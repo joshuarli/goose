@@ -95,10 +95,33 @@ theorem newPermissions_lowerExpr_read {module : GIR.Module} {func : Func} {le : 
     (generated : GeneratedBuilderState before)
     (run : lowerExpr (.read place) le before = (value, after)) :
     NewPermissionInstructions module func le first before after := by
-  simp only [lowerExpr, bind_run, childRun] at run
-  exact children.compose_framed (newPermissions_free_emitDef (by trivial) run) run
-    (dense_emitDef _) (advB_emitDef _) (types_emitDef _) (generatedTargetFrame_emitDef none _)
-    (generated.lowerPlace place childRun) (by trivial)
+  change (lowerPlace place >>= fun address => do
+    let loaded ← emitDef (.load address)
+    recordReadValueRootRecipe loaded place
+    pure loaded) le before = (value, after) at run
+  obtain ⟨actualAddress, actualState, actualRun, run⟩ := bind_eq.mp run
+  rw [childRun] at actualRun
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj actualRun
+  obtain ⟨loaded, loadedState, emitted, rest⟩ := bind_eq.mp run
+  obtain ⟨recordedUnit, recorded, recordRun, result⟩ := bind_eq.mp rest
+  obtain ⟨rfl, rfl⟩ := pure_eq.mp result
+  have loadedPermissions := children.compose_framed
+    (newPermissions_free_emitDef (by trivial) emitted) emitted
+    (dense_emitDef _) (advB_emitDef _) (types_emitDef _)
+    (generatedTargetFrame_emitDef none _) (generated.lowerPlace place childRun) (by trivial)
+  have neutral : NewPermissionInstructions module func le first loadedState recorded := by
+    apply NewPermissionInstructions.of_blocks_eq
+    have equation := congrArg Prod.snd recordRun
+    cases place <;> simp only [recordReadValueRootRecipe_run] at equation
+    all_goals try exact congrArg LS.blocks equation.symm
+    split at equation
+    · rw [recordValueRootSource_run] at equation
+      simpa only using congrArg (fun state : LS => state.blocks) equation.symm
+    · exact congrArg LS.blocks equation.symm
+  exact loadedPermissions.compose_framed neutral recordRun
+    (dense_recordReadValueRootRecipe _ _) (advB_recordReadValueRootRecipe _ _)
+    (types_recordReadValueRootRecipe _ _) (generatedTargetFrame_recordReadValueRootRecipe none _ _)
+    ((generated.lowerPlace place childRun).emitDef _ emitted) (by trivial)
 
 theorem newPermissions_lowerExpr_len {module : GIR.Module} {func : Func} {le : LEnv}
     {first : Nat} {before middle after : LS} {child value : ValueId} {view : View}

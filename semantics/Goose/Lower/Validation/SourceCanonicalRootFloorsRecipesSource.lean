@@ -14,7 +14,7 @@ theorem recipes_lowerExpr : ∀ e : Expr, RecipeRun (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact recipes_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact RecipeRun.bind (recipes_lowerPlace p) fun _ => recipes_emitDef _
+    exact RecipeRun.bind (recipes_lowerPlace p) fun address => recipes_emitDef_recordRead (.load address) p
   | .ref m p => by
     simp only [lowerExpr]
     exact RecipeRun.bind (recipes_lowerPlace p) fun r => recipes_borrowTo m r

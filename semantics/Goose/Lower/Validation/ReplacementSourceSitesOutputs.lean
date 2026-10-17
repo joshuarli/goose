@@ -30,9 +30,14 @@ theorem replacementSites_read_source {env : Core.TEnv} {results : List Ty}
     ReplacementSitesAt (root := root) (targets := targets) (lowerEnv env.mod env.vars results) before (lowerExpr (.read place)) := by
   simp only [Core.tyExpr] at source
   obtain ⟨info, next, placeSource, rest⟩ := (st_bind_ok _ _ _ _).mp source
-  change ReplacementSitesAt (root := root) (targets := targets) _ _ (lowerPlace place >>= fun address => emitDef (.load address))
+  change ReplacementSitesAt (root := root) (targets := targets) _ _ (lowerPlace place >>= fun address => do
+    let value ← emitDef (.load address)
+    recordReadValueRootRecipe value place
+    pure value)
   apply (child placeSource generated).bind
-  exact ReplacementSitesAt.emitDef _ (by intros; trivial)
+  apply (ReplacementSitesAt.emitDef _ (by intros; trivial)).bind
+  apply (ReplacementSitesAt.recordReadValueRootRecipe _ _ _ _).bind
+  exact ReplacementSitesAt.pure _ _ _
 
 theorem replacementSites_pop_source {env : Core.TEnv} {results : List Ty}
     {owner : Place} {origin : OriginId} {type : Ty} {start finish : Nat}

@@ -34,7 +34,10 @@ theorem borrowReference (mutability : Mutability) (targetTy : Ty) (address : Val
     obtain ⟨next, nextRoots, effects, returned, nextSlots, symbols, nextCurrent,
       blockBound, valueBound, growth⟩ := borrowTo_refined_witness_growth mutability ready.symbols current
         (ready.current block current) ready.roots ready.effects bound refined
-    refine ⟨next, ⟨nextRoots, effects, symbols, ?_, nextSlots.trans ready.slotsEq⟩, ?_, growth⟩
+    refine ⟨next, ⟨nextRoots, effects, symbols, ?_, nextSlots.trans ready.slotsEq,
+      ready.recipes.prefix (recipesUnchangedB_borrowTo mutability address le ls) growth (by
+        rw [ready.roots.valueSize, nextRoots.valueSize]
+        exact (advB_borrowTo mutability address le ls _ _ rfl).vals)⟩, ?_, growth⟩
     · intro candidate candidateRow
       rw [nextCurrent] at candidateRow
       cases candidateRow

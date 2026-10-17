@@ -57,12 +57,18 @@ theorem storage_read_source {env : Core.TEnv} {results : List Ty}
     (child : StoragePlaceChild env results place) {before : LS} (generated : GeneratedBuilderState before) :
     StorageAt (lowerEnv env.mod env.vars results) before (lowerExpr (.read place)) := by
   obtain ⟨info, next, placeSource, shape, readable⟩ := tyExpr_read_storage source
-  change StorageAt _ _ (lowerPlace place >>= fun address => emitDef (.load address))
+  change StorageAt _ _ (do
+    let address ← lowerPlace place
+    let value ← emitDef (.load address)
+    recordReadValueRootRecipe value place
+    pure value)
   apply (child placeSource generated).bind
-  apply StorageAt.emitDef
-  intro active value
-  obtain ⟨mu, row⟩ := outputs.place place placeSource generated rfl active
-  exact ⟨mu, info.ty, row, Or.inl readable⟩
+  apply StorageAt.bind
+  · apply StorageAt.emitDef
+    intro active value
+    obtain ⟨mu, row⟩ := outputs.place place placeSource generated rfl active
+    exact ⟨mu, info.ty, row, Or.inl readable⟩
+  · exact (StorageAt.recordReadValueRootRecipe _ _ _ _).bind (StorageAt.pure _ _ _)
 
 theorem storage_pop_source {env : Core.TEnv} {results : List Ty}
     (outputs : StorageSourceOutputs env results) {owner : Place} {origin : OriginId} {type : Ty} {start finish : Nat}

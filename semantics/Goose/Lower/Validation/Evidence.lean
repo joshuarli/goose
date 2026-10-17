@@ -45,6 +45,14 @@ theorem checked_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) 
   rw [recordValueRootRecipe_run]
   rfl
 
+theorem checked_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    CheckedRun (recordReadValueRootRecipe value place) := by
+  apply CheckedRun.of_unchanged
+  intro le state
+  cases place <;>
+    simp [recordReadValueRootRecipe_run, recordValueRootSource_run] <;>
+    (try split) <;> rfl
+
 theorem checked_appendInst {before : LS} (checked : CheckedIndices before)
     (block : BlockId) (inst : Inst) (instruction : Inst.CheckedIndex inst) :
     CheckedIndices (before.appendInst block inst) := by
@@ -454,7 +462,9 @@ theorem checked_lowerExpr : ∀ e : Expr, CheckedRun (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact checked_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact CheckedRun.bind (checked_lowerPlace p) fun _ => checked_emitDef _
+    exact CheckedRun.bind (checked_lowerPlace p) fun _ =>
+      CheckedRun.bind (checked_emitDef _) fun value =>
+        CheckedRun.bind (checked_recordReadValueRootRecipe value p) fun _ => CheckedRun.pure value
   | .ref m p => by
     simp only [lowerExpr]
     exact CheckedRun.bind (checked_lowerPlace p) fun r => checked_borrowTo m r

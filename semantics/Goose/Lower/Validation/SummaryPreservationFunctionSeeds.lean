@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.SummaryPreservationRecipeBounds
 import Goose.Lower.Validation.SummaryPreservationDeclaredSeeds
 import Goose.Lower.Validation.SummaryPreservationFunctionEntryFrame
 import Goose.Lower.Validation.ValidationTypedModuleTables
@@ -22,6 +23,7 @@ theorem accepted_context_provenance_seed {module : Core.Module} {ctx : Context} 
     (contextRow : module.contexts[context]? = some ctx)
     (implementationRow : module.impls[ctx.impl]? = some impl)
     (slots : upper.slots = typedContextSlotUpper module ctx impl)
+    (recipes : RecipeBounds (lowerContextAt module ctx impl) upper (cfg_implState module impl))
     (retained : ∀ index, index < impl.params.size → rootsAt upper.vals index =
       rootsAt (entryRootValues (impl.params.toList.map fun param => .data (tyOfVar impl param.var))) index) :
     ProvenanceBelow (provStart ((lowerContextAt module ctx impl).valueTypes (lower module))
@@ -31,6 +33,8 @@ theorem accepted_context_provenance_seed {module : Core.Module} {ctx : Context} 
   cases row
   apply provStart_below_retained_entry (types := impl.params.toList.map fun param => .data (tyOfVar impl param.var))
     (by rw [slots]; exact lowerContext_slotRootSeeds_below accepted implementationRow checked.annotationShape)
+    (fun value root member => recipes.valueRootSeeds
+      (lowerValueRootRows_covered _ _ _) value member)
   · intro block row
     simpa only [List.length_map, Array.length_toList] using cfg_impl_entry_parameters module impl block row
   · exact fun index type row => accepted_context_entry_type accepted implementationRow row

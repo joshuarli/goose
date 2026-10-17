@@ -287,21 +287,37 @@ theorem edge_extends (f : Func) (state : State) (target : BlockId) (args : List 
 theorem step_extends (m : Module) (states : Array State) (f : Func)
     (vt : Array (Option VTy)) (state : State) (inst : Inst) :
     state.Extends (step m states f vt state inst) := by
-  unfold step
-  apply (touchValues_extends vt state (accessOperands inst)).trans
-  generalize touchValues vt state (accessOperands inst) = current
-  split
-  · exact ((callState_extends _ _ _ _ _ _).trans (State.extends_values _ _ _)).trans
-      (touchValues_extends _ _ _)
-  · exact (State.extends_values _ _ _).trans (touchValues_extends _ _ _)
-  · exact State.extends_slots _ _ _
-  · split
-    · exact write_extends _ _ _ _
-    · exact State.Extends.refl _
-  · exact edge_extends _ _ _ _
-  · exact (edge_extends _ _ _ _).trans (edge_extends _ _ _ _)
-  · exact State.extends_returned _ _
-  · exact State.Extends.refl _
+  cases inst with
+  | «def» value op =>
+      cases op <;> simp only [step,Id.run_pure]
+      case call fn args origin =>
+        exact ((callState_extends m states f state fn args).trans (State.extends_values _ _ _)).trans
+          (touchValues_extends _ _ _)
+      all_goals
+        exact (touchValues_extends _ _ _).trans
+          ((State.extends_values _ _ _).trans (touchValues_extends _ _ _))
+  | eff effect =>
+      cases effect <;> simp only [step,Id.run_pure]
+      case slotInit slot value origin =>
+        exact (touchValues_extends _ _ _).trans (State.extends_slots _ _ _)
+      case store address value origin =>
+        split
+        · exact (touchValues_extends _ _ _).trans (write_extends _ _ _ _)
+        · exact touchValues_extends _ _ _
+      all_goals exact touchValues_extends _ _ _
+  | term term =>
+      cases term <;> simp only [step,Id.run_pure]
+      case br target args => exact (touchValues_extends _ _ _).trans (edge_extends _ _ _ _)
+      case condbr condition left leftArgs right rightArgs =>
+        exact (touchValues_extends _ _ _).trans ((edge_extends _ _ _ _).trans (edge_extends _ _ _ _))
+      case ret values origin =>
+        cases values with
+        | nil => exact touchValues_extends _ _ _
+        | cons value rest =>
+            cases rest with
+            | nil => exact (touchValues_extends _ _ _).trans (State.extends_returned _ _)
+            | cons next rest => exact touchValues_extends _ _ _
+      all_goals exact touchValues_extends _ _ _
 
 theorem state_array_foldl_extends {α : Type} (values : Array α) (update : State → α → State)
     (growth : ∀ (state : State) (value : α), state.Extends (update state value)) (state : State) :

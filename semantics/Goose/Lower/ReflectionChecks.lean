@@ -17,7 +17,7 @@ def loopFunction : Func :=
       ⟨[],[.def 0 (.constBool true),.term (.condbr 0 2 [] 3 [])]⟩,
       ⟨[],[.eff (.enter 1),.eff (.leave 1),.term (.br 1 [])]⟩,
       ⟨[],[.eff (.leave 0),.term (.ret [] none)]⟩],
-    summary := .unknown, org := none }
+    roots := { slots := some #[] }, summary := .unknown, org := none }
 
 def loopContext : FnCtx := ⟨⟨.release,lower infiniteSource⟩,loopFunction⟩
 

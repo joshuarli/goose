@@ -42,8 +42,11 @@ theorem typedGlobalRead {typingEnv : TEnv} {env : PEnv} {place : Place} {type : 
     (PMono.bind (PMono.addReads placeRoots) (fun _ => PMono.readRoots env place))
     (PMonoRebinds.bind (PMonoRebinds.addReads placeRoots) (fun _ => PMonoRebinds.readRoots env place))
     (PFlagsMono.bind (PFlagsMono.addReads placeRoots) (fun _ => PFlagsMono.readRoots env place)) tail wholeEffect
+  have variablesAligned : le.vars = typingEnv.vars := by
+    simpa only [le, lowerEnv] using tables.variablesEq
+  have inactive := nonrefRead_record_inactive source nonref variablesAligned
   have whole : lowerExpr (.read place) le ls = Goose.Lower.emitDef (.load address.1) le address.2 := by
-    simp only [lowerExpr, bind_run]
+    simp only [lowerExpr, bind_run, inactive, pure_run]
     rfl
   have placeNative : NativeRows vt address.2 := by
     apply native.of_prefix
@@ -63,7 +66,7 @@ theorem typedGlobalRead {typingEnv : TEnv} {env : PEnv} {place : Place} {type : 
       obtain ⟨block, current⟩ := Option.isSome_iff_exists.mp live
       have fresh : (lowerExpr (.read place) le ls).1 = address.2.vals.size := by
         rw [whole, emitDef_run _ _ current]
-      simpa only [fresh] using tag)
+      simpa only [fresh] using tag) inactive
   refine ⟨next, nextReady, value, ?_⟩
   intro old bound
   have middleBound : old < middle.vals.size := by

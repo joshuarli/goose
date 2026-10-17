@@ -1,9 +1,11 @@
+import Goose.Lower.Validation.SourceCanonicalRootFloorsRecipesJoin
+import Goose.Lower.Validation.SummaryPreservationRefinedResults
 import Goose.Lower.Validation.SummaryPreservationReplayValue
 import Goose.Lower.Validation.SummaryPreservationJoinValue
 
 namespace Goose.Lower.Validation.SummaryPreservation
 
-open Goose.Core Goose.GIR
+open Goose.Core Goose.Core.Sound Goose.GIR
 
 private theorem patchBrs_symbols {ls final : LS} {le : LEnv} {scopeCount : Nat}
     {destination : BlockId} {resultUnit : Unit} (edges : List (BlockId × ValueId))
@@ -36,7 +38,7 @@ variable {module : GIR.Module} {results : Array (List RootRef)} {vt : Array (Opt
   {func : Func} {target : Core.Eff} {le : LEnv} {scopeCount : Nat}
   {slots : Array (List RootRef)} {ls final : LS} {upper : Prov}
 
-theorem liveJoin (live : List (BlockId × ValueId)) {value : ValueId}
+theorem liveJoinWithCeiling (live : List (BlockId × ValueId)) {value : ValueId}
     (ready : ReplayBuilder module results vt func target le scopeCount slots ls upper)
     (sourceRoots : List RootRef) (type : VTy)
     (bounds : ∀ pair ∈ live, pair.1 < ls.blocks.size ∧ pair.2 < ls.vals.size)
@@ -50,14 +52,34 @@ theorem liveJoin (live : List (BlockId × ValueId)) {value : ValueId}
       pure (params.headD 0) : B ValueId) le ls = (value, final)) :
     ∃ next, ReplayBuilder module results vt func target le scopeCount slots final next ∧
       ReplayValue func next final value sourceRoots type ∧
-      ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
+      (∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index) ∧
+      (type.refLike = true → refinedResultUpper func sourceRoots ⊆ rootsAt next.vals value) := by
+  let original := live.flatMap fun pair => rootsAt upper.vals pair.2
+  let ceiling := if type.refLike then refinedResultUpper func sourceRoots else []
+  have originalRefines : RootsRefine func original sourceRoots := by
+    intro root member
+    obtain ⟨pair, member, rootMember⟩ := List.mem_flatMap.mp member
+    exact roots pair member root rootMember
+  have ceilingRefines : RootsRefine func ceiling sourceRoots := by
+    dsimp [ceiling]
+    split
+    · exact refinedResultUpper_refines _ _
+    · exact RootsRefine.empty _ _
   obtain ⟨next, generatedRoots, effects, refined, slotRoots, growth, exactRoots, valueBound⟩ :=
-    joinValue_live_refined_witness live ready.symbols ready.roots ready.effects bounds roots run
+    joinValue_live_seeded_witness live ready.symbols ready.roots ready.effects bounds
+      (unionRoots original ceiling) (originalRefines.union ceilingRefines)
+      (fun pair member root rootMember => unionRoots_left _ _ _
+        (List.mem_flatMap.mpr ⟨pair, member, rootMember⟩)) run
+  have containsCeiling : type.refLike = true → refinedResultUpper func sourceRoots ⊆ rootsAt next.vals value := by
+    intro reference root member
+    rw [exactRoots]
+    exact unionRoots_right _ _ root (by simpa [ceiling, reference] using member)
   have valueReady : ReplayValue func next final value sourceRoots type := by
     refine ⟨valueBound, refined, ?_⟩
     intro nonref
     rw [exactRoots]
-    exact List.flatMap_eq_nil_iff.mpr (scalar nonref)
+    have empty : original = [] := List.flatMap_eq_nil_iff.mpr (scalar nonref)
+    simp [empty, ceiling, nonref, unionRoots]
   simp only [bind_eq] at run
   obtain ⟨ty, typeState, typeRun, ⟨join, params⟩, allocated, allocation,
     patchUnit, patched, patchRun, curUnit, selected, selecting, returned⟩ := run
@@ -84,14 +106,47 @@ theorem liveJoin (live : List (BlockId × ValueId)) {value : ValueId}
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj selecting
   rw [pure_run] at returned
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj returned
-  refine ⟨next, ⟨generatedRoots, effects, patchedSymbols.changeCur _, ?_, slotRoots.trans ready.slotsEq⟩,
-    valueReady, growth⟩
+  refine ⟨next, ⟨generatedRoots, effects, patchedSymbols.changeCur _, ?_, slotRoots.trans ready.slotsEq,
+      ready.recipes.prefix (by
+        have same := recipesUnchangedB_patchBrs join live le allocated
+        rw [patchRun] at same
+        have allocatedRecipes : allocated.valueRootRecipes = ls.valueRootRecipes := by
+          rw [newBlock1_run] at allocation
+          cases allocation
+          rfl
+        exact same.trans allocatedRecipes) growth (by
+        rw [ready.roots.valueSize, generatedRoots.valueSize]
+        have unchanged := SourceCanonicalRootFloors.patchBrs_vals join live le allocated
+        rw [patchRun] at unchanged
+        change ls.vals.size ≤ patched.vals.size
+        rw [unchanged]
+        exact (advB_newBlock1 ty le ls _ _ allocation).vals)⟩,
+    valueReady, growth, containsCeiling⟩
   intro block row
   simp only [Option.some.injEq] at row
   subst block
   exact blockSize ▸ destinationBound
 
-theorem joinValue {value trueValue falseValue : ValueId} {trueEnd falseEnd : Option BlockId}
+theorem liveJoin (live : List (BlockId × ValueId)) {value : ValueId}
+    (ready : ReplayBuilder module results vt func target le scopeCount slots ls upper)
+    (sourceRoots : List RootRef) (type : VTy)
+    (bounds : ∀ pair ∈ live, pair.1 < ls.blocks.size ∧ pair.2 < ls.vals.size)
+    (roots : ∀ pair ∈ live, RootsRefine func (rootsAt upper.vals pair.2) sourceRoots)
+    (scalar : type.refLike = false → ∀ pair ∈ live, rootsAt upper.vals pair.2 = [])
+    (run : (do
+      let ty ← valTy (live.headD (0, 0)).2
+      let (join, params) ← newBlock [ty]
+      patchBrs join live
+      Goose.Lower.setCur (some join)
+      pure (params.headD 0) : B ValueId) le ls = (value, final)) :
+    ∃ next, ReplayBuilder module results vt func target le scopeCount slots final next ∧
+      ReplayValue func next final value sourceRoots type ∧
+      ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
+  obtain ⟨next, nextReady, nextValue, retained, _ceiling⟩ :=
+    ready.liveJoinWithCeiling live sourceRoots type bounds roots scalar run
+  exact ⟨next, nextReady, nextValue, retained⟩
+
+theorem joinValueWithCeiling {value trueValue falseValue : ValueId} {trueEnd falseEnd : Option BlockId}
     (ready : ReplayBuilder module results vt func target le scopeCount slots ls upper)
     (sourceRoots : List RootRef) (type : VTy)
     (trueBound : ∀ block, trueEnd = some block → block < ls.blocks.size ∧ trueValue < ls.vals.size)
@@ -103,7 +158,9 @@ theorem joinValue {value trueValue falseValue : ValueId} {trueEnd falseEnd : Opt
     (run : Goose.Lower.joinValue trueEnd trueValue falseEnd falseValue le ls = (value, final)) :
     ∃ next, ReplayBuilder module results vt func target le scopeCount slots final next ∧
       (final.cur.isSome = true → ReplayValue func next final value sourceRoots type) ∧
-      ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
+      (∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index) ∧
+      (type.refLike = true → final.cur.isSome = true →
+        refinedResultUpper func sourceRoots ⊆ rootsAt next.vals value) := by
   have key (live : List (BlockId × ValueId))
       (bounds : ∀ pair ∈ live, pair.1 < ls.blocks.size ∧ pair.2 < ls.vals.size)
       (roots : ∀ pair ∈ live, RootsRefine func (rootsAt upper.vals pair.2) sourceRoots)
@@ -116,9 +173,12 @@ theorem joinValue {value trueValue falseValue : ValueId} {trueEnd falseEnd : Opt
         pure (params.headD 0) : B ValueId) le ls = (value, final)) :
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots final next ∧
         (final.cur.isSome = true → ReplayValue func next final value sourceRoots type) ∧
-        ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
-    obtain ⟨next, generated, returned, retained⟩ := ready.liveJoin live sourceRoots type bounds roots scalar step
-    exact ⟨next, generated, fun _ => returned, retained⟩
+        (∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index) ∧
+      (type.refLike = true → final.cur.isSome = true →
+        refinedResultUpper func sourceRoots ⊆ rootsAt next.vals value) := by
+    obtain ⟨next, generated, returned, retained, included⟩ :=
+      ready.liveJoinWithCeiling live sourceRoots type bounds roots scalar step
+    exact ⟨next, generated, fun _ => returned, retained, fun reference _ => included reference⟩
   unfold Goose.Lower.joinValue at run
   cases trueEnd with
   | none =>
@@ -126,7 +186,7 @@ theorem joinValue {value trueValue falseValue : ValueId} {trueEnd falseEnd : Opt
     | none =>
       simp only [bind_run, setCur_run, pure_run] at run
       obtain ⟨rfl, rfl⟩ := Prod.mk.inj run
-      exact ⟨upper, ready.setCur none (by simp), by simp, fun _ _ => rfl⟩
+      exact ⟨upper, ready.setCur none (by simp), by simp, (fun _ _ => rfl), by simp⟩
     | some block =>
       apply key _ (fun pair member => ?_) (fun pair member => ?_) (fun nonref pair member => ?_) run
       · simp at member; subst pair; exact falseBound block rfl
@@ -153,6 +213,24 @@ theorem joinValue {value trueValue falseValue : ValueId} {trueEnd falseEnd : Opt
         rcases member with rfl | rfl
         · exact trueScalar nonref rfl
         · exact falseScalar nonref rfl
+
+theorem joinValue {value trueValue falseValue : ValueId} {trueEnd falseEnd : Option BlockId}
+    (ready : ReplayBuilder module results vt func target le scopeCount slots ls upper)
+    (sourceRoots : List RootRef) (type : VTy)
+    (trueBound : ∀ block, trueEnd = some block → block < ls.blocks.size ∧ trueValue < ls.vals.size)
+    (falseBound : ∀ block, falseEnd = some block → block < ls.blocks.size ∧ falseValue < ls.vals.size)
+    (trueRoots : trueEnd.isSome = true → RootsRefine func (rootsAt upper.vals trueValue) sourceRoots)
+    (falseRoots : falseEnd.isSome = true → RootsRefine func (rootsAt upper.vals falseValue) sourceRoots)
+    (trueScalar : type.refLike = false → trueEnd.isSome = true → rootsAt upper.vals trueValue = [])
+    (falseScalar : type.refLike = false → falseEnd.isSome = true → rootsAt upper.vals falseValue = [])
+    (run : Goose.Lower.joinValue trueEnd trueValue falseEnd falseValue le ls = (value, final)) :
+    ∃ next, ReplayBuilder module results vt func target le scopeCount slots final next ∧
+      (final.cur.isSome = true → ReplayValue func next final value sourceRoots type) ∧
+      ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
+  obtain ⟨next, nextReady, nextValue, retained, _ceiling⟩ :=
+    ready.joinValueWithCeiling sourceRoots type trueBound falseBound trueRoots falseRoots
+      trueScalar falseScalar run
+  exact ⟨next, nextReady, nextValue, retained⟩
 
 end ReplayBuilder
 

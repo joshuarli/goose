@@ -15,6 +15,8 @@ set_option maxHeartbeats 2000000 in
 theorem sharedCalleeContexts_core_accepted : validate sharedCalleeContexts = .ok () := by
   cbv
 
+attribute [local cbv_opaque] Goose.GIR.replacementContentFlow
+
 set_option maxRecDepth 12000 in
 set_option maxHeartbeats 2000000 in
 theorem sharedCalleeContexts_gir_accepted :

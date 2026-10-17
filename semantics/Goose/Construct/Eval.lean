@@ -45,12 +45,32 @@ def producerCount? (declarations : DeclarationEnv) (expression : Expr) : Option 
       | _ => none
   | _ => literalCount expression
 
+def ordinaryProducerCount? (fuel : Nat) (declarations : DeclarationEnv) (expression : Expr) : Option Nat :=
+  if (producerCount? declarations expression).isSome then none
+  else match expressionResultTypes? (max fuel (expressionQueryBudget expression)) declarations expression with
+    | some [.arr element count] => if element.flat then some count else none
+    | _ => none
+
+def materializeProducer (fuel : Nat) (declarations : DeclarationEnv) (expression : Expr)
+    (evaluate : EvalM Value) : EvalM (Option (Array Value)) := do
+  match ordinaryProducerCount? fuel declarations expression with
+  | none => pure none
+  | some _ =>
+      let .fixed values ← evaluate | fault .shape
+      pure (some values)
+
+def materializedDestination (fuel : Nat) (layout : LayoutEnv) (owner : ActId) (ty : Ty)
+    (origin : OriginId) (count : Nat) (value : Value) : EvalM DestinationId := do
+  let destination ← newDestination layout owner ty .value origin none (some count)
+  copyValue fuel layout destination value origin none
+  completedReceivingDestination destination
+
 def constructLocal (declarations : DeclarationEnv) (owner : ActId) (ty : Ty) (origin : OriginId) (expression : Expr)
     (construct : DestinationId → EvalM Unit) : EvalM Carrier := do
   let destination ← newDestination (LayoutEnv.ofModule declarations.module) owner ty .value origin none
     (producerCount? declarations expression)
   construct destination
-  let destination ← completedDestination destination
+  let destination ← completedReceivingDestination destination
   publishCarriers origin [.completed destination]
   pure (.completed destination)
 
@@ -68,25 +88,157 @@ def targetActivation (config : EvalConfig) (target : Nat) : EvalM RuntimeActivat
   let some activation := selectTarget? target (← EvalM.get).activations | fault .flow
   pure activation
 
+def exitSource (source : RuntimeActivation) (incoming : DestinationId) (operand : Expr) : EvalM ExitSource := do
+  let id ← receivingDestination incoming
+  let alias ← match operand with
+    | .resultLocal localVar _ => do
+        let root ← rootOf source localVar
+        match (← EvalM.get).objects.lookup root with
+        | some (.stored stored) => pure (stored.destination == some id)
+        | _ => pure false
+    | _ => pure false
+  pure (if alias then .namedResult else .newValue)
+
+def selectCompletionChannel (source : RuntimeActivation) (operand : Expr) : Channel → EvalM Channel
+  | .completion token => do
+      let state ← EvalM.get
+      let some (.waiting incoming) := state.construction.exitReservations[token]? | fault .flow
+      let kind ← exitSource source incoming operand
+      let selected ← liftConstruction (expressionOrigin operand) (selectWaitingExitDestination token kind)
+      pure (.construct selected)
+  | channel => pure channel
+
 def exitChannels (source activation : RuntimeActivation) (operands : List Expr) (origin : OriginId) : EvalM (List Channel) := do
   if operands.length != activation.channels.length then fault .arity
   (activation.channels.zip operands).mapM fun (channel, operand) => do
+    let reserve := fun incoming => do
+      let kind ← exitSource source incoming operand
+      let (_, selected) ← liftConstruction origin (reserveExitDestination incoming kind)
+      pure (Channel.construct selected)
     match channel with
     | .register ty => pure (.register ty)
-    | .construct id =>
-        let destination ← getDestination id
-        let direct := match destination.progress with
-          | .open 0 => true
-          | _ => false
-        let alias ← match operand with
-          | .resultLocal localVar _ => do
-              let root ← rootOf source localVar
-              match (← EvalM.get).objects.lookup root with
-              | some (.stored stored) => pure (stored.destination == some id)
-              | _ => pure false
-          | _ => pure false
-        if direct || alias then pure channel
-        else pure (.construct (← liftConstruction origin (openExitReplacement id)))
+    | .construct incoming => reserve incoming
+    | .completion token =>
+        match (← EvalM.get).construction.exitReservations[token]? with
+        | some (.waiting _) => pure (.completion token)
+        | some (.active _ _ selected _) => reserve (← receivingDestination selected)
+        | _ => fault .flow
+
+def materializeOwnedCarriers (origin : OriginId) (tokens : List ExitReservationId)
+    (carriers : List Carrier) : EvalM (List Carrier) :=
+  carriers.mapM fun carrier => match carrier with
+    | .pendingNamed token =>
+        if tokens.contains token then do
+          pure (.completed (← liftConstruction origin (materializeNamedReservation token)))
+        else pure carrier
+    | carrier => pure carrier
+
+def withExitChannels (source activation : RuntimeActivation) (operands : List Expr)
+    (origin : OriginId) (action : List Channel → EvalM (List Carrier)) : EvalM (List Carrier) := fun state =>
+  let borrowed := activation.channels.filterMap fun channel => match channel with
+    | .completion token => captureWaitingExitReservation token state.construction
+    | _ => none
+  let first := state.construction.exitReservations.size
+  match exitChannels source activation operands origin state with
+  | .ok channels prepared =>
+      let tokens := (List.range (prepared.construction.exitReservations.size - first)).map (first + ·)
+      let finish := fun (cancel : Bool) (carriers : List Carrier)
+          (result : ExecutionState → ExecutionStep (List Carrier)) (state' : ExecutionState) =>
+        let cleanup : EvalM Unit := do
+          if cancel then
+            for receipt in borrowed.reverse do
+              let token := receipt.token
+              liftConstruction origin (cancelExitReservation token (carriers.filterMap fun carrier =>
+                match carrier with | .completed id => some id | _ => none))
+              match (← EvalM.get).construction.exitReservations[token]? with
+              | some .restored => liftConstruction origin (rearmExitReservation receipt)
+              | some (.waiting actual) => if actual != receipt.incoming then fault .flow
+              | some (.active ..) => pure ()
+              | _ => fault .flow
+          for token in tokens.reverse do
+            if cancel then
+              liftConstruction origin (cancelExitReservation token (carriers.filterMap fun carrier =>
+                match carrier with | .completed id => some id | _ => none))
+            liftConstruction origin (releaseExitReservation token)
+        match cleanup state' with
+        | .ok () final => result final
+        | .stop reason final => .stop reason final
+        | .escape target values final => .escape target values final
+        | .jump target kind final => .jump target kind final
+      let evaluated : EvalM (List Carrier) := do
+        materializeOwnedCarriers origin tokens (← action channels)
+      match evaluated prepared with
+      | .ok carriers state' => finish false carriers (.ok carriers) state'
+      | .stop reason state' => finish false [] (.stop reason) state'
+      | .escape target carriers state' => finish true carriers (.escape target carriers) state'
+      | .jump target kind state' =>
+          let carriers := match kind with | .breakValue carriers => carriers | .continueLoop => []
+          finish true carriers (.jump target kind) state'
+  | .stop reason state' => .stop reason state'
+  | .escape target carriers state' => .escape target carriers state'
+  | .jump target kind state' => .jump target kind state'
+
+
+def withCompletionChannels (channels : List Channel) (origin : OriginId)
+    (action : List Channel → EvalM (List Carrier)) : EvalM (List Carrier) := fun state =>
+  let setup : EvalM (List Channel × List ExitReservationId) := do
+    let planned ← channels.mapM fun channel => match channel with
+      | .construct incoming => do
+          let token ← liftConstruction origin (waitExitDestination incoming)
+          pure (Channel.completion token, some token)
+      | .register ty => pure (Channel.register ty, none)
+      | .completion _ => fault .flow
+    pure (planned.map Prod.fst, planned.filterMap Prod.snd)
+  match setup state with
+  | .ok (planned, tokens) prepared =>
+      let finish := fun (cancel : Bool) (carriers : List Carrier)
+          (result : ExecutionState → ExecutionStep (List Carrier)) (state' : ExecutionState) =>
+        let cleanup : EvalM Unit := do
+          for token in tokens.reverse do
+            if cancel then
+              liftConstruction origin (cancelExitReservation token (carriers.filterMap fun carrier =>
+                match carrier with | .completed id => some id | _ => none))
+            liftConstruction origin (releaseExitReservation token)
+        match cleanup state' with
+        | .ok () final => result final
+        | .stop reason final => .stop reason final
+        | .escape target values final => .escape target values final
+        | .jump target kind final => .jump target kind final
+      let evaluated : EvalM (List Carrier) := do
+        materializeOwnedCarriers origin tokens (← action planned)
+      match evaluated prepared with
+      | .ok carriers state' => finish false carriers (.ok carriers) state'
+      | .stop reason state' => finish false [] (.stop reason) state'
+      | .escape target carriers state' => finish true carriers (.escape target carriers) state'
+      | .jump target kind state' =>
+          let carriers := match kind with | .breakValue carriers => carriers | .continueLoop => []
+          finish true carriers (.jump target kind) state'
+  | .stop reason state' => .stop reason state'
+  | .escape target carriers state' => .escape target carriers state'
+  | .jump target kind state' => .jump target kind state'
+
+def execResultScope (environment : RuntimeActivation) (pre : List (VarId × Value))
+    (channels : List Channel) (block : Block)
+    (statementsAction : RuntimeActivation → List Stmt → EvalM Flow)
+    (tailAction : RuntimeActivation → Expr → EvalM (List Carrier)) : EvalM (Flow × List Carrier) := do
+  let .mk scope statements value := block
+  let scopeInst ← freshScope
+  let environment' := { environment with scopes := (scope, scopeInst) :: environment.scopes }
+  let state ← EvalM.get
+  EvalM.set { state with activations := state.activations.map (fun current =>
+    if current.act == environment.act then { current with scopes := environment'.scopes } else current) }
+  withScope environment scope scopeInst do
+    bindAll environment.act scopeInst pre
+    let flow ← statementsAction environment' statements
+    match flow, value with
+    | .normal _, some expression => pure (.normal .unit, ← tailAction environment' expression)
+    | .normal _, none =>
+        if channels.isEmpty then pure (flow, [])
+        else match channels with
+          | [.register .unit] => pure (flow, [.register .unit])
+          | _ => fault .arity
+    | flow, _ => pure (flow, [])
+
 
 
 set_option maxHeartbeats 400000 in
@@ -162,7 +314,7 @@ def evalValue : Nat → EvalConfig → RuntimeActivation → Expr → EvalM Valu
           | .normal value => pure value
           | _ => fault .flow
       | .blockE block origin =>
-          let some types := blockResultTypes? fuel ⟨config.module, environment.vars⟩ block | fault .shape
+          let some types := blockResultTypes? (max fuel (blockQueryBudget block)) ⟨config.module, environment.vars⟩ block | fault .shape
           let channels ← channelsFor config.layout environment.act
             (types.map fun ty => ⟨ty, if ty.nonfixed then .value else .register, none⟩) origin
           let carriers ← evalProduce fuel config environment channels expression
@@ -268,7 +420,30 @@ def evalView : Nat → EvalConfig → RuntimeActivation → View → EvalM Runti
 def evalProduce : Nat → EvalConfig → RuntimeActivation → List Channel → Expr → EvalM (List Carrier)
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, environment, channels, expression => do
+      let channels : List Channel ← channels.mapM fun channel => match channel with
+        | .register ty => pure (.register ty)
+        | .construct id => do pure (.construct (← liftConstruction (expressionOrigin expression) (renewReceivingDestination id)))
+        | .completion token => pure (.completion token)
+      let planned := channels
+      let channels ← match expression with
+        | .values _ | .ifE .. | .blockE .. => pure channels
+        | _ => channels.mapM (selectCompletionChannel environment expression)
       match expression with
+      | .resultLocal localVar origin =>
+          match channels with
+          | [.construct destination] =>
+              let .stored stored ← readLoc fuel config.layout ⟨← rootOf environment localVar, []⟩ | fault .shape
+              let named ← match planned with
+                | [.completion token] => prepareNamedCarrierAt origin token destination stored
+                | _ => prepareNamedCarrier origin destination stored
+              match named with
+              | some carrier => pure [carrier]
+              | none =>
+                  buildExpr fuel config environment destination expression
+                  pure [.completed (← completedReceivingDestination destination)]
+          | [] => let _ ← evalValue fuel config environment expression; pure []
+          | [.register _] => pure [.register (← evalValue fuel config environment expression)]
+          | _ => fault .arity
       | .values operands => evalOperands fuel config environment channels operands
       | .call context arguments origin => invokeCall fuel config environment context arguments channels origin
       | .ifE condition yes no _ =>
@@ -286,7 +461,7 @@ def evalProduce : Nat → EvalConfig → RuntimeActivation → List Channel → 
               | _ => fault .flow)
             (fun kind => do
               match kind with
-              | .breakValue carriers => landCarriers origin carriers; pure carriers
+              | .breakValue carriers => landCarriersInto origin channels carriers; pure carriers
               | .continueLoop => fault .flow)
       | _ =>
           match channels with
@@ -296,7 +471,7 @@ def evalProduce : Nat → EvalConfig → RuntimeActivation → List Channel → 
           | [.register _] => pure [.register (← evalValue fuel config environment expression)]
           | [.construct destination] =>
               buildExpr fuel config environment destination expression
-              pure [.completed (← completedDestination destination)]
+              pure [.completed (← completedReceivingDestination destination)]
           | _ => fault .arity
 
 def evalOperands : Nat → EvalConfig → RuntimeActivation → List Channel → List Expr → EvalM (List Carrier)
@@ -309,13 +484,14 @@ def evalOperands : Nat → EvalConfig → RuntimeActivation → List Channel →
 
 def buildExpr : Nat → EvalConfig → RuntimeActivation → DestinationId → Expr → EvalM Unit
   | 0, _, _, _, _ => timeout
-  | fuel + 1, config, environment, destination, expression =>
+  | fuel + 1, config, environment, incoming, expression => do
+      let destination ← liftConstruction (expressionOrigin expression) (renewReceivingDestination incoming)
       protectDestination (expressionOrigin expression) destination do
         match expression with
         | .call context arguments origin =>
             let carriers ← invokeCall fuel config environment context arguments [.construct destination] origin
             let .completed actual ← singleCarrier carriers | fault .shape
-            let original ← getDestination destination
+            let original ← getDestination (← receivingDestination destination)
             let actual ← getDestination actual
             if actual.storage != original.storage then fault .flow
         | .ifE condition yes no _ =>
@@ -333,7 +509,7 @@ def buildExpr : Nat → EvalConfig → RuntimeActivation → DestinationId → E
                 | _ => fault .flow)
               (fun kind => do
                 match kind with
-                | .breakValue carriers => landCarriers origin carriers
+                | .breakValue carriers => landCarriersInto origin [.construct destination] carriers
                 | .continueLoop => fault .flow)
         | .values [operand] => buildExpr fuel config environment destination operand
         | .arrLit _ operands origin =>
@@ -341,28 +517,29 @@ def buildExpr : Nat → EvalConfig → RuntimeActivation → DestinationId → E
             let some element := elementType pending.capability.logicalType | fault .shape
             for operand in operands do
               buildElement fuel config environment destination element operand
-            liftConstruction origin (finishDestination destination)
+            receivingAction origin destination finishDestination
         | .fill ty operand origin =>
             let .arr element count := ty | fault .shape
             if element.nonfixed then
               let source ← newDestination config.layout environment.act element .value origin
               buildExpr fuel config environment source operand
+              let source ← completedReceivingDestination source
               for _ in [0:count] do
                 repeatElement fuel config.layout destination element source origin
-              liftConstruction origin (retireRepeatedSource destination source)
+              receivingAction origin destination (fun destination => retireRepeatedSource destination source)
             else
               let value ← evalValue fuel config environment operand
               let bytes ← liftExcept (fixedBytes fuel config.layout element value)
-              for _ in [0:count] do liftConstruction origin (writeElement destination bytes)
-            liftConstruction origin (finishDestination destination)
+              for _ in [0:count] do receivingAction origin destination (fun destination => writeElement destination bytes)
+            receivingAction origin destination finishDestination
         | .bytes _ bytes origin =>
-            for byte in bytes do liftConstruction origin (writeElement destination ⟨#[byte]⟩)
-            liftConstruction origin (finishDestination destination)
+            for byte in bytes do receivingAction origin destination (fun destination => writeElement destination ⟨#[byte]⟩)
+            receivingAction origin destination finishDestination
         | .str _ arguments origin =>
             for argument in arguments do
               let bytes ← evalPrintArg fuel config environment argument
-              for byte in bytes.data do liftConstruction origin (writeElement destination ⟨#[byte]⟩)
-            liftConstruction origin (finishDestination destination)
+              for byte in bytes.data do receivingAction origin destination (fun destination => writeElement destination ⟨#[byte]⟩)
+            receivingAction origin destination finishDestination
         | .copy _ source origin =>
             let location ← evalPlace fuel config environment source
             let value ← readLoc fuel config.layout location
@@ -376,7 +553,7 @@ def buildExpr : Nat → EvalConfig → RuntimeActivation → DestinationId → E
                   let pending ← getDestination destination
                   match pending.progress with
                   | .built _ => pure ()
-                  | .open _ => liftConstruction origin (finishDestination destination)
+                  | .open _ => receivingAction origin destination finishDestination
                   | _ => fault .flow
                 else copyValue fuel config.layout destination value origin none
             | _ => fault .shape
@@ -388,13 +565,15 @@ def buildElement : Nat → EvalConfig → RuntimeActivation → DestinationId �
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, environment, parent, element, operand => do
       if element.nonfixed then
-        let child ← liftConstruction (expressionOrigin operand) (openChild parent element (← receivingLayout config.layout element))
+        let layout ← receivingLayout config.layout element
+        let child ← receivingAction (expressionOrigin operand) parent (fun parent => openChild parent element layout)
         buildExpr fuel config environment child operand
-        liftConstruction (expressionOrigin operand) (attachChild parent (← completedDestination child))
+        let child ← completedReceivingDestination child
+        receivingAction (expressionOrigin operand) parent (fun parent => attachChild parent child)
       else
         let value ← evalValue fuel config environment operand
         let bytes ← liftExcept (fixedBytes fuel config.layout element value)
-        liftConstruction (expressionOrigin operand) (writeElement parent bytes)
+        receivingAction (expressionOrigin operand) parent (fun parent => writeElement parent bytes)
 
 def evalArguments : Nat → EvalConfig → RuntimeActivation → Array LocalVar → List Param → List Arg → EvalM (List Value)
   | 0, _, _, _, _, _ => timeout
@@ -405,8 +584,18 @@ def evalArguments : Nat → EvalConfig → RuntimeActivation → Array LocalVar 
         | .byVal operand => evalValue fuel config environment operand
         | .construct operand =>
             let some localVar := parameterVars[parameter.var]? | fault .unbound
-            carrierValue (← constructLocal ⟨config.module, environment.vars⟩ environment.act localVar.ty (expressionOrigin operand) operand
-              (fun destination => buildExpr fuel config environment destination operand))
+            let materialized ← materializeProducer fuel ⟨config.module, environment.vars⟩ operand
+              (evalValue fuel config environment operand)
+            let carrier ← match materialized with
+              | some values => do
+                  let destination ← materializedDestination fuel config.layout environment.act localVar.ty
+                    (expressionOrigin operand) values.size (.fixed values)
+                  publishCarriers (expressionOrigin operand) [.completed destination]
+                  pure (.completed destination)
+              | none =>
+                  constructLocal ⟨config.module, environment.vars⟩ environment.act localVar.ty (expressionOrigin operand) operand
+                    (fun destination => buildExpr fuel config environment destination operand)
+            carrierValue carrier
       pure (value :: (← evalArguments fuel config environment parameterVars parameters arguments))
   | _ + 1, _, _, _, _, _ => fault .arity
 
@@ -418,11 +607,18 @@ def invokeCall : Nat → EvalConfig → RuntimeActivation → ContextId → List
       let callableChannels ← (channels.zip implementation.results.toList).mapM fun (channel, result) => do
         match result.request, channel with
         | .register, _ => pure (Channel.register result.ty)
-        | .value, .construct destination | .elementRun, .construct destination =>
+        | .value, .construct incoming | .elementRun, .construct incoming =>
+            let destination ← liftConstruction origin (renewReceivingDestination incoming)
             liftConstruction origin (adaptDestinationType destination result.ty)
             pure (.construct destination)
         | .value, .register _ | .elementRun, .register _ => fault .shape
+        | _, .completion _ => fault .flow
       let values ← evalArguments fuel config environment implementation.vars implementation.params.toList arguments
+      let callableChannels ← callableChannels.mapM fun channel => match channel with
+        | .register ty => pure (.register ty)
+        | .construct destination => do
+            pure (.construct (← liftConstruction origin (renewReceivingDestination destination)))
+        | .completion _ => fault .flow
       let state ← EvalM.get
       if state.activations.length ≥ Core.maxCallDepth then timeout
       let act ← freshAct
@@ -440,12 +636,16 @@ def enterActivation : Nat → EvalConfig → RuntimeActivation → List (VarId �
       finishActivation config.layout activation (implementation.results.toList.map (·.ty)) origin
         (execActivationBody fuel config activation pre body)
 
-def execActivationBody (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
-    (pre : List (VarId × Value)) (body : Block) : EvalM (List Carrier) := do
-  let (flow, carriers) ← execResultBlockWith fuel config activation pre activation.channels body
-  match flow with
-  | .normal _ => pure carriers
-  | _ => fault .flow
+def execActivationBody : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → Block → EvalM (List Carrier)
+  | 0, _, _, _, _ => timeout
+  | fuel + 1, config, activation, pre, body => do
+      let (flow, carriers) ← execResultScope activation pre activation.channels body
+        (fun environment statements => execStmts fuel config environment statements)
+        (fun environment expression => withCompletionChannels activation.channels (expressionOrigin expression)
+          (fun channels => evalProduce fuel config environment channels expression))
+      match flow with
+      | .normal _ => pure carriers
+      | _ => fault .flow
 
 def execResultBlock : Nat → EvalConfig → RuntimeActivation → List Channel → Block → EvalM (Flow × List Carrier)
   | 0, _, _, _, _ => timeout
@@ -454,24 +654,10 @@ def execResultBlock : Nat → EvalConfig → RuntimeActivation → List Channel 
 
 def execResultBlockWith : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → List Channel → Block → EvalM (Flow × List Carrier)
   | 0, _, _, _, _, _ => timeout
-  | fuel + 1, config, environment, pre, channels, .mk scope statements value => do
-      let scopeInst ← freshScope
-      let environment' := { environment with scopes := (scope, scopeInst) :: environment.scopes }
-      let state ← EvalM.get
-      EvalM.set { state with activations := state.activations.map (fun current => if current.act == environment.act then { current with scopes := environment'.scopes } else current) }
-      withScope environment scope scopeInst do
-        bindAll environment.act scopeInst pre
-        let flow ← execStmts fuel config environment' statements
-        match flow, value with
-        | .normal _, some expression => pure (.normal .unit, ← evalProduce fuel config environment' channels expression)
-        | .normal _, none =>
-            if channels.isEmpty then pure (flow, [])
-            else if channels.length == 1 then
-              match channels with
-              | [.register .unit] => pure (flow, [.register .unit])
-              | _ => fault .arity
-            else fault .arity
-        | flow, _ => pure (flow, [])
+  | fuel + 1, config, environment, pre, channels, block =>
+      execResultScope environment pre channels block
+        (fun environment statements => execStmts fuel config environment statements)
+        (fun environment expression => evalProduce fuel config environment channels expression)
 
 def execBlock : Nat → EvalConfig → RuntimeActivation → List (VarId × Value) → List Channel → Block → EvalM Flow
   | 0, _, _, _, _, _ => timeout
@@ -509,20 +695,28 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
               let named ← match namedCandidate with
                 | some (result, index) =>
                     match environment.channels[index]? with
-                    | some (.construct destination) => do
+                    | some (.construct incoming) => do
+                        let destination ← liftConstruction origin (renewReceivingDestination incoming)
                         let destination ← getDestination destination
                         pure (if destination.capability.request == .value then some (result, index) else none)
                     | _ => fault .flow
                 | none => pure none
+              let materialized ← if named.isNone then
+                  materializeProducer fuel ⟨config.module, environment.vars⟩ expression (evalValue fuel config environment expression)
+                else pure none
               let destination ← match named with
                 | some (_, index) =>
                     match environment.channels[index]? with
-                    | some (.construct destination) => pure destination
+                    | some (.construct destination) => liftConstruction origin (renewReceivingDestination destination)
                     | _ => fault .flow
-                | none => newDestination config.layout environment.act descriptor.ty .value origin none (producerCount? ⟨config.module, environment.vars⟩ expression)
+                | none =>
+                    newDestination config.layout environment.act descriptor.ty .value origin none
+                      (materialized.map Array.size <|> producerCount? ⟨config.module, environment.vars⟩ expression)
               if named.isSome then liftConstruction origin (prepareNamedBinding destination descriptor.ty)
-              buildExpr fuel config environment destination expression
-              let destination ← completedDestination destination
+              match materialized with
+              | some values => copyValue fuel config.layout destination (.fixed values) origin none
+              | none => buildExpr fuel config environment destination expression
+              let destination ← completedReceivingDestination destination
               if named.isNone then publishCarriers origin [.completed destination]
               let stored ← storedDestination destination
               let object ← if named.isSome then do pure (some (← liftConstruction origin reserveStorage)) else pure none
@@ -584,9 +778,16 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
           let location ← evalPlace fuel config environment owner
           truncateOwner fuel config.layout location 0 origin
           let .stored stored ← readLoc fuel config.layout location | fault .shape
-          let destination ← ownerDestination config.layout stored .value (producerCount? ⟨config.module, environment.vars⟩ expression) origin
-          buildExpr fuel config environment destination expression
-          publishOwner fuel config.layout location stored (← completedDestination destination) origin
+          let materialized ← materializeProducer fuel ⟨config.module, environment.vars⟩ expression
+            (evalValue fuel config environment expression)
+          withOwnerExtension stored
+            (ownerDestination config.layout stored .value
+              (materialized.map Array.size <|> producerCount? ⟨config.module, environment.vars⟩ expression) origin)
+            (fun destination => do
+              match materialized with
+              | some values => copyValue fuel config.layout destination (.fixed values) origin none
+              | none => buildExpr fuel config environment destination expression
+              publishOwner fuel config.layout location stored (← completedReceivingDestination destination) origin)
           pure (.normal .unit)
       | .ifS condition yes no _ =>
           if (← expectBool (← evalValue fuel config environment condition)) then execBlock fuel config environment [] [] yes
@@ -602,13 +803,26 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
       | .forEach localVar index view byRef body _ =>
           execEach fuel config environment localVar index byRef body (← evalView fuel config environment view) 0
       | .receive localVars producer origin =>
-          let channels ← localVars.mapM fun localVar => do
+          let producerTypes := expressionResultTypes? (max fuel (expressionQueryBudget producer)) ⟨config.module, environment.vars⟩ producer
+          let channels ← localVars.zipIdx.mapM fun (localVar, index) => do
             let some descriptor := environment.vars[localVar]? | fault .unbound
-            if descriptor.ty.nonfixed then
-              pure (Channel.construct (← newDestination config.layout environment.act descriptor.ty .value origin))
-            else pure (.register descriptor.ty)
+            let inlineType := (producerTypes.bind (fun types => types[index]?)).filter fun ty => ty.flat
+            match inlineType with
+            | some (.arr element count) => pure (.register (.arr element count))
+            | _ =>
+                if descriptor.ty.nonfixed then
+                  pure (Channel.construct (← newDestination config.layout environment.act descriptor.ty .value origin))
+                else pure (.register descriptor.ty)
           let carriers ← evalProduce fuel config environment channels producer
           if carriers.length != localVars.length then fault .arity
+          let carriers ← (localVars.zip carriers).mapM fun (localVar, carrier) => do
+            let some descriptor := environment.vars[localVar]? | fault .unbound
+            match carrier with
+            | .register (.fixed values) =>
+                if descriptor.ty.nonfixed then
+                  pure (.completed (← materializedDestination fuel config.layout environment.act descriptor.ty origin values.size (.fixed values)))
+                else pure carrier
+            | _ => pure carrier
           publishCarriers origin carriers
           for (localVar, carrier) in localVars.zip carriers do
             bindRoot (← rootOf environment localVar) (← carrierValue carrier)
@@ -621,35 +835,41 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
       | .appendConstruct owner producer origin =>
           let location ← evalPlace fuel config environment owner
           let .stored stored ← readLoc fuel config.layout location | fault .shape
-          let destination ← ownerDestination config.layout stored .elementRun (producerCount? ⟨config.module, environment.vars⟩ producer) origin
-          buildExpr fuel config environment destination producer
-          publishOwner fuel config.layout location stored (← completedDestination destination) origin
+          withOwnerExtension stored
+            (ownerDestination config.layout stored .elementRun (producerCount? ⟨config.module, environment.vars⟩ producer) origin)
+            (fun destination => do
+              buildExpr fuel config environment destination producer
+              publishOwner fuel config.layout location stored (← completedReceivingDestination destination) origin)
           pure (.normal .unit)
       | .retValues operands origin =>
           let activation ← enclosingActivation environment
-          let channels ← exitChannels environment activation operands origin
-          let carriers ← evalOperands fuel config environment channels operands
+          let carriers ← withExitChannels environment activation operands origin
+            (fun channels => evalOperands fuel config environment channels operands)
           returned activation.act carriers
       | .retForward producer origin =>
           let activation ← enclosingActivation environment
-          let channels ← exitChannels environment activation (List.replicate activation.channels.length producer) origin
-          returned activation.act (← evalProduce fuel config environment channels producer)
+          let carriers ← withExitChannels environment activation (List.replicate activation.channels.length producer) origin
+            (fun channels => evalProduce fuel config environment channels producer)
+          returned activation.act carriers
       | .returnFrom target operands origin =>
           let activation ← targetActivation config target
-          let channels ← exitChannels environment activation operands origin
-          escaped ⟨activation.act, .nonlocal target⟩ (← evalOperands fuel config environment channels operands)
+          let carriers ← withExitChannels environment activation operands origin
+            (fun channels => evalOperands fuel config environment channels operands)
+          escaped ⟨activation.act, .nonlocal target⟩ carriers
       | .returnFromForward target producer origin =>
           let activation ← targetActivation config target
-          let channels ← exitChannels environment activation (List.replicate activation.channels.length producer) origin
-          escaped ⟨activation.act, .nonlocal target⟩ (← evalProduce fuel config environment channels producer)
+          let carriers ← withExitChannels environment activation (List.replicate activation.channels.length producer) origin
+            (fun channels => evalProduce fuel config environment channels producer)
+          escaped ⟨activation.act, .nonlocal target⟩ carriers
       | .breakValue expression origin =>
           let target ← currentBreak environment.act (some .block)
           let activation := { environment with channels := target.channels }
           let operands := match expression with
             | .values operands => operands
             | _ => List.replicate activation.channels.length expression
-          let channels ← exitChannels environment activation operands origin
-          jump target.id (.breakValue (← evalProduce fuel config environment channels expression))
+          let carriers ← withExitChannels environment activation operands origin
+            (fun channels => evalProduce fuel config environment channels expression)
+          jump target.id (.breakValue carriers)
       | .ret expression origin =>
           let activation ← enclosingActivation environment
           match expression with
@@ -657,8 +877,9 @@ def execStmt : Nat → EvalConfig → RuntimeActivation → Stmt → EvalM Flow
               let operands := match expression with
                 | .values operands => operands
                 | _ => List.replicate activation.channels.length expression
-              let channels ← exitChannels environment activation operands origin
-              returned activation.act (← evalProduce fuel config environment channels expression)
+              let carriers ← withExitChannels environment activation operands origin
+                (fun channels => evalProduce fuel config environment channels expression)
+              returned activation.act carriers
           | none =>
               if activation.channels.isEmpty then returned activation.act []
               else if activation.channels.length == 1 then returned activation.act [.register .unit]
@@ -734,10 +955,12 @@ def pushValue : Nat → EvalConfig → RuntimeActivation → Place → Expr → 
       let .stored stored ← readLoc fuel config.layout location | fault .shape
       let (_, run) ← sampledStored stored
       let index ← if run.element.nonfixed then do
-        let destination ← openElementReceiving config.layout environment.act location stored run.element
-          (producerCount? ⟨config.module, environment.vars⟩ expression) origin
-        buildExpr fuel config environment destination expression
-        publishElementReceiving fuel config.layout location stored (← completedDestination destination) origin
+        withOwnerExtension stored
+          (openElementReceiving config.layout environment.act location stored run.element
+            (producerCount? ⟨config.module, environment.vars⟩ expression) origin)
+          (fun destination => do
+            buildExpr fuel config environment destination expression
+            publishElementReceiving fuel config.layout location stored (← completedReceivingDestination destination) origin)
         pure run.count
       else do
         let value ← evalValue fuel config environment expression
@@ -754,8 +977,17 @@ def initGlobals (fuel : Nat) (config : EvalConfig) : List GlobalId → EvalM Uni
       let act ← freshAct
       let environment : RuntimeActivation := ⟨0, act, #[], [], []⟩
       let value ← if descriptor.ty.nonfixed then
-        carrierValue (← constructLocal ⟨config.module, environment.vars⟩ act descriptor.ty descriptor.org descriptor.init
-          (fun destination => buildExpr fuel config environment destination descriptor.init))
+        let materialized ← materializeProducer fuel ⟨config.module, environment.vars⟩ descriptor.init
+          (evalValue fuel config environment descriptor.init)
+        let carrier ← match materialized with
+          | some values => do
+              let destination ← materializedDestination fuel config.layout act descriptor.ty descriptor.org values.size (.fixed values)
+              publishCarriers descriptor.org [.completed destination]
+              pure (.completed destination)
+          | none =>
+              constructLocal ⟨config.module, environment.vars⟩ act descriptor.ty descriptor.org descriptor.init
+                (fun destination => buildExpr fuel config environment destination descriptor.init)
+        carrierValue carrier
       else evalValue fuel config environment descriptor.init
       bindRoot (.global global) value
       initGlobals fuel config globals

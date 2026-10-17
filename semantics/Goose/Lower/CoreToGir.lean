@@ -99,6 +99,11 @@ structure LoopCtx where
   breakTo : BlockId
   cont : ContKind
 
+inductive ValueRootSource
+  | conditionalScope (scope : ScopeId)
+  | refSliceVar (variableId : VarId)
+  deriving Inhabited, DecidableEq, Repr, BEq
+
 structure LS where
   blocks : Array BlockB
   /-- Type of every value so far, indexed by value id. -/
@@ -106,7 +111,7 @@ structure LS where
   cur : Option BlockId
   /-- Scopes entered, innermost first. -/
   stack : List ScopeId
-  valueRootRecipes : Array (ValueId × ScopeId) := #[]
+  valueRootRecipes : Array (ValueId × ValueRootSource) := #[]
 
 /-- What the lowering of one function reads: the Core module's tables, the
 function's slots and the parameter and result types of every context. -/
@@ -160,15 +165,25 @@ def isLive : B Bool := do pure (← curBlock).isSome
 
 def setCur (b : Option BlockId) : B Unit := modify fun s => { s with cur := b }
 
-def recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) : B Unit :=
+def recordValueRootSource (value : ValueId) (source : ValueRootSource) : B Unit :=
   modify fun state =>
     let reference := match state.vals[value]?.join with
       | some (.data type) => type.isRefLike
       | some (.view ..) => true
       | none => false
     if state.cur.isSome && reference then
-      { state with valueRootRecipes := state.valueRootRecipes.push (value, sourceScope) }
+      { state with valueRootRecipes := state.valueRootRecipes.push (value, source) }
     else state
+
+def recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) : B Unit :=
+  recordValueRootSource value (.conditionalScope sourceScope)
+
+def recordReadValueRootRecipe (value : ValueId) (place : Place) : B Unit := do
+  match place with
+  | .var variableId =>
+    if ((← read).vars[variableId]?).any (·.ty.isRefSlice) then
+      recordValueRootSource value (.refSliceVar variableId)
+  | _ => pure ()
 
 def pushInst (b : BlockId) (i : Inst) : B Unit :=
   modify fun s => { s with blocks := s.blocks.modify b fun blk => { blk with insts := blk.insts.push i } }
@@ -440,7 +455,9 @@ def lowerExpr : Expr → B ValueId
   | .bool b => emitDef (.constBool b)
   | .read p => do
     let r ← lowerPlace p
-    emitDef (.load r)
+    let value ← emitDef (.load r)
+    recordReadValueRootRecipe value p
+    pure value
   | .ref m p => do
     let r ← lowerPlace p
     borrowTo m r
@@ -834,11 +851,17 @@ def lowerImplFromState (m : Module) (impl : Impl) (s : LS) : GIR.Func :=
 def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
   lowerImplFromState m impl (lowerImplState m impl)
 
+def lowerValueRootCeiling (env : PEnv) (table : SourceRootTable) : ValueRootSource → List RootRef
+  | .conditionalScope scope =>
+      lowerContextRootCeiling env.ctx env.impl (table[scope]?.join.getD [])
+  | .refSliceVar variableId =>
+      unionRoots ((env.ann variableId).getD [])
+        (if (env.impl.params[variableId]?).any (·.var == variableId) then [.param variableId] else [])
+
 def lowerValueRootRows (env : PEnv) (table : SourceRootTable)
-    (recipes : Array (ValueId × ScopeId)) : Option (Array (ValueId × List RootRef)) :=
+    (recipes : Array (ValueId × ValueRootSource)) : Option (Array (ValueId × List RootRef)) :=
   if recipes.isEmpty then none else
-    some (recipes.map fun (value, scope) =>
-      (value, lowerContextRootCeiling env.ctx env.impl (table[scope]?.join.getD [])))
+    some (recipes.map fun (value, source) => (value, lowerValueRootCeiling env table source))
 
 def lowerContextValueRoots (m : Module) (ctx : Context) (impl : Impl) (state : LS) :
     Option (Array (ValueId × List RootRef)) :=

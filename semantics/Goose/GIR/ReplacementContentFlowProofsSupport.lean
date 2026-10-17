@@ -390,36 +390,62 @@ theorem step_supported {m : Module} {states : Array State} {f : Func} {state : S
     (slotBound : ∀ value slot, inst = .def value (.slotAddr slot) → slot < f.slots.size)
     (globalBound : ∀ value global, inst = .def value (.globalAddr global) → global < m.globals.size) :
     (step m states f vt state inst).Supported (atomUniverse m f) := by
-  unfold step
-  have exposed := touchValues_supported valid vt (accessOperands inst)
-  generalize touchValues vt state (accessOperands inst) = current at *
-  split
-  · rename_i value fn args org
-    have called := callState_supported inputs exposed fn args
-    apply touchValues_supported
-    apply called.2.values_join
-    split
-    · exact called.1
-    · simp [Roots.Supported]
-  · apply touchValues_supported
-    apply exposed.values_join
-    apply result_supported exposed vt
-    · intro slot equal
-      apply slotBound
-      subst_vars
-      rfl
-    · intro global equal
-      apply globalBound
-      subst_vars
-      rfl
-  · exact exposed.slots_join _ _ (flowAt_supported exposed.values _)
-  · split
-    · exact write_supported exposed _ _ (flowAt_supported exposed.values _)
-    · exact exposed
-  · exact edge_supported exposed _ _
-  · exact edge_supported (edge_supported exposed _ _) _ _
-  · exact { exposed with returned := exposed.returned.join (flowAt_supported exposed.values _) }
-  · exact exposed
+  cases inst with
+  | «def» value op =>
+      by_cases called : ∃ fn args origin, op = .call fn args origin
+      · obtain ⟨fn,args,origin,rfl⟩ := called
+        have next := callState_supported inputs valid fn args
+        let call := callState m states f state fn args
+        change (touchValues vt { call.2 with
+          values := addFlow call.2.values value (if valRefLike vt value then call.1 else .known []) }
+          (interiorLoadedResults vt (.def value (.call fn args origin)))).Supported _
+        apply touchValues_supported
+        apply next.2.values_join
+        split
+        · exact next.1
+        · simp [Roots.Supported]
+      · let exposed := touchValues vt state (accessOperands (.def value op))
+        have supported := touchValues_supported valid vt (accessOperands (.def value op))
+        have decomposition : step m states f vt state (.def value op) =
+            touchValues vt { exposed with values := addFlow exposed.values value (result f vt exposed value op) }
+              (interiorLoadedResults vt (.def value op)) := by
+          cases op <;> try rfl
+          exact False.elim (called ⟨_,_,_,rfl⟩)
+        rw [decomposition]
+        apply touchValues_supported
+        apply supported.values_join
+        apply result_supported supported vt
+        · intro slot equal
+          apply slotBound
+          subst_vars
+          rfl
+        · intro global equal
+          apply globalBound
+          subst_vars
+          rfl
+  | eff effect =>
+      have exposed := touchValues_supported valid vt (accessOperands (.eff effect))
+      cases effect <;> simp only [step,Id.run_pure]
+      case slotInit slot value origin => exact exposed.slots_join _ _ (flowAt_supported exposed.values _)
+      case store address value origin =>
+        split
+        · exact write_supported exposed _ _ (flowAt_supported exposed.values _)
+        · exact exposed
+      all_goals exact exposed
+  | term term =>
+      have exposed := touchValues_supported valid vt (accessOperands (.term term))
+      cases term <;> simp only [step,Id.run_pure]
+      case br target args => exact edge_supported exposed _ _
+      case condbr condition left leftArgs right rightArgs =>
+        exact edge_supported (edge_supported exposed _ _) _ _
+      case ret values origin =>
+        cases values with
+        | nil => exact exposed
+        | cons value rest =>
+            cases rest with
+            | nil => exact { exposed with returned := exposed.returned.join (flowAt_supported exposed.values _) }
+            | cons next rest => exact exposed
+      all_goals exact exposed
 
 theorem round_supported {m : Module} {states : Array State} {f : Func} {state : State}
     (inputs : ModuleSupported m states) (valid : state.Supported (atomUniverse m f))

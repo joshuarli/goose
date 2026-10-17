@@ -20,7 +20,8 @@ theorem ssa_arrLit (loop : Option LoopCtx) (type : Ty) {expressions : List Expr}
 theorem ssa_readPlace (loop : Option LoopCtx) {place : Place}
     (source : SSARun loop [] (fun result => [result]) (lowerPlace place)) :
     SSARun loop [] (fun result => [result]) (lowerExpr (.read place)) :=
-  source.bind fun _value => ssa_emitDef loop _
+  source.bind fun address => (ssa_emitDef loop (.load address)).bind fun value =>
+    (ssa_recordReadValueRootRecipe loop value place).bind fun _ => ssa_value loop value
 
 theorem ssa_refPlace (loop : Option LoopCtx) (mu : Mutability) {place : Place}
     (source : SSARun loop [] (fun result => [result]) (lowerPlace place)) :

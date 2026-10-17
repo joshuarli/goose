@@ -279,6 +279,11 @@ theorem stateQuery_renderValue (value : Value) : StateQuery (renderValue value) 
   | bool value => cases value <;> exact stateQuery_pure _
   | unit | fixed _ | record _ _ | ref _ | slice _ _ _ | stored _ => exact stateQuery_stop _
 
+theorem stateQuery_receivingDestination (id : Goose.Core.DestinationId) : StateQuery (receivingDestination id) := by
+  intro state
+  simp only [receivingDestination, liftConstruction]
+  cases destinationCurrent state.construction id <;> rfl
+
 theorem stateQuery_completedDestination (id : Goose.Core.DestinationId) : StateQuery (completedDestination id) := by
   unfold completedDestination
   apply stateQuery_bind
@@ -286,14 +291,19 @@ theorem stateQuery_completedDestination (id : Goose.Core.DestinationId) : StateQ
   · intro destination
     cases destination.progress <;> first
       | exact stateQuery_pure _
-      | (apply stateQuery_bind
-         · exact stateQuery_get
-         · intro state
-           split <;> first | exact stateQuery_pure _ | exact stateQuery_stop _)
+      | exact stateQuery_stop _
+
+theorem stateQuery_completedReceivingDestination (id : Goose.Core.DestinationId) :
+    StateQuery (completedReceivingDestination id) := by
+  apply stateQuery_bind (receivingDestination id)
+  · exact stateQuery_receivingDestination id
+  · intro current
+    exact stateQuery_completedDestination current
 
 theorem stateQuery_carrierValue (carrier : Carrier) : StateQuery (carrierValue carrier) := by
   cases carrier with
   | register value => exact stateQuery_pure _
+  | pendingNamed token => exact stateQuery_stop _
   | completed id =>
       unfold carrierValue
       apply stateQuery_bind

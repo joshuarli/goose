@@ -176,7 +176,9 @@ def edge (f : Func) (state : State) (target : BlockId) (args : List ValueId) : S
 
 def step (m : Module) (states : Array State) (f : Func) (vt : Array (Option VTy))
     (state : State) (inst : Inst) : State := Id.run do
-  let state := touchValues vt state (accessOperands inst)
+  let state := match inst with
+    | .def _ (.call ..) => state
+    | _ => touchValues vt state (accessOperands inst)
   match inst with
   | .def value (.call fn args _) =>
       let (roots, after) := callState m states f state fn args
@@ -415,6 +417,14 @@ def ownerTouches (m : Module) (roots : List RootRef) : List RootRef :=
     | .local _ | .param _ => true
   else roots
 
+def rawOwnerTouches (m : Module) (roots : Roots) : Roots :=
+  roots.bind fun
+    | .global global => .known ((ownerTouches m [.global global]).map Atom.ofRootRef)
+    | atom => .known [atom]
+
+def ownerDependencies (m : Module) (f : Func) (roots : Roots) : Option (List RootRef) :=
+  normalize f (rawOwnerTouches m roots)
+
 def callQuery (m : Module) (f : Func) (vt : Array (Option VTy))
     (states : Array State) (state : State) (fn : FnId) (args : List ValueId) : Option (List RootRef) :=do
   let env : TyEnv := { m.tyEnv f with vals := vt }
@@ -423,10 +433,10 @@ def callQuery (m : Module) (f : Func) (vt : Array (Option VTy))
   let effects ← states[fn]?
   let arguments ← args.foldlM (init := []) fun roots value => do
     if !valRefLike vt value then pure roots else
-      let actual ← normalize f (flowAt state.values value)
+      let actual ← ownerDependencies m f (flowAt state.values value)
       pure (unionRoots roots actual)
-  let touched ← normalize f (substitute f state args (publicTouches effects.touched))
-  pure (unionRoots arguments (ownerTouches m touched))
+  let touched ← ownerDependencies m f (substitute f state args (publicTouches effects.touched))
+  pure (unionRoots arguments touched)
 
 
 def mutationQuery (m : Module) (f : Func) (vt : Array (Option VTy))
@@ -480,6 +490,11 @@ open ReplacementContentFlow.Model in
 
 def ReplacementFunctionFlow.value (flow : ReplacementFunctionFlow) (value : ValueId) : Option (List RootRef) :=
   flow.state.bind fun state => normalize flow.function (flowAt state.values value)
+
+open ReplacementContentFlow.Model in
+
+def ReplacementFunctionFlow.ownerDependencies (flow : ReplacementFunctionFlow) (value : ValueId) : Option (List RootRef) :=
+  flow.state.bind fun state => ReplacementContentFlow.Model.ownerDependencies flow.cache.module flow.function (flowAt state.values value)
 
 open ReplacementContentFlow.Model in
 
@@ -539,6 +554,10 @@ theorem ReplacementContentFlow.forFunction_model (cache : ReplacementContentFlow
 theorem ReplacementFunctionFlow.value_model (flow : ReplacementFunctionFlow) (value : ValueId) :
     flow.value value = flow.model.bind (fun state =>
       ReplacementContentFlow.Model.normalize flow.source (ReplacementContentFlow.Model.flowAt state.values value)) := rfl
+
+theorem ReplacementFunctionFlow.ownerDependencies_model (flow : ReplacementFunctionFlow) (value : ValueId) :
+    flow.ownerDependencies value = flow.model.bind (fun state => ReplacementContentFlow.Model.ownerDependencies
+      flow.module flow.source (ReplacementContentFlow.Model.flowAt state.values value)) := rfl
 
 theorem ReplacementFunctionFlow.contents_model (flow : ReplacementFunctionFlow) (value : ValueId) :
     flow.contents value = flow.model.bind (fun state => ReplacementContentFlow.Model.normalize flow.source

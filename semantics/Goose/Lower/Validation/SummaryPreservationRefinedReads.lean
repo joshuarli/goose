@@ -75,7 +75,23 @@ theorem lowerExpr_read_var_refined_witness {module : GIR.Module}
     (op := .load address.1) (value := (emitDef (.load address.1) le address.2).1)
     (final := (emitDef (.load address.1) le address.2).2)
     (by simpa [Op.uses] using addressBound) delta rfl
-  refine ⟨next, nextWitness, nextEffects, ?_, slots.trans sameSlots⟩
+  have recorded : BuilderRootWitness res vt func next
+        (lowerExpr (.read (.var varId)) le ls).2 ∧
+      BuilderEffectRefinement module vt func next start.eff
+        (lowerExpr (.read (.var varId)) le ls).2 := by
+    change BuilderRootWitness res vt func next
+        (recordReadValueRootRecipe (emitDef (.load address.1) le address.2).1 (.var varId) le
+          (emitDef (.load address.1) le address.2).2).2 ∧
+      BuilderEffectRefinement module vt func next start.eff
+        (recordReadValueRootRecipe (emitDef (.load address.1) le address.2).1 (.var varId) le
+          (emitDef (.load address.1) le address.2).2).2
+    rw [recordReadValueRootRecipe_run]
+    simp only []
+    split
+    · rw [recordValueRootSource_run]
+      exact ⟨⟨nextWitness.valueSize, nextWitness.instructions⟩, nextEffects⟩
+    · exact ⟨nextWitness, nextEffects⟩
+  refine ⟨next, recorded.1, recorded.2, ?_, slots.trans sameSlots⟩
   change RootsRefine func
     (rootsAt next.vals (emitDef (.load address.1) le address.2).1) sourceRoots
   rw [roots]

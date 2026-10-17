@@ -11,7 +11,7 @@ inductive StaticOwnerPlace : RootRef → Place → Prop
   | global (global) : StaticOwnerPlace (.global global) (.global global)
   | field {root place} (field) : StaticOwnerPlace root place → StaticOwnerPlace root (.field place field)
 
-theorem emitDef_current {env : LEnv} {before after : LS} {value : ValueId} {op : Op}
+theorem staticOwner_emitDef_current {env : LEnv} {before after : LS} {value : ValueId} {op : Op}
     (run : emitDef op env before = (value, after)) : after.cur = before.cur := by
   cases current : before.cur with
   | none => rw [emitDef_none _ _ current] at run; cases run; exact current
@@ -21,11 +21,11 @@ theorem staticOwner_lowerPlace_current {root : RootRef} {place : Place}
     (source : StaticOwnerPlace root place) {env : LEnv} {before after : LS} {value : ValueId}
     (run : lowerPlace place env before = (value, after)) : after.cur = before.cur := by
   induction source generalizing before after value with
-  | slot slot => exact emitDef_current run
-  | global global => exact emitDef_current run
+  | slot slot => exact staticOwner_emitDef_current run
+  | global global => exact staticOwner_emitDef_current run
   | field field child ih =>
     obtain ⟨address, middle, first, next⟩ := bind_eq.mp run
-    exact (emitDef_current next).trans (ih first)
+    exact (staticOwner_emitDef_current next).trans (ih first)
 
 theorem emitted_root_of_closed {env : LEnv} {before captured state : LS}
     {func : Func} {results : Array (List RootRef)} {types : Array (Option VTy)} {provenance : Prov}

@@ -162,6 +162,14 @@ theorem definitions_recordValueRootRecipe (value : ValueId) (sourceScope : Scope
   rw [recordValueRootRecipe_run]
   exact ⟨rfl, rfl⟩
 
+theorem definitions_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    DefinitionRun (recordReadValueRootRecipe value place) := by
+  apply DefinitionRun.of_unchanged
+  intro le state
+  cases place <;>
+    simp [recordReadValueRootRecipe_run, recordValueRootSource_run] <;>
+    (try split) <;> exact ⟨rfl, rfl⟩
+
 theorem definitions_emitTerm (term : Term) : DefinitionRun (emitTerm term) := by
   apply DefinitionRun.of_unchanged
   intro le state
@@ -500,7 +508,9 @@ theorem definitions_lowerExpr : ∀ e : Expr, DefinitionRun (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact definitions_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact DefinitionRun.bind (definitions_lowerPlace p) fun _ => definitions_emitDef _
+    exact DefinitionRun.bind (definitions_lowerPlace p) fun _ =>
+      DefinitionRun.bind (definitions_emitDef _) fun value =>
+        DefinitionRun.bind (definitions_recordReadValueRootRecipe value p) fun _ => DefinitionRun.pure value
   | .ref m p => by
     simp only [lowerExpr]
     exact DefinitionRun.bind (definitions_lowerPlace p) fun r => definitions_borrowTo m r

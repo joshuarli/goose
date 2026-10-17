@@ -39,12 +39,13 @@ theorem actualContents_sourceExpr (expr : Expr)
   cases expr with
   | read place =>
     obtain ⟨address, middle, placeRun, emitted⟩ := bind_eq.mp run
-    have middleLive := (dead_emitDef (.load address)).live_before emitted live
+    have middleLive := ((dead_emitDef (.load address)).bind fun value =>
+      (dead_recordReadValueRootRecipe value place).bind fun _ => DeadRun.pure value).live_before emitted live
     have middleGenerated := generated.lowerPlace place placeRun
     cases current : middle.cur with
     | none => simp [current] at middleLive
     | some block =>
-      exact (actualContents_terminal (by trivial) middleGenerated current emitted typed).weaken
+      exact (actualContents_terminal_read middleGenerated current emitted typed).weaken
         (advB_lowerPlace place _ _ _ _ placeRun).vals
   | ref requested place =>
     obtain ⟨info, childFinish, placeSource, _, _⟩ := tyExpr_ref_place source
@@ -278,13 +279,14 @@ theorem actualContents_sourcePlace (place : Place)
         cases place with
         | var index =>
           obtain ⟨address, middle, placeRun, emitted⟩ := bind_eq.mp run
-          have middleLive := (dead_emitDef (.load address)).live_before emitted live
+          have middleLive := ((dead_emitDef (.load address)).bind fun value =>
+            (dead_recordReadValueRootRecipe value (.var index)).bind fun _ => DeadRun.pure value).live_before emitted live
           have middleGenerated := generated.lowerPlace (.var index) placeRun
           cases current : middle.cur with
           | none => simp [current] at middleLive
           | some block =>
             obtain ⟨_, typed⟩ := typed
-            exact (actualContents_terminal (by trivial) middleGenerated current emitted typed).weaken
+            exact (actualContents_terminal_read middleGenerated current emitted typed).weaken
               (advB_lowerPlace (.var index) _ _ _ _ placeRun).vals
         | _ => simp [Core.sliceRefTy] at special
       | _ => simp [Core.sliceRefTy] at special

@@ -40,7 +40,7 @@ theorem entryReplayBuilder (module : GIR.Module) (results : Array (List RootRef)
   have symbols : (entryReplayState types le).SymbolWF le scopeCount := by
     exact (LS.symbolWF_initState le scopeCount).newBlockCur
   have empty := entryReplayState_instructions types le
-  refine ⟨⟨?_, ?_⟩, ?_, symbols, entryReplayState_current types le, rfl⟩
+  refine ⟨⟨?_, ?_⟩, ?_, symbols, entryReplayState_current types le, rfl, RecipeBounds.empty rfl⟩
   · simp [entryRootValues, entryReplayState_values_size]
   · intro inst member
     rw [empty] at member

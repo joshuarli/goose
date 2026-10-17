@@ -23,6 +23,13 @@ theorem cleanupDestination_protected_exact (state : ExecutionState) (origin : Or
     active, Bool.not_true, Bool.false_eq_true, ↓reduceIte, replacementFound, liftConstruction,
     abandonPreservingExit_exact state.construction id replacement indexed checked]
 
+theorem cleanupReceivingDestination_current (state : ExecutionState) (origin : OriginId)
+    (incoming current : DestinationId) (carriers : List Goose.Construct.Carrier)
+    (resolved : destinationCurrent state.construction incoming = .ok current) :
+    cleanupReceivingDestination origin incoming carriers state =
+      cleanupDestination origin current carriers state := by
+  simp [cleanupReceivingDestination, receivingDestination, liftConstruction, resolved, bind, pure]
+
 theorem protectDestination_ok (state final : ExecutionState) (origin : OriginId)
     (id : DestinationId) (action : EvalM α) (value : α)
     (result : action state = .ok value final) :
@@ -38,32 +45,38 @@ theorem protectDestination_stop (state final : ExecutionState) (origin : OriginI
 theorem protectDestination_escape_protected_exact (state final : ExecutionState)
     (origin : OriginId) (id replacement : DestinationId) (action : EvalM α)
     (target : ExitAddress) (carriers : List Goose.Construct.Carrier) (destination : PendingDestination)
+    (incoming : DestinationId)
+    (resolved : destinationCurrent final.construction incoming = .ok id)
     (result : action state = .escape target carriers final)
     (present : final.construction.destinations[id]? = some destination)
     (active : activeProgress destination.progress = true)
     (replacementFound : protectedReplacement? final.construction id carriers = some replacement)
     (indexed : DestinationCapabilitiesIndexed final.construction)
     (checked : ∃ rows, protectedExitDiscarded final.construction id replacement = .ok rows) :
-    protectDestination origin id action state = .escape target carriers
+    protectDestination origin incoming action state = .escape target carriers
       { final with construction :=
         abandonRowsState (protectedRows final.construction id replacement) final.construction } := by
   simp only [protectDestination, result,
+    cleanupReceivingDestination_current final origin incoming id _ resolved,
     cleanupDestination_protected_exact final origin id replacement carriers destination
       present active replacementFound indexed checked]
 
 theorem protectDestination_break_protected_exact (state final : ExecutionState)
     (origin : OriginId) (id replacement : DestinationId) (action : EvalM α)
     (target : Nat) (carriers : List Goose.Construct.Carrier) (destination : PendingDestination)
+    (incoming : DestinationId)
+    (resolved : destinationCurrent final.construction incoming = .ok id)
     (result : action state = .jump target (.breakValue carriers) final)
     (present : final.construction.destinations[id]? = some destination)
     (active : activeProgress destination.progress = true)
     (replacementFound : protectedReplacement? final.construction id carriers = some replacement)
     (indexed : DestinationCapabilitiesIndexed final.construction)
     (checked : ∃ rows, protectedExitDiscarded final.construction id replacement = .ok rows) :
-    protectDestination origin id action state = .jump target (.breakValue carriers)
+    protectDestination origin incoming action state = .jump target (.breakValue carriers)
       { final with construction :=
         abandonRowsState (protectedRows final.construction id replacement) final.construction } := by
   simp only [protectDestination, result,
+    cleanupReceivingDestination_current final origin incoming id _ resolved,
     cleanupDestination_protected_exact final origin id replacement carriers destination
       present active replacementFound indexed checked]
 
@@ -114,13 +127,16 @@ theorem cleanupDestination_tree_success_exact (state final : ExecutionState) (or
 
 theorem protectDestination_continue_tree_success_exact (state pending final : ExecutionState)
     (origin : OriginId) (id target : Nat) (action : EvalM α) (destination : PendingDestination)
+    (incoming : DestinationId)
+    (resolved : destinationCurrent pending.construction incoming = .ok id)
     (result : action state = .jump target .continueLoop pending)
     (present : pending.construction.destinations[id]? = some destination)
     (active : activeProgress destination.progress = true)
     (indexed : DestinationCapabilitiesIndexed pending.construction)
-    (propagated : protectDestination origin id action state = .jump target .continueLoop final) :
+    (propagated : protectDestination origin incoming action state = .jump target .continueLoop final) :
     final = { pending with construction := treeAbandonRowsState (treeRows pending.construction id) pending.construction } := by
-  simp only [protectDestination, result] at propagated
+  simp only [protectDestination, result,
+    cleanupReceivingDestination_current pending origin incoming id _ resolved] at propagated
   simp only [cleanupDestination, getDestination, EvalM.get, bind, present, pure,
     active, Bool.not_true, Bool.false_eq_true, ↓reduceIte, protectedReplacement?, List.findSome?_nil,
     List.any_nil, liftConstruction] at propagated
@@ -135,6 +151,8 @@ theorem protectDestination_continue_tree_success_exact (state pending final : Ex
 theorem protectDestination_escape_tree_success_exact (state pending final : ExecutionState)
     (origin : OriginId) (id : DestinationId) (action : EvalM α) (target : ExitAddress)
     (carriers : List Goose.Construct.Carrier) (destination : PendingDestination)
+    (incoming : DestinationId)
+    (resolved : destinationCurrent pending.construction incoming = .ok id)
     (result : action state = .escape target carriers pending)
     (present : pending.construction.destinations[id]? = some destination)
     (active : activeProgress destination.progress = true)
@@ -143,9 +161,10 @@ theorem protectDestination_escape_tree_success_exact (state pending final : Exec
       | .completed destination => destination == id
       | _ => false) = false)
     (indexed : DestinationCapabilitiesIndexed pending.construction)
-    (propagated : protectDestination origin id action state = .escape target carriers final) :
+    (propagated : protectDestination origin incoming action state = .escape target carriers final) :
     final = { pending with construction := treeAbandonRowsState (treeRows pending.construction id) pending.construction } := by
   simp only [protectDestination, result,
+    cleanupReceivingDestination_current pending origin incoming id _ resolved,
     cleanupDestination_tree_transition pending origin id carriers destination present active noReplacement noCarrier,
     liftConstruction] at propagated
   cases cleaned : abandonTree id pending.construction with
@@ -159,6 +178,8 @@ theorem protectDestination_escape_tree_success_exact (state pending final : Exec
 theorem protectDestination_break_tree_success_exact (state pending final : ExecutionState)
     (origin : OriginId) (id target : Nat) (action : EvalM α)
     (carriers : List Goose.Construct.Carrier) (destination : PendingDestination)
+    (incoming : DestinationId)
+    (resolved : destinationCurrent pending.construction incoming = .ok id)
     (result : action state = .jump target (.breakValue carriers) pending)
     (present : pending.construction.destinations[id]? = some destination)
     (active : activeProgress destination.progress = true)
@@ -167,9 +188,10 @@ theorem protectDestination_break_tree_success_exact (state pending final : Execu
       | .completed destination => destination == id
       | _ => false) = false)
     (indexed : DestinationCapabilitiesIndexed pending.construction)
-    (propagated : protectDestination origin id action state = .jump target (.breakValue carriers) final) :
+    (propagated : protectDestination origin incoming action state = .jump target (.breakValue carriers) final) :
     final = { pending with construction := treeAbandonRowsState (treeRows pending.construction id) pending.construction } := by
   simp only [protectDestination, result,
+    cleanupReceivingDestination_current pending origin incoming id _ resolved,
     cleanupDestination_tree_transition pending origin id carriers destination present active noReplacement noCarrier,
     liftConstruction] at propagated
   cases cleaned : abandonTree id pending.construction with

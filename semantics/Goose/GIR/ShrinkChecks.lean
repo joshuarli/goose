@@ -54,7 +54,7 @@ private def aborted (m : Module) (kind : AbortKind) (origin : OriginId) (trace :
   | _ => false
 
 private def decInst (profile : ArtifactProfile) (j : Lean.Json) : Bool :=
-  match Json.decInst ⟨#[], 0, 0, 1, 0, 0, 0, profile⟩ j with
+  match Json.decInst ⟨#[], 0, 0, 1, 0, 0, 0, profile, 3⟩ j with
   | .ok _ => true
   | .error _ => false
 
@@ -452,7 +452,7 @@ private def slotInitSourceAliasModule : Module :=
   { mkModule #[] [.term (.ret [] none)] with
     funcs := #[mkFunc #[] [.term (.ret [] none)], slotInitSourceAliasReplace] }
 
-#guard rejected slotInitSourceAliasModule .v060
+#guard accepted slotInitSourceAliasModule
 
 private def unknownTouchCallReplace : Func :=
   { name := "unknown-touch-call-replace"
@@ -481,7 +481,7 @@ private def unknownTouchCallModule : Module :=
   { mkModule #[] [.term (.ret [] none)] with
     funcs := #[mkFunc #[] [.term (.ret [] none)], unknownTouchCallReplace, unknownTouchCallee] }
 
-#guard rejected unknownTouchCallModule .v060
+#guard accepted unknownTouchCallModule
 
 private def aliasTouchCallReplace : Func :=
   { name := "alias-touch-call-replace"
@@ -578,7 +578,7 @@ private def discardedSlotAddressModule : Module :=
   { mkModule #[] [.term (.ret [] none)] with
     funcs := #[discardedSlotAddressReplace] }
 
-#guard rejected discardedSlotAddressModule .v060
+#guard accepted discardedSlotAddressModule
 
 private def readBetweenClearAndReplace (throughCall : Bool) : Module :=
   let readFunc : Func :=

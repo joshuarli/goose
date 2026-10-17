@@ -86,7 +86,8 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
     have lowering := run
     simp only [lowerExpr] at lowering
     obtain ⟨address, mid, placeRun, emitted⟩ := bind_eq.mp lowering
-    have midLive := (dead_emitDef (.load address)).live_before emitted live
+    have midLive := ((dead_emitDef (.load address)).bind fun value =>
+      (dead_recordReadValueRootRecipe value p).bind fun _ => DeadRun.pure value).live_before emitted live
     obtain ⟨mu, typed⟩ := lowerPlace_recursive_typed p supported placeSource placeRun midLive
     cases current : mid.cur with
     | none => simp [current] at midLive

@@ -32,6 +32,28 @@ private def observation (module : Module) : Option (List UInt8 × List Core.Cons
 #guard observation rawBytes == some ([65,0,255,10],[.begin 0,.write 0 0,.write 0 1,.write 0 2,.publish 0])
 #guard (match Run.run 0 .release rawBytes with | .timeout stdout events => stdout.isEmpty && events.isEmpty | _ => false)
 
+private def destValueAddsPrefix : Module :=
+  let ty := Ty.grow (.int .u8)
+  moduleOf #[function "entry" #[⟨[],[
+  .eff (.enter 0), .def 0 (.destOpen (.slot 0) ty .value none (some 0)),
+  .eff (.destBytes 0 [65] (some 0)), .def 1 (.destFinish 0 (some 0)),
+  .eff (.destPublish 1 (some 0)), .def 2 (.slotAddr 0),
+  .def 3 (.destOpen (.append 2) ty .elementRun none (some 0)),
+  .eff (.destBytes 3 [66] (some 0)), .def 4 (.destValue 3 (some 0)),
+  .def 5 (.destFinish 4 (some 0)), .def 6 (.destRelocate 5 .headerRemoval (some 0)),
+  .eff (.destPublish 6 (some 0)), .def 7 (.slotAddr 0), .def 8 (.snapshot .owner 7),
+  .eff (.print [.val 8] (some 0)),
+  .eff (.leave 0), .term (.ret [] (some 0))]⟩] #[⟨ty,.mutable,0,0⟩]]
+
+#guard (Validate.validate destValueAddsPrefix).isOk
+#guard observation destValueAddsPrefix == some ([65,66,10],[.begin 0,.write 0 0,.publish 0,
+  .begin 1,.write 1 0,.relocate 1 .headerRemoval,.publish 1])
+#guard (match Run.run 1000 .debug destValueAddsPrefix with
+  | .done .returned stdout events => stdout.data.toList == [65,66,10] &&
+      events == [.begin 0,.write 0 0,.publish 0,.begin 1,.write 1 0,
+        .relocate 1 .headerRemoval,.publish 1]
+  | _ => false)
+
 private def duplicatePublish : Module :=
   let entry := rawBytes.funcs[0]
   let block := entry.blocks[0]
@@ -83,6 +105,7 @@ private def roundTrip (module : Module) : Bool :=
 #guard roundTrip rawBytes
 #guard roundTrip multiple
 #guard roundTrip nested
+#guard roundTrip destValueAddsPrefix
 
 private def malformedBytes : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[],[],[],[],[],[],0]"
 #guard !(Decode.decodeBytes malformedBytes.toUTF8).isOk
@@ -103,10 +126,117 @@ private def staged (capacity : Nat) : Module :=
     .eff (.print [.val 5] (some 0)), .eff (.leave 0), .term (.ret [] (some 0))]⟩]
     #[⟨ty,.mutable,0,0⟩]]
 
+private def stagedReceivingAlias : Module :=
+  let ty := Ty.limited (.int .u8) 2
+  moduleOf #[function "entry" #[⟨[],[
+    .eff (.enter 0), .def 0 (.destOpen (.slot 0) ty .value none (some 0)),
+    .def 1 (.destStage 0 (some 0)), .def 2 (.receivingOpen 1), .def 3 (.destRenew 2),
+    .eff (.destBytes 3 [65,66] (some 0)), .def 4 (.destFinish 3 (some 0)), .eff (.receivingDrop 2),
+    .def 5 (.destFit 4 (some 0)), .eff (.destPublish 5 (some 0)),
+    .def 6 (.slotAddr 0), .def 7 (.snapshot .owner 6), .eff (.print [.val 7] (some 0)),
+    .eff (.leave 0), .term (.ret [] (some 0))]⟩]
+    #[⟨ty,.mutable,0,0⟩]]
+
+private def traceJson (text : String) : Lean.Json :=
+  (Lean.Json.parse text).toOption.getD .null
+
+private def rejectsTraceEvent (text : String) : Bool :=
+  match Goose.Construct.TraceJson.decodeEvent (traceJson text) with
+  | .error _ => true
+  | .ok _ => false
+
+private def acceptsTraceEvent (text : String) (expected : Core.ConstructionEvent) : Bool :=
+  match Goose.Construct.TraceJson.decodeEvent (traceJson text) with
+  | .error _ => false
+  | .ok event => event == expected
+
+#guard Goose.Construct.TraceJson.event (.stage 7) == "[\"stage\",7,\"capacity-check\"]"
+#guard rejectsTraceEvent "[\"stage\",7]"
+#guard rejectsTraceEvent "[\"stage\",7,\"other\"]"
+#guard acceptsTraceEvent "[\"stage\",7,\"capacity-check\"]" (.stage 7)
+
+private def rootMetadataModule (slotRoots : Option (Array (SlotId × List RootRef)))
+    (valueRoots : Option (Array (ValueId × List RootRef))) (includeReferenceSlot : Bool := false) : Module :=
+  { rawBytes with funcs := rawBytes.funcs.map fun entry =>
+      let slots := if includeReferenceSlot then
+        entry.slots.push ⟨.ref .mutable byteTy, .mutable, 0, 1⟩ else entry.slots
+      let roots := { entry.roots with slots := slotRoots, values := valueRoots }
+      { entry with slots, roots } }
+
+private def rootMetadataRoundTrip (module : Module) : Bool :=
+  match Decode.decodeBytes (Writer.write module).toUTF8 with
+  | .error _ => false
+  | .ok decoded => (Validate.validate decoded).isOk && Writer.write decoded == Writer.write module
+
+private def slotRootMetadata : Module :=
+  rootMetadataModule (some #[(1,[.static])]) none true
+
+private def valueRootMetadata : Module :=
+  rootMetadataModule none (some #[(2,[.local 0])])
+
+#guard (Validate.validate slotRootMetadata).isOk
+#guard rootMetadataRoundTrip slotRootMetadata
+#guard (Validate.validate valueRootMetadata).isOk
+#guard rootMetadataRoundTrip valueRootMetadata
+
+private def preservesRootPresence (module : Module)
+    (slots : Option (Array (SlotId × List RootRef)))
+    (values : Option (Array (ValueId × List RootRef))) : Bool :=
+  match Decode.decodeBytes (Writer.write module).toUTF8 with
+  | .error _ => false
+  | .ok decoded =>
+      decoded.funcs[0]?.any (fun entry => entry.roots.slots == slots && entry.roots.values == values) &&
+        Writer.write decoded == Writer.write module
+
+#guard preservesRootPresence (rootMetadataModule none none) none none
+#guard preservesRootPresence (rootMetadataModule (some #[]) none) (some #[]) none
+#guard preservesRootPresence (rootMetadataModule none (some #[])) none (some #[])
+
+private def badValueRootId : Bool :=
+  let wire := (Writer.write valueRootMetadata).replace "[\"er\",2," "[\"er\",99,"
+  !(Decode.decodeBytes wire.toUTF8).isOk
+
+private def nullValueRootId : Bool :=
+  let wire := (Writer.write valueRootMetadata).replace "[\"er\",2," "[\"er\",null,"
+  !(Decode.decodeBytes wire.toUTF8).isOk
+
+private def duplicateValueRootRows : Bool :=
+  let module := rootMetadataModule none (some #[(2,[.local 0]),(2,[])])
+  !(Decode.decodeBytes (Writer.write module).toUTF8).isOk
+
+private def badSlotRootId : Bool :=
+  let wire := (Writer.write slotRootMetadata).replace "[\"sr\",1," "[\"sr\",99,"
+  !(Decode.decodeBytes wire.toUTF8).isOk
+
+private def duplicateSlotRootRows : Bool :=
+  let module := rootMetadataModule (some #[(1,[.static]),(1,[])]) none true
+  !(Decode.decodeBytes (Writer.write module).toUTF8).isOk
+
+private def unsafeValueRootCeiling : Module :=
+  rootMetadataModule none (some #[(2,[.static])])
+
+private def nonReferenceSlotRootInfo : Module :=
+  rootMetadataModule (some #[(0,[])]) none
+
+#guard badValueRootId
+#guard nullValueRootId
+#guard duplicateValueRootRows
+#guard badSlotRootId
+#guard duplicateSlotRootRows
+#guard (match Validate.validate unsafeValueRootCeiling with
+  | .error violation => violation.code == .v050
+  | .ok _ => false)
+#guard (match Validate.validate nonReferenceSlotRootInfo with
+  | .error violation => violation.code == .v050
+  | .ok _ => false)
+
 #guard (Validate.validate (staged 2)).isOk
 #guard observation (staged 2) == some ([65,66,10],
   [.begin 0,.stage 0,.write 0 0,.write 0 1,.copy (.storage 1 []) 0,.publish 0])
 #guard roundTrip (staged 2)
+#guard (Validate.validate stagedReceivingAlias).isOk
+#guard observation stagedReceivingAlias == observation (staged 2)
+#guard roundTrip stagedReceivingAlias
 #guard (match Run.run 1000 .release (staged 1) with
   | .done (.aborted .capacity 0) stdout events => stdout.isEmpty &&
       events == [.begin 0,.stage 0,.write 0 0,.write 0 1]
@@ -126,16 +256,21 @@ private def targeted : Module :=
     .def 2 (.slotAddr 0), .def 3 (.snapshot .owner 2), .eff (.print [.val 3] (some 0)),
     .eff (.leave 0), .term (.ret [] (some 0))]⟩] #[⟨byteTy,.mutable,0,0⟩]
   let producer := function "producer" #[
-    ⟨[(0,.dest byteTy .value)],[.term (.invoke 2 [] [] 1 [0] [⟨0,2,[0]⟩] (some 0))]⟩,
-    ⟨[(1,.dest byteTy .value)],[.def 2 (.destAbandon 1 (some 0)),
+    ⟨[(0,.dest byteTy .value)],[.def 1 (.receivingOpen 0),
+      .term (.invoke 2 [] [] 1 [] [⟨0,2,[]⟩] (some 0))]⟩,
+    ⟨[],[.def 2 (.receivingCancel 1 [] (some 0)),
       .eff (.destCancel 2 (some 0)), .term (.abort .userAbort (some 0))]⟩,
-    ⟨[(3,.built byteTy .value),(4,.dest byteTy .value)],[
-      .def 5 (.destAbandon 4 (some 0)), .eff (.destCancel 5 (some 0)),
-      .def 6 (.destRelocate 3 .exitValue (some 0)), .term (.ret [6] (some 0))]⟩]
+    ⟨[(3,.built byteTy .value)],[
+      .def 4 (.exitAdopt 1 3), .def 5 (.receivingCancel 1 [3] (some 0)),
+      .eff (.destCancel 5 (some 0)), .def 6 (.exitLand 4 3 (some 0)),
+      .eff (.exitRelease 4 (some 0)), .term (.ret [6] (some 0))]⟩]
       #[] [⟨byteTy,.value,none⟩]
   let helper := function "helper" #[⟨[],[
-    .def 0 (.targetDest 0 0 (some 0)), .eff (.destBytes 0 [65,0,255] (some 0)),
-    .def 1 (.destFinish 0 (some 0)), .term (.escape 0 [1] [] (some 0))]⟩]
+    .def 0 (.targetReceiving 0 0 (some 0)), .def 1 (.exitReserve 0 .newValue (some 0)),
+    .def 2 (.reservedDest 1), .eff (.destBytes 2 [65,0,255] (some 0)),
+    .def 3 (.destFinish 2 (some 0)), .def 4 (.receivingCancel 0 [3] (some 0)),
+    .eff (.destCancel 4 (some 0)), .eff (.exitRelease 1 (some 0)),
+    .term (.escape 0 [3] [] (some 0))]⟩]
   { (moduleOf #[{ entry with summary := known [] [] [] true true },
       { producer with summary := known [0] [] [] true false },
       { helper with summary := known [] [0] [0] false false }]) with targets := #[⟨1,[]⟩] }
@@ -159,18 +294,111 @@ private def namedResult : Module :=
     [⟨byteTy,.value,some 0⟩]
   moduleOf #[entry,producer]
 
-#guard (Validate.validate namedResult).isOk
-#guard observation namedResult == some ([65,10],[.begin 0,.write 0 0,.publish 0])
-#guard roundTrip namedResult
+#guard (match Validate.validate namedResult with | .error v => v.code == .v060 | _ => false)
+#guard (Decode.decodeBytes (Writer.write namedResult).toUTF8).isOk
+
+private def mutatedNamedResult : Module :=
+  let producer := namedResult.funcs[1]
+  let producer := { producer with blocks := #[
+    ⟨[(0,.dest byteTy .value)],[
+    .eff (.enter 0), .def 1 (.receivingOpen 0), .def 2 (.destRenew 1),
+    .eff (.destBytes 2 [65] (some 0)), .def 3 (.destFinish 2 (some 0)),
+    .eff (.destBind 0 3 (some 0)), .def 4 (.slotAddr 0), .def 5 (.constInt .u8 66),
+    .def 6 (.push 4 5 (some 0)), .def 7 (.exitReserve 1 (.namedAlias 0) (some 0)),
+    .def 8 (.exitIsNamed 7), .term (.condbr 8 1 [] 2 [])]⟩,
+    ⟨[],[
+      .eff (.exitMarkNamed 7 (some 0)), .def 9 (.reservedNamed 7 (some 0)),
+      .def 10 (.receivingCancel 1 [9] (some 0)), .eff (.destCancel 10 (some 0)),
+      .def 11 (.exitLand 7 9 (some 0)), .eff (.exitRelease 7 (some 0)),
+      .eff (.leave 0), .term (.ret [11] (some 0))]⟩,
+    ⟨[],[
+      .def 12 (.reservedDest 7), .def 13 (.slotAddr 0), .eff (.destCopy 12 13 (some 0)),
+      .def 14 (.destFinish 12 (some 0)), .def 15 (.receivingCancel 1 [14] (some 0)),
+      .eff (.destCancel 15 (some 0)), .def 16 (.exitLand 7 14 (some 0)),
+      .eff (.exitRelease 7 (some 0)), .eff (.leave 0), .term (.ret [16] (some 0))]⟩] }
+  { namedResult with funcs := #[namedResult.funcs[0],producer] }
+
+#guard (Validate.validate mutatedNamedResult).isOk
+#guard observation mutatedNamedResult == some ([65,66,10],
+  [.begin 0,.write 0 0,.begin 1,.write 1 0,.publish 1,.publish 0])
+#guard roundTrip mutatedNamedResult
+
+private def unmarkedNamedResult : Module :=
+  let producer := mutatedNamedResult.funcs[1]
+  let block := producer.blocks[1]
+  let producer := { producer with blocks := producer.blocks.set! 1 { block with
+    insts := block.insts.filter fun
+      | .eff (.exitMarkNamed ..) => false
+      | _ => true } }
+  { mutatedNamedResult with funcs := #[mutatedNamedResult.funcs[0],producer] }
+
+#guard (match Validate.validate unmarkedNamedResult with | .error v => v.code == .v060 | _ => false)
+
+private def repeatedNamedMark : Module :=
+  let producer := mutatedNamedResult.funcs[1]
+  let block := producer.blocks[1]
+  let marker := Inst.eff (.exitMarkNamed 7 (some 0))
+  let producer := { producer with blocks := producer.blocks.set! 1 { block with
+    insts := block.insts.take 1 ++ [marker] ++ block.insts.drop 1 } }
+  { mutatedNamedResult with funcs := #[mutatedNamedResult.funcs[0],producer] }
+
+#guard (match Validate.validate repeatedNamedMark with | .error v => v.code == .v060 | _ => false)
+
+private def malformedNamedMarkArity : Bool :=
+  let valid := Writer.write mutatedNamedResult
+  let invalid := valid.replace "[\"x_exit_mark_named\",7,[0]]" "[\"x_exit_mark_named\",7,[0],0]"
+  !(Decode.decodeBytes invalid.toUTF8).isOk
+
+#guard malformedNamedMarkArity
+
+private def malformedExitIsNamedArity : Bool :=
+  let valid := Writer.write mutatedNamedResult
+  let invalid := valid.replace "[\"i_exit_is_named\",8,7]" "[\"i_exit_is_named\",8,7,0]"
+  !(Decode.decodeBytes invalid.toUTF8).isOk
+
+#guard malformedExitIsNamedArity
+
+private def obsoleteNamedResultSource : Bool :=
+  let valid := Writer.write mutatedNamedResult
+  let invalid := valid.replace "[\"i_exit_reserve\",7,1,[\"named_alias\",0],[0]]"
+    "[\"i_exit_reserve\",7,1,\"named_result\",[0]]"
+  !(Decode.decodeBytes invalid.toUTF8).isOk
+
+#guard obsoleteNamedResultSource
+
+private def namedAliasQueryWithoutBranch : Module :=
+  let producer := mutatedNamedResult.funcs[1]
+  let block := producer.blocks[0]
+  let producer := { producer with blocks := producer.blocks.set! 0 { block with
+    insts := block.insts.flatMap fun
+      | .term (.condbr _ left leftArgs right rightArgs) =>
+          [.def 17 (.constBool true), .term (.condbr 17 left leftArgs right rightArgs)]
+      | inst => [inst] } }
+  { mutatedNamedResult with funcs := #[mutatedNamedResult.funcs[0],producer] }
+
+#guard (match Validate.validate namedAliasQueryWithoutBranch with
+  | .error v => v.code == .v060
+  | _ => false)
+
+private def earlyNamedMaterialization : Module :=
+  let producer := mutatedNamedResult.funcs[1]
+  let block := producer.blocks[1]
+  let producer := { producer with blocks := producer.blocks.set! 1 { block with
+    insts := block.insts.extract 1 2 ++ block.insts.take 1 ++ block.insts.drop 2 } }
+  { mutatedNamedResult with funcs := #[mutatedNamedResult.funcs[0],producer] }
+
+#guard (match Validate.validate earlyNamedMaterialization with | .error v => v.code == .v060 | _ => false)
 
 private def alternateNamed : Module :=
   let producer := namedResult.funcs[1]
   let producer := { producer with blocks := #[⟨[(0,.dest byteTy .value)],[
-    .eff (.enter 0), .eff (.destBytes 0 [65] (some 0)), .def 1 (.destFinish 0 (some 0)),
-    .eff (.destBind 0 1 (some 0)), .def 2 (.resultExitDest 0 (some 0)),
-    .eff (.destBytes 2 [66,67] (some 0)), .def 3 (.destFinish 2 (some 0)),
-    .def 4 (.destAbandonNamed 0 3 (some 0)), .eff (.destCancel 4 (some 0)),
-    .def 5 (.destRelocate 3 .exitValue (some 0)), .eff (.leave 0), .term (.ret [5] (some 0))]⟩] }
+    .eff (.enter 0), .def 2 (.receivingOpen 0), .def 3 (.destRenew 2),
+    .eff (.destBytes 3 [65] (some 0)), .def 1 (.destFinish 3 (some 0)),
+    .eff (.destBind 0 1 (some 0)), .def 4 (.exitReserve 2 .newValue (some 0)),
+    .def 5 (.reservedDest 4), .eff (.destBytes 5 [66,67] (some 0)), .def 6 (.destFinish 5 (some 0)),
+    .def 7 (.receivingCancel 2 [6] (some 0)), .eff (.destCancel 7 (some 0)),
+    .def 8 (.exitLand 4 6 (some 0)), .eff (.exitRelease 4 (some 0)),
+    .eff (.leave 0), .term (.ret [8] (some 0))]⟩] }
   { namedResult with funcs := #[namedResult.funcs[0],producer] }
 
 #guard (Validate.validate alternateNamed).isOk
@@ -181,10 +409,11 @@ private def alternateNamed : Module :=
 private def ordinaryOpenResultExit : Module :=
   let entry := namedResult.funcs[0]
   let producer := function "ordinary" #[⟨[(0,.dest byteTy .value)],[
-    .eff (.enter 0), .def 1 (.resultExitDest 0 (some 0)), .eff (.destBytes 1 [65,66] (some 0)),
-    .def 2 (.destFinish 1 (some 0)), .def 3 (.destAbandon 0 (some 0)),
-    .eff (.destCancel 3 (some 0)), .def 4 (.destRelocate 2 .exitValue (some 0)),
-    .eff (.leave 0), .term (.ret [4] (some 0))]⟩]
+    .eff (.enter 0), .def 1 (.receivingOpen 0), .def 2 (.exitReserve 1 .newValue (some 0)),
+    .def 3 (.reservedDest 2), .eff (.destBytes 3 [65,66] (some 0)),
+    .def 4 (.destFinish 3 (some 0)), .def 5 (.receivingCancel 1 [4] (some 0)),
+    .eff (.destCancel 5 (some 0)), .def 6 (.exitLand 2 4 (some 0)),
+    .eff (.exitRelease 2 (some 0)), .eff (.leave 0), .term (.ret [6] (some 0))]⟩]
     #[] [⟨byteTy,.value,none⟩]
   { namedResult with funcs := #[entry,producer] }
 
@@ -196,10 +425,12 @@ private def ordinaryOpenResultExit : Module :=
 private def ordinaryPartialResultExit : Module :=
   let entry := ordinaryOpenResultExit.funcs[0]
   let producer := function "ordinaryPartial" #[⟨[(0,.dest byteTy .value)],[
-    .eff (.enter 0), .eff (.destBytes 0 [65] (some 0)), .def 1 (.resultExitDest 0 (some 0)),
-    .eff (.destBytes 1 [66] (some 0)), .def 2 (.destFinish 1 (some 0)),
-    .def 3 (.destAbandon 0 (some 0)), .eff (.destCancel 3 (some 0)),
-    .def 4 (.destRelocate 2 .exitValue (some 0)), .eff (.leave 0), .term (.ret [4] (some 0))]⟩]
+    .eff (.enter 0), .eff (.destBytes 0 [65] (some 0)), .def 1 (.receivingOpen 0),
+    .def 2 (.exitReserve 1 .newValue (some 0)), .def 3 (.reservedDest 2),
+    .eff (.destBytes 3 [66] (some 0)), .def 4 (.destFinish 3 (some 0)),
+    .def 5 (.receivingCancel 1 [4] (some 0)), .eff (.destCancel 5 (some 0)),
+    .def 6 (.exitLand 2 4 (some 0)), .eff (.exitRelease 2 (some 0)),
+    .eff (.leave 0), .term (.ret [6] (some 0))]⟩]
     #[] [⟨byteTy,.value,none⟩]
   { ordinaryOpenResultExit with funcs := #[entry,producer] }
 
@@ -215,13 +446,13 @@ private def ordinaryOpenResultExitCapacityFault : Module :=
     .def 1 (.callConstruct 1 [] [0] (some 0)), .eff (.destPublish 1 (some 0)),
     .eff (.leave 0), .term (.ret [] (some 0))]⟩] #[⟨limitedByte,.mutable,0,0⟩]
   let producer := function "ordinaryCapacity" #[⟨[(0,.dest limitedByte .value)],[
-    .eff (.enter 0), .def 1 (.resultExitDest 0 (some 0)),
-    .eff (.destBytes 1 [65,66] (some 0)), .def 2 (.destFinish 1 (some 0)),
-    .def 3 (.destAbandon 0 (some 0)), .eff (.destCancel 3 (some 0)),
-    .def 4 (.destRelocate 2 .exitValue (some 0)), .eff (.leave 0),
-    .term (.ret [4] (some 0))]⟩] #[] [⟨limitedByte,.value,none⟩]
+    .eff (.enter 0), .def 1 (.receivingOpen 0), .def 2 (.exitReserve 1 .newValue (some 0)),
+    .def 3 (.reservedDest 2), .eff (.destBytes 3 [65,66] (some 0)),
+    .def 4 (.destFinish 3 (some 0)), .def 5 (.receivingCancel 1 [4] (some 0)),
+    .eff (.destCancel 5 (some 0)), .def 6 (.exitLand 2 4 (some 0)),
+    .eff (.exitRelease 2 (some 0)), .eff (.leave 0), .term (.ret [6] (some 0))]⟩]
+    #[] [⟨limitedByte,.value,none⟩]
   { ordinaryOpenResultExit with funcs := #[entry,producer] }
-
 #guard (Validate.validate ordinaryOpenResultExitCapacityFault).isOk
 #guard (match Run.run 1000 .release ordinaryOpenResultExitCapacityFault with
   | .done (.aborted .capacity 0) stdout events => stdout.isEmpty && events == [.begin 0,.write 0 0]
@@ -370,7 +601,7 @@ private def pushedNested : Module :=
   [.begin 0,.publish 0,.begin 1,.write 1 0,.write 1 1,.write 1 2,.publish 1])
 #guard roundTrip pushedNested
 
-private def branchWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"sem_construction_bytes.goose\"]],[[\"int\",\"u8\"],[\"grow\",0],[\"int\",\"i64\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0],[\"slot\",2,\"let\",0,1],[\"slot\",1,\"let\",0,2],[\"slot\",1,\"let\",0,3]],[[\"scope\",[]],[\"scope\",[0]],[\"scope\",[0]],[\"scope\",[0]],[\"scope\",[0]],[\"scope\",[0]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,2,\"3\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[4]],[\"x_dest_bytes\",1,[65,0,66],[4]],[\"i_dest_finish\",2,1,[4]],[\"x_dest_publish\",2,[4]],[\"i_slot\",3,0],[\"i_snap\",4,\"owner\",3],[\"i_vlen\",5,4],[\"i_int\",6,2,\"3\"],[\"i_cmp\",7,\"eq\",2,5,6],[\"t_condbr\",7,1,[],2,[]]]],[\"block\",[],[[\"x_enter\",1],[\"i_int\",8,2,\"1\"],[\"x_leave\",1],[\"t_br\",3,[8]]]],[\"block\",[],[[\"x_enter\",2],[\"i_int\",9,2,\"2\"],[\"x_leave\",2],[\"t_br\",3,[9]]]],[\"block\",[[\"bp\",10,2]],[[\"x_init\",1,10,[1]],[\"i_slot\",11,0],[\"i_snap\",12,\"owner\",11],[\"i_vlen\",13,12],[\"i_int\",14,2,\"3\"],[\"i_cmp\",15,\"eq\",2,13,14],[\"t_condbr\",15,4,[],5,[]]]],[\"block\",[],[[\"x_enter\",3],[\"i_int\",16,2,\"3\"],[\"i_dest_open\",17,[\"dr_slot\",2],1,\"value\",[16],[5]],[\"x_dest_bytes\",17,[67,0,68],[5]],[\"i_dest_finish\",18,17,[5]],[\"x_dest_publish\",18,[5]],[\"x_leave\",3],[\"t_br\",6,[]]]],[\"block\",[],[[\"x_enter\",4],[\"i_int\",19,2,\"1\"],[\"i_dest_open\",20,[\"dr_slot\",2],1,\"value\",[19],[6]],[\"x_dest_bytes\",20,[69],[6]],[\"i_dest_finish\",21,20,[6]],[\"x_dest_publish\",21,[6]],[\"x_leave\",4],[\"t_br\",6,[]]]],[\"block\",[],[[\"x_enter\",5],[\"i_int\",22,2,\"3\"],[\"i_dest_open\",23,[\"dr_slot\",3],1,\"value\",[22],[7]],[\"x_dest_bytes\",23,[70,0,71],[7]],[\"i_dest_finish\",24,23,[7]],[\"x_dest_publish\",24,[7]],[\"x_leave\",5],[\"i_slot\",25,1],[\"i_load\",26,25],[\"x_print\",[[\"pp_val\",26]],[8]],[\"i_slot\",27,0],[\"i_snap\",28,\"owner\",27],[\"i_vlen\",29,28],[\"i_slot\",30,0],[\"i_snap\",31,\"owner\",30],[\"i_int\",32,2,\"0\"],[\"i_index\",33,31,32,[9]],[\"i_load\",34,33],[\"i_slot\",35,0],[\"i_snap\",36,\"owner\",35],[\"i_int\",37,2,\"2\"],[\"i_index\",38,36,37,[9]],[\"i_load\",39,38],[\"x_print\",[[\"pp_val\",29],[\"pp_text\",\" \"],[\"pp_val\",34],[\"pp_text\",\" \"],[\"pp_val\",39]],[10]],[\"i_slot\",40,2],[\"i_snap\",41,\"owner\",40],[\"i_vlen\",42,41],[\"i_slot\",43,2],[\"i_snap\",44,\"owner\",43],[\"i_int\",45,2,\"2\"],[\"i_index\",46,44,45,[11]],[\"i_load\",47,46],[\"x_print\",[[\"pp_val\",42],[\"pp_text\",\" \"],[\"pp_val\",47]],[12]],[\"i_slot\",48,3],[\"i_snap\",49,\"owner\",48],[\"i_vlen\",50,49],[\"i_slot\",51,3],[\"i_snap\",52,\"owner\",51],[\"i_int\",53,2,\"1\"],[\"i_index\",54,52,53,[13]],[\"i_load\",55,54],[\"x_print\",[[\"pp_val\",50],[\"pp_text\",\" \"],[\"pp_val\",55]],[14]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[0],[]]],0,[[\"origin\",0,2,\"let\"],[\"origin\",0,3,\"let\"],[\"origin\",0,8,\"let\"],[\"origin\",0,13,\"let\"],[\"origin\",0,2,\"expr\"],[\"origin\",0,9,\"expr\"],[\"origin\",0,11,\"expr\"],[\"origin\",0,14,\"expr\"],[\"origin\",0,16,\"print\"],[\"origin\",0,17,\"index\"],[\"origin\",0,17,\"print\"],[\"origin\",0,18,\"index\"],[\"origin\",0,18,\"print\"],[\"origin\",0,19,\"index\"],[\"origin\",0,19,\"print\"]]]"
+private def branchWire : String := "[\"module\",\"gir-h/0.5\",\"core-construction\",[[\"file\",\"sem_construction_bytes.goose\"]],[[\"int\",\"u8\"],[\"grow\",0],[\"int\",\"i64\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0],[\"slot\",2,\"let\",0,1],[\"slot\",1,\"let\",0,2],[\"slot\",1,\"let\",0,3]],[[\"scope\",[]],[\"scope\",[0]],[\"scope\",[0]],[\"scope\",[0]],[\"scope\",[0]],[\"scope\",[0]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,2,\"3\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[4]],[\"x_dest_bytes\",1,[65,0,66],[4]],[\"i_dest_finish\",2,1,[4]],[\"x_dest_publish\",2,[4]],[\"i_slot\",3,0],[\"i_snap\",4,\"owner\",3],[\"i_vlen\",5,4],[\"i_int\",6,2,\"3\"],[\"i_cmp\",7,\"eq\",2,5,6],[\"t_condbr\",7,1,[],2,[]]]],[\"block\",[],[[\"x_enter\",1],[\"i_int\",8,2,\"1\"],[\"x_leave\",1],[\"t_br\",3,[8]]]],[\"block\",[],[[\"x_enter\",2],[\"i_int\",9,2,\"2\"],[\"x_leave\",2],[\"t_br\",3,[9]]]],[\"block\",[[\"bp\",10,2]],[[\"x_init\",1,10,[1]],[\"i_slot\",11,0],[\"i_snap\",12,\"owner\",11],[\"i_vlen\",13,12],[\"i_int\",14,2,\"3\"],[\"i_cmp\",15,\"eq\",2,13,14],[\"t_condbr\",15,4,[],5,[]]]],[\"block\",[],[[\"x_enter\",3],[\"i_int\",16,2,\"3\"],[\"i_dest_open\",17,[\"dr_slot\",2],1,\"value\",[16],[5]],[\"x_dest_bytes\",17,[67,0,68],[5]],[\"i_dest_finish\",18,17,[5]],[\"x_dest_publish\",18,[5]],[\"x_leave\",3],[\"t_br\",6,[]]]],[\"block\",[],[[\"x_enter\",4],[\"i_int\",19,2,\"1\"],[\"i_dest_open\",20,[\"dr_slot\",2],1,\"value\",[19],[6]],[\"x_dest_bytes\",20,[69],[6]],[\"i_dest_finish\",21,20,[6]],[\"x_dest_publish\",21,[6]],[\"x_leave\",4],[\"t_br\",6,[]]]],[\"block\",[],[[\"x_enter\",5],[\"i_int\",22,2,\"3\"],[\"i_dest_open\",23,[\"dr_slot\",3],1,\"value\",[22],[7]],[\"x_dest_bytes\",23,[70,0,71],[7]],[\"i_dest_finish\",24,23,[7]],[\"x_dest_publish\",24,[7]],[\"x_leave\",5],[\"i_slot\",25,1],[\"i_load\",26,25],[\"x_print\",[[\"pp_val\",26]],[8]],[\"i_slot\",27,0],[\"i_snap\",28,\"owner\",27],[\"i_vlen\",29,28],[\"i_slot\",30,0],[\"i_snap\",31,\"owner\",30],[\"i_int\",32,2,\"0\"],[\"i_index\",33,31,32,[9]],[\"i_load\",34,33],[\"i_slot\",35,0],[\"i_snap\",36,\"owner\",35],[\"i_int\",37,2,\"2\"],[\"i_index\",38,36,37,[9]],[\"i_load\",39,38],[\"x_print\",[[\"pp_val\",29],[\"pp_text\",\" \"],[\"pp_val\",34],[\"pp_text\",\" \"],[\"pp_val\",39]],[10]],[\"i_slot\",40,2],[\"i_snap\",41,\"owner\",40],[\"i_vlen\",42,41],[\"i_slot\",43,2],[\"i_snap\",44,\"owner\",43],[\"i_int\",45,2,\"2\"],[\"i_index\",46,44,45,[11]],[\"i_load\",47,46],[\"x_print\",[[\"pp_val\",42],[\"pp_text\",\" \"],[\"pp_val\",47]],[12]],[\"i_slot\",48,3],[\"i_snap\",49,\"owner\",48],[\"i_vlen\",50,49],[\"i_slot\",51,3],[\"i_snap\",52,\"owner\",51],[\"i_int\",53,2,\"1\"],[\"i_index\",54,52,53,[13]],[\"i_load\",55,54],[\"x_print\",[[\"pp_val\",50],[\"pp_text\",\" \"],[\"pp_val\",55]],[14]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[0],[]]],0,[[\"origin\",0,2,\"let\"],[\"origin\",0,3,\"let\"],[\"origin\",0,8,\"let\"],[\"origin\",0,13,\"let\"],[\"origin\",0,2,\"expr\"],[\"origin\",0,9,\"expr\"],[\"origin\",0,11,\"expr\"],[\"origin\",0,14,\"expr\"],[\"origin\",0,16,\"print\"],[\"origin\",0,17,\"index\"],[\"origin\",0,17,\"print\"],[\"origin\",0,18,\"index\"],[\"origin\",0,18,\"print\"],[\"origin\",0,19,\"index\"],[\"origin\",0,19,\"print\"]]]"
 
 private def branchObservation : Bool :=
   match Decode.decodeBytes branchWire.toUTF8 with
@@ -400,21 +631,24 @@ private def recursiveTarget : Module :=
     ⟨[(0,.data (.int .i64)),(1,.dest byteTy .value)],[
       .eff (.enter 0), .eff (.slotInit 0 0 (some 0)), .def 2 (.constInt .i64 0), .def 3 (.cmp .eq .i64 0 2),
       .term (.condbr 3 1 [] 2 [])]⟩,
-    ⟨[],[.term (.invoke 2 [] [] 3 [1] [⟨0,4,[1]⟩] (some 0))]⟩,
+    ⟨[],[.def 16 (.receivingOpen 1),.term (.invoke 2 [] [] 3 [] [⟨0,4,[]⟩] (some 0))]⟩,
     ⟨[],[.def 4 (.constInt .i64 1), .def 5 (.bin .sub .i64 0 4 (some 0)),
       .def 6 (.destOpen (.slot 1) byteTy .value none (some 0)), .def 7 (.callConstruct 1 [5] [6] (some 0)),
       .eff (.destPublish 7 (some 0)), .def 8 (.slotAddr 1), .def 9 (.snapshot .owner 8),
       .eff (.print [.val 9] (some 0)), .eff (.destBytes 1 [79] (some 0)),
       .def 10 (.destFinish 1 (some 0)), .eff (.leave 0), .term (.ret [10] (some 0))]⟩,
-    ⟨[(11,.dest byteTy .value)],[.def 12 (.destAbandon 11 (some 0)), .eff (.destCancel 12 (some 0)),
+    ⟨[],[.def 11 (.receivingCancel 16 [] (some 0)), .eff (.destCancel 11 (some 0)),
       .eff (.leave 0), .term (.abort .userAbort (some 0))]⟩,
-    ⟨[(13,.built byteTy .value),(14,.dest byteTy .value)],[.def 15 (.destAbandon 14 (some 0)),
-      .eff (.destCancel 15 (some 0)), .def 16 (.destRelocate 13 .exitValue (some 0)),
-      .eff (.leave 0), .term (.ret [16] (some 0))]⟩]
+    ⟨[(12,.built byteTy .value)],[.def 13 (.exitAdopt 16 12),
+      .def 14 (.receivingCancel 16 [12] (some 0)),.eff (.destCancel 14 (some 0)),
+      .def 15 (.exitLand 13 12 (some 0)),.eff (.exitRelease 13 (some 0)),
+      .eff (.leave 0),.term (.ret [15] (some 0))]⟩]
     #[⟨.int .i64,.immutable,0,0⟩,⟨byteTy,.mutable,0,1⟩] [⟨byteTy,.value,none⟩]
-  let helper := function "helper" #[⟨[],[.def 0 (.targetDest 0 0 (some 0)),
-    .eff (.destBytes 0 [73] (some 0)), .def 1 (.destFinish 0 (some 0)),
-    .term (.escape 0 [1] [] (some 0))]⟩]
+  let helper := function "helper" #[⟨[],[.def 0 (.targetReceiving 0 0 (some 0)),
+    .def 1 (.exitReserve 0 .newValue (some 0)),.def 2 (.reservedDest 1),
+    .eff (.destBytes 2 [73] (some 0)),.def 3 (.destFinish 2 (some 0)),
+    .def 4 (.receivingCancel 0 [3] (some 0)),.eff (.destCancel 4 (some 0)),
+    .eff (.exitRelease 1 (some 0)),.term (.escape 0 [3] [] (some 0))]⟩]
   { (moduleOf #[{ entry with summary := known [] [] [] true true },
       { recursive with params := [.int .i64], summary := known [0] [] [] true true },
       { helper with summary := known [] [0] [0] false false }]) with targets := #[⟨1,[]⟩] }
@@ -521,6 +755,56 @@ private def fixedSnapshotAbort : Module :=
   | .done (.aborted .userAbort 0) stdout events => stdout.isEmpty && events == [.begin 0]
   | _ => false)
 
+private def fixedCallLimited (capacity : Nat) : Module :=
+  let ty := Ty.limited (.int .u8) capacity
+  moduleOf #[
+    function "entry" #[⟨[],[
+      .eff (.enter 0),
+      .def 0 (.call 1 [] (some 0)),
+      .def 1 (.constInt .i64 2),
+      .def 2 (.destOpen (.slot 0) ty .value (some 1) (some 0)),
+      .eff (.destSnapshot 2 0 (some 0)),
+      .def 3 (.destFinish 2 (some 0)),
+      .eff (.destPublish 3 (some 0)),
+      .eff (.leave 0),
+      .term (.ret [] (some 0))]⟩] #[⟨ty,.mutable,0,0⟩],
+    function "producer" #[⟨[],[
+      .eff (.enter 0),
+      .eff (.print [.text "effect"] (some 0)),
+      .def 0 (.constInt .u8 65),
+      .def 1 (.constInt .u8 66),
+      .def 2 (.arrLit (.arr (.int .u8) 2) [0,1]),
+      .eff (.leave 0),
+      .term (.ret [2] (some 0))]⟩]
+      #[] [⟨.arr (.int .u8) 2,.register,none⟩]]
+
+private def fixedCallCapacityAbort (profile : Goose.Core.NumProfile) (module : Module) : Bool :=
+  match Run.run 1000 profile module with
+  | .done (.aborted .capacity 0) stdout events =>
+      stdout.data.toList == "effect\n".toUTF8.data.toList && events.isEmpty
+  | _ => false
+
+private def fixedCallCapacityAbortRoundTrip : Bool :=
+  match Decode.decodeBytes (Writer.write (fixedCallLimited 1)).toUTF8 with
+  | .error _ => false
+  | .ok decoded =>
+      (Validate.validate decoded).isOk &&
+        fixedCallCapacityAbort .release decoded && fixedCallCapacityAbort .debug decoded
+
+#guard (Validate.validate (fixedCallLimited 3)).isOk
+#guard observation (fixedCallLimited 3) == some ("effect\n".toUTF8.data.toList,
+  [.begin 0,.write 0 0,.write 0 1,.publish 0])
+#guard (match Run.run 1000 .debug (fixedCallLimited 3) with
+  | .done .returned stdout events =>
+      stdout.data.toList == "effect\n".toUTF8.data.toList &&
+        events == [.begin 0,.write 0 0,.write 0 1,.publish 0]
+  | _ => false)
+#guard roundTrip (fixedCallLimited 3)
+#guard (Validate.validate (fixedCallLimited 1)).isOk
+#guard fixedCallCapacityAbort .release (fixedCallLimited 1)
+#guard fixedCallCapacityAbort .debug (fixedCallLimited 1)
+#guard fixedCallCapacityAbortRoundTrip
+
 end Goose.Construct.GIR.Checks
 
 namespace Goose.Construct.GIR.Checks
@@ -625,7 +909,7 @@ end Goose.Construct.GIR.Checks
 
 namespace Goose.Construct.GIR.Checks
 
-private def writerRecursiveWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"u8\"],[\"varr\",0],[\"arr\",1,2],[\"dest\",2,\"value\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"built\",2,\"value\"],[\"int\",\"i64\"],[\"view\",\"const\",0]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",2,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_dest_open\",0,[\"dr_slot\",0],2,\"value\",[],[0]],[\"i_dest_child\",1,0,1,[0]],[\"x_dest_bytes\",1,[65,0],[0]],[\"i_dest_finish\",2,1,[0]],[\"x_dest_attach\",0,2,[0]],[\"i_dest_child\",3,0,1,[0]],[\"x_dest_bytes\",3,[255],[0]],[\"i_dest_finish\",4,3,[0]],[\"x_dest_attach\",0,4,[0]],[\"i_dest_finish\",5,0,[0]],[\"x_dest_publish\",5,[0]],[\"i_slot\",6,0],[\"i_snap\",7,\"borrowed\",6],[\"i_int\",8,7,\"0\"],[\"i_index\",9,7,8,[0]],[\"i_snap\",10,\"borrowed\",9],[\"i_render\",11,10,[0]],[\"x_print\",[[\"pp_val\",11]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
+private def writerRecursiveWire : String := "[\"module\",\"gir-h/0.5\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"u8\"],[\"varr\",0],[\"arr\",1,2],[\"dest\",2,\"value\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"built\",2,\"value\"],[\"int\",\"i64\"],[\"view\",\"const\",0]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",2,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_dest_open\",0,[\"dr_slot\",0],2,\"value\",[],[0]],[\"i_dest_child\",1,0,1,[0]],[\"x_dest_bytes\",1,[65,0],[0]],[\"i_dest_finish\",2,1,[0]],[\"x_dest_attach\",0,2,[0]],[\"i_dest_child\",3,0,1,[0]],[\"x_dest_bytes\",3,[255],[0]],[\"i_dest_finish\",4,3,[0]],[\"x_dest_attach\",0,4,[0]],[\"i_dest_finish\",5,0,[0]],[\"x_dest_publish\",5,[0]],[\"i_slot\",6,0],[\"i_snap\",7,\"borrowed\",6],[\"i_int\",8,7,\"0\"],[\"i_index\",9,7,8,[0]],[\"i_snap\",10,\"borrowed\",9],[\"i_render\",11,10,[0]],[\"x_print\",[[\"pp_val\",11]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
 
 private def writerRecursive : Option Module := (Decode.decodeBytes writerRecursiveWire.toUTF8).toOption
 
@@ -726,18 +1010,28 @@ private def overlappingTargets : Module :=
     .def 2 (.slotAddr 0),.def 3 (.snapshot .owner 2),.eff (.print [.val 3] (some 0)),
     .eff (.leave 0),.term (.ret [] none)]⟩] #[⟨byteTy,.immutable,0,0⟩]
   let member := function "member" #[⟨[(0,.dest byteTy .value)],[
-      .def 1 (.constBool true),.term (.invoke 2 [1] [] 1 [] [⟨0,2,[]⟩,⟨1,3,[]⟩] (some 0))]⟩,
-    ⟨[],[.term (.abort .userAbort (some 0))]⟩,
-    ⟨[(2,.built byteTy .value)],[.def 3 (.destAbandon 0 (some 0)),.eff (.destCancel 3 (some 0)),
-      .def 4 (.destRelocate 2 .exitValue (some 0)),.eff (.print [.text "zero"] (some 0)),.term (.ret [4] (some 0))]⟩,
-    ⟨[(5,.built byteTy .value)],[.def 6 (.destAbandon 0 (some 0)),.eff (.destCancel 6 (some 0)),
-      .def 7 (.destRelocate 5 .exitValue (some 0)),.eff (.print [.text "one"] (some 0)),.term (.ret [7] (some 0))]⟩]
+      .def 1 (.constBool true),.def 2 (.receivingOpen 0),.def 3 (.constBool false),
+      .term (.invoke 2 [1] [] 1 [] [⟨0,2,[]⟩,⟨1,3,[]⟩] (some 0))]⟩,
+    ⟨[],[.def 4 (.receivingCancel 2 [] (some 0)),
+      .eff (.destCancel 4 (some 0)),.term (.abort .userAbort (some 0))]⟩,
+    ⟨[(5,.built byteTy .value)],[
+      .def 6 (.exitAdopt 2 5),.def 7 (.receivingCancel 2 [5] (some 0)),
+      .eff (.destCancel 7 (some 0)),.def 8 (.exitLand 6 5 (some 0)),
+      .eff (.exitRelease 6 (some 0)),.eff (.print [.text "zero"] (some 0)),.term (.ret [8] (some 0))]⟩,
+    ⟨[(9,.built byteTy .value)],[
+      .def 10 (.exitAdopt 2 9),.def 11 (.receivingCancel 2 [9] (some 0)),
+      .eff (.destCancel 11 (some 0)),.def 12 (.exitLand 10 9 (some 0)),
+      .eff (.exitRelease 10 (some 0)),.eff (.print [.text "one"] (some 0)),.term (.ret [12] (some 0))]⟩]
     #[] [⟨byteTy,.value,none⟩]
   let helper := function "helper" #[⟨[(0,.data .bool)],[.term (.condbr 0 1 [] 2 [])]⟩,
-    ⟨[],[.def 1 (.targetDest 1 0 (some 0)),.eff (.destBytes 1 [65] (some 0)),
-      .def 2 (.destFinish 1 (some 0)),.term (.escape 1 [2] [] (some 0))]⟩,
-    ⟨[],[.def 3 (.targetDest 0 0 (some 0)),.eff (.destBytes 3 [66] (some 0)),
-      .def 4 (.destFinish 3 (some 0)),.term (.escape 0 [4] [] (some 0))]⟩]
+    ⟨[],[.def 1 (.targetReceiving 1 0 (some 0)),.def 2 (.exitReserve 1 .newValue (some 0)),
+      .def 3 (.reservedDest 2),.eff (.destBytes 3 [65] (some 0)),.def 4 (.destFinish 3 (some 0)),
+      .def 5 (.receivingCancel 1 [4] (some 0)),.eff (.destCancel 5 (some 0)),
+      .eff (.exitRelease 2 (some 0)),.term (.escape 1 [4] [] (some 0))]⟩,
+    ⟨[],[.def 6 (.targetReceiving 0 0 (some 0)),.def 7 (.exitReserve 6 .newValue (some 0)),
+      .def 8 (.reservedDest 7),.eff (.destBytes 8 [66] (some 0)),.def 9 (.destFinish 8 (some 0)),
+      .def 10 (.receivingCancel 6 [9] (some 0)),.eff (.destCancel 10 (some 0)),
+      .eff (.exitRelease 7 (some 0)),.term (.escape 0 [9] [] (some 0))]⟩]
   let other := function "other" #[⟨[(0,.dest byteTy .value)],[.eff (.destBytes 0 [67] (some 0)),
     .def 1 (.destFinish 0 (some 0)),.term (.ret [1] (some 0))]⟩] #[] [⟨byteTy,.value,none⟩]
   { (moduleOf #[{ entry with summary := known [] [] [] true true },
@@ -749,6 +1043,18 @@ private def overlappingTargets : Module :=
 #guard observation overlappingTargets == some ("one\nA\n".toUTF8.data.toList,
   [.begin 0,.write 0 0,.publish 0])
 #guard roundTrip overlappingTargets
+
+private def duplicateExitAdoption : Option Module := do
+  let [entry,member,helper,other] := overlappingTargets.funcs.toList | none
+  let [invokeBlock,normalBlock,targetZero,targetOne] := member.blocks.toList | none
+  let targetZero := { targetZero with
+    insts := targetZero.insts.take 1 ++ [.def 13 (.exitAdopt 2 5)] ++ targetZero.insts.drop 1 }
+  let member := { member with blocks := #[invokeBlock,normalBlock,targetZero,targetOne] }
+  pure { overlappingTargets with funcs := #[entry,member,helper,other] }
+
+#guard duplicateExitAdoption.any fun module => match Validate.validate module with
+  | .error violation => violation.code == .v060
+  | .ok _ => false
 
 end Goose.Construct.GIR.Checks
 
@@ -849,7 +1155,7 @@ end Goose.Construct.GIR.Checks
 
 namespace Goose.Construct.GIR.Checks
 
-private def writerCallWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"i64\"],[\"grow\",0],[\"dest\",1,\"value\"],[\"built\",1,\"value\"]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_call_construct\",2,1,[],[1],[0]],[\"x_dest_publish\",2,[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],0,0],[],[]],[\"func\",\"make\",[],[[\"result\",1,\"value\",[]]],[],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,2]],[[\"x_enter\",0],[\"i_int\",1,0,\"7\"],[\"x_dest_write\",0,1,[0]],[\"i_dest_finish\",2,0,[0]],[\"x_leave\",0],[\"t_ret\",[2],[0]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
+private def writerCallWire : String := "[\"module\",\"gir-h/0.5\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"i64\"],[\"grow\",0],[\"dest\",1,\"value\"],[\"built\",1,\"value\"]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_call_construct\",2,1,[],[1],[0]],[\"x_dest_publish\",2,[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],0,0],[],[]],[\"func\",\"make\",[],[[\"result\",1,\"value\",[]]],[],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,2]],[[\"x_enter\",0],[\"i_int\",1,0,\"7\"],[\"x_dest_write\",0,1,[0]],[\"i_dest_finish\",2,0,[0]],[\"x_leave\",0],[\"t_ret\",[2],[0]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
 
 private def writerCall : Option Module := (Decode.decodeBytes writerCallWire.toUTF8).toOption
 
@@ -1061,18 +1367,14 @@ end Goose.Construct.GIR.Checks
 
 namespace Goose.Construct.GIR.Checks
 
-private def emittedRawWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"construction_raw_bytes.goose\"]],[[\"int\",\"u8\"],[\"grow\",0],[\"int\",\"i64\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"tuple\",[4,2]],[\"view\",\"const\",0]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0],[\"slot\",2,\"let\",0,1]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_dest_open\",0,[\"dr_slot\",0],1,\"value\",[],[0]],[\"i_int\",1,0,\"65\"],[\"i_int\",2,0,\"66\"],[\"i_call_construct\",3,1,[1,2],[0],[0]],[\"i_result\",4,3,0],[\"i_result\",5,3,1],[\"x_dest_publish\",4,[0]],[\"x_init\",1,5,[0]],[\"i_slot\",6,0],[\"i_snap\",7,\"owner\",6],[\"i_render\",8,7,[2]],[\"x_print\",[[\"pp_val\",8]],[2]],[\"i_slot\",9,1],[\"i_load\",10,9],[\"t_exit\",10,[3]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[0],[]],[\"func\",\"payload\",[0,0],[[\"result\",1,\"value\",[2]],[\"result\",2,\"register\",[]]],[[\"slot\",0,\"let\",0,0],[\"slot\",0,\"let\",0,1],[\"slot\",1,\"var\",0,2]],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,0],[\"bp\",1,0],[\"bp\",2,3]],[[\"x_enter\",0],[\"x_init\",0,0,[4]],[\"x_init\",1,1,[4]],[\"i_slot\",3,0],[\"i_load\",4,3],[\"x_dest_write\",2,4,[5]],[\"i_int\",5,0,\"0\"],[\"x_dest_write\",2,5,[5]],[\"i_int\",6,0,\"255\"],[\"x_dest_write\",2,6,[5]],[\"i_slot\",7,1],[\"i_load\",8,7],[\"x_dest_write\",2,8,[5]],[\"i_dest_finish\",9,2,[5]],[\"x_dest_bind\",2,9,[5]],[\"i_dest_named\",10,2,[7]],[\"i_int\",11,2,\"19\"],[\"x_leave\",0],[\"t_ret\",[10,11],[7]]]]],[\"roots\",[],[],[[],[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[4],[]]],0,[[\"origin\",0,9,\"let\"],[\"origin\",0,10,\"call\"],[\"origin\",0,11,\"print\"],[\"origin\",0,12,\"exit\"],[\"origin\",0,2,\"param\"],[\"origin\",0,3,\"let\"],[\"origin\",0,3,\"expr\"],[\"origin\",0,4,\"return\"]]]\n"
+private def emittedRawWire : String := "[\"module\",\"gir-h/0.5\",\"core-construction\",[[\"file\",\"construction_raw_bytes.goose\"]],[[\"int\",\"u8\"],[\"grow\",0],[\"int\",\"i64\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"tuple\",[4,2]],[\"view\",\"const\",0]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0],[\"slot\",2,\"let\",0,1]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_dest_open\",0,[\"dr_slot\",0],1,\"value\",[],[0]],[\"i_int\",1,0,\"65\"],[\"i_int\",2,0,\"66\"],[\"i_call_construct\",3,1,[1,2],[0],[0]],[\"i_result\",4,3,0],[\"i_result\",5,3,1],[\"x_dest_publish\",4,[0]],[\"x_init\",1,5,[0]],[\"i_slot\",6,0],[\"i_snap\",7,\"owner\",6],[\"i_render\",8,7,[2]],[\"x_print\",[[\"pp_val\",8]],[2]],[\"i_slot\",9,1],[\"i_load\",10,9],[\"t_exit\",10,[3]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[0],[]],[\"func\",\"payload\",[0,0],[[\"result\",1,\"value\",[2]],[\"result\",2,\"register\",[]]],[[\"slot\",0,\"let\",0,0],[\"slot\",0,\"let\",0,1],[\"slot\",1,\"var\",0,2]],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,0],[\"bp\",1,0],[\"bp\",2,3]],[[\"x_enter\",0],[\"x_init\",0,0,[4]],[\"x_init\",1,1,[4]],[\"i_slot\",3,0],[\"i_load\",4,3],[\"x_dest_write\",2,4,[5]],[\"i_int\",5,0,\"0\"],[\"x_dest_write\",2,5,[5]],[\"i_int\",6,0,\"255\"],[\"x_dest_write\",2,6,[5]],[\"i_slot\",7,1],[\"i_load\",8,7],[\"x_dest_write\",2,8,[5]],[\"i_dest_finish\",9,2,[5]],[\"x_dest_bind\",2,9,[5]],[\"i_dest_named\",10,2,[7]],[\"i_int\",11,2,\"19\"],[\"x_leave\",0],[\"t_ret\",[10,11],[7]]]]],[\"roots\",[],[],[[],[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[4],[]]],0,[[\"origin\",0,9,\"let\"],[\"origin\",0,10,\"call\"],[\"origin\",0,11,\"print\"],[\"origin\",0,12,\"exit\"],[\"origin\",0,2,\"param\"],[\"origin\",0,3,\"let\"],[\"origin\",0,3,\"expr\"],[\"origin\",0,4,\"return\"]]]\n"
 
 private def emittedRaw : Option Module := (Decode.decodeBytes emittedRawWire.toUTF8).toOption
 
-#guard emittedRaw.any (fun module => (Validate.validate module).isOk)
+#guard emittedRaw.any (fun module => match Validate.validate module with | .error v => v.code == .v060 | _ => false)
 #guard emittedRaw.any (fun module => Writer.write module == emittedRawWire)
-#guard emittedRaw.any (fun module => match Run.run 1000 .release module with
-  | .done (.exited 19) stdout events => stdout.data.toList == [65,0,255,66,10] &&
-      events == [.begin 0,.write 0 0,.write 0 1,.write 0 2,.write 0 3,.publish 0]
-  | _ => false)
 
-private def emittedValuesWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"sem_construction_source_values.goose\"]],[[\"int\",\"i64\"],[\"grow\",0],[\"arr\",0,2],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"int\",\"u8\"],[\"view\",\"const\",5],[\"ref\",\"mut\",1]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"var\",0,0],[\"slot\",2,\"let\",0,1],[\"slot\",2,\"let\",0,2],[\"slot\",0,\"let\",0,3],[\"slot\",0,\"let\",0,4],[\"slot\",0,\"let\",3,5]],[[\"scope\",[]],[\"scope\",[0]],[\"scope\",[0]],[\"scope\",[0]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_int\",2,0,\"1\"],[\"x_dest_write\",1,2,[0]],[\"i_dest_finish\",3,1,[0]],[\"x_dest_publish\",3,[0]],[\"i_int\",4,0,\"2\"],[\"i_int\",5,0,\"3\"],[\"i_arr\",6,2,[4,5]],[\"x_init\",1,6,[1]],[\"i_int\",7,0,\"4\"],[\"i_fill\",8,2,7],[\"x_init\",2,8,[2]],[\"i_bool\",9,1],[\"t_condbr\",9,1,[],2,[]]]],[\"block\",[],[[\"x_enter\",1],[\"i_slot\",10,1],[\"i_snap\",11,\"owner\",10],[\"i_int\",12,0,\"0\"],[\"i_index\",13,11,12,[9]],[\"i_load\",14,13],[\"x_leave\",1],[\"t_br\",3,[14]]]],[\"block\",[],[[\"x_enter\",2],[\"i_int\",15,0,\"0\"],[\"x_leave\",2],[\"t_br\",3,[15]]]],[\"block\",[[\"bp\",16,0]],[[\"x_init\",3,16,[3]],[\"x_enter\",3],[\"i_int\",17,0,\"6\"],[\"x_init\",5,17,[5]],[\"i_slot\",18,5],[\"i_load\",19,18],[\"i_slot\",20,3],[\"i_load\",21,20],[\"i_bin\",22,\"add\",0,19,21,[11]],[\"x_leave\",3],[\"x_init\",4,22,[4]],[\"i_dest_open\",23,[\"dr_arg\",1,0],1,\"value\",[],[14]],[\"i_slot\",24,0],[\"x_dest_copy\",23,24,[13]],[\"i_dest_finish\",25,23,[13]],[\"i_dest_arg\",26,25,[14]],[\"i_call\",27,1,[26],[14]],[\"i_render\",28,27,[16]],[\"i_slot\",29,2],[\"i_snap\",30,\"owner\",29],[\"i_int\",31,0,\"1\"],[\"i_index\",32,30,31,[15]],[\"i_load\",33,32],[\"i_render\",34,33,[16]],[\"i_slot\",35,4],[\"i_load\",36,35],[\"i_render\",37,36,[16]],[\"x_print\",[[\"pp_val\",28],[\"pp_text\",\" \"],[\"pp_val\",34],[\"pp_text\",\" \"],[\"pp_val\",37]],[16]],[\"i_slot\",38,0],[\"i_slot\",39,4],[\"i_load\",40,39],[\"i_push\",41,38,40,[17]],[\"i_slot\",42,0],[\"i_snap\",43,\"owner\",42],[\"i_int\",44,0,\"1\"],[\"i_index\",45,43,44,[18]],[\"i_load\",46,45],[\"i_render\",47,46,[19]],[\"x_print\",[[\"pp_val\",47]],[19]],[\"x_leave\",0],[\"t_ret\",[],[0]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[0],[]],[\"func\",\"length\",[1],[[\"result\",0,\"register\",[]]],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,7]],[[\"x_enter\",0],[\"x_init\",0,0,[20]],[\"i_slot\",1,0],[\"i_snap\",2,\"owner\",1],[\"i_vlen\",3,2],[\"x_leave\",0],[\"t_ret\",[3],[21]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[],[],[],0,0],[20],[]]],0,[[\"origin\",0,6,\"let\"],[\"origin\",0,7,\"let\"],[\"origin\",0,8,\"let\"],[\"origin\",0,9,\"let\"],[\"origin\",0,14,\"let\"],[\"origin\",0,15,\"let\"],[\"origin\",0,6,\"expr\"],[\"origin\",0,7,\"expr\"],[\"origin\",0,8,\"expr\"],[\"origin\",0,10,\"index\"],[\"origin\",0,9,\"expr\"],[\"origin\",0,16,\"binary\"],[\"origin\",0,14,\"expr\"],[\"origin\",0,18,\"expr\"],[\"origin\",0,18,\"call\"],[\"origin\",0,18,\"index\"],[\"origin\",0,18,\"print\"],[\"origin\",0,19,\"expr\"],[\"origin\",0,20,\"index\"],[\"origin\",0,20,\"print\"],[\"origin\",0,1,\"param\"],[\"origin\",0,2,\"return\"]]]\n"
+private def emittedValuesWire : String := "[\"module\",\"gir-h/0.5\",\"core-construction\",[[\"file\",\"sem_construction_source_values.goose\"]],[[\"int\",\"i64\"],[\"grow\",0],[\"arr\",0,2],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"int\",\"u8\"],[\"view\",\"const\",5],[\"ref\",\"mut\",1]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"var\",0,0],[\"slot\",2,\"let\",0,1],[\"slot\",2,\"let\",0,2],[\"slot\",0,\"let\",0,3],[\"slot\",0,\"let\",0,4],[\"slot\",0,\"let\",3,5]],[[\"scope\",[]],[\"scope\",[0]],[\"scope\",[0]],[\"scope\",[0]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_int\",2,0,\"1\"],[\"x_dest_write\",1,2,[0]],[\"i_dest_finish\",3,1,[0]],[\"x_dest_publish\",3,[0]],[\"i_int\",4,0,\"2\"],[\"i_int\",5,0,\"3\"],[\"i_arr\",6,2,[4,5]],[\"x_init\",1,6,[1]],[\"i_int\",7,0,\"4\"],[\"i_fill\",8,2,7],[\"x_init\",2,8,[2]],[\"i_bool\",9,1],[\"t_condbr\",9,1,[],2,[]]]],[\"block\",[],[[\"x_enter\",1],[\"i_slot\",10,1],[\"i_snap\",11,\"owner\",10],[\"i_int\",12,0,\"0\"],[\"i_index\",13,11,12,[9]],[\"i_load\",14,13],[\"x_leave\",1],[\"t_br\",3,[14]]]],[\"block\",[],[[\"x_enter\",2],[\"i_int\",15,0,\"0\"],[\"x_leave\",2],[\"t_br\",3,[15]]]],[\"block\",[[\"bp\",16,0]],[[\"x_init\",3,16,[3]],[\"x_enter\",3],[\"i_int\",17,0,\"6\"],[\"x_init\",5,17,[5]],[\"i_slot\",18,5],[\"i_load\",19,18],[\"i_slot\",20,3],[\"i_load\",21,20],[\"i_bin\",22,\"add\",0,19,21,[11]],[\"x_leave\",3],[\"x_init\",4,22,[4]],[\"i_dest_open\",23,[\"dr_arg\",1,0],1,\"value\",[],[14]],[\"i_slot\",24,0],[\"x_dest_copy\",23,24,[13]],[\"i_dest_finish\",25,23,[13]],[\"i_dest_arg\",26,25,[14]],[\"i_call\",27,1,[26],[14]],[\"i_render\",28,27,[16]],[\"i_slot\",29,2],[\"i_snap\",30,\"owner\",29],[\"i_int\",31,0,\"1\"],[\"i_index\",32,30,31,[15]],[\"i_load\",33,32],[\"i_render\",34,33,[16]],[\"i_slot\",35,4],[\"i_load\",36,35],[\"i_render\",37,36,[16]],[\"x_print\",[[\"pp_val\",28],[\"pp_text\",\" \"],[\"pp_val\",34],[\"pp_text\",\" \"],[\"pp_val\",37]],[16]],[\"i_slot\",38,0],[\"i_slot\",39,4],[\"i_load\",40,39],[\"i_push\",41,38,40,[17]],[\"i_slot\",42,0],[\"i_snap\",43,\"owner\",42],[\"i_int\",44,0,\"1\"],[\"i_index\",45,43,44,[18]],[\"i_load\",46,45],[\"i_render\",47,46,[19]],[\"x_print\",[[\"pp_val\",47]],[19]],[\"x_leave\",0],[\"t_ret\",[],[0]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[0],[]],[\"func\",\"length\",[1],[[\"result\",0,\"register\",[]]],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,7]],[[\"x_enter\",0],[\"x_init\",0,0,[20]],[\"i_slot\",1,0],[\"i_snap\",2,\"owner\",1],[\"i_vlen\",3,2],[\"x_leave\",0],[\"t_ret\",[3],[21]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[],[],[],0,0],[20],[]]],0,[[\"origin\",0,6,\"let\"],[\"origin\",0,7,\"let\"],[\"origin\",0,8,\"let\"],[\"origin\",0,9,\"let\"],[\"origin\",0,14,\"let\"],[\"origin\",0,15,\"let\"],[\"origin\",0,6,\"expr\"],[\"origin\",0,7,\"expr\"],[\"origin\",0,8,\"expr\"],[\"origin\",0,10,\"index\"],[\"origin\",0,9,\"expr\"],[\"origin\",0,16,\"binary\"],[\"origin\",0,14,\"expr\"],[\"origin\",0,18,\"expr\"],[\"origin\",0,18,\"call\"],[\"origin\",0,18,\"index\"],[\"origin\",0,18,\"print\"],[\"origin\",0,19,\"expr\"],[\"origin\",0,20,\"index\"],[\"origin\",0,20,\"print\"],[\"origin\",0,1,\"param\"],[\"origin\",0,2,\"return\"]]]\n"
 
 #guard (Decode.decodeBytes emittedValuesWire.toUTF8).toOption.any (fun module =>
   (Validate.validate module).isOk && Writer.write module == emittedValuesWire)
@@ -1142,8 +1444,11 @@ private def helperLocalExitCopy : Module :=
   let helper := { original.funcs[2] with slots := #[⟨byteTy,.mutable,0,0⟩], blocks := #[⟨[],[
     .eff (.enter 0),.def 0 (.destOpen (.slot 0) byteTy .value none (some 0)),
     .eff (.destBytes 0 [65,0] (some 0)),.def 1 (.destFinish 0 (some 0)),.eff (.destPublish 1 (some 0)),
-    .def 2 (.slotAddr 0),.def 3 (.targetDest 0 0 (some 0)),.eff (.destCopy 3 2 (some 0)),
-    .def 4 (.destFinish 3 (some 0)),.eff (.leave 0),.term (.escape 0 [4] [] (some 0))]⟩] }
+    .def 2 (.slotAddr 0),.def 3 (.targetReceiving 0 0 (some 0)),
+    .def 4 (.exitReserve 3 .newValue (some 0)),.def 5 (.reservedDest 4),
+    .eff (.destCopy 5 2 (some 0)),.def 6 (.destFinish 5 (some 0)),
+    .def 7 (.receivingCancel 3 [6] (some 0)),.eff (.destCancel 7 (some 0)),
+    .eff (.exitRelease 4 (some 0)),.eff (.leave 0),.term (.escape 0 [6] [] (some 0))]⟩] }
   { original with funcs := #[original.funcs[0],original.funcs[1],helper] }
 
 #guard (Validate.validate helperLocalExitCopy).isOk
@@ -1154,23 +1459,69 @@ private def helperLocalExitCopy : Module :=
 
 private def helperLocalNamedExitCopy : Module :=
   let original := helperLocalExitCopy
+  let helper := { original.funcs[2] with blocks := #[⟨[],[
+    .eff (.enter 0),.def 0 (.destOpen (.slot 0) byteTy .value none (some 0)),
+    .eff (.destBytes 0 [65,0] (some 0)),.def 1 (.destFinish 0 (some 0)),.eff (.destPublish 1 (some 0)),
+    .def 2 (.slotAddr 0),.def 3 (.targetReceiving 0 0 (some 0)),
+    .def 4 (.exitReserve 3 .newValue (some 0)),.def 5 (.reservedDest 4),
+    .eff (.destCopy 5 2 (some 0)),.def 6 (.destFinish 5 (some 0)),
+    .eff (.exitRelease 4 (some 0)),.eff (.receivingDrop 3),
+    .eff (.leave 0),.term (.escape 0 [6] [] (some 0))]⟩] }
   let producer := { original.funcs[1] with
     slots := #[⟨byteTy,.mutable,0,0⟩], results := [⟨byteTy,.value,some 0⟩], blocks := #[
-    ⟨[(0,.dest byteTy .value)],[.eff (.enter 0),.eff (.destBytes 0 [79] (some 0)),
-      .def 1 (.destFinish 0 (some 0)),.eff (.destBind 0 1 (some 0)),
-      .term (.invoke 2 [] [] 1 [] [⟨0,2,[]⟩] (some 0))]⟩,
-    ⟨[],[.def 2 (.destNamed 0 (some 0)),.def 3 (.destAbandon 2 (some 0)),
-      .eff (.destCancel 3 (some 0)),.eff (.leave 0),.term (.abort .userAbort (some 0))]⟩,
-    ⟨[(4,.built byteTy .value)],[.def 5 (.destAbandonNamed 0 4 (some 0)),
-      .eff (.destCancel 5 (some 0)),.def 6 (.destRelocate 4 .exitValue (some 0)),
-      .eff (.leave 0),.term (.ret [6] (some 0))]⟩] }
-  { original with funcs := #[original.funcs[0],producer,original.funcs[2]] }
+    ⟨[(0,.dest byteTy .value)],[.eff (.enter 0),.def 7 (.receivingOpen 0),
+      .def 11 (.destRenew 7),.eff (.destBytes 11 [79] (some 0)),
+      .def 1 (.destFinish 11 (some 0)),.eff (.destBind 0 1 (some 0)),
+      .term (.invoke 2 [] [] 1 [] [⟨0,4,[]⟩] (some 0))]⟩,
+    ⟨[],[.def 2 (.exitReserve 7 (.namedAlias 0) (some 0)),.def 3 (.exitIsNamed 2),
+      .term (.condbr 3 2 [] 3 [])]⟩,
+    ⟨[],[.eff (.exitMarkNamed 2 (some 0)),.def 6 (.reservedNamed 2 (some 0)),
+      .def 8 (.receivingCancel 7 [6] (some 0)),.eff (.destCancel 8 (some 0)),
+      .def 9 (.exitLand 2 6 (some 0)),.eff (.exitRelease 2 (some 0)),
+      .eff (.leave 0),.term (.ret [9] (some 0))]⟩,
+    ⟨[],[.def 10 (.reservedDest 2),.def 12 (.slotAddr 0),.eff (.destCopy 10 12 (some 0)),
+      .def 13 (.destFinish 10 (some 0)),.def 14 (.receivingCancel 7 [13] (some 0)),
+      .eff (.destCancel 14 (some 0)),.def 15 (.exitLand 2 13 (some 0)),
+      .eff (.exitRelease 2 (some 0)),.eff (.leave 0),.term (.ret [15] (some 0))]⟩,
+    ⟨[(4,.built byteTy .value)],[.def 5 (.exitAdopt 7 4),
+      .def 16 (.receivingCancel 7 [4] (some 0)),.eff (.destCancel 16 (some 0)),
+      .def 17 (.exitLand 5 4 (some 0)),.eff (.exitRelease 5 (some 0)),
+      .eff (.leave 0),.term (.ret [17] (some 0))]⟩] }
+  { original with funcs := #[original.funcs[0],producer,helper] }
 
 #guard (Validate.validate helperLocalNamedExitCopy).isOk
 #guard observation helperLocalNamedExitCopy == some ([65,0,10],
   [.begin 0,.write 0 0,.begin 1,.write 1 0,.write 1 1,.publish 1,.begin 2,
     .copy (.storage 2 []) 2,.write 2 0,.write 2 1,.abandon 0,.relocate 2 .exitValue,.publish 2])
 #guard roundTrip helperLocalNamedExitCopy
+
+private def duplicateReceivingDrop : Module :=
+  let module := helperLocalNamedExitCopy
+  let funcs := module.funcs.mapIdx fun index helper =>
+    if index == 2 then
+      { helper with blocks := helper.blocks.map fun block =>
+        { block with insts := block.insts.flatMap fun
+          | .eff (.receivingDrop receiver) =>
+            [.eff (.receivingDrop receiver),.eff (.receivingDrop receiver)]
+          | inst => [inst] } }
+    else helper
+  { module with funcs := funcs }
+
+#guard (match Validate.validate duplicateReceivingDrop with
+  | .error error => error.code == .v060
+  | _ => false)
+
+private def receivingDropWithWriter : Module :=
+  let producer := function "producer" #[⟨[(0,.dest byteTy .value)],[
+    .eff (.enter 0), .def 1 (.receivingOpen 0), .def 2 (.destRenew 1),
+    .eff (.receivingDrop 1), .eff (.leave 0), .term (.abort .userAbort (some 0))]⟩]
+    #[] [⟨byteTy,.value,none⟩]
+  { ordinaryOpenResultExit with funcs := ordinaryOpenResultExit.funcs.mapIdx fun index func =>
+      if index == 1 then producer else func }
+
+#guard (match Validate.validate receivingDropWithWriter with
+  | .error error => error.code == .v060
+  | _ => false)
 
 end Goose.Construct.GIR.Checks
 
@@ -1258,7 +1609,7 @@ end Goose.Construct.GIR.Checks
 
 namespace Goose.Construct.GIR.Checks
 
-private def emittedPushReferenceWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"u8\"],[\"varr\",0],[\"grow\",1],[\"int\",\"i64\"],[\"dest\",2,\"value\"],[\"built\",2,\"value\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"view\",\"const\",0]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",2,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,3,\"0\"],[\"i_dest_open\",1,[\"dr_slot\",0],2,\"value\",[0],[0]],[\"i_dest_finish\",2,1,[0]],[\"x_dest_publish\",2,[0]],[\"i_slot\",3,0],[\"i_dest_open\",4,[\"dr_push\",3],1,\"value\",[],[0]],[\"x_dest_bytes\",4,[65],[0]],[\"i_dest_finish\",5,4,[0]],[\"i_dest_publish_ref\",6,5,[0]],[\"i_snap\",7,\"borrowed\",6],[\"i_int\",8,3,\"0\"],[\"i_elem\",9,7,8],[\"i_int\",10,0,\"66\"],[\"x_store\",9,10,[0]],[\"i_alen\",11,3],[\"i_render\",12,11,[0]],[\"i_snap\",13,\"borrowed\",6],[\"i_elem\",14,13,8],[\"i_load\",15,14],[\"i_render\",16,15,[0]],[\"x_print\",[[\"pp_val\",12],[\"pp_text\",\" \"],[\"pp_val\",16]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
+private def emittedPushReferenceWire : String := "[\"module\",\"gir-h/0.5\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"u8\"],[\"varr\",0],[\"grow\",1],[\"int\",\"i64\"],[\"dest\",2,\"value\"],[\"built\",2,\"value\"],[\"dest\",1,\"value\"],[\"built\",1,\"value\"],[\"view\",\"const\",0]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",2,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,3,\"0\"],[\"i_dest_open\",1,[\"dr_slot\",0],2,\"value\",[0],[0]],[\"i_dest_finish\",2,1,[0]],[\"x_dest_publish\",2,[0]],[\"i_slot\",3,0],[\"i_dest_open\",4,[\"dr_push\",3],1,\"value\",[],[0]],[\"x_dest_bytes\",4,[65],[0]],[\"i_dest_finish\",5,4,[0]],[\"i_dest_publish_ref\",6,5,[0]],[\"i_snap\",7,\"borrowed\",6],[\"i_int\",8,3,\"0\"],[\"i_elem\",9,7,8],[\"i_int\",10,0,\"66\"],[\"x_store\",9,10,[0]],[\"i_alen\",11,3],[\"i_render\",12,11,[0]],[\"i_snap\",13,\"borrowed\",6],[\"i_elem\",14,13,8],[\"i_load\",15,14],[\"i_render\",16,15,[0]],[\"x_print\",[[\"pp_val\",12],[\"pp_text\",\" \"],[\"pp_val\",16]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],1,1],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
 
 private def emittedPushReference : Option Module := (Decode.decodeBytes emittedPushReferenceWire.toUTF8).toOption
 
@@ -1270,7 +1621,7 @@ end Goose.Construct.GIR.Checks
 
 namespace Goose.Construct.GIR.Checks
 
-private def emittedAdaptGrowWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"i64\"],[\"grow\",0],[\"dest\",1,\"value\"],[\"varr\",0],[\"dest\",3,\"value\"],[\"built\",3,\"value\"],[\"built\",1,\"value\"],[\"int\",\"u8\"],[\"view\",\"const\",7]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_dest_adapt\",2,1,3,\"value\",[0]],[\"i_call_construct\",3,1,[],[2],[0]],[\"i_dest_adapt_finish\",4,3,[0]],[\"x_dest_publish\",4,[0]],[\"i_slot\",5,0],[\"i_snap\",6,\"owner\",5],[\"i_render\",7,6,[0]],[\"x_print\",[[\"pp_val\",7]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],0,1],[],[]],[\"func\",\"make\",[],[[\"result\",3,\"value\",[]]],[],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,4]],[[\"x_enter\",0],[\"i_int\",1,0,\"7\"],[\"x_dest_write\",0,1,[0]],[\"i_dest_finish\",2,0,[0]],[\"x_leave\",0],[\"t_ret\",[2],[0]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
+private def emittedAdaptGrowWire : String := "[\"module\",\"gir-h/0.5\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"i64\"],[\"grow\",0],[\"dest\",1,\"value\"],[\"varr\",0],[\"dest\",3,\"value\"],[\"built\",3,\"value\"],[\"built\",1,\"value\"],[\"int\",\"u8\"],[\"view\",\"const\",7]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_dest_adapt\",2,1,3,\"value\",[0]],[\"i_call_construct\",3,1,[],[2],[0]],[\"i_dest_adapt_finish\",4,3,[0]],[\"x_dest_publish\",4,[0]],[\"i_slot\",5,0],[\"i_snap\",6,\"owner\",5],[\"i_render\",7,6,[0]],[\"x_print\",[[\"pp_val\",7]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],0,1],[],[]],[\"func\",\"make\",[],[[\"result\",3,\"value\",[]]],[],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,4]],[[\"x_enter\",0],[\"i_int\",1,0,\"7\"],[\"x_dest_write\",0,1,[0]],[\"i_dest_finish\",2,0,[0]],[\"x_leave\",0],[\"t_ret\",[2],[0]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
 
 private def emittedAdaptGrow : Option Module := (Decode.decodeBytes emittedAdaptGrowWire.toUTF8).toOption
 
@@ -1283,7 +1634,7 @@ end Goose.Construct.GIR.Checks
 
 namespace Goose.Construct.GIR.Checks
 
-private def emittedAdaptVarrWire : String := "[\"module\",\"gir-h/0.4\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"i64\"],[\"varr\",0],[\"dest\",1,\"value\"],[\"grow\",0],[\"dest\",3,\"value\"],[\"built\",3,\"value\"],[\"built\",1,\"value\"],[\"int\",\"u8\"],[\"view\",\"const\",7]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_dest_adapt\",2,1,3,\"value\",[0]],[\"i_call_construct\",3,1,[],[2],[0]],[\"i_dest_adapt_finish\",4,3,[0]],[\"x_dest_publish\",4,[0]],[\"i_slot\",5,0],[\"i_snap\",6,\"owner\",5],[\"i_render\",7,6,[0]],[\"x_print\",[[\"pp_val\",7]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],0,1],[],[]],[\"func\",\"make\",[],[[\"result\",3,\"value\",[]]],[],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,4]],[[\"x_enter\",0],[\"i_int\",1,0,\"7\"],[\"x_dest_write\",0,1,[0]],[\"i_dest_finish\",2,0,[0]],[\"x_leave\",0],[\"t_ret\",[2],[0]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
+private def emittedAdaptVarrWire : String := "[\"module\",\"gir-h/0.5\",\"core-construction\",[[\"file\",\"t.goose\"]],[[\"int\",\"i64\"],[\"varr\",0],[\"dest\",1,\"value\"],[\"grow\",0],[\"dest\",3,\"value\"],[\"built\",3,\"value\"],[\"built\",1,\"value\"],[\"int\",\"u8\"],[\"view\",\"const\",7]],[],[],[],[[\"func\",\"main\",[],[],[[\"slot\",1,\"let\",0,0]],[[\"scope\",[]]],[[\"block\",[],[[\"x_enter\",0],[\"i_int\",0,0,\"1\"],[\"i_dest_open\",1,[\"dr_slot\",0],1,\"value\",[0],[0]],[\"i_dest_adapt\",2,1,3,\"value\",[0]],[\"i_call_construct\",3,1,[],[2],[0]],[\"i_dest_adapt_finish\",4,3,[0]],[\"x_dest_publish\",4,[0]],[\"i_slot\",5,0],[\"i_snap\",6,\"owner\",5],[\"i_render\",7,6,[0]],[\"x_print\",[[\"pp_val\",7]],[0]],[\"x_leave\",0],[\"t_ret\",[],[]]]]],[\"roots\",[],[],[]],[\"summary\",[],[],[],[],[],[],[],[],0,1],[],[]],[\"func\",\"make\",[],[[\"result\",3,\"value\",[]]],[],[[\"scope\",[]]],[[\"block\",[[\"bp\",0,4]],[[\"x_enter\",0],[\"i_int\",1,0,\"7\"],[\"x_dest_write\",0,1,[0]],[\"i_dest_finish\",2,0,[0]],[\"x_leave\",0],[\"t_ret\",[2],[0]]]]],[\"roots\",[],[],[[]]],[\"summary\",[],[],[],[],[],[0],[],[],0,0],[],[]]],0,[[\"origin\",0,1,\"let\"]]]\n\n"
 
 private def emittedAdaptVarr : Option Module := (Decode.decodeBytes emittedAdaptVarrWire.toUTF8).toOption
 
@@ -1300,7 +1651,7 @@ namespace Goose.Construct.GIR.Checks
   [.begin 0,.publish 0,.begin 1,.write 1 0,.publish 1])
 #guard emittedPushReference.any roundTrip
 #guard emittedAdaptGrow.bind observation == some ("[7]\n".toUTF8.data.toList,
-  [.begin 0,.write 0 0,.relocate 0 .headerRemoval,.publish 0])
+  [.begin 0,.write 0 0,.publish 0])
 #guard emittedAdaptGrow.any roundTrip
 #guard emittedAdaptVarr.bind observation == some ("[7]\n".toUTF8.data.toList,
   [.begin 0,.write 0 0,.publish 0])
@@ -1379,11 +1730,11 @@ private def stagedAdaptation (capacity : Nat) : Module :=
 
 #guard (Validate.validate (stagedAdaptation 2)).isOk
 #guard observation (stagedAdaptation 2) == some ([65,66,10],
-  [.begin 0,.stage 0,.write 0 0,.write 0 1,.relocate 0 .headerRemoval,.copy (.storage 1 []) 0,.publish 0])
+  [.begin 0,.stage 0,.write 0 0,.write 0 1,.copy (.storage 1 []) 0,.publish 0])
 #guard roundTrip (stagedAdaptation 2)
 #guard (match Run.run 1000 .release (stagedAdaptation 1) with
   | .done (.aborted .capacity 0) stdout events => stdout.isEmpty &&
-      events == [.begin 0,.stage 0,.write 0 0,.write 0 1,.relocate 0 .headerRemoval]
+      events == [.begin 0,.stage 0,.write 0 0,.write 0 1]
   | _ => false)
 
 end Goose.Construct.GIR.Checks
@@ -1401,12 +1752,22 @@ private def adaptedNamedProducer : Module :=
     .eff (.print [.val 6] (some 0)),.eff (.leave 0),.term (.ret [] none)]⟩]
     #[⟨owner,.mutable,0,0⟩]
   let callee := function "make" #[⟨[(0,.dest producer .value)],[
-      .eff (.enter 0),.def 1 (.constInt .i64 7),.eff (.destWrite 0 1 (some 0)),
-      .def 2 (.destFinish 0 (some 0)),.eff (.destBind 0 2 (some 0)),
+    .eff (.enter 0),.def 9 (.receivingOpen 0),.def 10 (.destRenew 9),
+      .def 1 (.constInt .i64 7),.eff (.destWrite 10 1 (some 0)),
+      .def 2 (.destFinish 10 (some 0)),.eff (.destBind 0 2 (some 0)),
       .def 3 (.slotAddr 0),.def 4 (.snapshot .owner 3),.def 5 (.constInt .i64 0),
       .def 6 (.indexChecked 4 5 (some 0)),.def 7 (.constInt .i64 9),.eff (.store 6 7 (some 0)),
-      .def 8 (.snapshot .owner 3),.eff (.print [.val 8] (some 0)),.def 9 (.destNamed 0 (some 0)),
-      .eff (.leave 0),.term (.ret [9] (some 0))]⟩]
+      .def 8 (.snapshot .owner 3),.eff (.print [.val 8] (some 0)),
+      .def 11 (.exitReserve 9 (.namedAlias 0) (some 0)),.def 12 (.exitIsNamed 11),
+      .term (.condbr 12 1 [] 2 [])]⟩,
+    ⟨[],[.eff (.exitMarkNamed 11 (some 0)),.def 13 (.reservedNamed 11 (some 0)),
+      .def 14 (.receivingCancel 9 [13] (some 0)),.eff (.destCancel 14 (some 0)),
+      .def 15 (.exitLand 11 13 (some 0)),.eff (.exitRelease 11 (some 0)),
+      .eff (.leave 0),.term (.ret [15] (some 0))]⟩,
+    ⟨[],[.def 16 (.reservedDest 11),.def 17 (.slotAddr 0),.eff (.destCopy 16 17 (some 0)),
+      .def 18 (.destFinish 16 (some 0)),.def 19 (.receivingCancel 9 [18] (some 0)),
+      .eff (.destCancel 19 (some 0)),.def 20 (.exitLand 11 18 (some 0)),
+      .eff (.exitRelease 11 (some 0)),.eff (.leave 0),.term (.ret [20] (some 0))]⟩]
     #[⟨producer,.mutable,0,0⟩] [⟨producer,.value,some 0⟩]
   moduleOf #[caller,callee]
 

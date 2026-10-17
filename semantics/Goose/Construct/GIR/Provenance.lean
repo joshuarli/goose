@@ -7,6 +7,8 @@ inductive DestinationOwner
   | result (position : Nat)
   | target (target position : Nat)
   | child (parent : ValueId)
+  | receiving (handle : ValueId)
+  | reservation (ticket : ValueId)
   deriving DecidableEq, Repr
 
 structure Provenance where
@@ -42,23 +44,42 @@ def Func.provenance (m : Module) (functionId : FnId) (f : Func) : Provenance := 
             let owners := match op with
               | .destOpen receiver .. => [.receiver receiver]
               | .destChild parent .. => [.child parent]
-              | .destAdapt source _ _ _ | .destAdaptFinish source _ | .destFinish source _ | .destAbandon source _ | .destValue source _ |
+              | .destAdapt source _ _ _ | .destAdaptFinish source _ | .destFinish source _ | .destPrepareNamed source _ _ | .destAbandon source _ | .destValue source _ |
                   .destFit source _ | .destStage source _ | .destPublishRef source _ | .destArg source _ => get source
-              | .destRelocate source reason _ =>
-                  (get source).map fun owner => match owner with
-                    | .target target position =>
-                        if reason == .exitValue && (m.targets[target]?).any (fun t => t.contains functionId) then .result position else owner
-                    | _ => owner
+              | .destRelocate source _ _ => get source
               | .destNamed slot _ | .destAbandonNamed slot _ _ =>
                   f.results.zipIdx |>.filterMap fun (r,i) => if r.namedLocal == some slot then some (.result i) else none
-              | .resultExitDest position _ => [.result position]
-              | .targetDest target position _ => [.target target position]
+              | .receivingOpen source => mergeOwners (get source) [.receiving id]
+              | .targetReceiving target position _ => [.target target position,.receiving id]
+              | .destRenew source => get source
+              | .destRefresh source _ => get source
+              | .exitReserve source _ _ => mergeOwners (get source) [.reservation id]
+              | .exitWait source => mergeOwners (get source) [.reservation id]
+              | .exitAdopt receiver built => mergeOwners (mergeOwners (get receiver) (get built)) [.reservation id]
+              | .reservedDest ticket | .reservedNamed ticket _ => get ticket
+              | .exitLand ticket built _ =>
+                  let ticketOwners := get ticket
+                  match ticketOwners.findSome? fun
+                    | .result position =>
+                        if ticketOwners.any (fun owner => match owner with
+                          | .target target targetPosition => targetPosition == position &&
+                              (m.targets[target]?).any (fun target => target.contains functionId)
+                          | _ => false) then some position else none
+                    | _ => none with
+                  | some position => [.result position]
+                  | none => mergeOwners (get built) ticketOwners
+              | .receivingCancel source carried _ => mergeOwners (get source) (carried.flatMap get)
               | .result pack position => (packs[pack]?.getD [])[position]?.getD []
               | .callConstruct callee _ destinations _ =>
                   let outputs := (m.funcs[callee]?).map (fun f => resultOwners f (destinations.map get)) |>.getD []
                   if outputs.length == 1 then outputs.head?.getD [] else []
               | _ => []
             values := values.set! id (mergeOwners (get id) owners)
+            if let .exitAdopt receiver built := op then
+              let receivers := get receiver |>.filterMap fun
+                | .receiving handle => some (.receiving handle)
+                | _ => none
+              values := values.set! built (mergeOwners (get built) (.reservation id :: receivers))
             match op with
             | .callConstruct callee _ destinations _ =>
                 let outputs := (m.funcs[callee]?).map (fun f => resultOwners f (destinations.map get)) |>.getD []

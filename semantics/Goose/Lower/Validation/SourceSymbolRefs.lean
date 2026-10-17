@@ -101,6 +101,19 @@ theorem LS.SourceSymbolsRun.recordValueRootRecipe {le : LEnv} {scopeCount : Nat}
   · intro state
     rw [recordValueRootRecipe_run]
 
+theorem LS.SourceSymbolsRun.recordReadValueRootRecipe {le : LEnv} {scopeCount : Nat}
+    (value : ValueId) (place : Core.Place) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.recordReadValueRootRecipe value place) := by
+  apply LS.SourceSymbolsRun.of_insts_stack
+  · intro state
+    cases place <;>
+      simp [recordReadValueRootRecipe_run, recordValueRootSource_run] <;>
+      (try split) <;> rfl
+  · intro state
+    cases place <;>
+      simp [recordReadValueRootRecipe_run, recordValueRootSource_run] <;>
+      (try split) <;> rfl
+
 theorem LS.SourceSymbolsRun.bind {le : LEnv} {scopeCount : Nat} {action : B α}
     {next : α → B β} (first : LS.SourceSymbolsRun le scopeCount action)
     (second : ∀ value, LS.SourceSymbolsRun le scopeCount (next value)) :
@@ -341,12 +354,15 @@ theorem LS.SourceSymbolsRun.coerceResult {le : LEnv} {scopeCount : Nat}
 theorem LS.SourceSymbolsRun.lowerExpr_read {le : LEnv} {scopeCount : Nat} {place : Core.Place}
     (source : LS.SourceSymbolsRun le scopeCount (lowerPlace place)) :
     LS.SourceSymbolsRun le scopeCount (lowerExpr (.read place)) := by
-  change LS.SourceSymbolsRun le scopeCount
-    (lowerPlace place >>= fun address => Goose.Lower.emitDef (.load address))
+  simp only [lowerExpr]
   apply LS.SourceSymbolsRun.bind (action := lowerPlace place) source
   intro address
-  exact LS.SourceSymbolsRun.emitDef_unreferenced (by simp [Op.origin]) (by
-    simp [Op.SymbolRefsValid])
+  apply LS.SourceSymbolsRun.bind
+    (LS.SourceSymbolsRun.emitDef_unreferenced (by simp [Op.origin]) (by
+      simp [Op.SymbolRefsValid]))
+  intro value
+  exact (LS.SourceSymbolsRun.recordReadValueRootRecipe value place).bind fun _ =>
+    LS.SourceSymbolsRun.pure value
 
 theorem LS.SourceSymbolsRun.lowerExpr_ref {le : LEnv} {scopeCount : Nat}
     {mutability : Core.Mutability} {place : Core.Place}

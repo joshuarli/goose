@@ -32,6 +32,14 @@ theorem dead_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
   intro le state
   rw [recordValueRootRecipe_run]
 
+theorem dead_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    DeadRun (recordReadValueRootRecipe value place) := by
+  apply DeadRun.of_cur_unchanged
+  intro le state
+  cases place <;>
+    simp [recordReadValueRootRecipe_run, recordValueRootSource_run] <;>
+    (try split) <;> rfl
+
 theorem dead_emitDef (op : Op) : DeadRun (emitDef op) := by
   intro le before result after run dead
   rw [emitDef_none op le dead] at run
@@ -134,7 +142,9 @@ theorem dead_lowerExpr : ∀ e : Expr, DeadRun (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact dead_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact DeadRun.bind (dead_lowerPlace p) fun _ => dead_emitDef _
+    exact DeadRun.bind (dead_lowerPlace p) fun _ =>
+      DeadRun.bind (dead_emitDef _) fun value =>
+        DeadRun.bind (dead_recordReadValueRootRecipe value p) fun _ => DeadRun.pure value
   | .ref m p => by
     simp only [lowerExpr]
     exact DeadRun.bind (dead_lowerPlace p) fun r => dead_borrowTo m r

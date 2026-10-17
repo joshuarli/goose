@@ -73,8 +73,8 @@ theorem State.CanonicalWithin.step_closed {module : Module} {states : Array Stat
         have calleeSupported := supported fn site.callee effects site.calleeAt effectsAt
         rcases facts.callResults block blockMember value fn args origin member site.callee site.calleeAt with
           ⟨empty,canonicalUnit⟩ | ⟨result,resultType,canonicalResult⟩
-        · let exposed := ReplacementContentFlow.Model.touchValues vt state (accessOperands (.def value (.call fn args origin)))
-          have initial : exposed.CanonicalWithin func vt provenance := before.touchValues _
+        · let exposed := state
+          have initial : exposed.CanonicalWithin func vt provenance := before
           have mutated := initial.callState_closed site.calleeAt effectsAt calleeBounded calleeSupported
             calleeFacts.roots.unique facts.roots.closed facts.roots.parameters calleeFacts.roots.contentExternal
             site.contracts calleeFacts.roots.contentTypes site.arguments site.references site.observed

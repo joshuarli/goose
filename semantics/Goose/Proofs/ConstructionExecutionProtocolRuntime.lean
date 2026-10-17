@@ -2,7 +2,9 @@ import Goose.Construct.Eval
 import Goose.Construct.Validate
 import Goose.Proofs.Construct
 import Goose.Proofs.ConstructionExecutionProtocolQueries
-import Goose.Proofs.ConstructionExecutionProtocolKernel
+import Goose.Proofs.ConstructionExecutionProtocolExecutionKernel
+import Goose.Proofs.ConstructionExecutionProtocolReservationKernel
+import Goose.Proofs.ConstructionExecutionProtocolReservationCombinators
 
 set_option Elab.async false
 
@@ -10,7 +12,8 @@ namespace Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Construct
 
 variable {predicate : ConstructionState → Prop} [primitives : ConstructionProtocolPrimitives predicate]
-include primitives
+  [reservations : ConstructionReservationPrimitives predicate]
+include primitives reservations
 
 theorem stateQuery_preservesConstructionInvariant (action : EvalM α) (query : StateQuery action) :
     (PreservesConstructionInvariant predicate) action := by
@@ -27,9 +30,27 @@ theorem preservesConstructionInvariant_lift (origin : Goose.Core.OriginId) (acti
     simpa only [ExecutionInvariant, liftConstruction, result, ConstructionResult.finalState,
       Goose.Proofs.Exit.stepState] using after
 
+theorem preservesConstructionInvariant_receivingAction (origin : Goose.Core.OriginId)
+    (incoming : Goose.Core.DestinationId) (action : Goose.Core.DestinationId → ConstructionM α)
+    (preserved : ∀ current state, predicate state → predicate (action current state).finalState) :
+    PreservesConstructionInvariant predicate (receivingAction origin incoming action) := by
+  unfold receivingAction
+  apply preservesConstructionInvariant_lift
+  apply constructionInvariant_bind predicate
+  · exact ConstructionReservationPrimitives.preserves _ (.renewReceivingDestination incoming)
+  · exact preserved
+
 macro "kernel_protocol" : tactic => `(tactic|
+  first
+    | (with_reducible apply preservesConstructionInvariant_lift
+       with_reducible exact ConstructionProtocolPrimitives.preserves _ (by constructor))
+    | (with_reducible apply preservesConstructionInvariant_receivingAction
+       intro current
+       with_reducible exact ConstructionProtocolPrimitives.preserves _ (by constructor)))
+
+macro "reservation_protocol" : tactic => `(tactic|
   (with_reducible apply preservesConstructionInvariant_lift
-   with_reducible exact ConstructionProtocolPrimitives.preserves _ (by constructor)))
+   with_reducible exact ConstructionReservationPrimitives.preserves _ (by constructor)))
 
 theorem preservesConstructionInvariant_pure (value : α) : (PreservesConstructionInvariant predicate) (pure value) := by
   intro state fresh
@@ -61,6 +82,57 @@ theorem preservesConstructionInvariant_bind (action : EvalM α) (next : α → E
   | stop reason final => simpa only [bind, result, Goose.Proofs.Exit.stepState] using preserved
   | escape target carriers final => simpa only [bind, result, Goose.Proofs.Exit.stepState] using preserved
   | jump target kind final => simpa only [bind, result, Goose.Proofs.Exit.stepState] using preserved
+
+theorem preservesConstructionInvariant_withOwnerExtension (stored : StoredValue)
+    (allocate : EvalM Goose.Core.DestinationId) (action : Goose.Core.DestinationId → EvalM α)
+    (allocated : PreservesConstructionInvariant predicate allocate)
+    (preserved : ∀ destination, PreservesConstructionInvariant predicate (action destination)) :
+    PreservesConstructionInvariant predicate (withOwnerExtension stored allocate action) := by
+  unfold withOwnerExtension
+  cases chosen : stored.destination with
+  | none =>
+      simp only [pure_bind]
+      apply preservesConstructionInvariant_bind
+      · exact allocated
+      · intro destination state valid
+        have evaluatedValid := preserved destination state valid
+        cases evaluated : action destination state <;>
+          simpa only [evaluated, Goose.Proofs.Exit.stepState] using evaluatedValid
+  | some id =>
+      apply preservesConstructionInvariant_bind
+      · exact stateQuery_preservesConstructionInvariant _ (stateQuery_getDestination id)
+      · intro parent
+        simp only [pure_bind]
+        apply preservesConstructionInvariant_bind
+        · exact allocated
+        · intro destination state valid
+          have evaluatedValid := preserved destination state valid
+          cases evaluated : action destination state with
+          | ok value after | stop reason after =>
+              simpa only [evaluated, Goose.Proofs.Exit.stepState] using evaluatedValid
+          | escape target carriers after =>
+              simp only [evaluated, Goose.Proofs.Exit.stepState] at evaluatedValid
+              cases parentProgress : parent.progress <;>
+                try simpa only [evaluated, parentProgress, Goose.Proofs.Exit.stepState] using evaluatedValid
+              let carried := (carriers).filterMap fun (carrier : Carrier) => match carrier with
+                | .completed id => some id
+                | _ => none
+              have restoredValid := ConstructionReservationPrimitives.restoreOwner parent destination carried after evaluatedValid
+              simp only [evaluated, parentProgress]
+              cases restored : restoreCompletedOwner parent destination carried after <;>
+                simpa only [carried, restored, Goose.Proofs.Exit.stepState] using restoredValid
+          | jump target kind after =>
+              simp only [evaluated, Goose.Proofs.Exit.stepState] at evaluatedValid
+              cases parentProgress : parent.progress <;>
+                try simpa only [evaluated, parentProgress, Goose.Proofs.Exit.stepState] using evaluatedValid
+              let carried := ((match kind with | .breakValue carriers => carriers | .continueLoop => [])).filterMap fun (carrier : Carrier) => match carrier with
+                | .completed id => some id
+                | _ => none
+              have restoredValid := ConstructionReservationPrimitives.restoreOwner parent destination carried after evaluatedValid
+              simp only [evaluated, parentProgress]
+              cases restored : restoreCompletedOwner parent destination carried after <;>
+                simpa only [carried, restored, Goose.Proofs.Exit.stepState] using restoredValid
+
 
 theorem preservesConstructionInvariant_listMapM (action : α → EvalM β) (items : List α)
     (preserved : ∀ item, (PreservesConstructionInvariant predicate) (action item)) : (PreservesConstructionInvariant predicate) (items.mapM action) := by
@@ -252,7 +324,14 @@ theorem constructionInvariant_activation_filter (state : ExecutionState)
 theorem preservesConstructionInvariant_publishCarriers (origin : Goose.Core.OriginId) (carriers : List Carrier) :
     (PreservesConstructionInvariant predicate) (publishCarriers origin carriers) := by
   unfold publishCarriers
-  kernel_protocol
+  apply preservesConstructionInvariant_bind
+  · apply preservesConstructionInvariant_listMapM
+    intro carrier
+    cases carrier <;> first
+      | exact preservesConstructionInvariant_pure _
+      | exact preservesConstructionInvariant_stop _
+  · intro ids
+    kernel_protocol
 
 theorem preservesConstructionInvariant_publishOwner (fuel : Nat) (layout : LayoutEnv) (location : Goose.Core.Loc)
     (stored : StoredValue) (id : Goose.Core.DestinationId) (origin : Goose.Core.OriginId) :
@@ -289,17 +368,20 @@ theorem preservesConstructionInvariant_repeatElement (fuel : Nat) (layout : Layo
   | succ fuel =>
       unfold repeatElement
       apply preservesConstructionInvariant_bind
-      · exact stateQuery_preservesConstructionInvariant _ (stateQuery_storedDestination source)
-      · intro stored
+      · reservation_protocol
+      · intro parent
         apply preservesConstructionInvariant_bind
-        · exact stateQuery_preservesConstructionInvariant _ (stateQuery_getStorage stored.storage)
-        · intro receiving
+        · exact stateQuery_preservesConstructionInvariant _ (stateQuery_storedDestination source)
+        · intro stored
           apply preservesConstructionInvariant_bind
-          · exact stateQuery_preservesConstructionInvariant _ (stateQuery_liftLayout _)
-          · intro finish
+          · exact stateQuery_preservesConstructionInvariant _ (stateQuery_getStorage stored.storage)
+          · intro receiving
             apply preservesConstructionInvariant_bind
-            · kernel_protocol
-            · intro _; kernel_protocol
+            · exact stateQuery_preservesConstructionInvariant _ (stateQuery_liftLayout _)
+            · intro finish
+              apply preservesConstructionInvariant_bind
+              · kernel_protocol
+              · intro _; kernel_protocol
 
 theorem fixed_writes_preserveConstructionInvariant (fuel : Nat) (layout : LayoutEnv) (destination : Goose.Core.DestinationId)
     (element : Ty) (origin : Goose.Core.OriginId) (values : Array Value) :
@@ -341,75 +423,78 @@ theorem preservesConstructionInvariant_copyValue (fuel : Nat) (layout : LayoutEn
   | succ fuel =>
       unfold copyValue
       apply preservesConstructionInvariant_bind
-      · exact stateQuery_preservesConstructionInvariant _ (stateQuery_getDestination destination)
-      · intro pending
-        cases elementFound : elementType pending.capability.logicalType with
-        | none => exact preservesConstructionInvariant_stop _
-        | some element =>
-            cases value with
-            | int _ _ | bool _ | unit | record _ _ | ref _ => exact preservesConstructionInvariant_stop _
-            | stored stored =>
-                apply preservesConstructionInvariant_bind
-                · exact stateQuery_preservesConstructionInvariant _ (stateQuery_sampledStored stored)
-                · intro sampled
-                  rcases sampled with ⟨bytes, run⟩
-                  simp only
-                  split
-                  · exact preservesConstructionInvariant_stop _
-                  · apply preservesConstructionInvariant_bind
-                    · kernel_protocol
-                    · intro _
-                      apply preservesConstructionInvariant_bind
-                      · simpa only [Nat.zero_add] using packed_writes_preserveConstructionInvariant fuel layout destination bytes run 0 run.count origin
-                      · intro _; kernel_protocol
-            | fixed values =>
-                cases source with
-                | none =>
-                    apply preservesConstructionInvariant_bind
-                    · exact fixed_writes_preserveConstructionInvariant fuel layout destination element origin values
-                    · intro _; kernel_protocol
-                | some source =>
-                    apply preservesConstructionInvariant_bind
-                    · kernel_protocol
-                    · intro _
+      · reservation_protocol
+      · intro destination
+        apply preservesConstructionInvariant_bind
+        · exact stateQuery_preservesConstructionInvariant _ (stateQuery_getDestination destination)
+        · intro pending
+          cases elementFound : elementType pending.capability.logicalType with
+          | none => exact preservesConstructionInvariant_stop _
+          | some element =>
+              cases value with
+              | int _ _ | bool _ | unit | record _ _ | ref _ => exact preservesConstructionInvariant_stop _
+              | stored stored =>
+                  apply preservesConstructionInvariant_bind
+                  · exact stateQuery_preservesConstructionInvariant _ (stateQuery_sampledStored stored)
+                  · intro sampled
+                    rcases sampled with ⟨bytes, run⟩
+                    simp only
+                    split
+                    · exact preservesConstructionInvariant_stop _
+                    · apply preservesConstructionInvariant_bind
+                      · kernel_protocol
+                      · intro _
+                        apply preservesConstructionInvariant_bind
+                        · simpa only [Nat.zero_add] using packed_writes_preserveConstructionInvariant fuel layout destination bytes run 0 run.count origin
+                        · intro _; kernel_protocol
+              | fixed values =>
+                  cases source with
+                  | none =>
                       apply preservesConstructionInvariant_bind
                       · exact fixed_writes_preserveConstructionInvariant fuel layout destination element origin values
                       · intro _; kernel_protocol
-            | slice location start count =>
-                apply preservesConstructionInvariant_bind
-                · exact stateQuery_preservesConstructionInvariant _ (stateQuery_readLoc fuel layout location)
-                · intro backing
-                  cases source with
-                  | none => exact preservesConstructionInvariant_stop _
                   | some source =>
-                      cases backing with
-                      | int _ _ | bool _ | unit | record _ _ | ref _ | slice _ _ _ => exact preservesConstructionInvariant_stop _
-                      | stored stored =>
-                          apply preservesConstructionInvariant_bind
-                          · exact stateQuery_preservesConstructionInvariant _ (stateQuery_storedPathRun stored)
-                          · intro sampled
-                            rcases sampled with ⟨bytes, run⟩
+                      apply preservesConstructionInvariant_bind
+                      · kernel_protocol
+                      · intro _
+                        apply preservesConstructionInvariant_bind
+                        · exact fixed_writes_preserveConstructionInvariant fuel layout destination element origin values
+                        · intro _; kernel_protocol
+              | slice location start count =>
+                  apply preservesConstructionInvariant_bind
+                  · exact stateQuery_preservesConstructionInvariant _ (stateQuery_readLoc fuel layout location)
+                  · intro backing
+                    cases source with
+                    | none => exact preservesConstructionInvariant_stop _
+                    | some source =>
+                        cases backing with
+                        | int _ _ | bool _ | unit | record _ _ | ref _ | slice _ _ _ => exact preservesConstructionInvariant_stop _
+                        | stored stored =>
+                            apply preservesConstructionInvariant_bind
+                            · exact stateQuery_preservesConstructionInvariant _ (stateQuery_storedPathRun stored)
+                            · intro sampled
+                              rcases sampled with ⟨bytes, run⟩
+                              simp only
+                              split
+                              · exact preservesConstructionInvariant_stop _
+                              · split
+                                · exact preservesConstructionInvariant_stop _
+                                · apply preservesConstructionInvariant_bind
+                                  · kernel_protocol
+                                  · intro _
+                                    apply preservesConstructionInvariant_bind
+                                    · exact packed_writes_preserveConstructionInvariant fuel layout destination bytes run start count origin
+                                    · intro _; kernel_protocol
+                        | fixed values =>
                             simp only
                             split
                             · exact preservesConstructionInvariant_stop _
-                            · split
-                              · exact preservesConstructionInvariant_stop _
-                              · apply preservesConstructionInvariant_bind
-                                · kernel_protocol
-                                · intro _
-                                  apply preservesConstructionInvariant_bind
-                                  · exact packed_writes_preserveConstructionInvariant fuel layout destination bytes run start count origin
-                                  · intro _; kernel_protocol
-                      | fixed values =>
-                          simp only
-                          split
-                          · exact preservesConstructionInvariant_stop _
-                          · apply preservesConstructionInvariant_bind
-                            · kernel_protocol
-                            · intro _
-                              apply preservesConstructionInvariant_bind
-                              · exact fixed_writes_preserveConstructionInvariant fuel layout destination element origin (values.extract start (start + count))
-                              · intro _; kernel_protocol
+                            · apply preservesConstructionInvariant_bind
+                              · kernel_protocol
+                              · intro _
+                                apply preservesConstructionInvariant_bind
+                                · exact fixed_writes_preserveConstructionInvariant fuel layout destination element origin (values.extract start (start + count))
+                                · intro _; kernel_protocol
 
 theorem preservesConstructionInvariant_deliverCarriers (fuel : Nat) (layout : LayoutEnv) (channels : List Channel)
     (carriers : List Carrier) (origin : Goose.Core.OriginId) :
@@ -424,8 +509,11 @@ theorem preservesConstructionInvariant_deliverCarriers (fuel : Nat) (layout : La
       | exact preservesConstructionInvariant_pure _
       | exact preservesConstructionInvariant_stop _
       | (apply preservesConstructionInvariant_bind
-         · exact preservesConstructionInvariant_copyValue _ _ _ _ _ _
-         · intro _; exact preservesConstructionInvariant_pure _)
+         · exact preservesConstructionInvariant_copyValue (predicate := predicate) _ _ _ _ _ _
+         · intro _
+           apply preservesConstructionInvariant_bind
+           · exact stateQuery_preservesConstructionInvariant _ (stateQuery_completedReceivingDestination _)
+           · intro completed; exact preservesConstructionInvariant_pure _)
 
 theorem preservesConstructionInvariant_cleanupDestination (origin : Goose.Core.OriginId)
     (id : Goose.Core.DestinationId) (carriers : List Carrier) :
@@ -445,6 +533,15 @@ theorem preservesConstructionInvariant_cleanupDestination (origin : Goose.Core.O
           · exact preservesConstructionInvariant_pure _
           · kernel_protocol
 
+theorem preservesConstructionInvariant_cleanupReceivingDestination (origin : Goose.Core.OriginId)
+    (id : Goose.Core.DestinationId) (carriers : List Carrier) :
+    PreservesConstructionInvariant predicate (cleanupReceivingDestination origin id carriers) := by
+  unfold cleanupReceivingDestination
+  apply preservesConstructionInvariant_bind
+  · exact stateQuery_preservesConstructionInvariant _ (stateQuery_receivingDestination id)
+  · intro current
+    exact preservesConstructionInvariant_cleanupDestination origin current carriers
+
 theorem preservesConstructionInvariant_protectDestination (origin : Goose.Core.OriginId)
     (id : Goose.Core.DestinationId) (action : EvalM α) (preserved : (PreservesConstructionInvariant predicate) action) :
     (PreservesConstructionInvariant predicate) (protectDestination origin id action) := by
@@ -455,19 +552,19 @@ theorem preservesConstructionInvariant_protectDestination (origin : Goose.Core.O
   | stop reason final => simpa [protectDestination, result, Goose.Proofs.Exit.stepState] using after
   | escape target carriers final =>
       simp only [result, Goose.Proofs.Exit.stepState] at after
-      have cleaned := preservesConstructionInvariant_cleanupDestination origin id carriers final after
-      cases cleanup : cleanupDestination origin id carriers final <;>
+      have cleaned := preservesConstructionInvariant_cleanupReceivingDestination origin id carriers final after
+      cases cleanup : cleanupReceivingDestination origin id carriers final <;>
         simpa [protectDestination, result, cleanup, Goose.Proofs.Exit.stepState] using cleaned
   | jump target kind final =>
       simp only [result, Goose.Proofs.Exit.stepState] at after
       cases kind with
       | breakValue carriers =>
-          have cleaned := preservesConstructionInvariant_cleanupDestination origin id carriers final after
-          cases cleanup : cleanupDestination origin id carriers final <;>
+          have cleaned := preservesConstructionInvariant_cleanupReceivingDestination origin id carriers final after
+          cases cleanup : cleanupReceivingDestination origin id carriers final <;>
             simpa [protectDestination, result, cleanup, Goose.Proofs.Exit.stepState] using cleaned
       | continueLoop =>
-          have cleaned := preservesConstructionInvariant_cleanupDestination origin id [] final after
-          cases cleanup : cleanupDestination origin id [] final <;>
+          have cleaned := preservesConstructionInvariant_cleanupReceivingDestination origin id [] final after
+          cases cleanup : cleanupReceivingDestination origin id [] final <;>
             simpa [protectDestination, result, cleanup, Goose.Proofs.Exit.stepState] using cleaned
 
 theorem preservesConstructionInvariant_landCarrier (origin : Goose.Core.OriginId) (carrier : Carrier) :
@@ -475,12 +572,13 @@ theorem preservesConstructionInvariant_landCarrier (origin : Goose.Core.OriginId
   unfold landCarrier
   cases carrier with
   | register value => exact preservesConstructionInvariant_pure _
+  | pendingNamed token => exact preservesConstructionInvariant_stop _
   | completed id =>
       apply preservesConstructionInvariant_bind
       · exact stateQuery_preservesConstructionInvariant _ (stateQuery_getDestination id)
       · intro destination
         cases destination.use with
-        | replacement old => kernel_protocol
+        | replacement old => reservation_protocol
         | receiver | child parent => exact preservesConstructionInvariant_pure _
 
 theorem preservesConstructionInvariant_landCarriers (origin : Goose.Core.OriginId) (carriers : List Carrier) :
@@ -494,11 +592,34 @@ theorem preservesConstructionInvariant_landCarriers (origin : Goose.Core.OriginI
     · intro _; exact preservesConstructionInvariant_pure _
   · intro _; exact preservesConstructionInvariant_pure _
 
+theorem preservesConstructionInvariant_landCarriersInto (origin : Goose.Core.OriginId)
+    (channels : List Channel) (carriers : List Carrier) :
+    PreservesConstructionInvariant predicate (landCarriersInto origin channels carriers) := by
+  unfold landCarriersInto
+  split
+  · intro state valid
+    exact valid
+  · apply preservesConstructionInvariant_bind
+    · apply preservesConstructionInvariant_listForIn
+      intro pair _
+      rcases pair with ⟨channel, carrier⟩
+      cases channel <;> cases carrier <;> repeat' first
+        | exact preservesConstructionInvariant_pure _
+        | exact preservesConstructionInvariant_stop _
+        | exact preservesConstructionInvariant_get
+        | exact stateQuery_preservesConstructionInvariant _ (stateQuery_receivingDestination _)
+        | reservation_protocol
+        | apply preservesConstructionInvariant_bind
+        | split
+        | (guard_target = ∀ _, PreservesConstructionInvariant _ _; intro value)
+    · intro _; exact preservesConstructionInvariant_pure _
+
 theorem preservesConstructionInvariant_finishChannel (layout : LayoutEnv) (origin : Goose.Core.OriginId)
     (carrier : Carrier) (result : Ty) : (PreservesConstructionInvariant predicate) (finishChannel layout origin carrier result) := by
   unfold finishChannel
   cases carrier with
   | register value => exact preservesConstructionInvariant_pure _
+  | pendingNamed token => exact preservesConstructionInvariant_stop _
   | completed id =>
       apply preservesConstructionInvariant_bind
       · exact stateQuery_preservesConstructionInvariant _ (stateQuery_getDestination id)
@@ -520,12 +641,12 @@ theorem preservesConstructionInvariant_finishChannel (layout : LayoutEnv) (origi
                      · kernel_protocol
                      · intro _; kernel_protocol)
 
-theorem preservesConstructionInvariant_finishChannels (layout : LayoutEnv) (types : List Ty)
+theorem preservesConstructionInvariant_finishChannels (layout : LayoutEnv) (channels : List Channel) (types : List Ty)
     (carriers : List Carrier) (origin : Goose.Core.OriginId) :
-    (PreservesConstructionInvariant predicate) (finishChannels layout types carriers origin) := by
+    (PreservesConstructionInvariant predicate) (finishChannels layout channels types carriers origin) := by
   unfold finishChannels
   apply preservesConstructionInvariant_bind
-  · exact preservesConstructionInvariant_landCarriers origin carriers
+  · exact preservesConstructionInvariant_landCarriersInto origin channels carriers
   · intro _
     split
     · exact preservesConstructionInvariant_stop _
@@ -571,8 +692,8 @@ theorem preservesConstructionInvariant_finishActivation (layout : LayoutEnv) (ac
       let trimmed : ExecutionState := { final with
         activations := final.activations.filter (fun current => current.act != activation.act) }
       have trimmedValid : (ExecutionInvariant predicate) trimmed := constructionInvariant_activation_filter final _ after
-      have landedValid := preservesConstructionInvariant_finishChannels layout types carriers origin trimmed trimmedValid
-      cases finished : finishChannels layout types carriers origin trimmed <;>
+      have landedValid := preservesConstructionInvariant_finishChannels layout activation.channels types carriers origin trimmed trimmedValid
+      cases finished : finishChannels layout activation.channels types carriers origin trimmed <;>
         simpa [finishActivation, result, trimmed, finished, Goose.Proofs.Exit.stepState] using landedValid
   | stop reason final =>
       simpa [finishActivation, result, Goose.Proofs.Exit.stepState] using after
@@ -584,8 +705,8 @@ theorem preservesConstructionInvariant_finishActivation (layout : LayoutEnv) (ac
       · let trimmed : ExecutionState := { final with
           activations := final.activations.filter (fun current => current.act != activation.act) }
         have trimmedValid : (ExecutionInvariant predicate) trimmed := constructionInvariant_activation_filter final _ after
-        have landedValid := preservesConstructionInvariant_finishChannels layout types carriers origin trimmed trimmedValid
-        cases finished : finishChannels layout types carriers origin trimmed <;>
+        have landedValid := preservesConstructionInvariant_finishChannels layout activation.channels types carriers origin trimmed trimmedValid
+        cases finished : finishChannels layout activation.channels types carriers origin trimmed <;>
           simpa [finishActivation, result, caught, trimmed, finished, Goose.Proofs.Exit.stepState] using landedValid
       · simpa [finishActivation, result, caught, Goose.Proofs.Exit.stepState] using
           constructionInvariant_activation_filter final (fun current => current.act != activation.act) after
@@ -862,6 +983,32 @@ theorem preservesConstructionInvariant_appendRun (fuel : Nat) (layout : LayoutEn
                             · intro _; exact preservesConstructionInvariant_pure _
                         · intro _; exact finish
 
+theorem preservesConstructionInvariant_materializeProducer (fuel : Nat) (declarations : DeclarationEnv)
+    (expression : Expr) (evaluate : EvalM Value)
+    (preserved : PreservesConstructionInvariant predicate evaluate) :
+    PreservesConstructionInvariant predicate (materializeProducer fuel declarations expression evaluate) := by
+  unfold materializeProducer
+  split
+  · exact preservesConstructionInvariant_pure _
+  · apply preservesConstructionInvariant_bind
+    · exact preserved
+    · intro value
+      cases value <;> first
+        | exact preservesConstructionInvariant_pure _
+        | exact preservesConstructionInvariant_stop _
+
+theorem preservesConstructionInvariant_materializedDestination (fuel : Nat) (layout : LayoutEnv)
+    (owner : Goose.Core.ActId) (ty : Ty) (origin : Goose.Core.OriginId) (count : Nat) (value : Value) :
+    PreservesConstructionInvariant predicate (materializedDestination fuel layout owner ty origin count value) := by
+  unfold materializedDestination
+  apply preservesConstructionInvariant_bind
+  · exact preservesConstructionInvariant_newDestination _ _ _ _ _ _ _
+  · intro destination
+    apply preservesConstructionInvariant_bind
+    · exact preservesConstructionInvariant_copyValue _ _ _ _ _ _
+    · intro ignored
+      exact stateQuery_preservesConstructionInvariant _ (stateQuery_completedReceivingDestination destination)
+
 theorem preservesConstructionInvariant_constructLocal (declarations : DeclarationEnv) (owner : Goose.Core.ActId) (ty : Ty)
     (origin : Goose.Core.OriginId) (expression : Expr) (construct : Goose.Core.DestinationId → EvalM Unit)
     (preserved : ∀ destination, (PreservesConstructionInvariant predicate) (construct destination)) :
@@ -874,51 +1021,248 @@ theorem preservesConstructionInvariant_constructLocal (declarations : Declaratio
     · exact preserved destination
     · intro _
       apply preservesConstructionInvariant_bind
-      · exact stateQuery_preservesConstructionInvariant _ (stateQuery_completedDestination destination)
+      · exact stateQuery_preservesConstructionInvariant _ (stateQuery_completedReceivingDestination destination)
       · intro completed
         apply preservesConstructionInvariant_bind
         · exact preservesConstructionInvariant_publishCarriers _ _
         · intro _; exact preservesConstructionInvariant_pure _
 
+theorem preservesConstructionInvariant_exitSource (source : RuntimeActivation)
+    (incoming : Goose.Core.DestinationId) (operand : Expr) :
+    PreservesConstructionInvariant predicate (exitSource source incoming operand) := by
+  unfold exitSource
+  apply preservesConstructionInvariant_bind
+  · exact stateQuery_preservesConstructionInvariant _ (stateQuery_receivingDestination incoming)
+  · intro selected
+    cases operand <;> repeat' first
+      | exact preservesConstructionInvariant_pure _
+      | exact preservesConstructionInvariant_get
+      | exact stateQuery_preservesConstructionInvariant _ (stateQuery_rootOf _ _)
+      | apply preservesConstructionInvariant_bind
+      | split
+      | (guard_target = ∀ _, PreservesConstructionInvariant _ _; intro value)
+
+theorem preservesConstructionInvariant_selectCompletionChannel (source : RuntimeActivation)
+    (operand : Expr) (channel : Channel) :
+    PreservesConstructionInvariant predicate (selectCompletionChannel source operand channel) := by
+  cases channel <;> simp only [selectCompletionChannel]
+  all_goals repeat' first
+    | exact preservesConstructionInvariant_pure _
+    | exact preservesConstructionInvariant_stop _
+    | exact preservesConstructionInvariant_get
+    | exact preservesConstructionInvariant_exitSource _ _ _
+    | reservation_protocol
+    | apply preservesConstructionInvariant_bind
+    | split
+    | (guard_target = ∀ _, PreservesConstructionInvariant _ _; intro value)
+
 theorem preservesConstructionInvariant_exitChannels (source activation : RuntimeActivation) (operands : List Expr)
-    (origin : Goose.Core.OriginId) : (PreservesConstructionInvariant predicate) (exitChannels source activation operands origin) := by
+    (origin : Goose.Core.OriginId) : PreservesConstructionInvariant predicate (exitChannels source activation operands origin) := by
   unfold exitChannels
   split
   · exact preservesConstructionInvariant_stop _
   · apply preservesConstructionInvariant_listMapM
     intro item
     rcases item with ⟨channel, operand⟩
-    cases channel with
-    | register ty => exact preservesConstructionInvariant_pure _
-    | construct id =>
+    cases channel <;> repeat' first
+      | exact preservesConstructionInvariant_pure _
+      | exact preservesConstructionInvariant_stop _
+      | exact preservesConstructionInvariant_get
+      | exact preservesConstructionInvariant_exitSource _ _ _
+      | exact stateQuery_preservesConstructionInvariant _ (stateQuery_receivingDestination _)
+      | reservation_protocol
+      | apply preservesConstructionInvariant_bind
+      | split
+      | (guard_target = ∀ _, PreservesConstructionInvariant _ _; intro value)
+
+theorem constructionInvariant_cleanupResult (cleanup : EvalM Unit) (resume : ExecutionState → ExecutionStep α)
+    (frame : ∀ state, Goose.Proofs.Exit.stepState (resume state) = state)
+    (preserved : PreservesConstructionInvariant predicate cleanup)
+    (state : ExecutionState) (valid : ExecutionInvariant predicate state) :
+    ExecutionInvariant predicate (Goose.Proofs.Exit.stepState (match cleanup state with
+      | .ok () after => resume after
+      | .stop reason after => .stop reason after
+      | .escape target carriers after => .escape target carriers after
+      | .jump target kind after => .jump target kind after)) := by
+  have after := preserved state valid
+  cases result : cleanup state with
+  | ok unit final =>
+      cases unit
+      simp only [result, Goose.Proofs.Exit.stepState] at after
+      change ExecutionInvariant predicate (Goose.Proofs.Exit.stepState (resume final))
+      rw [frame]
+      exact after
+  | stop reason final | escape target carriers final | jump target kind final =>
+      simpa only [result, Goose.Proofs.Exit.stepState] using after
+
+theorem preservesConstructionInvariant_prepareNamedCarrier (origin : Goose.Core.OriginId)
+    (incoming : Goose.Core.DestinationId) (stored : StoredValue) :
+    PreservesConstructionInvariant predicate (prepareNamedCarrier origin incoming stored) := by
+  unfold prepareNamedCarrier
+  apply preservesConstructionInvariant_bind
+  · exact stateQuery_preservesConstructionInvariant _ (stateQuery_receivingDestination incoming)
+  · intro selected
+    split
+    · exact preservesConstructionInvariant_pure _
+    · apply preservesConstructionInvariant_bind
+      · exact preservesConstructionInvariant_get
+      · intro state
+        dsimp only
+        split
+        · exact preservesConstructionInvariant_pure _
+        · repeat' first
+            | exact preservesConstructionInvariant_pure _
+            | exact preservesConstructionInvariant_stop _
+            | exact stateQuery_preservesConstructionInvariant _ (stateQuery_getDestination _)
+            | reservation_protocol
+            | apply preservesConstructionInvariant_bind
+            | split
+            | (guard_target = ∀ _, PreservesConstructionInvariant _ _; intro value)
+
+theorem preservesConstructionInvariant_prepareNamedCarrierAt (origin : Goose.Core.OriginId)
+    (token : ExitReservationId) (incoming : Goose.Core.DestinationId) (stored : StoredValue) :
+    PreservesConstructionInvariant predicate (prepareNamedCarrierAt origin token incoming stored) := by
+  unfold prepareNamedCarrierAt
+  repeat' first
+    | exact preservesConstructionInvariant_pure _
+    | exact preservesConstructionInvariant_stop _
+    | exact preservesConstructionInvariant_get
+    | exact stateQuery_preservesConstructionInvariant _ (stateQuery_receivingDestination _)
+    | exact stateQuery_preservesConstructionInvariant _ (stateQuery_getDestination _)
+    | reservation_protocol
+    | apply preservesConstructionInvariant_bind
+    | dsimp only
+    | split
+    | (guard_target = ∀ _, PreservesConstructionInvariant _ _; intro value)
+
+theorem preservesConstructionInvariant_materializeOwnedCarriers (origin : Goose.Core.OriginId)
+    (tokens : List ExitReservationId) (carriers : List Carrier) :
+    PreservesConstructionInvariant predicate (materializeOwnedCarriers origin tokens carriers) := by
+  apply preservesConstructionInvariant_listMapM
+  intro carrier
+  cases carrier with
+  | register value | completed id => exact preservesConstructionInvariant_pure _
+  | pendingNamed token =>
+      dsimp only
+      split
+      · apply preservesConstructionInvariant_bind
+        · reservation_protocol
+        · intro id; exact preservesConstructionInvariant_pure _
+      · exact preservesConstructionInvariant_pure _
+
+theorem preservesConstructionInvariant_materializeNamedCarriers (origin : Goose.Core.OriginId)
+    (carriers : List Carrier) :
+    PreservesConstructionInvariant predicate (materializeNamedCarriers origin carriers) := by
+  apply preservesConstructionInvariant_listMapM
+  intro carrier
+  cases carrier with
+  | register value | completed id => exact preservesConstructionInvariant_pure _
+  | pendingNamed token =>
+      apply preservesConstructionInvariant_bind
+      · reservation_protocol
+      · intro id
+        exact preservesConstructionInvariant_pure _
+
+theorem preservesConstructionInvariant_withExitChannels (source activation : RuntimeActivation)
+    (operands : List Expr) (origin : Goose.Core.OriginId) (action : List Channel → EvalM (List Carrier))
+    (preserved : ∀ channels, PreservesConstructionInvariant predicate (action channels)) :
+    PreservesConstructionInvariant predicate (withExitChannels source activation operands origin action) := by
+  intro state valid
+  have preparedValid := preservesConstructionInvariant_exitChannels source activation operands origin state valid
+  cases prepared : exitChannels source activation operands origin state with
+  | stop reason after => simpa only [withExitChannels, prepared, Goose.Proofs.Exit.stepState] using preparedValid
+  | escape target carriers after => simpa only [withExitChannels, prepared, Goose.Proofs.Exit.stepState] using preparedValid
+  | jump target kind after => simpa only [withExitChannels, prepared, Goose.Proofs.Exit.stepState] using preparedValid
+  | ok channels after =>
+      simp only [prepared, Goose.Proofs.Exit.stepState] at preparedValid
+      let tokens := (List.range (after.construction.exitReservations.size - state.construction.exitReservations.size)).map (state.construction.exitReservations.size + ·)
+      let evaluatedAction := do materializeOwnedCarriers origin tokens (← action channels)
+      have actionPreserved : PreservesConstructionInvariant predicate evaluatedAction := by
         apply preservesConstructionInvariant_bind
-        · exact stateQuery_preservesConstructionInvariant _ (stateQuery_getDestination id)
-        · intro destination
-          have finish (alias : Bool) : (PreservesConstructionInvariant predicate)
-              (if (match destination.progress with | .open 0 => true | _ => false) || alias then
-                pure (Channel.construct id)
-              else do pure (Channel.construct (← liftConstruction origin (openExitReplacement id)))) := by
-            split <;> split
-            all_goals first
+        · exact preserved channels
+        · exact preservesConstructionInvariant_materializeOwnedCarriers origin tokens
+      have evaluatedValid := actionPreserved after preparedValid
+      cases evaluated : evaluatedAction after
+      all_goals simp only [evaluated, Goose.Proofs.Exit.stepState] at evaluatedValid
+      all_goals have evaluatedResult := evaluated
+      all_goals dsimp only [evaluatedAction, tokens] at evaluatedResult
+      all_goals simp only [withExitChannels, prepared, evaluatedResult]
+      all_goals
+        apply constructionInvariant_cleanupResult
+        · exact fun _ => rfl
+        · simp only [Bool.false_eq_true, ↓reduceIte]
+          repeat' first
+            | exact preservesConstructionInvariant_pure _
+            | exact preservesConstructionInvariant_get
+            | exact preservesConstructionInvariant_stop _
+            | reservation_protocol
+            | apply preservesConstructionInvariant_bind
+            | (apply preservesConstructionInvariant_listForIn; intro item accumulator)
+            | (guard_target = ∀ _, PreservesConstructionInvariant _ _; intro value)
+            | split
+        · exact evaluatedValid
+
+theorem preservesConstructionInvariant_withCompletionChannels (channels : List Channel)
+    (origin : Goose.Core.OriginId) (action : List Channel → EvalM (List Carrier))
+    (preserved : ∀ planned, PreservesConstructionInvariant predicate (action planned)) :
+    PreservesConstructionInvariant predicate (withCompletionChannels channels origin action) := by
+  let setup : EvalM (List Channel × List ExitReservationId) := do
+    let planned ← channels.mapM fun channel => match channel with
+      | .construct incoming => do
+          let token ← liftConstruction origin (waitExitDestination incoming)
+          pure (Channel.completion token, some token)
+      | .register ty => pure (Channel.register ty, none)
+      | .completion _ => fault .flow
+    pure (planned.map Prod.fst, planned.filterMap Prod.snd)
+  have setupPreserved : PreservesConstructionInvariant predicate setup := by
+    apply preservesConstructionInvariant_bind
+    · apply preservesConstructionInvariant_listMapM
+      intro channel
+      cases channel <;> repeat' first
+        | exact preservesConstructionInvariant_pure _
+        | exact preservesConstructionInvariant_stop _
+        | reservation_protocol
+        | apply preservesConstructionInvariant_bind
+        | (guard_target = ∀ _, PreservesConstructionInvariant _ _; intro value)
+    · intro _; exact preservesConstructionInvariant_pure _
+  intro state valid
+  change ExecutionInvariant predicate (Goose.Proofs.Exit.stepState (match setup state with
+    | .ok (planned, tokens) prepared => _
+    | .stop reason state' => .stop reason state'
+    | .escape target carriers state' => .escape target carriers state'
+    | .jump target kind state' => .jump target kind state'))
+  have preparedValid := setupPreserved state valid
+  cases prepared : setup state with
+  | stop reason after | escape target carriers after | jump target kind after =>
+      simpa only [prepared, Goose.Proofs.Exit.stepState] using preparedValid
+  | ok pair after =>
+      rcases pair with ⟨planned, tokens⟩
+      simp only [prepared, Goose.Proofs.Exit.stepState] at preparedValid
+      let evaluatedAction := do materializeOwnedCarriers origin tokens (← action planned)
+      have actionPreserved : PreservesConstructionInvariant predicate evaluatedAction := by
+        apply preservesConstructionInvariant_bind
+        · exact preserved planned
+        · exact preservesConstructionInvariant_materializeOwnedCarriers origin tokens
+      have evaluatedValid := actionPreserved after preparedValid
+      cases evaluated : evaluatedAction after
+      all_goals simp only [evaluated, Goose.Proofs.Exit.stepState] at evaluatedValid
+      all_goals have evaluatedResult := evaluated
+      all_goals dsimp only [evaluatedAction] at evaluatedResult
+      all_goals simp only [prepared, evaluatedResult]
+      all_goals
+        apply constructionInvariant_cleanupResult
+        · exact fun _ => rfl
+        · simp only [Bool.false_eq_true, ↓reduceIte]
+          apply preservesConstructionInvariant_bind
+          · apply preservesConstructionInvariant_listForIn
+            intro token accumulator
+            repeat' first
               | exact preservesConstructionInvariant_pure _
-              | (apply preservesConstructionInvariant_bind
-                 · kernel_protocol
-                 · intro _; exact preservesConstructionInvariant_pure _)
-          cases operand <;> first
-            | (apply preservesConstructionInvariant_bind
-               · exact preservesConstructionInvariant_pure _
-               · intro alias; exact finish alias)
-            | (apply preservesConstructionInvariant_bind
-               · exact stateQuery_preservesConstructionInvariant _ (stateQuery_rootOf _ _)
-               · intro root
-                 apply preservesConstructionInvariant_bind
-                 · exact preservesConstructionInvariant_get
-                 · intro state
-                   split
-                   all_goals
-                     apply preservesConstructionInvariant_bind
-                     · exact preservesConstructionInvariant_pure _
-                     · intro alias; exact finish alias)
+              | reservation_protocol
+              | apply preservesConstructionInvariant_bind
+              | (guard_target = ∀ _, PreservesConstructionInvariant _ _; intro value)
+          · intro _; exact preservesConstructionInvariant_pure _
+        · exact evaluatedValid
 
 theorem preservesConstructionInvariant_openElementReceiving (layout : LayoutEnv) (owner : Goose.Core.ActId)
     (location : Goose.Core.Loc) (stored : StoredValue) (element : Ty) (known : Option Nat)

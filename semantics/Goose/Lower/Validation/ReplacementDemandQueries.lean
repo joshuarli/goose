@@ -19,6 +19,17 @@ theorem ReplacementRootsWithin.expanded_mono {query : ReplacementRootQuery}
   obtain ⟨source, sourceAt, expandedAt⟩ := List.mem_flatMap.mp (upper member)
   exact List.mem_flatMap.mpr ⟨source, included source sourceAt, expandedAt⟩
 
+theorem ReplacementRootsWithin.refined_expanded {query : ReplacementRootQuery}
+    {actual source : List RootRef} {func : Func}
+    (known : ReplacementRootsWithin query (actual.flatMap func.expandParameterRoot))
+    (closed : ParameterRootsClosed func) (refined : SummaryPreservation.RootsRefine func actual source) :
+    ReplacementRootsWithin query (source.flatMap func.expandParameterRoot) := by
+  obtain ⟨roots, equality, upper⟩ := known
+  refine ⟨roots, equality, ?_⟩
+  intro root member
+  obtain ⟨original, originalAt, expandedAt⟩ := List.mem_flatMap.mp (upper member)
+  exact refined.expanded closed original originalAt root expandedAt
+
 theorem ReplacementRootsWithin.access_place {query : ReplacementRootQuery} {func : Func}
     {env : PEnv} {place : Place} {before after : RState} {actual roots : List RootRef}
     (known : ReplacementRootsWithin query (actual.flatMap func.expandParameterRoot))
@@ -42,6 +53,23 @@ theorem ReplacementRootsWithin.access_view {query : ReplacementRootQuery} {func 
     (access : env.access.viewRoots view = .ok roots) :
     ReplacementRootsWithin query (roots.flatMap func.expandParameterRoot) :=
   known.expanded_mono (Core.Sound.rpView_accessRoots env view before actual after roots replayed access)
+
+theorem ReplacementRootsWithin.access_owner {query : ReplacementRootQuery} {func : Func}
+    {env : PEnv} {place : Place} {before after : RState} {actual : List RootRef}
+    {target : DemandOwner}
+    (known : ReplacementRootsWithin query (actual.flatMap func.expandParameterRoot))
+    (replayed : rpPlace env place before = .ok (actual, after))
+    (access : env.access.owner place = .ok target) :
+    ReplacementRootsWithin query (target.roots.flatMap func.expandParameterRoot) := by
+  apply known.access_place replayed
+  unfold AccessEnv.owner at access
+  cases typed : env.access.placeType? place with
+  | none => simp [typed, reject] at access
+  | some ty =>
+    simp only [typed] at access
+    obtain ⟨roots, rootsAt, result⟩ := (Core.Sound.ex_bind_ok _ _ _).1 access
+    have same : target = (⟨some ty, roots⟩ : DemandOwner) := (Core.Sound.ex_pure_ok _ _).1 result
+    simpa only [same] using rootsAt
 
 theorem replacementApart_of_expanded_source {func : Func}
     {queries : ReplacementQueries} {owner : ValueId} {query : ReplacementRootQuery}
@@ -150,9 +178,9 @@ theorem ReplacementDemandContext.descendant_read_load_apart {module : Core.Modul
     {queries : ReplacementQueries} {owner address value : ValueId}
     (closed : ParameterRootsClosed func)
     (ownerKnown : ReplacementRootsWithin (queries.value owner) (target.roots.flatMap func.expandParameterRoot))
-    (addressKnown : ReplacementRootsWithin (queries.value address)
+    (addressKnown : ReplacementRootsWithin (queries.ownerDependencies address)
       (addressRoots.flatMap func.expandParameterRoot))
-    (readKnown : ReplacementRootsWithin (queries.value value) (readRoots.flatMap func.expandParameterRoot)) :
+    (readKnown : ReplacementRootsWithin (queries.ownerDependencies value) (readRoots.flatMap func.expandParameterRoot)) :
     ReplacementInstApart girModule types queries owner (.def value (.load address)) := by
   have childSource : DemandNodeAt (.expression rhs) (suffix ++ [0]) (.place child) :=
     source.snoc 0 (by simp [DemandNode.child?, DemandNode.children])
@@ -188,9 +216,9 @@ theorem ReplacementDemandContext.descendant_replay_read_load_apart {module : Cor
     {queries : ReplacementQueries} {owner address value : ValueId}
     (closed : ParameterRootsClosed func)
     (ownerKnown : ReplacementRootsWithin (queries.value owner) (target.roots.flatMap func.expandParameterRoot))
-    (addressKnown : ReplacementRootsWithin (queries.value address)
+    (addressKnown : ReplacementRootsWithin (queries.ownerDependencies address)
       (addressRoots.flatMap func.expandParameterRoot))
-    (readKnown : ReplacementRootsWithin (queries.value value) (readRoots.flatMap func.expandParameterRoot)) :
+    (readKnown : ReplacementRootsWithin (queries.ownerDependencies value) (readRoots.flatMap func.expandParameterRoot)) :
     ReplacementInstApart girModule types queries owner (.def value (.load address)) := by
   have childSource : DemandNodeAt (.expression rhs) (suffix ++ [0]) (.place child) :=
     source.snoc 0 (by simp [DemandNode.child?, DemandNode.children])
@@ -201,9 +229,11 @@ theorem ReplacementDemandContext.descendant_replay_read_load_apart {module : Cor
   · exact readKnown.access_expr readReplay (access ▸ readAt)
 
 #print axioms replacementApart_of_expanded_source
+#print axioms ReplacementRootsWithin.refined_expanded
 #print axioms ReplacementRootsWithin.access_place
 #print axioms ReplacementRootsWithin.access_expr
 #print axioms ReplacementRootsWithin.access_view
+#print axioms ReplacementRootsWithin.access_owner
 #print axioms ReplacementDemandContext.descendant_read_query_apart
 #print axioms ReplacementDemandContext.descendant_place_query_apart
 #print axioms ReplacementDemandContext.descendant_call_query_apart

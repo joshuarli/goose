@@ -1,9 +1,4 @@
-import Goose.Lower.Validation.SummaryPreservationReplayLiveEmit
-import Goose.Lower.Validation.SummaryPreservationReplayTerm
-import Goose.Lower.Validation.SummaryPreservationTypedCallRoots
-import Goose.Lower.Validation.SummaryPreservationRefinedCalls
-import Goose.Lower.Validation.SummaryPreservationRefinedCallEffects
-import Goose.Lower.Validation.SummaryPreservationLowerCall
+import Goose.Lower.Validation.SummaryPreservationReplayCallEmitted
 
 namespace Goose.Lower.Validation.SummaryPreservation.ReplayBuilder
 
@@ -38,26 +33,8 @@ theorem call {env : PEnv} {calleeId : ContextId} {ctx : Context} {callee : Impl}
           (lowerExpr (.call calleeId syntaxArgs origin) le initial).1 sourceRoots
           (.data ((callee.results[0]?).getD Ty.unit))) ∧
       ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
-  obtain ⟨next, generated, returned, retained⟩ := ready.emitTypedDef_live
-    (.call calleeId args (some origin)) sourceRoots (.data ((callee.results[0]?).getD Ty.unit))
-    (fun live => by simpa [Op.uses] using operandBounds live)
-    (fun candidate row => by cases row; exact originBound)
-    calleeBound
-    (fun live => (effectStep_call_refines_from_source accepted contextLookup implLookup closed
-      (arguments live) replayed).trans effectBound)
-    (fun live => rootsOfDef_call_refines_from_source accepted contextLookup implLookup
-      (fun index root member => typedResultUpper_below_refined env.mod index root
-        (bounded index root member)) (argumentCount live) (arguments live) replayed)
-    (fun _ nonref => rootsOfDef_call_default_nonref_empty bounded contextLookup implLookup
-      nonref vt func upper ls.vals.size args (some origin))
-  rw [lowerExpr_call_after_args argumentsRun]
-  dsimp only
-  split
-  · refine ⟨next, generated.unreachable, ?_, retained⟩
-    intro live
-    cases current : (Goose.Lower.emitDef (.call calleeId args (some origin)) le ls).2.cur with
-    | none => rw [emitTerm_none _ _ current] at live; simp [current] at live
-    | some block => rw [emitTerm_run _ _ current] at live; simp at live
-  · exact ⟨next, generated, returned, retained⟩
+  obtain ⟨next, completed, value, retained, _⟩ := ready.callEmitted accepted contextLookup implLookup
+    closed bounded argumentCount operandBounds arguments originBound calleeBound argumentsRun replayed effectBound
+  exact ⟨next, completed, value, retained⟩
 
 end Goose.Lower.Validation.SummaryPreservation.ReplayBuilder

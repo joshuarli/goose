@@ -13,14 +13,15 @@ private theorem retainedCur_emitDef (op : Op) (le : LEnv) (ls : LS) :
   | some block => rw [emitDef_run _ _ active]; exact active
 
 private theorem retainedCur_localRead (variableId : VarId) (le : LEnv) (ls : LS) :
-    (lowerExpr (.read (.var variableId)) le ls).2.cur = ls.cur :=
-  (retainedCur_emitDef _ _ _).trans (retainedCur_emitDef _ _ _)
+    (lowerExpr (.read (.var variableId)) le ls).2.cur = ls.cur := by
+  rw [ReplayBuilder.readCurrent_eq]
+  exact (retainedCur_emitDef _ _ _).trans (retainedCur_emitDef _ _ _)
 
 namespace ReplayBuilder
 
 theorem typedRead {typingEnv : TEnv} {env : PEnv} {context : ContextId} {place : Place} {type : Ty}
     {start finish : Nat} {before after : RState} {sourceRoots : List RootRef}
-    {results : Array (List RootRef)} {vt : Array (Option VTy)} {target : Core.Eff}
+    {results : Array (List RootRef)} {vt : Array (Option VTy)} {target : Core.Eff} {siteRoot : DemandNode}
     {scopeCount : Nat} {ls : LS} {upper : Prov}
     (checked : SourceReadableEnvironment typingEnv) (tables : SourceRootTables typingEnv env)
     (contextRow : env.mod.contexts[context]? = some env.ctx)
@@ -34,6 +35,9 @@ theorem typedRead {typingEnv : TEnv} {env : PEnv} {context : ContextId} {place :
     (generated : GeneratedBuilderState ls)
     (native : NativeRows vt (lowerExpr (.read place)
       (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).2)
+    (metadata : SourceCanonicalRootFloors.RecipeMetadataProjects env siteRoot
+      (lowerContextAt env.mod env.ctx env.impl)
+      (lowerExpr (.read place) (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).2)
     (placeChild : ∀ info tn2 roots state,
       tyPlace typingEnv place start = .ok (info, tn2) →
       rpPlace env place before = .ok (roots, state) →
@@ -78,16 +82,13 @@ theorem typedRead {typingEnv : TEnv} {env : PEnv} {context : ContextId} {place :
     exact placeChild info tn2 roots state typedPlace placeReplay effectBound
   · intro active
     let address := lowerPlace place le ls
-    have whole : lowerExpr (.read place) le ls = Goose.Lower.emitDef (.load address.1) le address.2 := by
-      simp only [lowerExpr, bind_run]
-      rfl
     have addressLive : address.2.cur.isSome = true := active
     have live : (lowerExpr (.read place) le ls).2.cur.isSome = true := by
-      rw [whole, retainedCur_emitDef]
+      rw [readCurrent_eq, retainedCur_emitDef]
       exact active
     have tag := resultTag live
     have fresh : (lowerExpr (.read place) le ls).1 = address.2.vals.size := by
-      rw [whole]
+      rw [readValue_eq]
       cases current : address.2.cur with
       | none => simp [current] at addressLive
       | some block => rw [emitDef_run _ _ current]
@@ -102,6 +103,9 @@ theorem typedRead {typingEnv : TEnv} {env : PEnv} {context : ContextId} {place :
       rw [retainedCur_localRead]
       exact live
     apply nativeHolder.local_read (by simpa only [tables.variablesEq] using variableRow) holderLive
+  · exact metadata
+
+#print axioms typedRead
 
 end ReplayBuilder
 

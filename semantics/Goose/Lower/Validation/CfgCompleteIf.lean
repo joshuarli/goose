@@ -127,14 +127,7 @@ theorem complete_ifE (condition : ValueId) (sourceScope : ScopeId) {thenAction e
       shapeElseEnd unique incomingOpen
     rw [joinRun] at shapeJoin countJoin
     rw [recordValueRootRecipe_run] at recipeRun
-    have recipeStateEq :
-        { joinedState with valueRootRecipes :=
-          if joinedState.cur.isSome && (match joinedState.vals[joinedValue]?.join with
-            | some (.data type) => type.isRefLike
-            | some (.view ..) => true
-            | none => false)
-          then joinedState.valueRootRecipes.push (joinedValue, sourceScope)
-          else joinedState.valueRootRecipes } = recordedState := (Prod.mk.inj recipeRun).2
+    have recipeStateEq := (Prod.mk.inj recipeRun).2
     have recipeBlocks : recordedState.blocks = joinedState.blocks := by
       have same := congrArg LS.blocks recipeStateEq
       simpa using same.symm

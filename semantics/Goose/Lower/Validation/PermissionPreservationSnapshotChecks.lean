@@ -13,7 +13,7 @@ private def env : Core.TEnv :=
 
 private def place : Place := .deref (.ref .readOnly (.var 0))
 
-private def initial : LS := ⟨#[⟨[], #[]⟩], #[], some 0, []⟩
+private def initial : LS := ⟨#[⟨[], #[]⟩], #[], some 0, [], #[]⟩
 
 private theorem generated : GeneratedBuilderState initial := by
   refine ⟨List.Perm.refl _, ?_, ?_⟩

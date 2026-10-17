@@ -110,26 +110,49 @@ theorem emitted_source_assignOp {env output : Core.TEnv} {results : List Ty}
     let after := (lowerStmt loop (.assignOp op place expr origin) (lowerEnv env.mod env.vars results) before).2
     EmittedBuilder (lowerEnv env.mod env.vars results) initial after ∧ GeneratedBuilderState after := by
   obtain ⟨info, integer, childStart, placeSource, infoType, exprSource, _, _⟩ := tyStmt_assignOp_children source
-  have readSource : Core.tyExpr env (.read place) start = .ok (.int integer, childStart) := by
-    simp [Core.tyExpr, placeSource, infoType, Ty.readable, Ty.flat, pure, StateT.pure, Except.pure,
-      bind, StateT.bind, Except.bind]
   let le := lowerEnv env.mod env.vars results
   let address := lowerPlace place le before
   let loaded := emitDef (.load address.1) le address.2
   let rhs := lowerExpr expr le loaded.2
   let operation := Op.bin op (intTyOf loaded.1 le rhs.2).1 loaded.1 rhs.1 (some origin)
   let computed := emitDef operation le rhs.2
-  have loadedBuilder : EmittedBuilder le initial loaded.2 :=
-    emitted_source_read place placeChild readSource generated builder
-  have loadedGenerated : GeneratedBuilderState loaded.2 := generated.lowerExpr (.read place) rfl
+  have addressTyped : ∀ active, address.2.cur = some active →
+      ∃ mu, address.2.vals[address.1]? = some (some (.data (.ref mu (.int integer)))) := by
+    intro active current
+    obtain ⟨mu, row⟩ := (emitted_source_results env results).place place placeSource generated
+      (show lowerPlace place (lowerEnv env.mod env.vars results) before = address from rfl)
+      (by change address.2.cur.isSome = true; rw [current]; rfl)
+    exact ⟨mu, by simpa only [infoType] using row⟩
+  have loadSuccess : address.2.cur.isSome = true →
+      (Op.load address.1).resultTy (tyEnv le address.2) = .ok (.data (.int integer)) := by
+    intro active
+    cases current : address.2.cur with
+    | none => simp [current] at active
+    | some block =>
+      obtain ⟨mu, row⟩ := addressTyped block current
+      simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, row,
+        pure, Except.pure, bind, Except.bind]
+  have loadedBuilder : EmittedBuilder le initial loaded.2 := by
+    apply (placeChild placeSource generated builder).emitDef (.load address.1)
+    · intro active
+      exact ⟨_, loadSuccess active⟩
+    · intro active operand member
+      have same : operand = address.1 := by simpa [Op.uses] using member
+      subst operand
+      exact value_lowerPlace place le before _ _ rfl active
+  have loadedGenerated : GeneratedBuilderState loaded.2 :=
+    (generated.lowerPlace place rfl).emitDef (.load address.1) rfl
   have rhsBuilder := exprChild exprSource loadedGenerated loadedBuilder
   have rows : rhs.2.cur.isSome = true →
       rhs.2.vals[loaded.1]? = some (some (.data (.int integer))) ∧
       rhs.2.vals[rhs.1]? = some (some (.data (.int integer))) := by
     intro active
     have loadedLive := (dead_lowerExpr expr).live_before rfl active
-    have oldTyped := (emitted_source_results env results).expression (.read place) readSource generated
-      (show lowerExpr (.read place) le before = loaded from rfl) loadedLive
+    have addressLive := (dead_emitDef (.load address.1)).live_before rfl loadedLive
+    have oldTyped : loaded.2.vals[loaded.1]? = some (some (.data (.int integer))) := by
+      cases current : address.2.cur with
+      | none => simp [current] at addressLive
+      | some block => exact (emitDef_recorded current (loadSuccess addressLive)).2.2.1
     exact ⟨(types_lowerExpr expr le loaded.2 _ _ rfl) _ _ oldTyped,
       (emitted_source_results env results).expression expr exprSource loadedGenerated rfl active⟩
   have operationSuccess : rhs.2.cur.isSome = true → operation.resultTy (tyEnv le rhs.2) = .ok (.data (.int integer)) := by

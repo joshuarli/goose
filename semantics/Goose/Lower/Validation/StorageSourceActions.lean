@@ -26,6 +26,26 @@ theorem StorageAt.of_preserving {le : LEnv} {before : LS} {action : B α}
     (instructions : ∀ instruction ∈ (action le before).2.insts, instruction ∈ before.insts) :
     StorageAt le before action := fun checked => checked.retained types instructions
 
+theorem StorageAt.recordValueRootSource (le : LEnv) (before : LS) (value : ValueId)
+    (source : ValueRootSource) : StorageAt le before (Goose.Lower.recordValueRootSource value source) := by
+  unfold StorageAt
+  rw [recordValueRootSource_run]
+  exact fun checked => checked
+
+theorem StorageAt.recordValueRootRecipe (le : LEnv) (before : LS) (value : ValueId)
+    (sourceScope : ScopeId) : StorageAt le before (Goose.Lower.recordValueRootRecipe value sourceScope) :=
+  StorageAt.recordValueRootSource le before value (.conditionalScope sourceScope)
+
+theorem StorageAt.recordReadValueRootRecipe (le : LEnv) (before : LS) (value : ValueId)
+    (place : Place) : StorageAt le before (Goose.Lower.recordReadValueRootRecipe value place) := by
+  unfold StorageAt
+  cases place <;> simp only [recordReadValueRootRecipe_run]
+  all_goals try exact fun checked => checked
+  split
+  · rw [recordValueRootSource_run]
+    exact fun checked => checked
+  · exact fun checked => checked
+
 theorem StorageAt.emitDef {le : LEnv} {before : LS} (op : Op)
     (emitted : before.cur.isSome = true → ∀ value, StorageAuthority le.mod.profile before.vals (.def value op)) :
     StorageAt le before (Goose.Lower.emitDef op) := by
@@ -82,5 +102,9 @@ theorem StorageAt.whenLive {le : LEnv} {before : LS} (default : α) (action : Bl
   cases live : before.cur with
   | none => apply StorageAt.of_state; exact congrArg Prod.snd (whenLive_none _ _ _ live)
   | some block => simpa only [StorageAt, whenLive_some _ _ _ live] using branches block live
+
+#print axioms StorageAt.recordValueRootSource
+#print axioms StorageAt.recordValueRootRecipe
+#print axioms StorageAt.recordReadValueRootRecipe
 
 end Goose.Lower.Validation

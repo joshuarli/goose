@@ -2,7 +2,7 @@ import Goose.Lower.Validation.SummaryPreservationReplayArgumentSource
 
 namespace Goose.Lower.Validation.SummaryPreservation
 
-open Goose.Core Goose.Core.Sound Goose.GIR
+open Goose.Core Goose.Core.Sound
 
 theorem tyExpr_call_arguments {env : TEnv} {calleeId : ContextId} {ctx : Context}
     {callee : Impl} {arguments : List Arg} {origin : OriginId} {start finish : Nat} {type : Ty}

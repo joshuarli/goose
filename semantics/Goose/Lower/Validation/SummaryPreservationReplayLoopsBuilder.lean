@@ -14,7 +14,7 @@ variable {module : GIR.Module} {results : Array (List RootRef)} {vt : Array (Opt
 theorem loopEmptyBlock (ready : ReplayBuilder module results vt func target le scopeCount slots ls upper) :
     ReplayBuilder module results vt func target le scopeCount slots (newBlock [] le ls).2 upper := by
   have generated := newBlock_empty_refined_witness ready.symbols ready.roots ready.effects
-  refine ⟨generated.1, generated.2, ?_, ?_, ready.slotsEq⟩
+  refine ⟨generated.1, generated.2, ?_, ?_, ready.slotsEq, ready.recipes.same (recipesUnchangedB_newBlock [] le ls)⟩
   · simpa [newBlock0_run, paramIds, pushParamTypes] using
       (ready.symbols.newBlock (tys := []))
   · rw [newBlock0_run]
@@ -29,7 +29,10 @@ theorem loopScalarBlock (ready : ReplayBuilder module results vt func target le 
       ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
   obtain ⟨next, roots, effects, scalar, slotsEq, growth⟩ :=
     newBlock_parameter_refined_frame [] type ready.symbols ready.roots ready.effects
-  refine ⟨next, ⟨roots, effects, ?_, ?_, slotsEq.trans ready.slotsEq⟩, scalar, growth⟩
+  refine ⟨next, ⟨roots, effects, ?_, ?_, slotsEq.trans ready.slotsEq,
+    ready.recipes.prefix (recipesUnchangedB_newBlock [type] le ls) growth (by
+      rw [ready.roots.valueSize, roots.valueSize]
+      exact (advB_newBlock1 type le ls _ _ rfl).vals)⟩, scalar, growth⟩
   · simpa [newBlock1_run, paramIds, pushParamTypes] using
       (ready.symbols.newBlock (tys := [type]))
   · rw [newBlock1_run]
@@ -48,7 +51,7 @@ private theorem emitLoopTerm (ready : ReplayBuilder module results vt func targe
   | some block =>
     have bound := ready.current block current
     have next := emitTerm_refined_witness (le := le) current bound ready.roots ready.effects closed delta
-    refine ⟨next.1, next.2, ?_, ?_, ready.slotsEq⟩
+    refine ⟨next.1, next.2, ?_, ?_, ready.slotsEq, ready.recipes.same (recipesUnchangedB_emitTerm term le ls)⟩
     · rw [emitTerm_run _ _ current]
       exact ready.symbols.emitTerm bound symbols
     · rw [emitTerm_run _ _ current]

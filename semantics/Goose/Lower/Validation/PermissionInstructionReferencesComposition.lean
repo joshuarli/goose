@@ -56,9 +56,25 @@ theorem newPermissions_lowerPlace_deref_refSlice {module : GIR.Module} {func : F
   obtain ⟨owner, middle, slotRun, loadRun⟩ := bind_eq.mp run
   have head : NewPermissionInstructions module func le first before middle :=
     newPermissions_free_emitDef (by trivial) slotRun
-  exact head.compose_framed (newPermissions_free_emitDef (by trivial) loadRun) loadRun
-    (dense_emitDef _) (advB_emitDef _) (types_emitDef _) (generatedTargetFrame_emitDef none _)
-    (generated.emitDef _ slotRun) (by trivial)
+  obtain ⟨loaded, loadedState, emitted, rest⟩ := bind_eq.mp loadRun
+  obtain ⟨recordedUnit, recorded, recordRun, result⟩ := bind_eq.mp rest
+  obtain ⟨rfl, rfl⟩ := pure_eq.mp result
+  have loadedPermissions := head.compose_framed
+    (newPermissions_free_emitDef (by trivial) emitted) emitted
+    (dense_emitDef _) (advB_emitDef _) (types_emitDef _)
+    (generatedTargetFrame_emitDef none _) (generated.emitDef _ slotRun) (by trivial)
+  have neutral : NewPermissionInstructions module func le first loadedState recorded := by
+    apply NewPermissionInstructions.of_blocks_eq
+    have equation := congrArg Prod.snd recordRun
+    simp only [recordReadValueRootRecipe_run] at equation
+    split at equation
+    · rw [recordValueRootSource_run] at equation
+      simpa only using congrArg (fun state : LS => state.blocks) equation.symm
+    · exact congrArg LS.blocks equation.symm
+  exact loadedPermissions.compose_framed neutral recordRun
+    (dense_recordReadValueRootRecipe _ _) (advB_recordReadValueRootRecipe _ _)
+    (types_recordReadValueRootRecipe _ _) (generatedTargetFrame_recordReadValueRootRecipe none _ _)
+    ((generated.emitDef _ slotRun).emitDef _ emitted) (by trivial)
 
 theorem newPermissions_lowerView_val {module : GIR.Module} {func : Func} {le : LEnv}
     {first : Nat} {before middle after : LS} {slice value : ValueId} {expression : Expr}

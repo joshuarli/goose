@@ -44,7 +44,15 @@ theorem lowerExpr_read_var_root_witness {res : Array (List RootRef)}
     middleCurrent middleBlockBound middleWitness (op := .load address.1)
     (by simpa [Op.uses] using addressBound) represented
   refine ⟨next, ?_, ?_, slots.trans sameSlots⟩
-  · exact nextWitness
+  · change BuilderRootWitness res vt func next
+      (recordReadValueRootRecipe (emitDef (.load address.1) le address.2).1 (.var varId) le
+        (emitDef (.load address.1) le address.2).2).2
+    rw [recordReadValueRootRecipe_run]
+    simp only []
+    split
+    · rw [recordValueRootSource_run]
+      exact ⟨nextWitness.valueSize, nextWitness.instructions⟩
+    · exact nextWitness
   · exact roots
 
 end Goose.Lower.Validation.SummaryPreservation

@@ -229,6 +229,15 @@ theorem resolved_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId)
   apply EmittedResolvedRun.of_unchanged
   all_goals intro before; rw [recordValueRootRecipe_run]
 
+omit tables in
+theorem resolved_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    EmittedResolvedRun module le (recordReadValueRootRecipe value place) := by
+  apply EmittedResolvedRun.of_unchanged
+  all_goals
+    intro before
+    cases place <;> simp only [recordReadValueRootRecipe_run]
+    split <;> simp [recordValueRootSource_run]
+
 theorem resolved_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : EmittedResolvedRun module le a1) (h2 : EmittedResolvedRun module le a2) :
     EmittedResolvedRun module le (whenLive 0 fun _ => do
       let (tb, eb) ← fork cv

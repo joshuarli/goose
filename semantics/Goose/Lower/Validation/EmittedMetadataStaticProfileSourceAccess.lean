@@ -19,7 +19,9 @@ theorem profile_source_read {env : Core.TEnv} {results : List Ty} (place : Place
   intro type start finish source
   obtain ⟨info, childFinish, childSource, _⟩ := tyExpr_read_place source
   exact ((child childSource).bind fun value =>
-    EmittedProfileRun.emitDef (.load value) (by intro; trivial))
+    (EmittedProfileRun.emitDef (.load value) (by intro; trivial)).bind fun result =>
+      (EmittedProfileRun.recordReadValueRootRecipe result place).bind fun _ =>
+        EmittedProfileRun.pure result)
 
 theorem profile_source_reference {env : Core.TEnv} {results : List Ty} (requested : Mutability) (place : Place)
     (child : EmittedProfileSourcePlace env results place) : EmittedProfileSourceExpression env results (.ref requested place) := by
@@ -58,7 +60,9 @@ theorem profile_source_dereference {env : Core.TEnv} {results : List Ty} (expr :
       cases place with
       | var index =>
         exact ((EmittedProfileRun.emitDef (.slotAddr index) (by intro; trivial)).bind fun value =>
-          EmittedProfileRun.emitDef (.load value) (by intro; trivial))
+          (EmittedProfileRun.emitDef (.load value) (by intro; trivial)).bind fun result =>
+            (EmittedProfileRun.recordReadValueRootRecipe result (.var index)).bind fun _ =>
+              EmittedProfileRun.pure result)
       | _ => simp [Core.sliceRefTy] at special
     | _ => simp [Core.sliceRefTy] at special
 

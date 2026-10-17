@@ -18,7 +18,8 @@ theorem cfg_source_read {env : Core.TEnv} {results : List Ty} (place : Place)
     (child : CfgSourcePlace env results place) : CfgSourceExpression env results (.read place) := by
   intro output start finish source
   obtain ⟨info, next, placeSource, _⟩ := tyExpr_read_place source
-  exact (child placeSource).bind fun _ => generated_edge_emitDef _ _ _
+  exact (child placeSource).bind fun address => (generated_edge_emitDef _ _ (.load address)).bind fun value =>
+    (generated_edge_recordReadValueRootRecipe _ _ value place).bind fun _ => generated_edge_pure _ _ value
 
 theorem cfg_source_reference {env : Core.TEnv} {results : List Ty} (mu : Mutability) (place : Place)
     (child : CfgSourcePlace env results place) : CfgSourceExpression env results (.ref mu place) := by

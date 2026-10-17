@@ -44,7 +44,7 @@ theorem globalRecipeState_recipes (module : Core.Module) (global : Core.Global) 
   exact (preservation (lowerEnv module #[] [global.ty]) initState _ _ rfl recipes_initState).1
 
 theorem lowerValueRootRows_keys (env : PEnv) (table : SourceRootTable)
-    (recipes : Array (ValueId × ScopeId)) :
+    (recipes : Array (ValueId × ValueRootSource)) :
     ((lowerValueRootRows env table recipes).getD #[]).toList.map Prod.fst =
       recipes.toList.map Prod.fst := by
   unfold lowerValueRootRows

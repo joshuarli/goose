@@ -6,7 +6,7 @@ open Goose.Core Goose.Core.Sound Goose.GIR
 
 theorem referenceSlicePlace {env : PEnv} {context : ContextId} {variableId : VarId} {localVar : LocalVar}
     {before after : RState} {sourceRoots : List RootRef} {results : Array (List RootRef)}
-    {vt : Array (Option VTy)} {target : Core.Eff} {scopeCount : Nat} {ls : LS} {upper : Prov}
+    {vt : Array (Option VTy)} {target : Core.Eff} {siteRoot : DemandNode} {scopeCount : Nat} {ls : LS} {upper : Prov}
     (accepted : Core.validate env.mod = .ok ())
     (contextRow : env.mod.contexts[context]? = some env.ctx)
     (implementationRow : env.mod.impls[env.ctx.impl]? = some env.impl)
@@ -15,7 +15,11 @@ theorem referenceSlicePlace {env : PEnv} {context : ContextId} {variableId : Var
       (typedContextSlotUpper env.mod env.ctx env.impl) ls upper)
     (variableRow : env.impl.vars[variableId]? = some localVar)
     (reference : localVar.ty.isRefSlice = true)
-    (source : rpPlace env (.deref (.read (.var variableId))) before = .ok (sourceRoots, after)) :
+    (source : rpPlace env (.deref (.read (.var variableId))) before = .ok (sourceRoots, after))
+    (metadata : SourceCanonicalRootFloors.RecipeMetadataProjects env siteRoot
+      (lowerContextAt env.mod env.ctx env.impl)
+      (lowerPlace (.deref (.read (.var variableId)))
+        (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).2) :
     variableId < env.impl.params.size ∧ env.isRefSliceVar variableId = true ∧
     ∃ next, ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
         (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
@@ -31,9 +35,12 @@ theorem referenceSlicePlace {env : PEnv} {context : ContextId} {variableId : Var
         RootsRefine (lowerContextAt env.mod env.ctx env.impl)
           (rootsAt next.vals (lowerPlace (.deref (.read (.var variableId)))
             (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1) sourceRoots ∧
-        ∀ root ∈ rootsAt next.vals (lowerPlace (.deref (.read (.var variableId)))
+        ((env.cont variableId).isSome = true → ∀ root ∈ rootsAt next.vals (lowerPlace (.deref (.read (.var variableId)))
           (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1,
             root ∈ [RootRef.param variableId]) ∧
+        rootsAt next.vals (lowerPlace (.deref (.read (.var variableId)))
+          (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1 =
+            lowerValueRootCeiling env #[] (.refSliceVar variableId)) ∧
       ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
   obtain ⟨param, parameterRow, _identity, _mode⟩ :=
     accepted_refSlice_parameter accepted implementationRow variableRow reference
@@ -42,19 +49,22 @@ theorem referenceSlicePlace {env : PEnv} {context : ContextId} {variableId : Var
   obtain ⟨next, nextReady, value, retained⟩ := ready.acceptedLocalRead accepted contextRow
     implementationRow variableRow (show rpExpr env (.read (.var variableId)) before =
       .ok (sourceRoots, after) from source)
-    (by intro _ nonref; rw [refLike] at nonref; cases nonref)
+    (by intro _ nonref; rw [refLike] at nonref; cases nonref) metadata
   refine ⟨(Array.getElem?_eq_some_iff.mp parameterRow).1, ?_, next, nextReady, ?_, retained⟩
   · simp [PEnv.isRefSliceVar, variableRow, reference]
   · intro live
     obtain ⟨typed, raw⟩ := value live
-    refine ⟨typed.bound, typed.refined, ?_⟩
-    intro root member
+    have cap : rootsAt next.vals (lowerExpr (.read (.var variableId))
+        (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1 =
+          lowerValueRootCeiling env #[] (.refSliceVar variableId) := by
+      simpa only [reference, ite_true] using raw
+    refine ⟨typed.bound, typed.refined, ?_, cap⟩
+    intro observed root member
     change root ∈ rootsAt next.vals (lowerExpr (.read (.var variableId))
       (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1 at member
-    rw [raw, typedContextSlotUpper_at variableRow, if_pos reference] at member
-    split at member
-    · exact member
-    · cases member
+    rw [raw, if_pos reference, refSliceReadRootCeiling_observed accepted contextRow
+      implementationRow variableRow reference observed] at member
+    exact member
 
 #print axioms referenceSlicePlace
 

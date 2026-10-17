@@ -1,5 +1,7 @@
-import Goose.Lower.Validation.CfgAcceptedModule
+import Goose.Lower.Validation.EmittedTypingFunctions
+import Goose.Lower.Validation.SnapshotContentsModule
 import Goose.Lower.Validation.StorageSourceEntry
+import Goose.Lower.ContextLowering
 
 namespace Goose.Lower.Validation
 
@@ -33,20 +35,15 @@ private theorem lower_function_checkStorage {module : Core.Module} (accepted : C
     (label : String) : checkStorage (lower module) label func (func.valueTypes (lower module)) = .ok () := by
   have moduleOk := validate_modOk module accepted
   rcases List.mem_append.mp member with implementation | initializer
-  · change func ∈ (module.contexts.map fun context =>
-        match (module.impls.map fun impl =>
-          (impl, lowerImplFromState module impl (lowerImplState module impl), lowerImplState module impl))[context.impl]? with
-        | some (impl, body, state) => { body with roots := { lowerContextRootInfo context impl with
-            values := lowerContextValueRoots module context impl state } }
-        | none => invalidContextFunction context).toList at implementation
-    simp only [Array.toList_map, List.mem_map] at implementation
-    obtain ⟨context, contextMember, equality⟩ := implementation
-    obtain ⟨index, contextRow⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp contextMember)
-    obtain ⟨impl, implRow, _⟩ := moduleOk.ctx index context contextRow
-    rw [Array.getElem?_map, implRow] at equality
-    simp only [Option.map_some] at equality
-    subst func
-    exact lowerContextAt_checkStorage_of_accepted accepted implRow context label
+  · obtain ⟨index, functionAt⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp implementation)
+    cases contextAt : module.contexts[index]? with
+    | none => simp [lower, Array.getElem?_map, contextAt] at functionAt
+    | some context =>
+      obtain ⟨impl, implAt, _⟩ := moduleOk.ctx index context contextAt
+      have same : lowerContextAt module context impl = func :=
+        Option.some.inj ((lower_func_at contextAt implAt).symm.trans functionAt)
+      rw [← same]
+      exact lowerContextAt_checkStorage_of_accepted accepted implAt context label
   · obtain ⟨global, globalMember, rfl⟩ := List.mem_map.mp initializer
     change global ∈ (module.globals.map (lowerGlobal module)).toList at globalMember
     simp only [Array.toList_map, List.mem_map] at globalMember

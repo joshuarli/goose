@@ -14,7 +14,10 @@ theorem generatedTargets_lowerExpr (lc : Option LoopCtx) : ∀ e : Expr, Generat
   | .bool b => by simp only [lowerExpr]; exact generatedTargets_emitDef lc _
   | .read p => by
     simp only [lowerExpr]
-    exact GeneratedTargetRun.bind (generatedTargets_lowerPlace lc p) fun _ => generatedTargets_emitDef lc _
+    exact GeneratedTargetRun.bind (generatedTargets_lowerPlace lc p) fun address =>
+      GeneratedTargetRun.bind (generatedTargets_emitDef lc (.load address)) fun value =>
+      GeneratedTargetRun.bind (generatedTargets_recordReadValueRootRecipe lc value p) fun _ =>
+      generatedTargets_pure lc value
   | .ref m p => by
     simp only [lowerExpr]
     exact GeneratedTargetRun.bind (generatedTargets_lowerPlace lc p) fun r => generatedTargets_borrowTo lc m r

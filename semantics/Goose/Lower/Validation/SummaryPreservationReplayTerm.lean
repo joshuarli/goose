@@ -27,7 +27,7 @@ theorem emitTerm (ready : ReplayBuilder module results vt func target le scopeCo
     have bound := ready.current block current
     have completed := emitTerm_refined_witness (le := le) current bound ready.roots ready.effects
       (roots live) (delta live)
-    refine ⟨completed.1, completed.2, ?_, ?_, ready.slotsEq⟩
+    refine ⟨completed.1, completed.2, ?_, ?_, ready.slotsEq, ready.recipes.same (recipesUnchangedB_emitTerm term le ls)⟩
     · rw [emitTerm_run _ _ current]
       exact ready.symbols.emitTerm bound (symbols live)
     · rw [emitTerm_run _ _ current]

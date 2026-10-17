@@ -16,7 +16,10 @@ theorem generatedTargetFrame_lowerExpr (lc : Option LoopCtx) : ∀ e : Expr, Gen
   | .bool b => by simp only [lowerExpr]; exact generatedTargetFrame_emitDef lc _
   | .read p => by
     simp only [lowerExpr]
-    exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerPlace lc p) fun _ => generatedTargetFrame_emitDef lc _
+    exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerPlace lc p) fun address =>
+      GeneratedTargetFrameRun.bind (generatedTargetFrame_emitDef lc (.load address)) fun value =>
+      GeneratedTargetFrameRun.bind (generatedTargetFrame_recordReadValueRootRecipe lc value p) fun _ =>
+      generatedTargetFrame_pure lc value
   | .ref m p => by
     simp only [lowerExpr]
     exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerPlace lc p) fun r => generatedTargetFrame_borrowTo lc m r

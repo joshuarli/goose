@@ -179,6 +179,18 @@ theorem ScopeFlowAction.observe (parents : Array (Option ScopeId)) (parent : Opt
   rw [same]
   exact config
 
+theorem ScopeFlowAction.recordReadValueRootRecipe (parents : Array (Option ScopeId))
+    (parent : Option ScopeId) (loop : Option LoopCtx) (value : ValueId) (place : Place) :
+    ScopeFlowAction parents parent loop (Goose.Lower.recordReadValueRootRecipe value place) := by
+  refine ⟨ScopeAction.recordReadValueRootRecipe parents parent value place, ?_⟩
+  intro env before entry exit config context head
+  cases place <;> simp only [recordReadValueRootRecipe_run]
+  all_goals try exact ⟨entry, exit, config, ScopeMapAdvance.refl _ _ _⟩
+  split
+  · rw [recordValueRootSource_run]
+    exact ⟨entry, exit, config.of_state rfl rfl rfl, ScopeMapAdvance.refl _ _ _⟩
+  · exact ⟨entry, exit, config, ScopeMapAdvance.refl _ _ _⟩
+
 theorem ScopeFlowAction.emitDef (parents : Array (Option ScopeId)) (parent : Option ScopeId)
     (loop : Option LoopCtx) (op : Op) : ScopeFlowAction parents parent loop (Goose.Lower.emitDef op) := by
   refine ⟨ScopeAction.emitDef parents parent op, ?_⟩

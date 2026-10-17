@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.SummaryPreservationRecipeBounds
 import Goose.Lower.Validation.SummaryPreservationEntrySeeds
 import Goose.Lower.Validation.CfgBuilderFunctions
 import Goose.Lower.Frag
@@ -28,11 +29,14 @@ theorem cfg_global_entry_parameters (module : Core.Module) (global : Core.Global
   exact same
 
 theorem global_provenance_seed (module : Core.Module) (global : Core.Global)
-    (vt : Array (Option VTy)) (upper : Prov) :
+    (vt : Array (Option VTy)) (upper : Prov)
+    (recipes : RecipeBounds (lowerGlobal module global).init upper (cfg_globalState module global)) :
     ProvenanceBelow (provStart vt (lowerGlobal module global).init) upper := by
   apply provStart_below_of_entry_seeds
   · intro slot root member
     simp [Func.slotRootSeeds, rootsAt, lowerGlobal] at member
+  · intro value root member
+    exact recipes.valueRootSeeds (lowerValueRootRows_covered _ _ _) value member
   intro block row pair member reference
   rw [cfg_global_entry_parameters module global block row] at member
   cases member

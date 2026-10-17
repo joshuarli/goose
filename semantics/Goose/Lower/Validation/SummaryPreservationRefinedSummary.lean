@@ -15,7 +15,7 @@ theorem refined_checkSummary_lowerContextAt {module : Core.Module} {context : Co
   let func := lowerContextAt module ctx impl
   cases known : impl.summary with
   | unknown =>
-    simp [Func.summaryClosed, lowerContextAt, lowerImpl, known]
+    simp [Func.summaryClosed, lowerContextAt, lowerImpl, lowerImplFromState, known]
     rfl
   | known summary =>
     have source := sourceEffects_of_checkSummary checked known

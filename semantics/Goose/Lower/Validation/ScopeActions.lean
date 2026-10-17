@@ -83,6 +83,18 @@ theorem ScopeAction.bind {parents : Array (Option ScopeId)} {parent : Option Sco
       middleValid (bound.advance advance) middleHead
   exact ⟨afterEntry, afterExit, afterValid, firstMaps.trans advance secondMaps⟩
 
+theorem ScopeAction.recordReadValueRootRecipe (parents : Array (Option ScopeId))
+    (parent : Option ScopeId) (value : ValueId) (place : Place) :
+    ScopeAction parents parent (Goose.Lower.recordReadValueRootRecipe value place) := by
+  refine ⟨advB_recordReadValueRootRecipe value place, ?_⟩
+  intro env before entry exit valid bound head
+  cases place <;> simp only [recordReadValueRootRecipe_run]
+  all_goals try exact ⟨entry, exit, valid, ScopeMapAdvance.refl _ _ _⟩
+  split
+  · rw [recordValueRootSource_run]
+    exact ⟨entry, exit, ⟨valid.traces, valid.current⟩, ScopeMapAdvance.refl _ _ _⟩
+  · exact ⟨entry, exit, valid, ScopeMapAdvance.refl _ _ _⟩
+
 theorem ScopeAction.emitDef (parents : Array (Option ScopeId)) (parent : Option ScopeId) (op : Op) :
     ScopeAction parents parent (emitDef op) := by
   refine ⟨advB_emitDef _, ?_⟩

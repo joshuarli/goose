@@ -4,9 +4,9 @@ namespace Goose.Lower.GeneratedTargetsChecks
 
 open Goose.Core Goose.GIR Goose.Lower.Validation
 
-private def entry : LS := ⟨#[⟨[], #[]⟩], #[], some 0, []⟩
+private def entry : LS := ⟨#[⟨[], #[]⟩], #[], some 0, [], #[]⟩
 
-private def futureEdge : LS := ⟨#[⟨[], #[.term (.br 1 [])]⟩], #[], some 0, []⟩
+private def futureEdge : LS := ⟨#[⟨[], #[.term (.br 1 [])]⟩], #[], some 0, [], #[]⟩
 
 example : ¬ TargetsBounded futureEdge := by
   intro bounded

@@ -49,6 +49,16 @@ theorem dense_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
   exact checked
 
+theorem dense_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    DenseRun (recordReadValueRootRecipe value place) := by
+  apply DenseRun.of_bounded ?_ (advB_recordReadValueRootRecipe value place)
+  intro le before result after run checked bounded
+  cases place <;> simp only [recordReadValueRootRecipe_run] at run
+  all_goals try split at run
+  all_goals try rw [recordValueRootSource_run] at run
+  all_goals obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  all_goals exact checked
+
 theorem dense_emitDef (op : Op) : DenseRun (emitDef op) := by
   apply DenseRun.of_bounded ?_ (advB_emitDef op)
   intro le before result after run checked bounded
@@ -609,7 +619,9 @@ theorem dense_lowerExpr : ∀ e : Expr, DenseRun (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact dense_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact DenseRun.bind (dense_lowerPlace p) fun _ => dense_emitDef _
+    exact DenseRun.bind (dense_lowerPlace p) fun _ =>
+      DenseRun.bind (dense_emitDef _) fun value =>
+        DenseRun.bind (dense_recordReadValueRootRecipe value p) fun _ => DenseRun.pure value
   | .ref m p => by
     simp only [lowerExpr]
     exact DenseRun.bind (dense_lowerPlace p) fun r => dense_borrowTo m r

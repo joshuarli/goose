@@ -4,13 +4,29 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Lower.Validation
 
-theorem generatedTargetFrame_recordValueRootRecipe (loop : Option LoopCtx)
-    (value : ValueId) (sourceScope : ScopeId) :
-    GeneratedTargetFrameRun loop (recordValueRootRecipe value sourceScope) := by
+theorem generatedTargetFrame_recordValueRootSource (loop : Option LoopCtx)
+    (value : ValueId) (source : ValueRootSource) :
+    GeneratedTargetFrameRun loop (recordValueRootSource value source) := by
   intro base env current result after baseCurrent frames terms run
-  rw [recordValueRootRecipe_run] at run
+  rw [recordValueRootSource_run] at run
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
   exact ⟨terms, .refl _⟩
+
+theorem generatedTargetFrame_recordValueRootRecipe (loop : Option LoopCtx)
+    (value : ValueId) (sourceScope : ScopeId) :
+    GeneratedTargetFrameRun loop (recordValueRootRecipe value sourceScope) :=
+  generatedTargetFrame_recordValueRootSource loop value (.conditionalScope sourceScope)
+
+theorem generatedTargetFrame_recordReadValueRootRecipe (loop : Option LoopCtx)
+    (value : ValueId) (place : Place) :
+    GeneratedTargetFrameRun loop (recordReadValueRootRecipe value place) := by
+  unfold recordReadValueRootRecipe
+  cases place <;> first
+    | exact generatedTargetFrame_pure loop ()
+    | (refine GeneratedTargetFrameRun.bind (generatedTargetFrame_read loop) fun le => ?_
+       split
+       · exact generatedTargetFrame_recordValueRootSource loop value _
+       · exact generatedTargetFrame_pure loop ())
 
 theorem generatedTargetFrame_curBlock (loop : Option LoopCtx) :
     GeneratedTargetFrameRun loop curBlock := by

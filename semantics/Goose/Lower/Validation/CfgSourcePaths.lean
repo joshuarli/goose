@@ -15,7 +15,9 @@ theorem path_lowerExpr : ∀ expr : Expr, PathAction (lowerExpr expr)
   | .bool _ => path_emitDef _
   | .read place => by
     simp only [lowerExpr]
-    exact PathAction.bind (path_lowerPlace place) fun _ => path_emitDef _
+    exact PathAction.bind (path_lowerPlace place) fun address =>
+      PathAction.bind (path_emitDef (.load address)) fun value =>
+        PathAction.bind (path_recordReadValueRootRecipe value place) fun _ => PathAction.pure value
   | .ref mu place => by
     simp only [lowerExpr]
     exact PathAction.bind (path_lowerPlace place) fun value => path_borrowTo mu value

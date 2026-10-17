@@ -1,0 +1,3 @@
+import Goose.Lower.Validation.ReplacementContentFlowSourceOccurrenceAggregatesGlobalFill
+import Goose.Lower.Validation.ReplacementContentFlowSourceOccurrenceAggregatesGlobalArray
+import Goose.Lower.Validation.ReplacementContentFlowSourceOccurrenceAggregatesGlobalStruct

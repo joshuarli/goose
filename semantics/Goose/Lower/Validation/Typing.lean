@@ -69,9 +69,14 @@ theorem lowerExpr_read_typed_of_place {le : LEnv} {before mid : LS}
     after.cur = mid.cur ∧ after.vals[value]? = some (some (.data ty)) := by
   have typed : (Op.load reference).resultTy (tyEnv le mid) = .ok (.data ty) := by
     simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, placeType, pure, Except.pure, bind, Except.bind]
-  simp only [lowerExpr, bind_run, placeRun]
   have result := emitDef_recorded live typed
-  exact ⟨result.2.1, result.2.2.1⟩
+  generalize emitted : emitDef (.load reference) le mid = output
+  obtain ⟨value, state⟩ := output
+  rw [emitted] at result
+  simp only [lowerExpr, bind_run, placeRun, emitted]
+  cases place <;>
+    simp [recordReadValueRootRecipe_run, recordValueRootSource_run, pure_run] <;>
+    (try split) <;> exact ⟨result.2.1, result.2.2.1⟩
 
 theorem lowerPlace_var_typed {env : Core.TEnv} {varId : VarId}
     {info : PlaceInfo} {next final : Nat}

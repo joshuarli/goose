@@ -19,7 +19,9 @@ theorem snapshot_source_read {env : Core.TEnv} {results : List Ty} (place : Plac
   intro type start finish source
   obtain ⟨info, childFinish, childSource, _⟩ := tyExpr_read_place source
   exact ((SnapshotSourceAction.lowerPlace place (child childSource)).bind fun value =>
-    SnapshotSourceAction.emitDef _ none (.load value) (by intros; intro h; cases h)).snapshots
+    (SnapshotSourceAction.emitDef _ none (.load value) (by intros; intro h; cases h)).bind fun loaded =>
+      (SnapshotSourceAction.recordReadValueRootRecipe _ none loaded place).bind fun _ =>
+        SnapshotSourceAction.pure _ none loaded).snapshots
 
 theorem snapshot_source_reference {env : Core.TEnv} {results : List Ty} (requested : Mutability) (place : Place)
     (child : SnapshotSourcePlace env results place) : SnapshotSourceExpression env results (.ref requested place) := by
@@ -57,7 +59,9 @@ theorem snapshot_source_dereference {env : Core.TEnv} {results : List Ty} (expr 
       cases place with
       | var index =>
         exact ((SnapshotSourceAction.emitDef _ none (.slotAddr index) (by intros; intro h; cases h)).bind fun value =>
-          SnapshotSourceAction.emitDef _ none (.load value) (by intros; intro h; cases h)).snapshots
+          (SnapshotSourceAction.emitDef _ none (.load value) (by intros; intro h; cases h)).bind fun loaded =>
+            (SnapshotSourceAction.recordReadValueRootRecipe _ none loaded (.var index)).bind fun _ =>
+              SnapshotSourceAction.pure _ none loaded).snapshots
       | _ => simp [Core.sliceRefTy] at special
     | _ => simp [Core.sliceRefTy] at special
 

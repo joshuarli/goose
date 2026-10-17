@@ -23,14 +23,22 @@ theorem storage_sliceRef_source {env : Core.TEnv} {results : List Ty}
           have placeSource : Core.tyPlace env (.var slot) 0 =
               .ok (⟨localVar.ty, localVar.kind == .mutable, true⟩, 0) := by
             simp [Core.tyPlace, Core.varOf, visible, row, pure, StateT.pure, Except.pure, bind, StateT.bind, Except.bind]
-          change StorageAt _ _ (emitDef (.slotAddr slot) >>= fun address => emitDef (.load address))
+          change StorageAt _ _ (do
+            let address ← emitDef (.slotAddr slot)
+            let value ← emitDef (.load address)
+            recordReadValueRootRecipe value (.var slot)
+            pure value)
           apply (StorageAt.emitDef _ (by intros; trivial)).bind
-          apply StorageAt.emitDef
-          intro active result
-          obtain ⟨mu, typed⟩ := outputs.place (.var slot) placeSource generated rfl active
-          exact ⟨mu, localVar.ty, typed, Or.inr reference⟩
+          apply StorageAt.bind
+          · apply StorageAt.emitDef
+            intro active result
+            obtain ⟨mu, typed⟩ := outputs.place (.var slot) placeSource generated rfl active
+            exact ⟨mu, localVar.ty, typed, Or.inr reference⟩
+          · exact (StorageAt.recordReadValueRootRecipe _ _ _ _).bind (StorageAt.pure _ _ _)
       · simp [Core.sliceRefTy, visible] at shortcut
     | _ => simp [Core.sliceRefTy] at shortcut
   | _ => simp [Core.sliceRefTy] at shortcut
+
+#print axioms storage_sliceRef_source
 
 end Goose.Lower.Validation

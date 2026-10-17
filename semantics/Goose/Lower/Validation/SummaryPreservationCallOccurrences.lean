@@ -38,10 +38,14 @@ theorem callWithArgumentOrigins {env : PEnv} {calleeId : ContextId} {ctx : Conte
         (∃ roots, sourceArgs[index]? = some roots ∧ RootsRefine func (rootsAt next.vals value) roots) ∧
         (RootRef.param index ∈ (lowerContextAt env.mod ctx callee).parameterRoots index ∨
           ∀ root ∈ mapArgumentRoots func next value index,
-            root ∈ (lowerContextAt env.mod ctx callee).parameterRoots index)) := by
-  obtain ⟨next, completed, returned, retained⟩ := ready.call accepted contextLookup implLookup
+            root ∈ (lowerContextAt env.mod ctx callee).parameterRoots index)) ∧
+      (ls.cur.isSome = true →
+        ReplayValue func next (lowerExpr (.call calleeId syntaxArgs origin) le initial).2
+          (lowerExpr (.call calleeId syntaxArgs origin) le initial).1 sourceRoots
+          (.data ((callee.results[0]?).getD Ty.unit))) := by
+  obtain ⟨next, completed, returned, retained, emitted⟩ := ready.callEmitted accepted contextLookup implLookup
     closed bounded argumentCount operandBounds arguments originBound calleeBound argumentsRun replayed effectBound
-  refine ⟨next, completed, returned, retained, ?_⟩
+  refine ⟨next, completed, returned, retained, ?_, emitted⟩
   intro live index value valueRow
   have indexBound := (List.getElem?_eq_some_iff.mp valueRow).1
   have parameterBound : index < callee.params.size := by rw [argumentCount live] at indexBound; exact indexBound

@@ -4,7 +4,7 @@ import Goose.Construct.Typing
 
 namespace Goose.Construct.GIR
 
-open Goose.Core (Mutability VarKind IntTy BinOp UnOp CmpOp ConvKind OriginId GlobalId VarId AbortKind NonlocalTarget Request ConstructionRequest RelocationReason)
+open Goose.Core (Mutability VarKind IntTy BinOp UnOp CmpOp ConvKind OriginId GlobalId VarId AbortKind NonlocalTarget Request ConstructionRequest)
 
 abbrev ValueId := Nat
 abbrev BlockId := Nat
@@ -19,6 +19,8 @@ inductive VTy
   | dest (ty : Ty) (request : ConstructionRequest)
   | built (ty : Ty) (request : ConstructionRequest)
   | cancelled (ty : Ty) (request : ConstructionRequest)
+  | receiving (ty : Ty) (request : ConstructionRequest)
+  | exitReservation (ty : Ty) (request : ConstructionRequest)
   | pack (parts : List ResultDescriptor)
   deriving DecidableEq, Repr, Inhabited
 
@@ -33,6 +35,21 @@ inductive Bnd
 inductive SnapshotMode
   | owner
   | borrowed
+  deriving DecidableEq, Repr
+
+inductive ExitSource
+  | newValue
+  | namedAlias (slot : SlotId)
+  deriving DecidableEq, Repr
+
+inductive ExitTicketKind
+  | waiting
+  | reserved (source : ExitSource)
+  | adopted
+  deriving DecidableEq, Repr
+
+inductive RelocationReason
+  | headerRemoval
   deriving DecidableEq, Repr
 
 inductive PrintPart
@@ -103,8 +120,20 @@ inductive Op
   | destAdapt (destination : ValueId) (producer : Ty) (request : ConstructionRequest) (org : Option OriginId)
   | destAdaptFinish (closed : ValueId) (org : Option OriginId)
   | destFinish (destination : ValueId) (org : Option OriginId)
+  | destPrepareNamed (destination : ValueId) (slot : SlotId) (org : Option OriginId)
   | destNamed (slot : SlotId) (org : Option OriginId)
-  | resultExitDest (position : Nat) (org : Option OriginId)
+  | receivingOpen (destination : ValueId)
+  | targetReceiving (target position : Nat) (org : Option OriginId)
+  | destRenew (receiving : ValueId)
+  | destRefresh (receiving previousDestination : ValueId)
+  | exitReserve (receiving : ValueId) (source : ExitSource) (org : Option OriginId)
+  | exitWait (receiving : ValueId)
+  | exitIsNamed (ticket : ValueId)
+  | exitAdopt (receiving built : ValueId)
+  | reservedDest (ticket : ValueId)
+  | reservedNamed (ticket : ValueId) (org : Option OriginId)
+  | exitLand (ticket built : ValueId) (org : Option OriginId)
+  | receivingCancel (receiving : ValueId) (carried : List ValueId) (org : Option OriginId)
   | destAbandonNamed (slot : SlotId) (replacement : ValueId) (org : Option OriginId)
   | destPublishRef (built : ValueId) (org : Option OriginId)
   | destArg (built : ValueId) (org : Option OriginId)
@@ -114,7 +143,6 @@ inductive Op
   | destStage (destination : ValueId) (org : Option OriginId)
   | destFit (built : ValueId) (org : Option OriginId)
   | callConstruct (callee : FnId) (args destinations : List ValueId) (org : Option OriginId)
-  | targetDest (target position : Nat) (org : Option OriginId)
 
 
 
@@ -145,6 +173,12 @@ inductive Effect
   | destBind (slot : SlotId) (built : ValueId) (org : Option OriginId)
   | destPublish (built : ValueId) (org : Option OriginId)
   | destCancel (cancelled : ValueId) (org : Option OriginId)
+  | receivingDrop (receiving : ValueId)
+  | exitRelease (ticket : ValueId) (org : Option OriginId)
+  | exitRearm (ticket : ValueId) (org : Option OriginId)
+  | exitSelect (ticket : ValueId) (source : ExitSource) (org : Option OriginId)
+  | exitDiscard (ticket : ValueId) (carried : List ValueId) (org : Option OriginId)
+  | exitMarkNamed (ticket : ValueId) (org : Option OriginId)
 
 
 inductive Term
@@ -182,6 +216,8 @@ structure RootInfo where
   params : Array (Nat × List RootRef) := #[]
   contents : Array (Nat × List RootRef) := #[]
   results : Array (List RootRef) := #[]
+  slots : Option (Array (SlotId × List RootRef)) := none
+  values : Option (Array (ValueId × List RootRef)) := none
 
 inductive Fact
   | ge0 (i : ValueId)
@@ -267,13 +303,20 @@ def Op.uses : Op → List ValueId
   | .call _ args _ => args
   | .arrLit _ vs | .structLit _ vs => vs
   | .arrFill _ v | .fieldAddr v _ => [v]
-  | .bytes .. | .destNamed .. | .resultExitDest .. | .targetDest .. => []
+  | .bytes .. | .destNamed .. | .targetReceiving .. => []
   | .result v _ | .render v _ => [v]
   | .destOpen receiver _ _ count _ => receiver.uses ++ count.toList
-  | .destAdapt v _ _ _ | .destAdaptFinish v _ | .destChild v _ _ | .destFinish v _ | .destPublishRef v _ | .destArg v _ | .destAbandon v _ |
+  | .destAdapt v _ _ _ | .destAdaptFinish v _ | .destChild v _ _ | .destFinish v _ | .destPrepareNamed v _ _ | .destPublishRef v _ | .destArg v _ | .destAbandon v _ |
       .destValue v _ | .destRelocate v _ _ | .destStage v _ | .destFit v _ => [v]
   | .destAbandonNamed _ v _ => [v]
   | .callConstruct _ args destinations _ => args ++ destinations
+  | .receivingOpen destination | .destRenew destination | .exitReserve destination .. | .exitWait destination => [destination]
+  | .exitIsNamed ticket => [ticket]
+  | .exitAdopt receiving built => [receiving,built]
+  | .destRefresh receiving destination => [receiving,destination]
+  | .reservedDest ticket | .reservedNamed ticket _ => [ticket]
+  | .exitLand ticket built _ => [ticket,built]
+  | .receivingCancel receiving carried _ => receiving :: carried
 
 def PrintPart.uses : PrintPart → List ValueId
   | .text _ => []
@@ -289,7 +332,9 @@ def Effect.uses : Effect → List ValueId
   | .enter _ | .leave _ => []
   | .print parts _ => parts.flatMap PrintPart.uses
   | .destRepeat a b _ | .destSnapshot a b _ | .appendValue a b _ | .destWrite a b _ | .destAttach a b _ | .destText a b _ | .destCopy a b _ => [a,b]
-  | .destBytes d _ _ | .destBind _ d _ | .destPublish d _ | .destCancel d _ => [d]
+  | .destBytes d _ _ | .destBind _ d _ | .destPublish d _ | .destCancel d _ | .receivingDrop d | .exitRelease d _ | .exitRearm d _ |
+    .exitMarkNamed d _ | .exitSelect d .. => [d]
+  | .exitDiscard ticket carried _ => ticket :: carried
 
 def Term.uses : Term → List ValueId
   | .br _ args => args

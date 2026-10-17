@@ -12,8 +12,15 @@ def genericParameter : Module :=
 def explicitRootUnion : Module :=
   { genericParameter with
     globals := genericParameter.globals.push ⟨"other", .int .i64, .mutable, .lit .i64 2, 0⟩,
+    impls := genericParameter.impls.modify 0 fun impl =>
+      { impl with summary := .known ⟨[.global 0, .global 1], [], [], [], [], false, true⟩ },
     contexts := genericParameter.contexts.modify 1 fun ctx =>
       { ctx with varRoots := [(0, [.param 0, .global 1])] } }
+
+def explicitRootMismatch : Module :=
+  { explicitRootUnion with
+    contexts := explicitRootUnion.contexts.modify 1 fun ctx =>
+      { ctx with varRoots := [(0, [.global 1])] } }
 
 def directGlobalRead : Module :=
   { genericParameter with
@@ -33,6 +40,14 @@ def directGlobalRead : Module :=
   | _ => false
 
 #guard match GIR.validate (lower explicitRootUnion) with
+  | .ok _ => true
+  | _ => false
+
+#guard match Core.validate explicitRootMismatch with
+  | .error rejection => rejection.rule == .call
+  | _ => false
+
+#guard match GIR.validate (lower explicitRootMismatch) with
   | .error rejection => rejection.code == .v050 &&
       rejection.message == "function receiver parameter 0 root info omits a root passed at a call site"
   | _ => false

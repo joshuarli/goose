@@ -25,6 +25,7 @@ theorem empty_roots_below (size : Nat) (upper : Array (List RootRef)) :
 
 theorem provStart_below_of_entry_seeds {vt : Array (Option VTy)} {func : Func} {upper : Prov}
     (slotSeeds : RootsBelow func.slotRootSeeds upper.slots)
+    (valueSeeds : RootsBelow func.valueRootSeeds upper.vals)
     (seeds : ∀ block, func.blocks[0]? = some block →
       ∀ pair ∈ block.params.zipIdx,
         valRefLike vt pair.1.1 = true → RootRef.param pair.2 ∈ rootsAt upper.vals pair.1.1) :
@@ -32,22 +33,24 @@ theorem provStart_below_of_entry_seeds {vt : Array (Option VTy)} {func : Func} {
   refine ⟨slotSeeds, ?_⟩
   unfold provStart
   cases entry : func.blocks[0]? with
-  | none => exact empty_roots_below _ _
+  | none => exact valueSeeds
   | some block =>
     apply List.foldlRecOn (motive := fun table => RootsBelow table upper.vals)
-      block.params.zipIdx _ (empty_roots_below _ _)
+      block.params.zipIdx _ valueSeeds
     intro table prior pair member
     rcases pair with ⟨⟨value, paramTy⟩, index⟩
     change RootsBelow (if valRefLike vt value && value < table.size then
-      table.set! value [.param index] else table) upper.vals
+      table.set! value (unionRoots (rootsAt table value) [.param index]) else table) upper.vals
     split
     · rename_i active
       apply roots_set_below prior
       intro root rootMember
-      have same : root = .param index := List.mem_singleton.mp rootMember
-      subst root
-      simp only [Bool.and_eq_true] at active
-      exact seeds block entry ((value, paramTy), index) member active.1
+      rcases Goose.Core.Sound.unionRoots_mem _ _ _ rootMember with old | parameter
+      · exact prior value root old
+      · have same : root = .param index := List.mem_singleton.mp parameter
+        subst root
+        simp only [Bool.and_eq_true] at active
+        exact seeds block entry ((value, paramTy), index) member active.1
     · exact prior
 
 end Goose.Lower.Validation.SummaryPreservation

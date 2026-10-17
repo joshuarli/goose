@@ -50,6 +50,18 @@ theorem operands_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId)
     rw [recordValueRootRecipe_run]
     exact Nat.le_refl _
 
+theorem operands_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    OperandRun (recordReadValueRootRecipe value place) := by
+  apply OperandRun.of_unchanged
+  · intro le state
+    cases place <;>
+      simp [recordReadValueRootRecipe_run, recordValueRootSource_run] <;>
+      (try split) <;> rfl
+  · intro le state
+    cases place <;>
+      simp [recordReadValueRootRecipe_run, recordValueRootSource_run] <;>
+      (try split) <;> exact Nat.le_refl _
+
 theorem insts_appendInst_member {before : LS} {block : BlockId} {inst next : Inst} :
     next ∈ (before.appendInst block inst).insts → next ∈ before.insts ∨ next = inst := by
   intro member
@@ -244,7 +256,15 @@ theorem operands_lowerPlace_global (global : GlobalId) : OperandRun (lowerPlace 
 
 theorem operands_lowerExpr_read (place : Place) (child : OperandRun (lowerPlace place)) :
     OperandRun (lowerExpr (.read place)) := by
-  exact child.emitDefAfterValue (value_lowerPlace place) (by simp [Op.uses])
+  intro le before result after run checked
+  obtain ⟨address, addressed, placeRun, value, loaded, emission, unit, recorded, recording, returning⟩ :=
+    (by simpa only [lowerExpr, bind_eq] using run)
+  obtain ⟨rfl, rfl⟩ := pure_eq.mp returning
+  have emitted : (do let address ← lowerPlace place; emitDef (.load address)) le before =
+      (value, loaded) := bind_eq.mpr ⟨address, addressed, placeRun, emission⟩
+  have loadedChecked :=
+    (child.emitDefAfterValue (value_lowerPlace place) (by simp [Op.uses])) _ _ _ _ emitted checked
+  exact operands_recordReadValueRootRecipe value place _ _ _ _ recording loadedChecked
 
 theorem operands_lowerPlace_field (place : Place) (field : Nat)
     (child : OperandRun (lowerPlace place)) : OperandRun (lowerPlace (.field place field)) := by

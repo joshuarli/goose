@@ -31,6 +31,20 @@ theorem path_read : PathAction (read : B LEnv) := ⟨advB_read, paths_read⟩
 theorem path_get : PathAction (get : B LS) := PathAction.of_blocks advB_get (fun _ _ => rfl)
 theorem path_isLive : PathAction isLive := PathAction.of_blocks advB_isLive (fun _ _ => rfl)
 
+theorem path_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    PathAction (recordReadValueRootRecipe value place) := by
+  refine PathAction.of_blocks (advB_recordReadValueRootRecipe value place) ?_
+  intro env state
+  cases place with
+  | var variableId =>
+    rw [recordReadValueRootRecipe_run]
+    by_cases refSlice : (env.vars[variableId]?).any (fun localVar => localVar.ty.isRefSlice) = true <;>
+      simp [refSlice, recordValueRootSource_run]
+  | global _ => rw [recordReadValueRootRecipe_run]
+  | deref _ => rw [recordReadValueRootRecipe_run]
+  | elem _ _ _ => rw [recordReadValueRootRecipe_run]
+  | field _ _ => rw [recordReadValueRootRecipe_run]
+
 theorem path_freezeTo (mu : Mutability) (value : ValueId) : PathAction (freezeTo mu value) := by
   refine ⟨advB_freezeTo mu value, ?_⟩
   intro env before result after run paths bounded

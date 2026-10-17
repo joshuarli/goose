@@ -1,5 +1,4 @@
 import Goose.Lower.Validation.SourceGlobalControlMutationsCommon
-import Goose.Lower.Validation.SummaryPreservationSourceMutationKernelsAssignOpCheckpoint
 
 namespace Goose.Lower.Validation.SummaryPreservation
 
@@ -166,7 +165,14 @@ private theorem globalAssignOpAfterRhs {env : PEnv} {func : Func}
         source wholeEffect placeRun loadRun valueRun typeRun ready.symbols current blockBound
         ready.roots ready.effects (input live).2.2.2.1 (input live).2.2.2.2
         (input live).1 (input live).2.1 (input live).2.2.1 originBound
-    refine ⟨next, ⟨roots, effects, symbols, ?_, slotsEq.trans ready.slotsEq⟩, retained⟩
+    refine ⟨next, ⟨roots, effects, symbols, ?_, slotsEq.trans ready.slotsEq,
+      ready.recipes.prefix (by
+        rw [whole]
+        exact (RecipesUnchangedB.bind (recipesUnchangedB_emitDef (.bin op ty old rhs (some origin)))
+          (fun result => recipesUnchangedB_emitEffect (.store address result (some origin)))) le ls) retained (by
+        rw [ready.roots.valueSize, roots.valueSize, whole]
+        exact ((AdvB.bind (advB_emitDef (.bin op ty old rhs (some origin)))
+          (fun result => advB_emitEffect (.store address result (some origin)))) le ls _ _ rfl).vals)⟩, retained⟩
     intro candidate row
     rw [finalCurrent] at row
     cases row

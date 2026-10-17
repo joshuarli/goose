@@ -14,9 +14,9 @@ theorem stopped {action : B α} {result : α}
     (stable : StoppedGraph action) (dead : ls.cur = none)
     (run : action le ls = (result, final)) :
     ReplayBuilder module results vt func target le scopeCount slots final upper := by
-  obtain ⟨afterDead, blocks, values⟩ := stable le ls result final run dead
+  obtain ⟨afterDead, blocks, values, recipes⟩ := stable le ls result final run dead
   have instructions : final.insts = ls.insts := by simp only [LS.insts, blocks]
-  refine ⟨⟨ready.roots.valueSize.trans (congrArg Array.size values).symm, ?_⟩, ?_, ?_, ?_, ready.slotsEq⟩
+  refine ⟨⟨ready.roots.valueSize.trans (congrArg Array.size values).symm, ?_⟩, ?_, ?_, ?_, ready.slotsEq, ready.recipes.same recipes⟩
   · intro inst member
     rw [instructions] at member
     simpa only [blocks] using ready.roots.instructions inst member

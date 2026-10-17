@@ -16,7 +16,9 @@ theorem complete_lowerExpr : ∀ expr : Expr, CompletionAction (lowerExpr expr)
   | .bool _ => complete_emitDef _
   | .read place => by
     simp only [lowerExpr]
-    exact CompletionAction.bind (complete_lowerPlace place) fun _ => complete_emitDef _
+    exact CompletionAction.bind (complete_lowerPlace place) fun address =>
+      CompletionAction.bind (complete_emitDef (.load address)) fun value =>
+        CompletionAction.bind (complete_recordReadValueRootRecipe value place) fun _ => CompletionAction.pure value
   | .ref mu place => by
     simp only [lowerExpr]
     exact CompletionAction.bind (complete_lowerPlace place) fun value => complete_borrowTo mu value

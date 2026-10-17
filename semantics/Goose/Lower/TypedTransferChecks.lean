@@ -18,7 +18,7 @@ def module (profile : ArtifactProfile) : Core.Module :=
     impls := #[implementation], contexts := #[⟨0, "main", [], [], []⟩], entry := 0,
     origins := #[⟨0, 1, "return"⟩] }
 
-def initialBuilder : LS := ⟨#[⟨[], #[]⟩], #[], some 0, []⟩
+def initialBuilder : LS := ⟨#[⟨[], #[]⟩], #[], some 0, [], #[]⟩
 
 def initialFrame : GIR.Frame := { act := 0, scopes := [], depth := 1, vals := {} }
 

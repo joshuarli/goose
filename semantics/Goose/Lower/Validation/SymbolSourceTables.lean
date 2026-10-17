@@ -1,13 +1,15 @@
 import Goose.Lower.Validation.SourceSymbolAnnotationFacts
 import Goose.Lower.Validation.SourceCanonicalRootFloorsBounds
+import Goose.Lower.Validation.SourceCanonicalRootFloorsRowBounds
 
 namespace Goose.Lower.Validation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
 
 private theorem valueRootRows_root_bounds {env : PEnv} {table : SourceRootTable}
-    {recipes : Array (ValueId × ScopeId)}
+    {recipes : Array (ValueId × ValueRootSource)}
     (bounded : SourceCanonicalRootFloors.SourceTableBounds env.mod env.impl table)
+    (annotations : ∀ variableId, SourceRootsWithin env.mod env.impl ((env.ann variableId).getD []))
     {value : ValueId} {roots : List RootRef}
     (member : (value, roots) ∈ (lowerValueRootRows env table recipes).getD #[]) :
     ∀ root ∈ roots,
@@ -15,8 +17,13 @@ private theorem valueRootRows_root_bounds {env : PEnv} {table : SourceRootTable}
       | .local index => index < env.impl.vars.size
       | .global index => index < env.mod.globals.size
       | .param index => index < env.impl.params.size := by
-  obtain ⟨scope, _, rfl⟩ := SourceCanonicalRootFloors.lowerValueRootRows_source env table recipes member
-  exact lowerContextRootCeiling_root_bounds (bounded.getD scope)
+  obtain ⟨source, _, rfl⟩ := SourceCanonicalRootFloors.lowerValueRootRows_source env table recipes member
+  cases source with
+  | conditionalScope scope =>
+    exact lowerContextRootCeiling_root_bounds (bounded.getD scope)
+  | refSliceVar variableId =>
+    exact SourceCanonicalRootFloors.lowerValueRootCeiling_refSliceVar_bounds env variableId
+      (annotations variableId)
 
 theorem lowerContextAt_symbol_tables {module : Core.Module} {contextIndex : ContextId}
     {ctx : Core.Context} {impl : Core.Impl}
@@ -80,8 +87,17 @@ theorem lowerContextAt_symbol_tables {module : Core.Module} {contextIndex : Cont
     · exact SourceCanonicalRootFloors.lowerContextAt_valueRoots_numValues module ctx impl
         (lowerContextAt_state_numValues module ctx impl) member
     · have bounded := SourceCanonicalRootFloors.lowerContext_source_table_bounds accepted contextAt implAt
+      have annotations : ∀ variableId, SourceRootsWithin module impl
+          ((PEnv.ann ⟨module, impl, ctx, []⟩ variableId).getD []) := by
+        intro variableId
+        unfold PEnv.ann
+        cases found : ctx.varRoots.find? (·.1 == variableId) with
+        | none => intro root member; cases member
+        | some row =>
+          exact (accepted_context_root_bounds accepted contextAt implAt).1 row.1 row.2
+            (List.mem_of_find?_eq_some found)
       have rootBounds := valueRootRows_root_bounds (env := ⟨module, impl, ctx, []⟩) bounded
-        (Array.mem_toList_iff.mp member)
+        annotations (Array.mem_toList_iff.mp member)
       intro root rootMember
       have bound := rootBounds root rootMember
       cases root <;> simpa [lower, lowerContextAt, lowerImpl, lowerImplFromState, lowerEnv] using bound
@@ -109,8 +125,12 @@ theorem lowerGlobal_symbol_tables {module : Core.Module} {index : GlobalId} {glo
     · exact SourceCanonicalRootFloors.lowerGlobal_valueRoots_numValues module global
         (lowerGlobal_state_numValues module global) member
     · have bounded := SourceCanonicalRootFloors.lowerGlobal_source_table_bounds accepted lookup
+      have annotations : ∀ variableId, SourceRootsWithin module initImpl
+          ((PEnv.ann ⟨module, initImpl, initContext, []⟩ variableId).getD []) := by
+        intro variableId root member
+        simp [PEnv.ann, initContext] at member
       have rootBounds := valueRootRows_root_bounds (env := ⟨module, initImpl, initContext, []⟩) bounded
-        (Array.mem_toList_iff.mp member)
+        annotations (Array.mem_toList_iff.mp member)
       intro root rootMember
       have bound := rootBounds root rootMember
       cases root <;> simpa [lower, lowerGlobal, initImpl] using bound

@@ -6,25 +6,27 @@ open Goose.Core Goose.GIR
 
 def StoppedGraph (action : B α) : Prop :=
   ∀ le before result after, action le before = (result, after) → before.cur = none →
-    after.cur = none ∧ after.blocks = before.blocks ∧ after.vals = before.vals
+    after.cur = none ∧ after.blocks = before.blocks ∧ after.vals = before.vals ∧
+      after.valueRootRecipes = before.valueRootRecipes
 
 theorem StoppedGraph.pure (value : α) : StoppedGraph (pure value) := by
   intro le before result after run dead
   obtain ⟨_, rfl⟩ := pure_eq.mp run
-  exact ⟨dead, rfl, rfl⟩
+  exact ⟨dead, rfl, rfl, rfl⟩
 
 theorem StoppedGraph.bind {action : B α} {next : α → B β}
     (first : StoppedGraph action) (second : ∀ value, StoppedGraph (next value)) :
     StoppedGraph (action >>= next) := by
   intro le before result after run dead
   obtain ⟨value, mid, firstRun, secondRun⟩ := bind_eq.mp run
-  obtain ⟨midDead, midBlocks, midValues⟩ := first _ _ _ _ firstRun dead
-  obtain ⟨afterDead, afterBlocks, afterValues⟩ := second value _ _ _ _ secondRun midDead
-  exact ⟨afterDead, afterBlocks.trans midBlocks, afterValues.trans midValues⟩
+  obtain ⟨midDead, midBlocks, midValues, midRecipes⟩ := first _ _ _ _ firstRun dead
+  obtain ⟨afterDead, afterBlocks, afterValues, afterRecipes⟩ := second value _ _ _ _ secondRun midDead
+  exact ⟨afterDead, afterBlocks.trans midBlocks, afterValues.trans midValues, afterRecipes.trans midRecipes⟩
 
 theorem StoppedGraph.of_graph_unchanged {action : B α}
     (unchanged : ∀ le state, (action le state).2.cur = state.cur ∧
-      (action le state).2.blocks = state.blocks ∧ (action le state).2.vals = state.vals) :
+      (action le state).2.blocks = state.blocks ∧ (action le state).2.vals = state.vals ∧
+      (action le state).2.valueRootRecipes = state.valueRootRecipes) :
     StoppedGraph action := by
   intro le before result after run dead
   have same := unchanged le before
@@ -35,36 +37,58 @@ theorem stopped_emitDef (op : Op) : StoppedGraph (emitDef op) := by
   intro le before result after run dead
   rw [emitDef_none op le dead] at run
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
-  exact ⟨dead, rfl, rfl⟩
+  exact ⟨dead, rfl, rfl, rfl⟩
 
 theorem stopped_emitEffect (effect : Effect) : StoppedGraph (emitEffect effect) := by
   intro le before result after run dead
   rw [emitEffect_none effect le dead] at run
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
-  exact ⟨dead, rfl, rfl⟩
+  exact ⟨dead, rfl, rfl, rfl⟩
 
 theorem stopped_emitTerm (term : Term) : StoppedGraph (emitTerm term) := by
   intro le before result after run dead
   rw [emitTerm_none term le dead] at run
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
-  exact ⟨dead, rfl, rfl⟩
+  exact ⟨dead, rfl, rfl, rfl⟩
 
 theorem stopped_whenLive (default : α) (action : BlockId → B α) : StoppedGraph (whenLive default action) := by
   intro le before result after run dead
   rw [whenLive_none default action le dead] at run
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
-  exact ⟨dead, rfl, rfl⟩
+  exact ⟨dead, rfl, rfl, rfl⟩
 
 theorem stopped_read : StoppedGraph (read : B LEnv) := by
   apply StoppedGraph.of_graph_unchanged
   intros
-  exact ⟨rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl⟩
+
+theorem stopped_recordValueRootSource (value : ValueId) (source : ValueRootSource) :
+    StoppedGraph (recordValueRootSource value source) := by
+  intro le before result after run dead
+  rw [recordValueRootSource_run] at run
+  simp only [dead, Option.isSome_none, Bool.false_and, Bool.false_eq_true, ite_false] at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  exact ⟨rfl, rfl, rfl, rfl⟩
+
+theorem stopped_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    StoppedGraph (recordReadValueRootRecipe value place) := by
+  cases place with
+  | var variableId =>
+    unfold recordReadValueRootRecipe
+    refine StoppedGraph.bind stopped_read fun le => ?_
+    split
+    · exact stopped_recordValueRootSource _ _
+    · exact StoppedGraph.pure _
+  | global global => exact StoppedGraph.pure _
+  | deref expression => exact StoppedGraph.pure _
+  | field owner field => exact StoppedGraph.pure _
+  | elem view index => exact StoppedGraph.pure _
 
 theorem stopped_valTy (value : ValueId) : StoppedGraph (valTy value) := by
   apply StoppedGraph.of_graph_unchanged
   intro le state
   rw [valTy_run]
-  exact ⟨rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl⟩
 
 theorem stopped_intTyOf (value : ValueId) : StoppedGraph (intTyOf value) := by
   unfold intTyOf
@@ -97,13 +121,13 @@ theorem stopped_pushScope (scope : ScopeId) : StoppedGraph (pushScope scope) := 
   apply StoppedGraph.of_graph_unchanged
   intro le state
   rw [pushScope_run]
-  exact ⟨rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl⟩
 
 theorem stopped_popScope : StoppedGraph popScope := by
   apply StoppedGraph.of_graph_unchanged
   intro le state
   rw [popScope_run]
-  exact ⟨rfl, rfl, rfl⟩
+  exact ⟨rfl, rfl, rfl, rfl⟩
 
 theorem stopped_inScope (scope : ScopeId) {action : B α} (dead : StoppedGraph action) : StoppedGraph (inScope scope action) := by
   unfold inScope
@@ -120,11 +144,11 @@ theorem stopped_lowerStmts (context : Option LoopCtx) (stmts : List Stmt) : Stop
   | nil =>
     rw [lowerStmts, pure_run] at run
     obtain ⟨_, rfl⟩ := Prod.mk.inj run
-    exact ⟨dead, rfl, rfl⟩
+    exact ⟨dead, rfl, rfl, rfl⟩
   | cons stmt rest =>
     simp only [lowerStmts, bind_run, isLive_none dead, Bool.false_eq_true, ite_false, pure_run] at run
     obtain ⟨_, rfl⟩ := Prod.mk.inj run
-    exact ⟨dead, rfl, rfl⟩
+    exact ⟨dead, rfl, rfl, rfl⟩
 
 mutual
 
@@ -136,7 +160,9 @@ theorem stopped_lowerExpr : ∀ e : Expr, StoppedGraph (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact stopped_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact StoppedGraph.bind (stopped_lowerPlace p) fun _ => stopped_emitDef _
+    exact StoppedGraph.bind (stopped_lowerPlace p) fun address =>
+      StoppedGraph.bind (stopped_emitDef (.load address)) fun value =>
+      StoppedGraph.bind (stopped_recordReadValueRootRecipe value p) fun _ => StoppedGraph.pure value
   | .ref m p => by
     simp only [lowerExpr]
     exact StoppedGraph.bind (stopped_lowerPlace p) fun r => stopped_borrowTo m r

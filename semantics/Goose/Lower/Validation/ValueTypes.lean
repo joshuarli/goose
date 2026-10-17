@@ -42,6 +42,14 @@ theorem types_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
   intro le state
   rw [recordValueRootRecipe_run]
 
+theorem types_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    TypeRun (recordReadValueRootRecipe value place) := by
+  apply TypeRun.of_unchanged
+  intro le state
+  cases place <;>
+    simp [recordReadValueRootRecipe_run, recordValueRootSource_run] <;>
+    (try split) <;> rfl
+
 theorem types_emitDef (op : Op) : TypeRun (emitDef op) := by
   intro le before result after run value ty typed
   cases current : before.cur with
@@ -408,7 +416,9 @@ theorem types_lowerExpr : ∀ e : Expr, TypeRun (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact types_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact TypeRun.bind (types_lowerPlace p) fun _ => types_emitDef _
+    exact TypeRun.bind (types_lowerPlace p) fun _ =>
+      TypeRun.bind (types_emitDef _) fun value =>
+        TypeRun.bind (types_recordReadValueRootRecipe value p) fun _ => TypeRun.pure value
   | .ref m p => by
     simp only [lowerExpr]
     exact TypeRun.bind (types_lowerPlace p) fun r => types_borrowTo m r

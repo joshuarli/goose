@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.CfgReadRecipes
 import Goose.Lower.Validation.CfgSourceDominanceArms
 
 namespace Goose.Lower.Validation
@@ -59,6 +60,20 @@ theorem ArmsSSA.joinValue {before state : LS} {beforeImports imports : ImportedV
     | some other =>
       exact ⟨_, by simpa only [Goose.Lower.joinValue, incoming, Option.map_some,
         Option.toList_some, List.cons_append, List.nil_append] using finished⟩
+
+theorem ssa_recordReadValueRootRecipe (loop : Option LoopCtx) (value : ValueId) (place : Place) :
+    SSARun loop [value] (fun _ => [value]) (recordReadValueRootRecipe value place) := by
+  intro env before result after run imports checked ready arguments
+  have advance := advB_recordReadValueRootRecipe value place env before result after run
+  have tables := recordReadValueRootRecipe_tables value place env before
+  rw [run] at tables
+  have current : after.cur = before.cur := tables.2.2
+  have checkedAfter := checked.of_tables tables.1 tables.2.1 current
+  refine ⟨imports, SSAResult.of_current checkedAfter advance (Or.inr current) ?_⟩
+  intro block live output member
+  have equal : output = value := by simpa using member
+  subst output
+  exact (arguments block (current.symm.trans live) value (by simp)).of_ext advance.ext (fun _ _ => rfl)
 
 theorem ssa_recordValueRootRecipe (loop : Option LoopCtx) (value : ValueId) (sourceScope : ScopeId) :
     SSARun loop [value] (fun _ => [value]) (recordValueRootRecipe value sourceScope) := by

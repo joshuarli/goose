@@ -38,6 +38,14 @@ theorem EmittedProfileRun.recordValueRootRecipe {profile : ArtifactProfile} {le 
   intro before
   rw [recordValueRootRecipe_run]
 
+theorem EmittedProfileRun.recordReadValueRootRecipe {profile : ArtifactProfile} {le : LEnv}
+    (value : ValueId) (place : Place) :
+    EmittedProfileRun profile le (Goose.Lower.recordReadValueRootRecipe value place) := by
+  apply EmittedProfileRun.of_blocks_eq
+  intro before
+  cases place <;> simp only [recordReadValueRootRecipe_run]
+  split <;> simp [recordValueRootSource_run]
+
 theorem EmittedProfile.appendInst {profile : ArtifactProfile} {before : LS}
     (checked : EmittedProfile profile before) (block : BlockId) (inst : Inst)
     (allowed : EmittedProfileInst profile inst) : EmittedProfile profile (before.appendInst block inst) := by

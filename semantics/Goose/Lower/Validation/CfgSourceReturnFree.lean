@@ -14,7 +14,10 @@ theorem returnFree_lowerExpr : ∀ e : Expr, ReturnFreeExpr e → ReturnFreeRun 
   | .bool b, free => by simp only [lowerExpr]; exact returnFree_emitDef _
   | .read p, free => by
     simp only [lowerExpr]
-    exact ReturnFreeRun.bind (returnFree_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun _ => returnFree_emitDef _
+    exact ReturnFreeRun.bind (returnFree_lowerPlace p free) fun address =>
+      ReturnFreeRun.bind (returnFree_emitDef (.load address)) fun value =>
+        ReturnFreeRun.bind (returnFree_recordReadValueRootRecipe value p) fun _ =>
+          returnFree_pure value
   | .ref m p, free => by
     simp only [lowerExpr]
     exact ReturnFreeRun.bind (returnFree_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun r => returnFree_borrowTo m r

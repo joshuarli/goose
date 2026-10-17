@@ -132,9 +132,10 @@ private theorem landing_updates_lifecycle (state : ConstructionState) (id : Dest
       | .receiver => True
       | .child parent | .replacement parent => parent < id)
     (parentValid : ∀ parentId parent, parentUpdate = some (parentId, parent) →
-      ∃ before parentCount, state.destinations[parentId]? = some before ∧
-        before.progress = .suspended parentCount superseded.capability.id ∧
-        parent = { before with progress := .suspended parentCount id } ∧ parentId < id)
+      ∃ before, state.destinations[parentId]? = some before ∧
+        parent.capability.id = before.capability.id ∧ parent.backing = before.backing ∧
+        parent.use = before.use ∧
+        (∀ (phase : DestinationTracePhase), phase.matchesDestination before → phase.matchesDestination parent) ∧ parentId < id)
     (valid : DestinationLifecycleInvariant state) :
     DestinationLifecycleInvariant (((do
       replaceDestination id { replacement with
@@ -165,19 +166,15 @@ private theorem landing_updates_lifecycle (state : ConstructionState) (id : Dest
       · exact changed
   | some pair =>
       rcases pair with ⟨parentId, parent⟩
-      obtain ⟨before, parentCount, parentPresent, parentProgress, parentEq, earlier⟩ := parentValid parentId parent rfl
-      subst parent
+      obtain ⟨before, parentPresent, parentCapability, parentBacking, parentUse, parentTransition, earlier⟩ := parentValid parentId parent rfl
       have different : id ≠ parentId := (Nat.ne_of_lt earlier).symm
       have parentInside := (Array.getElem?_eq_some_iff.mp parentPresent).choose
       have parentAfter : (state.destinations.set! id updated)[parentId]? = some before := by
         simpa only [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds_ne different] using parentPresent
       have parentChanged := destinationLifecycleInvariant_replace_silent
         { state with destinations := state.destinations.set! id updated } parentId before
-        { before with progress := .suspended parentCount id } state.storage parentAfter rfl rfl rfl rfl
-        (by intro phase matched; cases phase <;>
-            simp_all [DestinationTracePhase.matchesDestination, DestinationTracePhase.matchesProgress]) changed
-      have replacementAfter : ((state.destinations.set! id updated).set! parentId
-          { before with progress := .suspended parentCount id })[id]? = some updated := by
+        parent state.storage parentAfter rfl parentCapability parentBacking parentUse parentTransition changed
+      have replacementAfter : ((state.destinations.set! id updated).set! parentId parent)[id]? = some updated := by
         simpa only [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds_ne (Ne.symm different)] using updatedPresent
       simp only [replaceDestination, replaceDestination_result, Array.size_set!, parentInside, ↓reduceIte, bind]
       split
@@ -221,9 +218,10 @@ private theorem landing_completion_preserves
       | .receiver => True
       | .child parent | .replacement parent => parent < id)
     (parentValid : ∀ parentId parent, parentUpdate = some (parentId, parent) →
-      ∃ before parentCount, state.destinations[parentId]? = some before ∧
-        before.progress = .suspended parentCount superseded.capability.id ∧
-        parent = { before with progress := .suspended parentCount id } ∧ parentId < old)
+      ∃ before, state.destinations[parentId]? = some before ∧
+        parent.capability.id = before.capability.id ∧ parent.backing = before.backing ∧
+        parent.use = before.use ∧
+        (∀ (phase : DestinationTracePhase), phase.matchesDestination before → phase.matchesDestination parent) ∧ parentId < old)
     (orderedIds : old < id)
     (valid : DestinationLifecycleInvariant state) :
     DestinationLifecycleInvariant
@@ -250,12 +248,13 @@ private theorem landing_completion_preserves
             simp only [cleaned, bind]
             have replacementAfter : after.destinations[id]? = some replacement := replacementFrame.trans present
             have parentsAfter : ∀ parentId parent, parentUpdate = some (parentId, parent) →
-                ∃ before parentCount, after.destinations[parentId]? = some before ∧
-                  before.progress = .suspended parentCount superseded.capability.id ∧
-                  parent = { before with progress := .suspended parentCount id } ∧ parentId < id := by
+                ∃ before, after.destinations[parentId]? = some before ∧
+                  parent.capability.id = before.capability.id ∧ parent.backing = before.backing ∧
+                  parent.use = before.use ∧
+                  (∀ (phase : DestinationTracePhase), phase.matchesDestination before → phase.matchesDestination parent) ∧ parentId < id := by
               intro parentId parent selected
-              obtain ⟨before, parentCount, found, wasSuspended, updated, earlier⟩ := parentValid parentId parent selected
-              refine ⟨before, parentCount, ?_, wasSuspended, updated, Nat.lt_trans earlier orderedIds⟩
+              obtain ⟨before, found, capability, backing, use, transition, earlier⟩ := parentValid parentId parent selected
+              refine ⟨before, ?_, capability, backing, use, transition, Nat.lt_trans earlier orderedIds⟩
               exact (frame.2.2 parentId (landing_rows_omit state old id valid.2.2.2 parentId (Or.inr earlier))).trans found
             have receivingValid := landReceivingStorage_destination_lifecycle_invariant replacement.storage
               superseded.capability.start replacement.capability.start after cleanupValid
@@ -275,7 +274,7 @@ private theorem landing_completion_preserves
                 · simpa only [receivingFrame] using parentsAfter
                 · exact receivingValid
 
-private abbrev completedStep (id old : DestinationId) (count : Nat)
+abbrev completedStep (id old : DestinationId) (count : Nat)
     (replacement superseded : PendingDestination)
     (parentUpdate : Option (DestinationId × PendingDestination)) : ConstructionM Unit :=
   (fun {left right : ConstructionM Unit} (_ : left = right) => left)
@@ -302,7 +301,7 @@ private theorem protectedStep_cons (destination : PendingDestination) (rest : Li
       else .fault .destination state := by
   cases rest <;> simpa only [protectedStep] using protectedAbandonment_cons_transition destination _ state
 
-private theorem completedStep_preserves (state : ConstructionState) (id old : DestinationId) (count : Nat)
+theorem completedStep_preserves (state : ConstructionState) (id old : DestinationId) (count : Nat)
     (replacement superseded : PendingDestination)
     (parentUpdate : Option (DestinationId × PendingDestination))
     (present : state.destinations[id]? = some replacement)
@@ -311,9 +310,10 @@ private theorem completedStep_preserves (state : ConstructionState) (id old : De
       | .receiver => True
       | .child parent | .replacement parent => parent < id)
     (parentValid : ∀ parentId parent, parentUpdate = some (parentId, parent) →
-      ∃ before parentCount, state.destinations[parentId]? = some before ∧
-        before.progress = .suspended parentCount superseded.capability.id ∧
-        parent = { before with progress := .suspended parentCount id } ∧ parentId < old)
+      ∃ before, state.destinations[parentId]? = some before ∧
+        parent.capability.id = before.capability.id ∧ parent.backing = before.backing ∧
+        parent.use = before.use ∧
+        (∀ (phase : DestinationTracePhase), phase.matchesDestination before → phase.matchesDestination parent) ∧ parentId < old)
     (orderedIds : old < id)
     (valid : DestinationLifecycleInvariant state) :
     DestinationLifecycleInvariant (completedStep id old count replacement superseded parentUpdate state).finalState := by
@@ -382,8 +382,9 @@ theorem landExitReplacement_destination_lifecycle_invariant (id : DestinationId)
                 apply completedStep_preserves state id old count replacement superseded _ present progress owner
                 · intro index updated selected
                   cases selected
-                  refine ⟨parent, parentCount, parentPresent, ?_, rfl, ?_⟩
-                  · simpa only [valid.2.1 old superseded oldPresent] using parentProgress
+                  refine ⟨parent, parentPresent, rfl, rfl, rfl, ?_, ?_⟩
+                  · intro phase matched
+                    cases phase <;> simp_all [DestinationTracePhase.matchesDestination, DestinationTracePhase.matchesProgress]
                   · simpa only [oldUse] using valid.2.2.2 old superseded oldPresent
                 · exact orderedIds
                 · exact valid

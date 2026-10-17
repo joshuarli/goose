@@ -14,7 +14,9 @@ theorem entry_lowerExpr (lc : Option LoopCtx) : ∀ e : Expr, EntryRun lc (lower
   | .bool b => by simp only [lowerExpr]; exact entry_emitDef lc _
   | .read p => by
     simp only [lowerExpr]
-    exact EntryRun.bind (entry_lowerPlace lc p) fun _ => entry_emitDef lc _
+    exact EntryRun.bind (entry_lowerPlace lc p) fun address =>
+      EntryRun.bind (entry_emitDef lc (.load address)) fun value =>
+        EntryRun.bind (entry_recordReadValueRootRecipe lc value p) fun _ => entry_pure lc value
   | .ref m p => by
     simp only [lowerExpr]
     exact EntryRun.bind (entry_lowerPlace lc p) fun r => entry_borrowTo lc m r

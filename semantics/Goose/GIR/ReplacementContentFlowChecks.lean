@@ -227,7 +227,9 @@ private def scalarRefCaller := function "scalarRefCaller" [] [] #[]
   [.def 0 (.globalAddr 0), .def 1 (.refFreeze 0), .def 2 (.call 1 [1] (some 0)),
    .term (.ret [] (some 0))]
 private def scalarRefModule := module #[scalarRefCaller, scalarRefReader] #[global element]
-#guard (localFlow scalarRefModule scalarRefCaller).call 1 [1] == some [.global 0]
+#guard (localFlow scalarRefModule scalarRefCaller).value 1 == some [.global 0]
+#guard (localFlow scalarRefModule scalarRefCaller).ownerDependencies 1 == some []
+#guard (localFlow scalarRefModule scalarRefCaller).call 1 [1] == some []
 #guard ReplacementContentFlow.Model.ownerTouches scalarModule [.global 20] == [.global 20]
 #guard ReplacementContentFlow.Model.ownerTouches (module #[pure] #[global holder]) [.global 0] == [.global 0]
 

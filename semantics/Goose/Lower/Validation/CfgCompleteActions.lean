@@ -13,6 +13,12 @@ theorem complete_intTyOf (value : ValueId) : CompletionAction (intTyOf value) :=
     (fun env state => congrArg LS.blocks (intTyOf_eq (v := value) (le := env) (ls := state) rfl))
     (fun env state => congrArg LS.cur (intTyOf_eq (v := value) (le := env) (ls := state) rfl))
 
+theorem complete_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    CompletionAction (recordReadValueRootRecipe value place) :=
+  CompletionAction.of_state (open_recordReadValueRootRecipe value place)
+    (fun env state => (recordReadValueRootRecipe_tables value place env state).1)
+    (fun env state => (recordReadValueRootRecipe_tables value place env state).2.2)
+
 theorem complete_read : CompletionAction (read : B LEnv) :=
   CompletionAction.of_state open_read (fun _ _ => rfl) (fun _ _ => rfl)
 

@@ -377,10 +377,13 @@ theorem RecipeMetadataProjects.access {left right : PEnv} {root : DemandNode}
     {func : Goose.GIR.Func} {state : LS} (same : left.access = right.access)
     (projects : RecipeMetadataProjects left root func state) :
     RecipeMetadataProjects right root func state := by
+  refine ⟨projects.covered, ?_⟩
   intro recipe member roots row
-  have projected := projects recipe member roots row
+  have projected := projects.project recipe member roots row
   have ctx : left.ctx = right.ctx := congrArg AccessEnv.ctx same
   have impl : left.impl = right.impl := congrArg AccessEnv.impl same
-  simpa only [ctx, impl, sourceNodeRootTable_access left right root same] using projected
+  cases source : recipe.2 <;>
+    simpa only [source, lowerValueRootCeiling, PEnv.ann, ctx, impl,
+      sourceNodeRootTable_access left right root same] using projected
 
 end Goose.Lower.Validation.SourceCanonicalRootFloors

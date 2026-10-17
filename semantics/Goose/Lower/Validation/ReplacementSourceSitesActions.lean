@@ -63,6 +63,25 @@ theorem ReplacementSitesAt.of_state {le : LEnv} {before : LS} {action : B α}
   rw [same]
   exact ⟨.refl _, checked⟩
 
+theorem ReplacementSitesAt.recordValueRootSource (le : LEnv) (before : LS) (value : ValueId)
+    (source : ValueRootSource) :
+    ReplacementSitesAt (root := root) (targets := targets) le before
+      (Goose.Lower.recordValueRootSource value source) := by
+  intro _ checked
+  rw [recordValueRootSource_run]
+  exact ⟨.refl _, checked.of_emits (.of_blocks rfl) (.refl _) (.of_blocks rfl)⟩
+
+theorem ReplacementSitesAt.recordReadValueRootRecipe (le : LEnv) (before : LS) (value : ValueId)
+    (place : Place) :
+    ReplacementSitesAt (root := root) (targets := targets) le before
+      (Goose.Lower.recordReadValueRootRecipe value place) := by
+  intro bounded checked
+  cases place <;> simp only [recordReadValueRootRecipe_run]
+  all_goals try exact ⟨.refl _, checked⟩
+  split
+  · exact ReplacementSitesAt.recordValueRootSource le before value _ bounded checked
+  · exact ⟨.refl _, checked⟩
+
 theorem ReplacementSitesFree.emitDef {le : LEnv} {before : LS} (op : Op)
     (emitted : before.cur.isSome = true → ∀ value, NotReplacement (.def value op)) :
     ReplacementSitesFree (root := root) (targets := targets) le before (Goose.Lower.emitDef op) := by

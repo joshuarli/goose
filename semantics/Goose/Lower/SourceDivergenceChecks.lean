@@ -5,13 +5,13 @@ namespace Goose.Lower.SourceDivergenceChecks
 open Goose.Core Goose.Lower.SourceDivergence
 
 def returningBody : Block := .mk 0 [.while (.bool true)
-  (.mk 1 [.ifS (.bool false) (.mk 2 [.ret (some (.lit .i64 1)) 0] none)
+  (.mk 1 [.ifS (.bool false) (.mk 2 [.ret (some (.lit .i64 1)) 3] none)
     (some (.mk 3 [.while (.bool true)
-      (.mk 4 [.ret (some (.lit .i64 9)) 0] none) 0] none)) 0] none) 0] none
+      (.mk 4 [.ret (some (.lit .i64 9)) 3] none) 0] none)) 0] none) 0] none
 
 def normalCallBody : Block := .mk 0 [.expr (.call 0 [] 0) 0, .expr (.call 1 [] 0) 0] none
 
-def abortCallBody : Block := .mk 0 [.expr (.call 2 [] 0) 0] none
+def abortCallBody : Block := .mk 0 [.expr (.call 2 [] 2) 0] none
 
 def sourceModule : Module :=
   { files := #["source-divergence.goose"], types := #[.int .i64], globals := #[],
@@ -26,7 +26,8 @@ def sourceModule : Module :=
         body := normalCallBody, summary := .unknown }],
     contexts := #[⟨0, "returning", [], [[]], []⟩, ⟨1, "normalResult", [], [[]], []⟩,
       ⟨2, "aborting", [], [], []⟩, ⟨3, "main", [], [], []⟩],
-    entry := 3, origins := #[⟨0, 1, "source-divergence"⟩] }
+    entry := 3, origins := #[⟨0, 1, "call"⟩, ⟨0, 1, "call"⟩, ⟨0, 1, "call"⟩,
+      ⟨0, 1, "return"⟩] }
 
 def sourceEnv : Env := ⟨#[], 0, [], 0⟩
 

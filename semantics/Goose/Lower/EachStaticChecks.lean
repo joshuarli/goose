@@ -19,7 +19,7 @@ private def env : TEnv :=
   { mod := module, impl := some main, vars := vars,
     visible := [0], loops := 0, inExpr := false, scopes := [0],
     globalLimit := 0, initializing := none }
-private def futureEdge : LS := ⟨#[⟨[], #[.term (.br 3 [0])]⟩], #[], some 0, [0]⟩
+private def futureEdge : LS := ⟨#[⟨[], #[.term (.br 3 [0])]⟩], #[], some 0, [0], #[]⟩
 set_option maxHeartbeats 4000000 in
 #guard (Core.validate module).isOk
 #guard match tyPlace env place 1 with
@@ -29,7 +29,7 @@ set_option maxRecDepth 12000 in
 set_option maxHeartbeats 4000000 in
 #guard let (address, after) := lowerPlace place (lowerEnv module env.vars []) futureEdge
   after.cur.isSome && after.vals[address]? == some (some (.data .unit))
-private def legalEntry : LS := ⟨#[⟨[], #[]⟩], #[], some 0, [0]⟩
+private def legalEntry : LS := ⟨#[⟨[], #[]⟩], #[], some 0, [0], #[]⟩
 
 set_option maxRecDepth 12000 in
 set_option maxHeartbeats 4000000 in

@@ -14,6 +14,20 @@ theorem unreachable_read : UnreachableRun (read : B LEnv) := UnreachableRun.unch
 
 theorem unreachable_get : UnreachableRun (get : B LS) := UnreachableRun.unchanged (by intros; rfl)
 
+theorem unreachable_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    UnreachableRun (recordReadValueRootRecipe value place) := by
+  apply UnreachableRun.of_blocks
+  intro env state
+  cases place with
+  | var variableId =>
+    rw [recordReadValueRootRecipe_run]
+    by_cases refSlice : (env.vars[variableId]?).any (fun localVar => localVar.ty.isRefSlice) = true <;>
+      simp [refSlice, recordValueRootSource_run]
+  | global _ => rw [recordReadValueRootRecipe_run]
+  | deref _ => rw [recordReadValueRootRecipe_run]
+  | elem _ _ _ => rw [recordReadValueRootRecipe_run]
+  | field _ _ => rw [recordReadValueRootRecipe_run]
+
 theorem unreachable_emitDef (op : Op) : UnreachableRun (emitDef op) := by
   intro env before result after run checked
   have emitted := checked.emitDef op env

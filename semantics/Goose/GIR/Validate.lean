@@ -841,12 +841,14 @@ abbrev ReplacementRootQuery := Option (List RootRef)
 
 structure ReplacementQueries where
   values : Array ReplacementRootQuery
+  dependencies : Array ReplacementRootQuery
   callRoots : FnId → List ValueId → ReplacementRootQuery
 
 private def replacementQueriesUsing (cache : ReplacementContentFlow)
     (f : Func) (vt : Array (Option VTy)) : ReplacementQueries :=
   let flow := cache.forFunction f vt
-  ⟨(List.range f.numValues).toArray.map flow.value, flow.call⟩
+  ⟨(List.range f.numValues).toArray.map flow.value,
+    (List.range f.numValues).toArray.map flow.ownerDependencies, flow.call⟩
 
 def replacementQueries (m : Module) (f : Func) (vt : Array (Option VTy)) : ReplacementQueries :=
   replacementQueriesUsing (replacementContentFlow m) f vt
@@ -854,11 +856,20 @@ def replacementQueries (m : Module) (f : Func) (vt : Array (Option VTy)) : Repla
 def ReplacementQueries.value (queries : ReplacementQueries) (value : ValueId) : ReplacementRootQuery :=
   queries.values[value]?.join
 
+def ReplacementQueries.ownerDependencies (queries : ReplacementQueries) (value : ValueId) : ReplacementRootQuery :=
+  queries.dependencies[value]?.join
+
 theorem replacementQueries_value (m : Module) (f : Func) (vt : Array (Option VTy))
     (value : ValueId) (bounded : value < f.numValues) :
     (replacementQueries m f vt).value value =
       ((replacementContentFlow m).forFunction f vt).value value := by
   simp [ReplacementQueries.value, replacementQueries, replacementQueriesUsing, bounded]
+
+theorem replacementQueries_ownerDependencies (m : Module) (f : Func) (vt : Array (Option VTy))
+    (value : ValueId) (bounded : value < f.numValues) :
+    (replacementQueries m f vt).ownerDependencies value =
+      ((replacementContentFlow m).forFunction f vt).ownerDependencies value := by
+  simp [ReplacementQueries.ownerDependencies, replacementQueries, replacementQueriesUsing, bounded]
 
 def replacementOverlap (left right : ReplacementRootQuery) : Bool :=
   match left, right with
@@ -885,7 +896,7 @@ def callSummaryRoots (m : Module) (queries : ReplacementQueries) (fn : FnId)
         | .global g => pure (unionRoots roots [.global g])
         | .param i =>
           let arg ← args[i]?
-          let actual ← queries.value arg
+          let actual ← queries.ownerDependencies arg
           let annotated := ((callee.roots.params.find? (·.1 == i)).map (·.2)).getD [] |>.filterMap fun
             | .global g => some (.global g)
             | _ => none
@@ -895,7 +906,7 @@ def callDependencies (m : Module) (vt : Array (Option VTy)) (queries : Replaceme
     (fn : FnId) (args : List ValueId) : ReplacementRootQuery :=
   let argumentRoots := args.foldlM (init := []) fun roots arg => do
     if !valRefLike vt arg then pure roots else
-      let actual ← queries.value arg
+      let actual ← queries.ownerDependencies arg
       pure (unionRoots roots actual)
   argumentRoots.bind fun roots => do
     let actual ← queries.callRoots fn args
@@ -909,7 +920,7 @@ def emptyFactSourceOperands : Inst → List ValueId
 def killEmptyFactSources (facts : List ValueId) (operands : List ValueId)
     (vt : Array (Option VTy)) (p : ReplacementQueries) : List ValueId :=
   operands.foldl (fun current operand =>
-    if valRefLike vt operand then killEmptyFacts current (p.value operand) p
+    if valRefLike vt operand then killEmptyFacts current (p.ownerDependencies operand) p
     else current) facts
 
 def transferEmptyInst (m : Module) (vt : Array (Option VTy)) (p : ReplacementQueries)

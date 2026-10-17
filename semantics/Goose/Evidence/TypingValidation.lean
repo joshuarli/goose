@@ -706,7 +706,7 @@ theorem validated_structLit_operands {m : Module} {fn : Func}
   exact ⟨field.ty, he.symm, validated_struct_fields_flat h desc
     (Array.mem_of_getElem? hd) field (Array.mem_toList_iff.mp hfmem)⟩
 
-private theorem call_metadata {env : TyEnv} {id : FnId} {args : List ValueId}
+theorem call_resultTy_metadata {env : TyEnv} {id : FnId} {args : List ValueId}
     {org : Option OriginId} {result : VTy}
     (h : (Op.call id args org).resultTy env = .ok result) :
     ∃ params results, env.sigs[id]? = some (params, results) ∧
@@ -768,7 +768,7 @@ theorem validated_call_operands {m : Module} {fn : Func}
         ∃ ty, callee.results = [ty] ∧
           (fn.valueTypes m)[result]? = some (some (.data ty))) := by
   obtain ⟨resultTy, checked, hmeta⟩ := (validate_sound m h).1 fn hf |>.2.1 block hb result _ hi
-  obtain ⟨params, results, hs, hl, ha, hr⟩ := call_metadata checked
+  obtain ⟨params, results, hs, hl, ha, hr⟩ := call_resultTy_metadata checked
   change (m.funcs.map (fun f => (f.params, f.results)))[id]? = some (params, results) at hs
   cases hc : m.funcs[id]? with
   | none => simp [hc] at hs

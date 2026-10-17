@@ -46,8 +46,8 @@ theorem joinValue_recipe_frame (endT : Option BlockId) (vt : ValueId)
     simp [joinValue, bind, valTy_run, newBlock, setCur, pure, modify,
       modifyGet, MonadStateOf.modifyGet]
 
-theorem recipes_record_fresh {le : LEnv} {before after : LS} {result : Unit} {value : ValueId} {scope : ScopeId}
-    (run : recordValueRootRecipe value scope le before = (result, after))
+theorem recipes_record_source_fresh {le : LEnv} {before after : LS} {result : Unit} {value : ValueId} {source : ValueRootSource}
+    (run : recordValueRootSource value source le before = (result, after))
     (checked : RecipesValid before)
     (bounded : before.cur.isSome = true → value < before.vals.size)
     (fresh : before.cur.isSome = true → ∀ recipe ∈ before.valueRootRecipes.toList, recipe.1 ≠ value) :
@@ -57,7 +57,7 @@ theorem recipes_record_fresh {le : LEnv} {before after : LS} {result : Unit} {va
     | some (.view ..) => true
     | none => false)
   change ((), if allowed then
-      { before with valueRootRecipes := before.valueRootRecipes.push (value, scope) }
+      { before with valueRootRecipes := before.valueRootRecipes.push (value, source) }
     else before) = (result, after) at run
   cases guard : allowed
   · simp only [guard, Bool.false_eq_true, ite_false] at run
@@ -80,6 +80,73 @@ theorem recipes_record_fresh {le : LEnv} {before after : LS} {result : Unit} {va
       · exact checked.2 recipe old
       · exact bounded live
 
+theorem recipes_record_fresh {le : LEnv} {before after : LS} {result : Unit} {value : ValueId} {scope : ScopeId}
+    (run : recordValueRootRecipe value scope le before = (result, after))
+    (checked : RecipesValid before)
+    (bounded : before.cur.isSome = true → value < before.vals.size)
+    (fresh : before.cur.isSome = true → ∀ recipe ∈ before.valueRootRecipes.toList, recipe.1 ≠ value) :
+    RecipesValid after ∧ before.vals.size ≤ after.vals.size :=
+  recipes_record_source_fresh run checked bounded fresh
+
+theorem recipes_recordRead_fresh {le : LEnv} {before after : LS} {result : Unit}
+    {value : ValueId} {place : Place}
+    (run : recordReadValueRootRecipe value place le before = (result, after))
+    (checked : RecipesValid before)
+    (bounded : before.cur.isSome = true → value < before.vals.size)
+    (fresh : before.cur.isSome = true → ∀ recipe ∈ before.valueRootRecipes.toList, recipe.1 ≠ value) :
+    RecipesValid after ∧ before.vals.size ≤ after.vals.size := by
+  cases place with
+  | var variableId =>
+    simp only [recordReadValueRootRecipe, bind, read] at run
+    split at run
+    · exact recipes_record_source_fresh run checked bounded fresh
+    · obtain ⟨_, rfl⟩ := Prod.mk.inj run
+      exact ⟨checked, Nat.le_refl _⟩
+  | _ =>
+    obtain ⟨_, rfl⟩ := Prod.mk.inj run
+    exact ⟨checked, Nat.le_refl _⟩
+
+theorem emitDef_recipe_frame (op : Op) (le : LEnv) (before : LS) :
+    let output := emitDef op le before
+    output.2.valueRootRecipes = before.valueRootRecipes ∧
+      before.vals.size ≤ output.2.vals.size ∧
+      (output.2.cur.isSome = true → output.1 = before.vals.size ∧ output.1 < output.2.vals.size) := by
+  cases current : before.cur <;>
+    simp [emitDef, current, bind, pure, modify, modifyGet, MonadStateOf.modifyGet, pushInst]
+
+theorem recipes_emitDef_recordRead (op : Op) (place : Place) :
+    RecipeRun (do
+      let value ← emitDef op
+      recordReadValueRootRecipe value place
+      pure value) := by
+  intro le before result after run checked
+  let emitted := emitDef op le before
+  have frame : emitted.2.valueRootRecipes = before.valueRootRecipes ∧
+      before.vals.size ≤ emitted.2.vals.size ∧
+      (emitted.2.cur.isSome = true → emitted.1 = before.vals.size ∧ emitted.1 < emitted.2.vals.size) :=
+    emitDef_recipe_frame op le before
+  have emittedChecked : RecipesValid emitted.2 := by
+    refine ⟨?_, ?_⟩
+    · simpa only [frame.1] using checked.1
+    · intro recipe member
+      rw [frame.1] at member
+      exact Nat.lt_of_lt_of_le (checked.2 recipe member) frame.2.1
+  have recordRun : recordReadValueRootRecipe emitted.1 place le emitted.2 =
+      ((), (recordReadValueRootRecipe emitted.1 place le emitted.2).2) := by
+    cases place <;> first
+      | rfl
+      | (simp [recordReadValueRootRecipe, recordValueRootSource, read, bind, pure, modify,
+          modifyGet, MonadStateOf.modifyGet]; split <;> rfl)
+  have final := recipes_recordRead_fresh recordRun emittedChecked (fun live => (frame.2.2 live).2) (by
+    intro live recipe member same
+    have old : recipe.1 < before.vals.size := checked.2 recipe (by simpa only [frame.1] using member)
+    rw [same, (frame.2.2 live).1] at old
+    exact Nat.lt_irrefl _ old)
+  simp only [bind_run] at run
+  change (emitted.1, (recordReadValueRootRecipe emitted.1 place le emitted.2).2) = (result, after) at run
+  obtain ⟨_, rfl⟩ := Prod.mk.inj run
+  exact ⟨final.1, Nat.le_trans frame.2.1 final.2⟩
+
 theorem recipes_joinValue_record (endT : Option BlockId) (vt : ValueId)
     (endF : Option BlockId) (vf : ValueId) (scope : ScopeId) :
     RecipeRun (do
@@ -100,7 +167,7 @@ theorem recipes_joinValue_record (endT : Option BlockId) (vt : ValueId)
       exact Nat.lt_of_lt_of_le (checked.2 recipe member) frame.2.1
   have recordRun : recordValueRootRecipe joined.1 scope le joined.2 =
       ((), (recordValueRootRecipe joined.1 scope le joined.2).2) := by
-    simp [recordValueRootRecipe, modify, modifyGet, MonadStateOf.modifyGet]
+    simp [recordValueRootRecipe, recordValueRootSource, modify, modifyGet, MonadStateOf.modifyGet]
   have final := recipes_record_fresh recordRun joinedChecked (fun live => (frame.2.2 live).2) (by
     intro live recipe member same
     have old : recipe.1 < before.vals.size := checked.2 recipe (by simpa only [frame.1] using member)

@@ -15,7 +15,9 @@ theorem open_lowerExpr : ∀ expr : Expr, OpenAction (lowerExpr expr)
   | .bool _ => open_emitDef _
   | .read place => by
     simp only [lowerExpr]
-    exact OpenAction.bind (open_lowerPlace place) fun _ => open_emitDef _
+    exact OpenAction.bind (open_lowerPlace place) fun address =>
+      OpenAction.bind (open_emitDef (.load address)) fun value =>
+        OpenAction.bind (open_recordReadValueRootRecipe value place) fun _ => OpenAction.pure value
   | .ref mu place => by
     simp only [lowerExpr]
     exact OpenAction.bind (open_lowerPlace place) fun value => open_borrowTo mu value

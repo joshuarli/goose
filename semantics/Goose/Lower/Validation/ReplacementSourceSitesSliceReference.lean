@@ -25,9 +25,14 @@ theorem replacementSites_sliceRef_source {env : Core.TEnv} {results : List Ty}
           have placeSource : Core.tyPlace env (.var slot) 0 =
               .ok (⟨localVar.ty, localVar.kind == .mutable, true⟩, 0) := by
             simp [Core.tyPlace, Core.varOf, visible, row, pure, StateT.pure, Except.pure, bind, StateT.bind, Except.bind]
-          change ReplacementSitesAt (root := root) (targets := targets) _ _ (emitDef (.slotAddr slot) >>= fun address => emitDef (.load address))
+          change ReplacementSitesAt (root := root) (targets := targets) _ _ (emitDef (.slotAddr slot) >>= fun address => do
+            let value ← emitDef (.load address)
+            recordReadValueRootRecipe value (.var slot)
+            pure value)
           apply (ReplacementSitesAt.emitDef _ (by intros; trivial)).bind
-          exact ReplacementSitesAt.emitDef _ (by intros; trivial)
+          apply (ReplacementSitesAt.emitDef _ (by intros; trivial)).bind
+          apply (ReplacementSitesAt.recordReadValueRootRecipe _ _ _ _).bind
+          exact ReplacementSitesAt.pure _ _ _
       · simp [Core.sliceRefTy, visible] at shortcut
     | _ => simp [Core.sliceRefTy] at shortcut
   | _ => simp [Core.sliceRefTy] at shortcut

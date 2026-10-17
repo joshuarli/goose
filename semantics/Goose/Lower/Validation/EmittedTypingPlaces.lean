@@ -5,6 +5,21 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
 
+theorem EmittedAt.recordReadValueRootRecipe (le : LEnv) (before : LS)
+    (value : ValueId) (place : Place) :
+    EmittedAt le before (Goose.Lower.recordReadValueRootRecipe value place) := by
+  have values : (Goose.Lower.recordReadValueRootRecipe value place le before).2.vals = before.vals := by
+    cases place <;> simp only [recordReadValueRootRecipe_run] <;> first
+      | rfl
+      | (split <;> simp only [recordValueRootSource_run] <;> rfl)
+  have blocks : (Goose.Lower.recordReadValueRootRecipe value place le before).2.blocks = before.blocks := by
+    cases place <;> simp only [recordReadValueRootRecipe_run] <;> first
+      | rfl
+      | (split <;> simp only [recordValueRootSource_run] <;> rfl)
+  apply EmittedAt.of_preserving _ (EmittedTypePrefix.of_vals values)
+  intro result op member
+  simpa only [LS.insts, blocks] using member
+
 theorem emitted_lowerPlace_var {env : Core.TEnv} {variableId : VarId} {info : PlaceInfo}
     {start finish : Nat} (source : Core.tyPlace env (.var variableId) start = .ok (info, finish))
     (results : List Ty) (before : LS) :
@@ -47,15 +62,18 @@ theorem emitted_lowerExpr_read {le : LEnv} {before : LS} (place : Place)
         some (some (.data (.ref mu type)))) :
     EmittedAt le before (lowerExpr (.read place)) := by
   apply child.bind
-  apply EmittedAt.emitDef
-  intro live
-  cases current : (lowerPlace place le before).2.cur with
-  | none => simp [current] at live
-  | some block =>
-    obtain ⟨mu, type, recorded⟩ := typed block current
-    exact ⟨.data type, by
-      simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, recorded,
-        pure, Except.pure, bind, Except.bind]⟩
+  apply EmittedAt.bind
+  · apply EmittedAt.emitDef
+    intro live
+    cases current : (lowerPlace place le before).2.cur with
+    | none => simp [current] at live
+    | some block =>
+      obtain ⟨mu, type, recorded⟩ := typed block current
+      exact ⟨.data type, by
+        simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, recorded,
+          pure, Except.pure, bind, Except.bind]⟩
+  · apply (EmittedAt.recordReadValueRootRecipe le _ _ place).bind
+    exact EmittedAt.pure le _ _
 
 theorem emitted_lowerExpr_read_var {env : Core.TEnv} {variableId : VarId} {type : Ty}
     {start finish : Nat} (source : Core.tyExpr env (.read (.var variableId)) start = .ok (type, finish))

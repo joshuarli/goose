@@ -337,12 +337,55 @@ theorem exprClaim_read (n : Nat) (ihp : ∀ p, PlaceClaim n p) (p : Place) : Exp
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerExpr, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, h2⟩ := hlow
-  have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef h2)
+  rcases h2 with ⟨value, ls2, hload, unitResult, ls3, hrecord, hreturn⟩
+  cases unitResult
+  rw [pure_run] at hreturn
+  rcases Prod.mk.inj hreturn with ⟨rfl, rfl⟩
+  have hadvRecord : ls2.Adv ls3 :=
+    advB_recordReadValueRootRecipe value p le ls2 () ls3 hrecord
+  have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv ((adv_emitDef hload).trans hadvRecord)
+  have hext2 : ExtT ls2 cx.fn.blocks := hext.of_adv hadvRecord
+  have hrecordState : (recordReadValueRootRecipe value p le ls2).2 = ls3 :=
+    congrArg Prod.snd hrecord
   simp only [evalExpr]
   refine SimG.bind (ihp p (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
   have hc : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)
-  refine leaf_def P1 h2 hext (by simp) RVal.val ?_
-  simp only [execPure, getVal_of hc, Goose.Core.expectRef, bind_assoc, pure_bind]
+  refine SimG.mono (leaf_def P1 hload hext2 (by simp) RVal.val ?_) fun a pt' fr' hpost => ?_
+  · simp only [execPure, getVal_of hc, Goose.Core.expectRef, bind_assoc, pure_bind]
+  · cases hpost with
+    | mk hpp' hhas hlt hmono hsame hrel' =>
+      have hblocks : ls3.blocks = ls2.blocks := by
+        rw [← hrecordState]
+        cases p with
+        | var variableId =>
+          by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+            simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+        | _ => simp [recordReadValueRootRecipe_run]
+      have hvals : ls3.vals = ls2.vals := by
+        rw [← hrecordState]
+        cases p with
+        | var variableId =>
+          by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+            simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+        | _ => simp [recordReadValueRootRecipe_run]
+      have hcur : ls3.cur = ls2.cur := by
+        rw [← hrecordState]
+        cases p with
+        | var variableId =>
+          by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+            simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+        | _ => simp [recordReadValueRootRecipe_run]
+      have hstack : ls3.stack = ls2.stack := by
+        rw [← hrecordState]
+        cases p with
+        | var variableId =>
+          by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+            simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+        | _ => simp [recordReadValueRootRecipe_run]
+      refine ⟨by simpa [LS.pp, hblocks, hcur] using hpp', hhas, ?_, ?_, hsame,
+        hrel'.stack_eq hstack⟩
+      simpa [hvals] using hlt
+      simpa [hvals] using hmono
 
 theorem exprClaim_ref (n : Nat) (ihp : ∀ p, PlaceClaim n p) (m : Mutability) (p : Place) :
     ExprClaim (n + 1) (.ref m p) := by

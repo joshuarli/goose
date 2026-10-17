@@ -1,4 +1,6 @@
-import Goose.Lower.Validation.ReplacementContentFlowSourceHolderShape
+import Goose.Core.Sound.Frame
+import Goose.GIR.Effects
+import Goose.Lower.Frag
 import Goose.GIR.RootSeeds
 
 namespace Goose.Lower.Validation.ReplacementContentFlowSource

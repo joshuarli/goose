@@ -78,46 +78,6 @@ private def fail (rule : Rule) (message : String) : TypingM α := throw ⟨rule,
 
 private def ordinary (env : TypingEnv) : TypingEnv := { env with use := .ordinary, request := .value, resultRequests := [] }
 
-private inductive StatementFlow
-  | next
-  | breakLoop
-  | continueLoop
-  | escape
-  deriving DecidableEq
-
-mutual
-private def statementsFlow : Nat → List Stmt → List StatementFlow
-  | 0, _ => [.next]
-  | _ + 1, [] => [.next]
-  | fuel + 1, statement :: rest =>
-      (statementFlow fuel statement).flatMap fun flow =>
-        if flow == .next then statementsFlow fuel rest else [flow]
-
-private def blockFlow : Nat → Block → List StatementFlow
-  | 0, _ => [.next]
-  | fuel + 1, .mk _ statements _ => statementsFlow fuel statements
-
-private def statementFlow : Nat → Stmt → List StatementFlow
-  | 0, _ => [.next]
-  | _ + 1, .ret .. | _ + 1, .retValues .. | _ + 1, .retForward .. |
-    _ + 1, .returnFrom .. | _ + 1, .returnFromForward .. |
-    _ + 1, .breakValue .. | _ + 1, .abort .. | _ + 1, .exit .. => [.escape]
-  | _ + 1, .brk _ => [.breakLoop]
-  | _ + 1, .cont _ => [.continueLoop]
-  | fuel + 1, .ifS _ left right _ =>
-      blockFlow fuel left ++ (match right with | some block => blockFlow fuel block | none => [.next])
-  | fuel + 1, .while condition body _ =>
-      let bodyFlow := blockFlow fuel body
-      let escapes := bodyFlow.filter (· == .escape)
-      if (match condition with | .bool true => true | _ => false) && !bodyFlow.contains .breakLoop then escapes else .next :: escapes
-  | fuel + 1, .forRange _ _ _ body _ |
-    fuel + 1, .forEach _ _ _ _ body _ => .next :: (blockFlow fuel body).filter (· == .escape)
-  | _, _ => [.next]
-end
-
-private def blockEscapes (fuel : Nat) (block : Block) : Bool :=
-  (blockFlow fuel block).all (· == .escape)
-
 private def lookupVariable (env : TypingEnv) (id : VarId) : TypingM LocalVar := do
   if !env.visible.contains id then fail .type "localVar is not visible"
   let some localVar := env.variables[id]? | fail .type "localVar outside table"

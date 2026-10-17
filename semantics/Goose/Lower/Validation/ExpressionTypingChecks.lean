@@ -15,7 +15,7 @@ def env : Core.TEnv :=
     visible := [0, 1], loops := 0, inExpr := false, scopes := [0],
     globalLimit := 0, initializing := none }
 
-def initial : LS := ⟨#[⟨[], #[]⟩], #[], some 0, [0]⟩
+def initial : LS := ⟨#[⟨[], #[]⟩], #[], some 0, [0], #[]⟩
 
 def computedIndex : Expr := .bin .add (.lit .i64 1) (.lit .i64 1) 0
 

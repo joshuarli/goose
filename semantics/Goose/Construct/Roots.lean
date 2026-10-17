@@ -24,6 +24,7 @@ structure Eff where
   storageGrows : List RootRef := []
   storageShrinks : List RootRef := []
   namedRoots : List RootRef := []
+  calls : List (ContextId × List (List RootRef)) := []
 
 structure RState where
   
@@ -42,6 +43,8 @@ structure PEnv where
   valueBlock : Option Nat := none
   escaping : Array (List (Nat × List (List RootRef))) := #[]
   targetEscapes : Array (List Nat) := #[]
+  aliases : List (RootRef × RootRef) := []
+  calleeNames : Array (List RootRef) := #[]
 
 def rejP (r : Rule) (msg : String) : P α := throw ⟨r, msg⟩
 
@@ -400,7 +403,8 @@ private def mergeEffects (a b : Eff) : Eff := {
   storageWrites := (a.storageWrites ++ b.storageWrites).eraseDups
   storageGrows := (a.storageGrows ++ b.storageGrows).eraseDups
   storageShrinks := (a.storageShrinks ++ b.storageShrinks).eraseDups
-  namedRoots := (a.namedRoots ++ b.namedRoots).eraseDups }
+  namedRoots := (a.namedRoots ++ b.namedRoots).eraseDups
+  calls := (a.calls ++ b.calls).eraseDups }
 
 private def captureEffects (action : P α) : P (α × Eff) := fun state => do
   let (value, result) ← action { state with eff := {} }
@@ -410,22 +414,34 @@ private def noteNamed (roots : List RootRef) : P Unit :=
   modify fun state => { state with eff := { state.eff with
     namedRoots := (state.eff.namedRoots ++ roots).eraseDups } }
 
-private def overlaps (receiver accessed : List RootRef) : Bool :=
-  receiver.any accessed.contains
+private def rootsMayAlias (aliases : List (RootRef × RootRef)) (left right : RootRef) : Bool :=
+  left == right || aliases.contains (left, right) || aliases.contains (right, left)
 
-private def unknownGlobalAccess (receiver : List RootRef) (effects : Eff) : Bool :=
-  effects.unknown && receiver.any fun root => match root with | .global _ => true | _ => false
+private def overlaps (aliases : List (RootRef × RootRef)) (receiver accessed : List RootRef) : Bool :=
+  receiver.any fun root => accessed.any (rootsMayAlias aliases root)
 
-private def checkNoGrowth (receiver : List RootRef) (effects : Eff) : P Unit :=
-  if overlaps receiver (effects.storageGrows ++ effects.storageShrinks) || unknownGlobalAccess receiver effects then
+private def unknownGlobalAccess (env : PEnv) (receiver : List RootRef) (effects : Eff) : Bool :=
+  effects.unknown && receiver.any fun root =>
+    (List.range env.mod.globals.size).any fun global => rootsMayAlias env.aliases root (.global global)
+
+private def checkNoGrowth (env : PEnv) (receiver : List RootRef) (effects : Eff) : P Unit :=
+  if overlaps env.aliases receiver (effects.storageGrows ++ effects.storageShrinks) || unknownGlobalAccess env receiver effects then
     rejP .call "C-NOGROW: constructor resizes its open receiving owner"
   else pure ()
 
-private def checkWholeAccess (receiver : List RootRef) (effects : Eff) : P Unit :=
-  if overlaps receiver (effects.namedRoots ++ effects.storageReads ++ effects.storageWrites ++
-      effects.storageGrows ++ effects.storageShrinks) || unknownGlobalAccess receiver effects then
+private def checkWholeAccess (env : PEnv) (receiver : List RootRef) (effects : Eff) : P Unit :=
+  if overlaps env.aliases receiver (effects.namedRoots ++ effects.storageReads ++ effects.storageWrites ++
+      effects.storageGrows ++ effects.storageShrinks) || unknownGlobalAccess env receiver effects then
     rejP .whole "whole assignment replacement reaches its receiver"
   else pure ()
+
+private def mapNamedRoots (callee : Impl) (context : Context) (arguments : List (List RootRef))
+    (roots : List RootRef) : List RootRef :=
+  roots.flatMap fun root => match root with
+    | .local _ => []
+    | .static => [.static]
+    | .global global => [.global global]
+    | .param position => mappedStorage callee context arguments [.param position]
 
 def callEffects (callee : Impl) (cctx : Context) (argRoots : List (List RootRef)) (e : Eff) : Eff :=
   match callee.summary with
@@ -569,7 +585,9 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
   | .read p => do
     let rho ← rpPlace env p
     addReads rho
-    readRoots env p
+    let roots ← readRoots env p
+    noteNamed roots
+    pure roots
   | .ref _ p => rpPlace env p
   | .slice _ v lo hi _ => do
     let rho ← rpView env v
@@ -631,7 +649,7 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
     let rho ← rpPlace env owner
     let (_, effects) ← captureEffects (rpExpr env a)
     if ((env.access.placeType? owner).bind Ty.ownerElem?).any (·.nonfixed) then
-      checkNoGrowth rho effects
+      checkNoGrowth env rho effects
     addGrows rho
     addWrites rho
     if (← liftV (env.limitedOwner owner)) then noteAborts
@@ -710,7 +728,12 @@ def rpCall (env : PEnv) (c : ContextId) (argRoots : List (List RootRef)) : P (Li
   let some cctx := env.mod.contexts[c]? | rejP .call s!"call of context {c}, outside the context table"
   let some callee := env.mod.impls[cctx.impl]? | rejP .call s!"context {c} names a missing implementation"
   liftV (forAll (List.range callee.params.size) (checkArgRoots callee cctx argRoots))
-  modify fun s => { s with eff := callEffects callee cctx argRoots s.eff }
+  modify fun state =>
+    let effects := callEffects callee cctx argRoots state.eff
+    { state with eff := { effects with
+      calls := (effects.calls ++ [(c, argRoots)]).eraseDups
+      namedRoots := (effects.namedRoots ++
+        mapNamedRoots callee cctx argRoots (env.calleeNames[c]?.getD [])).eraseDups } }
   for (targetId, channels) in env.escaping[c]?.getD [] do
     let mapped ← liftV (channels.mapM (mapResultRoots argRoots []))
     receiveEscapeRoots env targetId mapped
@@ -831,7 +854,7 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     addReads rho
     addShrinks rho
     let (_, effects) ← captureEffects (rpExpr env replacement)
-    checkWholeAccess rho effects
+    checkWholeAccess env rho effects
     let some ty := env.access.placeType? owner | rejP .type "whole receiver type missing"
     noteReceivingCapacity env ty .value replacement
     addWrites rho
@@ -889,7 +912,7 @@ def rpStmt (env : PEnv) : Stmt → P Unit
   | .appendConstruct owner producer _ => do
     let roots ← rpPlace env owner
     let (_, effects) ← captureEffects (rpExpr env producer)
-    checkNoGrowth roots effects
+    checkNoGrowth env roots effects
     addGrows roots
     addWrites roots
     if (← liftV (env.limitedOwner owner)) then noteAborts
@@ -1082,8 +1105,9 @@ def checkSummary (m : Module) (impl : Impl) (ctx : Context) (eff : Eff) : V Unit
     if eff.outputs && !s.outputs then reject .summary s!"{impl.name} prints, which its summary omits"
 
 
-def checkContextEscapes (m : Module) (ctx : Context)
-    (escaping : Array (List (Nat × List (List RootRef)))) : V (List (Nat × List (List RootRef))) := do
+private def checkContextFacts (m : Module) (ctx : Context)
+    (escaping : Array (List (Nat × List (List RootRef))))
+    (aliases : List (RootRef × RootRef)) (names : Array (List RootRef)) : V Eff := do
   let some impl := m.impls[ctx.impl]? | reject .root s!"context {ctx.decl}: no such implementation"
   checkAnnotationShape m impl ctx
   checkResultShape m impl ctx
@@ -1091,7 +1115,7 @@ def checkContextEscapes (m : Module) (ctx : Context)
   let actualEscapes ← match bodyTargets m with
     | .ok escapes => pure escapes
     | .error message => reject .call message
-  let env : PEnv := ⟨m, impl, ctx, [], none, escaping, actualEscapes⟩
+  let env : PEnv := ⟨m, impl, ctx, [], none, escaping, actualEscapes, aliases, names⟩
   let ((), st) ← (do
       let (_, _) ← rpBlockValue env [] impl.body
       if let some expression := impl.body.value then
@@ -1100,33 +1124,25 @@ def checkContextEscapes (m : Module) (ctx : Context)
         let actual ← liftV (env.access.blockResultRoots impl.body)
         liftV (checkResultChannels env actual) : P Unit).run ⟨impl.params.size, {}, []⟩
   checkSummary m impl ctx st.eff
-  pure st.eff.escapeRoots
+  pure st.eff
+
+def checkContextEscapes (m : Module) (ctx : Context)
+    (escaping : Array (List (Nat × List (List RootRef)))) : V (List (Nat × List (List RootRef))) := do
+  pure (← checkContextFacts m ctx escaping [] #[]).escapeRoots
 
 def checkContext (m : Module) (ctx : Context) : V Unit := do
   let _ ← checkContextEscapes m ctx #[]
-
-def checkModuleExitRoots (module : Module) : V Unit := do
-  let largestResults := module.impls.foldl (fun largest impl => max largest impl.results.size) 0
-  let largestParams := module.impls.foldl (fun largest impl => max largest impl.params.size) 0
-  let bound := module.contexts.size * (module.targets.size + 1) * (largestResults + 1) *
-    (module.globals.size + largestParams + 1) + 1
-  let mut escaping := Array.replicate module.contexts.size []
-  for _ in [0:bound] do
-    let next ← module.contexts.mapM fun context => checkContextEscapes module context escaping
-    if next == escaping then return ()
-    escaping := next
-  reject .root "target escape root closure did not converge"
 
 def initImpl : Impl := ⟨"", #[], #[], #[], .mk 0 [] none, .unknown⟩
 
 def initContext : Context := ⟨0, "", [], [], []⟩
 
 
-def checkInitRoots (m : Module) (g : GlobalId) : V Unit :=
+private def checkInitFacts (m : Module) (g : GlobalId) (names : Array (List RootRef)) : V Eff :=
   match m.globals[g]? with
-  | none => pure ()
+  | none => pure {}
   | some gl => do
-    let env : PEnv := ⟨m, initImpl, initContext, [], none, #[], #[]⟩
+    let env : PEnv := ⟨m, initImpl, initContext, [], none, #[], #[], [], names⟩
     let (_, st) ← (do
       let roots ← rpExpr env gl.init
       noteReceivingCapacity env gl.ty .value gl.init
@@ -1139,5 +1155,59 @@ def checkInitRoots (m : Module) (g : GlobalId) : V Unit :=
         unless h < g do
           reject .call s!"initializer of global {gl.name} reaches global {h}, which is not initialized before it"
       | .param _ => pure ()
+
+    pure st.eff
+
+def checkInitRoots (m : Module) (g : GlobalId) : V Unit := do
+  let _ ← checkInitFacts m g #[]
+
+private def addCallAliases (module : Module) (caller : List (RootRef × RootRef))
+    (called : ContextId × List (List RootRef)) (aliases : Array (List (RootRef × RootRef))) :
+    Array (List (RootRef × RootRef)) := Id.run do
+  let (context, arguments) := called
+  let mut pairs := aliases[context]?.getD []
+  for (roots, position) in arguments.zipIdx do
+    for (earlier, previous) in (arguments.take position).zipIdx do
+      if overlaps caller roots earlier then
+        pairs := (pairs ++ [(RootRef.param position, RootRef.param previous)]).eraseDups
+    for global in List.range module.globals.size do
+      if overlaps caller roots [.global global] then
+        pairs := (pairs ++ [(RootRef.param position, RootRef.global global)]).eraseDups
+    if overlaps caller roots [.static] then
+      pairs := (pairs ++ [(RootRef.param position, RootRef.static)]).eraseDups
+  return aliases.set! context pairs
+
+def checkModuleExitRoots (module : Module) : V Unit := do
+  let largestResults := module.impls.foldl (fun largest impl => max largest impl.results.size) 0
+  let largestParams := module.impls.foldl (fun largest impl => max largest impl.params.size) 0
+  let largestVars := module.impls.foldl (fun largest impl => max largest impl.vars.size) 0
+  let externalRoots := module.globals.size + largestParams + 1
+  let escapeFacts := module.contexts.size * (module.targets.size + 1) * (largestResults + 1) *
+    (externalRoots + 1)
+  let aliasFacts := module.contexts.size * externalRoots * externalRoots
+  let nameFacts := module.contexts.size * (externalRoots + largestVars + 1)
+  let bound := escapeFacts + aliasFacts + nameFacts + 1
+  let mut escaping := Array.replicate module.contexts.size []
+  let mut aliases := Array.replicate module.contexts.size []
+  let mut names := Array.replicate module.contexts.size []
+  for _ in [0:bound] do
+    let mut nextEscaping := #[]
+    let mut nextAliases := aliases
+    let mut nextNames := names
+    for (descriptor, context) in module.contexts.toList.zipIdx do
+      let facts ← checkContextFacts module descriptor escaping aliases[context]! names
+      nextEscaping := nextEscaping.push (joinEscapeRoots escaping[context]! facts.escapeRoots)
+      nextNames := nextNames.set! context (names[context]! ++ facts.namedRoots).eraseDups
+      for called in facts.calls do
+        nextAliases := addCallAliases module aliases[context]! called nextAliases
+    for global in List.range module.globals.size do
+      let facts ← checkInitFacts module global names
+      for called in facts.calls do
+        nextAliases := addCallAliases module [] called nextAliases
+    if nextEscaping == escaping && nextAliases == aliases && nextNames == names then return ()
+    escaping := nextEscaping
+    aliases := nextAliases
+    names := nextNames
+  reject .root "construction root and escape closure did not converge"
 
 end Goose.Construct

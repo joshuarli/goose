@@ -9,7 +9,7 @@ theorem lowerContext_slot {module : Core.Module} {ctx : Context} {impl : Impl}
     {slot : SlotId} {localVar : LocalVar} (lookup : impl.vars[slot]? = some localVar) :
     (lowerContextAt module ctx impl).slots[slot]? =
       some ⟨localVar.ty, localVar.kind, localVar.scope, slot⟩ := by
-  simp [lowerContextAt, lowerImpl, lowerEnv, Array.getElem?_mapIdx, lookup]
+  simp [lowerContextAt, lowerImpl, lowerImplFromState, lowerEnv, Array.getElem?_mapIdx, lookup]
 
 
 theorem RootsRefine.local_member {func : Func} {actual source : List RootRef} {slot : SlotId}

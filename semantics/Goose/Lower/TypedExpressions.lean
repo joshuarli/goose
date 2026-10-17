@@ -12,6 +12,48 @@ open Goose.Core.Sound (World EvaluationContext Observation Frame ShrinkProtected
   PreservesValues PilotStoreLe Gam OwnerRooted PreservesForbiddenOwnerRoots MutationFootprint
   effectMutationRoots PlaceOk Targets)
 
+private theorem postAfterReadValueRootRecipe {cfg : Cfg} {env : Env} {cx : FnCtx}
+    {ls ls1 ls2 : LS} {fr fr' : GIR.Frame} {pt : Pt} {cells : List (ValueId × RVal)}
+    (post : Post cfg env cx ls fr ls1 fr' pt cells)
+    {value : ValueId} {place : Place} {le : LEnv}
+    (recorded : recordReadValueRootRecipe value place le ls1 = ((), ls2)) :
+    Post cfg env cx ls fr ls2 fr' pt cells := by
+  have hrecordState : (recordReadValueRootRecipe value place le ls1).2 = ls2 :=
+    congrArg Prod.snd recorded
+  have hblocks : ls2.blocks = ls1.blocks := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  have hvals : ls2.vals = ls1.vals := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  have hcur : ls2.cur = ls1.cur := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  have hstack : ls2.stack = ls1.stack := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  rcases post with ⟨hpp, hhas, hlt, hmono, hsame, hrel⟩
+  refine ⟨by simpa [LS.pp, hblocks, hcur] using hpp, hhas, ?_, ?_, hsame,
+    hrel.stack_eq hstack⟩
+  · simpa [hvals] using hlt
+  · simpa [hvals] using hmono
+
 structure ExprSource (cfg : Cfg) (env : Env) (expr : Expr) (state : St) where
   accepted : Core.validate cfg.mod = .ok ()
   plans : Array (Array DemandPoint)
@@ -2151,15 +2193,26 @@ theorem typedExprClaim_read {n : Nat} {cfg : Cfg} {results : List Ty} {place : P
     rw [htyping, hroots]
     exact hmetadata
   simp only [lowerExpr, bind_eq] at hlow
-  obtain ⟨id, middle, hchild, hdef⟩ := hlow
-  have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
+  obtain ⟨id, middle, hchild, hread⟩ := hlow
+  rcases hread with ⟨value, afterLoad, hload, unitResult, afterRecord, hrecord, hreturn⟩
+  cases unitResult
+  rw [pure_run] at hreturn
+  rcases Prod.mk.inj hreturn with ⟨rfl, rfl⟩
+  have hadvRecord : afterLoad.Adv afterRecord :=
+    advB_recordReadValueRootRecipe value place (lowerEnv cfg.mod env.vars results)
+      afterLoad () afterRecord hrecord
+  have hextMiddle : ExtT middle cx.fn.blocks :=
+    hext.of_adv ((adv_emitDef hload).trans hadvRecord)
+  have hextAfterLoad : ExtT afterLoad cx.fn.blocks := hext.of_adv hadvRecord
   simp only [evalExpr]
   refine SimEAt.bind (hp env state child hchildMetadata ls middle id pt cx fr hchild hpp
     hextMiddle hrel hgir hresults hgenerated) fun location after pt1 fr1 hdone P => ?_
   have hx := P.has (id, .val (.ref location)) (by simp)
   apply SimEAt.of_simG
-  exact leaf_def P hdef hext (by simp) RVal.val
-    (by simp only [execPure, getVal_of hx, Goose.Core.expectRef, pure_bind])
+  refine SimG.mono (leaf_def P hload hextAfterLoad (by simp) RVal.val ?_) ?_
+  · simp only [execPure, getVal_of hx, Goose.Core.expectRef, pure_bind]
+  · intro result pt' fr' post
+    exact postAfterReadValueRootRecipe post hrecord
 
 theorem typedExprClaim_ref {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) (mutability : Mutability) :
@@ -2631,8 +2684,17 @@ theorem read_var_sim (n : Nat) (cfg : Cfg) (results : List Ty) (env : Env) (id :
   | zero => simp only [evalExpr]; exact SimG.of_timeout
   | succ n =>
     simp only [lowerExpr, bind_eq] at hlow
-    obtain ⟨address, middle, hplace, hload⟩ := hlow
-    have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hload)
+    obtain ⟨address, middle, hplace, hread⟩ := hlow
+    rcases hread with ⟨value, afterLoad, hload, unitResult, afterRecord, hrecord, hreturn⟩
+    cases unitResult
+    rw [pure_run] at hreturn
+    rcases Prod.mk.inj hreturn with ⟨rfl, rfl⟩
+    have hadvRecord : afterLoad.Adv afterRecord :=
+      advB_recordReadValueRootRecipe value (.var id) (lowerEnv cfg.mod env.vars results)
+        afterLoad () afterRecord hrecord
+    have hextMiddle : ExtT middle cx.fn.blocks :=
+      hext.of_adv ((adv_emitDef hload).trans hadvRecord)
+    have hextAfterLoad : ExtT afterLoad cx.fn.blocks := hext.of_adv hadvRecord
     have hs : SimG cx pt fr (evalPlace n cfg env (.var id))
         (fun location pt' fr' =>
           Post cfg env cx ls fr middle fr' pt' [(address, .val (.ref location))]) := by
@@ -2647,8 +2709,10 @@ theorem read_var_sim (n : Nat) (cfg : Cfg) (results : List Ty) (env : Env) (id :
     simp only [evalExpr]
     refine SimG.bind hs fun location pt1 fr1 P => ?_
     have hx := P.has (address, .val (.ref location)) (by simp)
-    exact leaf_def P hload hext (by simp) RVal.val
-      (by simp only [execPure, getVal_of hx, Goose.Core.expectRef, pure_bind])
+    refine SimG.mono (leaf_def P hload hextAfterLoad (by simp) RVal.val ?_) ?_
+    · simp only [execPure, getVal_of hx, Goose.Core.expectRef, pure_bind]
+    · intro value pt' fr' post
+      exact postAfterReadValueRootRecipe post hrecord
 
 open Core.Sound in
 theorem typedPlaceClaim_deref {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}

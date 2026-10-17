@@ -9,6 +9,7 @@ import Goose.Lower.FuelBoundConverse
 import Goose.Lower.Validation.ValidationStructural
 import Goose.Lower.Validation.SnapshotContentsModule
 import Goose.Lower.Validation.ValidationTypedModule
+import Goose.Lower.Validation.ReplacementSourceAccepted
 import Goose.Lower.Validation.PermissionPreservationAccepted
 import Goose.Lower.Validation.StorageWalkAcceptance
 import Goose.Lower.Loops
@@ -48,7 +49,7 @@ is not named by `#audit` is not audited.
 namespace Goose.Audit
 
 /-- The Lean release the semantics is built and audited with. -/
-def expectedLeanVersion : String := "4.34.1"
+def expectedLeanVersion : String := "4.35.0"
 
 structure Entry where
   theoremName : String
@@ -210,7 +211,7 @@ end Goose.Audit
 #audit Goose.Lower.Validation.lower_structuralValidation_of_accepted
 #audit Goose.Lower.Validation.lowerContext_mutableSnapshotGraphs_of_accepted
 #audit Goose.Lower.Validation.lowerGlobal_mutableSnapshotGraphs_of_accepted
-#audit Goose.Lower.Validation.lower_typedValidation_of_accepted
+#audit Goose.Lower.Validation.lower_validate_of_accepted
 #audit Goose.Lower.Validation.lower_permission_stage_of_accepted
 #audit Goose.Lower.Validation.lower_checkStorageWalk
 #audit Goose.Lower.claims

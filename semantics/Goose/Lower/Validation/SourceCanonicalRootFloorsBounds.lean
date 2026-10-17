@@ -38,14 +38,16 @@ private theorem bounded_union {module : Core.Module} {impl : Impl} {left right :
   intro root member
   exact (unionRoots_mem left right root member).elim (first root) (second root)
 
+theorem sourceAnnotationRoots_bounded (env : PEnv) (bounds : SourceAnnotationBounds env)
+    (varId : VarId) : SourceRootsWithin env.mod env.impl ((env.ann varId).getD []) := by
+  unfold PEnv.ann
+  cases found : env.ctx.varRoots.find? (·.1 == varId) with
+  | none => exact bounded_empty _ _
+  | some row => exact bounds.1 row.1 row.2 (List.mem_of_find?_eq_some found)
+
 theorem sourceReadRoots_bounded (env : PEnv) (place : Place) (bounds : SourceAnnotationBounds env) :
     SourceRootsWithin env.mod env.impl (sourceReadRoots env place) := by
-  have annotation : ∀ varId, SourceRootsWithin env.mod env.impl ((env.ann varId).getD []) := by
-    intro varId
-    unfold PEnv.ann
-    cases found : env.ctx.varRoots.find? (·.1 == varId) with
-    | none => exact bounded_empty _ _
-    | some row => exact bounds.1 row.1 row.2 (List.mem_of_find?_eq_some found)
+  have annotation := sourceAnnotationRoots_bounded env bounds
   have contents : ∀ varId, SourceRootsWithin env.mod env.impl ((env.cont varId).getD []) := by
     intro varId
     unfold PEnv.cont

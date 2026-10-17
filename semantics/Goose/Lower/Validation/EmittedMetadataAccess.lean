@@ -19,7 +19,9 @@ theorem metadata_source_read {env : Core.TEnv} {results : List Ty} (place : Plac
   intro agreement type start finish source
   obtain ⟨info, childFinish, childSource, _⟩ := tyExpr_read_place source
   exact ((EmittedMetadataAction.lowerPlace place (child agreement childSource)).bind fun value =>
-    EmittedMetadataAction.emitDef _ none (.load value)).metadata
+    (EmittedMetadataAction.emitDef _ none (.load value)).bind fun loaded =>
+      (EmittedMetadataAction.recordReadValueRootRecipe _ none loaded place).bind fun _ =>
+        EmittedMetadataAction.pure _ none loaded).metadata
 
 theorem metadata_source_reference {env : Core.TEnv} {results : List Ty} (requested : Mutability) (place : Place)
     (child : EmittedMetadataSourcePlace env results place) : EmittedMetadataSourceExpression env results (.ref requested place) := by
@@ -57,7 +59,9 @@ theorem metadata_source_dereference {env : Core.TEnv} {results : List Ty} (expr 
       cases place with
       | var index =>
         exact ((EmittedMetadataAction.emitDef _ none (.slotAddr index)).bind fun value =>
-          EmittedMetadataAction.emitDef _ none (.load value)).metadata
+          (EmittedMetadataAction.emitDef _ none (.load value)).bind fun loaded =>
+            (EmittedMetadataAction.recordReadValueRootRecipe _ none loaded (.var index)).bind fun _ =>
+              EmittedMetadataAction.pure _ none loaded).metadata
       | _ => simp [Core.sliceRefTy] at special
     | _ => simp [Core.sliceRefTy] at special
 

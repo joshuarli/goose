@@ -79,7 +79,8 @@ theorem typedCallNativeWithOrigins {env : TEnv} {penv : PEnv} {calleeId : Contex
   obtain ⟨middle, argumentReady, argumentValues, argumentPrefix⟩ :=
     argumentsChild argumentCounter argumentRoots argumentState ls upper typedArguments argumentReplay argumentEffect ready rfl generated argumentNative
   let arguments := lowerArgs syntaxArgs le ls
-  obtain ⟨next, completed, returned, retained, origins⟩ := argumentReady.callWithArgumentOrigins accepted contextLookup implLookup
+  obtain ⟨next, completed, returned, retained, origins, _emittedResult⟩ :=
+    argumentReady.callWithArgumentOrigins accepted contextLookup implLookup
     closed bounded
     (fun live => (argumentValues live).1.trans arity)
     (fun live value member => by

@@ -25,12 +25,6 @@ theorem StorageAt.joinValue (le : LEnv) (before : LS) (yes : Option BlockId) (ye
   · exact (StorageAt.valTy _ _ _).bind ((StorageAt.newBlock _ _ _).bind
       ((StorageAt.patchBrs _ _ _ _).bind ((StorageAt.setCur _ _ _).bind (StorageAt.pure _ _ _))))
 
-theorem StorageAt.recordValueRootRecipe (le : LEnv) (before : LS) (value : ValueId)
-    (sourceScope : ScopeId) : StorageAt le before (recordValueRootRecipe value sourceScope) := by
-  intro checked
-  rw [recordValueRootRecipe_run]
-  exact checked
-
 theorem StorageAt.joinArms (le : LEnv) (before : LS) (yes no : Option BlockId) :
     StorageAt le before (Goose.Lower.joinArms yes no) := by
   unfold Goose.Lower.joinArms

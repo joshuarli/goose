@@ -85,6 +85,29 @@ theorem generatedTargets_read (loop : Option LoopCtx) :
 theorem generatedTargets_get (loop : Option LoopCtx) :
     GeneratedTargetRun loop (get : B LS) := GeneratedTargetRun.unchanged (by intros; rfl)
 
+theorem generatedTargets_recordValueRootSource (loop : Option LoopCtx) (value : ValueId)
+    (source : ValueRootSource) : GeneratedTargetRun loop (recordValueRootSource value source) := by
+  intro env before result after run bounded targets
+  rw [recordValueRootSource_run] at run
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj run
+  exact ⟨bounded.of_blocks rfl, by cases loop <;> exact targets⟩
+
+theorem generatedTargets_recordReadValueRootRecipe (loop : Option LoopCtx) (value : ValueId)
+    (place : Place) : GeneratedTargetRun loop (recordReadValueRootRecipe value place) := by
+  cases place with
+  | var variableId =>
+    unfold recordReadValueRootRecipe
+    refine GeneratedTargetRun.bind (generatedTargets_read loop) fun env => ?_
+    by_cases refSlice : (env.vars[variableId]?).any (fun localVar => localVar.ty.isRefSlice)
+    · simp [refSlice]
+      exact generatedTargets_recordValueRootSource loop value (.refSliceVar variableId)
+    · simp [refSlice]
+      exact generatedTargets_pure loop ()
+  | global _ => simp [recordReadValueRootRecipe]; exact generatedTargets_pure loop ()
+  | deref _ => simp [recordReadValueRootRecipe]; exact generatedTargets_pure loop ()
+  | elem _ _ _ => simp [recordReadValueRootRecipe]; exact generatedTargets_pure loop ()
+  | field _ _ => simp [recordReadValueRootRecipe]; exact generatedTargets_pure loop ()
+
 theorem generatedTargets_recordValueRootRecipe (loop : Option LoopCtx) (value : ValueId) (sourceScope : ScopeId) :
     GeneratedTargetRun loop (recordValueRootRecipe value sourceScope) := by
   intro env before result after run bounded targets

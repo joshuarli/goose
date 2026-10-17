@@ -45,6 +45,14 @@ theorem origins_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) 
   rw [recordValueRootRecipe_run]
   rfl
 
+theorem origins_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    OriginRun (recordReadValueRootRecipe value place) := by
+  apply OriginRun.of_unchanged
+  intro le state
+  cases place <;>
+    simp [recordReadValueRootRecipe_run, recordValueRootSource_run] <;>
+    (try split) <;> rfl
+
 theorem origins_appendInst {before : LS} (checked : PresentOrigins before)
     (block : BlockId) (inst : Inst) (instruction : Inst.OriginPresent inst) :
     PresentOrigins (before.appendInst block inst) := by
@@ -470,7 +478,9 @@ theorem origins_lowerExpr (e : Expr)
   | read p =>
     try simp [Expr.pushOrigins] at source
     simp only [lowerExpr]
-    exact OriginRun.bind (origins_lowerPlace p) fun _ => origins_emitDef _
+    exact OriginRun.bind (origins_lowerPlace p) fun _ =>
+      OriginRun.bind (origins_emitDef _) fun value =>
+        OriginRun.bind (origins_recordReadValueRootRecipe value p) fun _ => OriginRun.pure value
   | ref m p =>
     try simp [Expr.pushOrigins] at source
     simp only [lowerExpr]

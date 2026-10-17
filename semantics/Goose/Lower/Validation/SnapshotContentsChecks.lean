@@ -16,7 +16,7 @@ private def env : TEnv :=
 private def place : Place := .deref (.ref .readOnly (.var 0))
 
 private def initial : LS :=
-  ⟨#[⟨[], #[]⟩, ⟨[(0, .data (.int .i64))], #[]⟩], #[some (.data (.int .i64))], some 0, [0]⟩
+  ⟨#[⟨[], #[]⟩, ⟨[(0, .data (.int .i64))], #[]⟩], #[some (.data (.int .i64))], some 0, [0], #[]⟩
 
 private def ownerState : LS := (lowerPlace place (lowerEnv module env.vars []) initial).2
 

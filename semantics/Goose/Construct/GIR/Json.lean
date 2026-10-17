@@ -6,11 +6,11 @@ import Goose.Construct.GIR.Syntax
 
 namespace Goose.Construct.GIR.Decode
 
-open Goose.Core (Mutability VarKind IntTy OriginId GlobalId Request ConstructionRequest RelocationReason AbortKind NonlocalTarget)
+open Goose.Core (Mutability VarKind IntTy OriginId GlobalId Request ConstructionRequest AbortKind NonlocalTarget)
 open Goose.Core.Decode (fail record arity asNat asStr asArr asFlag asInt decIntTy decMut decVarKind
   decUnOp decBinOp decCmpOp decConvKind list optional checkIndex natLimit)
 
-def schemaName : String := "gir-h/0.4"
+def schemaName : String := "gir-h/0.5"
 def profileName : String := "core-pilot"
 
 
@@ -25,6 +25,7 @@ structure Tables where
   nScopes : Nat
   nBlocks : Nat
   nTargets : Nat := 0
+  nValues : Nat := 0
 
 
 def resolveStruct (types : Array VTy) (sizes : Array Nat) (raw : Goose.Construct.Decode.RawStructDef) :
@@ -110,7 +111,7 @@ def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json)
     let m ← decMut (← asStr fs[0]! "view mutability")
     let (t, z) ← comp fs[1]!
     pure (.view m t, z + 1)
-  | "dest" | "built" | "cancelled" => do
+  | "dest" | "built" | "cancelled" | "receiving" | "exit_reservation" => do
     arity tag fs 2
     let (ty, z) ← comp fs[0]!
     unless ty.nonfixed do fail "protocol carrier requires nonfixed type"
@@ -118,7 +119,13 @@ def decVTypeEntry (types : Array VTy) (sizes : Array Nat) (j : Lean.Json)
       | "value" => pure ConstructionRequest.value
       | "element_run" => pure ConstructionRequest.elementRun
       | _ => fail "carrier request must be value or element_run"
-    pure ((if tag == "dest" then .dest ty request else if tag == "built" then .built ty request else .cancelled ty request), z + 1)
+    let carrier := match tag with
+      | "dest" => VTy.dest ty request
+      | "built" => .built ty request
+      | "cancelled" => .cancelled ty request
+      | "receiving" => .receiving ty request
+      | _ => .exitReservation ty request
+    pure (carrier, z + 1)
   | _ => fail s!"unknown type tag {tag.quote}"
 
 def decVTypesWithStructs (j : Lean.Json) (raw : Array Goose.Construct.Decode.RawStructDef)
@@ -193,30 +200,35 @@ def decRootRef (tb : Tables) (nParams : Nat) (j : Lean.Json) : Except String Roo
   | "r_param" => pure (.param (← checkIndex i nParams "parameter"))
   | _ => fail s!"unknown root reference tag {tag.quote}"
 
-def decRootRows (tb : Tables) (nParams : Nat) (expectedTag : String) (j : Lean.Json) :
+def decRootRows (tb : Tables) (nParams nRows : Nat) (rowKind expectedTag : String) (j : Lean.Json) :
     Except String (Array (Nat × List RootRef)) := do
   let rows ← (← asArr j "root rows").mapM fun row => do
     let (tag, fs) ← record row "root row"
     unless tag == expectedTag do fail s!"expected {expectedTag}, found tag {tag.quote}"
     arity tag fs 2
-    let i ← checkIndex (← asNat fs[0]! "root row parameter") nParams "parameter"
+    let i ← checkIndex (← asNat fs[0]! s!"root row {rowKind}") nRows rowKind
     let roots ← list fs[1]! "root set" (decRootRef tb nParams)
     pure (i, roots)
   let rec distinct : List (Nat × List RootRef) → Bool
     | [] => true
     | (i, _) :: rest => !(rest.any (·.1 == i)) && distinct rest
-  unless distinct rows.toList do fail s!"{expectedTag} rows repeat a parameter"
+  unless distinct rows.toList do fail s!"{expectedTag} rows repeat a {rowKind}"
   pure rows
 
 def decRootInfo (tb : Tables) (nParams nResults : Nat) (j : Lean.Json) : Except String RootInfo := do
   let (tag, fs) ← record j "root info"
   unless tag == "roots" do fail s!"expected roots, found tag {tag.quote}"
-  arity tag fs 3
-  let params ← decRootRows tb nParams "vr" fs[0]!
-  let contents ← decRootRows tb nParams "cr" fs[1]!
+  unless fs.size == 3 || fs.size == 4 || fs.size == 5 do fail "roots expects 3, 4, or 5 fields"
+  let params ← decRootRows tb nParams nParams "parameter" "vr" fs[0]!
+  let contents ← decRootRows tb nParams nParams "parameter" "cr" fs[1]!
   let results ← list fs[2]! "result root rows" (fun row => list row "root set" (decRootRef tb nParams))
   unless results.length == nResults do fail s!"root info has {results.length} result rows, expected {nResults}"
-  pure { params, contents, results := results.toArray }
+  let slots ← if fs.size == 5 && fs[3]! == Lean.Json.null then pure none
+    else if fs.size >= 4 then some <$> decRootRows tb nParams tb.nSlots "slot" "sr" fs[3]!
+    else pure none
+  let values ← if fs.size == 5 then some <$> decRootRows tb nParams tb.nValues "value" "er" fs[4]!
+    else pure none
+  pure { params, contents, results := results.toArray, slots, values }
 
 def decPart (j : Lean.Json) : Except String PrintPart := do
   let (tag, fs) ← record j "print part"
@@ -266,6 +278,18 @@ def decResult (tb : Tables) (j : Lean.Json) : Except String ResultDescriptor := 
   let namedLocal ← optional fs[2]! "named result slot" fun x => do checkIndex (← asNat x "named result slot") tb.nSlots "slot"
   pure { ty, request, namedLocal }
 
+private def decExitSource (tb : Tables) (j : Lean.Json) : Except String ExitSource := do
+  match (← asArr j "exit source").toList with
+  | [tag] =>
+      match (← asStr tag "exit source tag") with
+      | "new_value" => pure .newValue
+      | _ => fail "exit source must be new_value or named_alias"
+  | [tag, slot] => do
+      unless (← asStr tag "exit source tag") == "named_alias" do
+        fail "exit source must be new_value or named_alias"
+      pure (.namedAlias (← checkIndex (← asNat slot "named alias slot") tb.nSlots "slot"))
+  | _ => fail "exit source must contain one or two fields"
+
 def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   let (tag, fs) ← record j "instruction"
   let org (i : Nat) := decOrgOpt tb fs[i]!
@@ -283,10 +307,32 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
   | "i_dest_adapt" => do arity tag fs 5; def_ (.destAdapt (← v 1) (← decTy tb fs[2]!) (← decRequest fs[3]!) (← org 4))
   | "i_dest_adapt_finish" => do arity tag fs 3; def_ (.destAdaptFinish (← v 1) (← org 2))
   | "i_dest_finish" => do arity tag fs 3; def_ (.destFinish (← v 1) (← org 2))
+  | "i_dest_prepare_named" => do
+    arity tag fs 4
+    def_ (.destPrepareNamed (← v 1) (← checkIndex (← asNat fs[2]! "named slot") tb.nSlots "slot") (← org 3))
   | "i_dest_named" => do
     arity tag fs 3
     def_ (.destNamed (← checkIndex (← asNat fs[1]! "named slot") tb.nSlots "slot") (← org 2))
-  | "i_result_exit_dest" => do arity tag fs 3; def_ (.resultExitDest (← asNat fs[1]! "result position") (← org 2))
+  | "i_receiving_open" => do arity tag fs 2; def_ (.receivingOpen (← v 1))
+  | "i_target_receiving" => do
+    arity tag fs 4
+    def_ (.targetReceiving (← checkIndex (← asNat fs[1]! "target") tb.nTargets "target")
+      (← asNat fs[2]! "target result position") (← org 3))
+  | "i_dest_renew" => do arity tag fs 2; def_ (.destRenew (← v 1))
+  | "i_dest_refresh" => do arity tag fs 3; def_ (.destRefresh (← v 1) (← v 2))
+  | "i_exit_wait" => do arity tag fs 2; def_ (.exitWait (← v 1))
+  | "i_exit_reserve" => do
+    arity tag fs 4
+    let source ← decExitSource tb fs[2]!
+    def_ (.exitReserve (← v 1) source (← org 3))
+  | "i_exit_is_named" => do arity tag fs 2; def_ (.exitIsNamed (← v 1))
+  | "i_exit_adopt" => do arity tag fs 3; def_ (.exitAdopt (← v 1) (← v 2))
+  | "i_reserved_dest" => do arity tag fs 2; def_ (.reservedDest (← v 1))
+  | "i_reserved_named" => do arity tag fs 3; def_ (.reservedNamed (← v 1) (← org 2))
+  | "i_exit_land" => do arity tag fs 4; def_ (.exitLand (← v 1) (← v 2) (← org 3))
+  | "i_receiving_cancel" => do
+    arity tag fs 4
+    def_ (.receivingCancel (← v 1) (← decVals fs[2]! "carried raw destinations") (← org 3))
   | "i_dest_abandon_named" => do
     arity tag fs 4
     def_ (.destAbandonNamed (← checkIndex (← asNat fs[1]! "named slot") tb.nSlots "slot") (← v 2) (← org 3))
@@ -298,7 +344,6 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     arity tag fs 4
     let reason ← match (← asStr fs[2]! "relocation reason") with
       | "header-removal" => pure RelocationReason.headerRemoval
-      | "exit-value" => pure RelocationReason.exitValue
       | _ => fail "unknown relocation reason"
     def_ (.destRelocate (← v 1) reason (← org 3))
   | "i_dest_stage" => do
@@ -310,9 +355,6 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     arity tag fs 5
     def_ (.callConstruct (← checkIndex (← asNat fs[1]! "callee") tb.nFuncs "function")
       (← decVals fs[2]! "arguments") (← decVals fs[3]! "result destinations") (← org 4))
-  | "i_target_dest" => do
-    arity tag fs 4
-    def_ (.targetDest (← checkIndex (← asNat fs[1]! "target") tb.nTargets "target") (← asNat fs[2]! "target result position") (← org 3))
   | "x_dest_repeat" => do arity tag fs 3; pure (.eff (.destRepeat (← v 0) (← v 1) (← org 2)))
   | "x_dest_snapshot" => do arity tag fs 3; pure (.eff (.destSnapshot (← v 0) (← v 1) (← org 2)))
   | "x_append_value" => do arity tag fs 3; pure (.eff (.appendValue (← v 0) (← v 1) (← org 2)))
@@ -326,6 +368,16 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     pure (.eff (.destBind (← checkIndex (← asNat fs[0]! "named slot") tb.nSlots "slot") (← v 1) (← org 2)))
   | "x_dest_publish" => do arity tag fs 2; pure (.eff (.destPublish (← v 0) (← org 1)))
   | "x_dest_cancel" => do arity tag fs 2; pure (.eff (.destCancel (← v 0) (← org 1)))
+  | "x_receiving_drop" => do arity tag fs 1; pure (.eff (.receivingDrop (← v 0)))
+  | "x_exit_release" => do arity tag fs 2; pure (.eff (.exitRelease (← v 0) (← org 1)))
+  | "x_exit_rearm" => do arity tag fs 2; pure (.eff (.exitRearm (← v 0) (← org 1)))
+  | "x_exit_mark_named" => do arity tag fs 2; pure (.eff (.exitMarkNamed (← v 0) (← org 1)))
+  | "x_exit_select" => do
+    arity tag fs 3
+    pure (.eff (.exitSelect (← v 0) (← decExitSource tb fs[1]!) (← org 2)))
+  | "x_exit_discard" => do
+    arity tag fs 3
+    pure (.eff (.exitDiscard (← v 0) (← decVals fs[1]! "carried raw destinations") (← org 2)))
   | "t_invoke" => do
     arity tag fs 7
     pure (.term (.invoke (← checkIndex (← asNat fs[0]! "callee") tb.nFuncs "function")
@@ -562,7 +614,8 @@ def decFunc (m : Tables) (j : Lean.Json) : Except String Func := do
   if nInsts > Goose.Core.Decode.maxNodesPerFunction then
     fail s!"more than {Goose.Core.Decode.maxNodesPerFunction} instructions in one function"
   let blocks ← blocksJ.mapIdx (fun i b => Goose.Core.Decode.inEntry "block" i (decBlock tb b)) |>.mapM id
-  let roots ← decRootInfo tb params.length results.length fs[6]!
+  let nValues := blocks.foldl (fun n block => n + block.defs.length) 0
+  let roots ← decRootInfo { tb with nValues } params.length results.length fs[6]!
   let summary ← Goose.Construct.Decode.decSummary m.nGlobals params.length results.length m.nTargets fs[7]!
   let org ← decOrgOpt tb fs[8]!
   let certificate ← optional fs[9]! "fact certificate" (decCertificate tb)
@@ -591,7 +644,7 @@ def decodeModule (j : Lean.Json) : Except String Module := do
   let (tag, fs) ← record j "module"
   unless tag == "module" do fail "expected module"
   arity tag fs 10
-  unless (← asStr fs[0]! "schema") == schemaName do fail "expected gir-h/0.4"
+  unless (← asStr fs[0]! "schema") == schemaName do fail "expected gir-h/0.5"
   unless (← asStr fs[1]! "profile") == "core-construction" do fail "expected core-construction"
   let files ← Goose.Core.Decode.decodeMapped "file" fs[2]! Goose.Core.Decode.decFile
   let origins ← Goose.Core.Decode.decodeMapped "origin" fs[9]! fun j => do
@@ -602,14 +655,18 @@ def decodeModule (j : Lean.Json) : Except String Module := do
   let nGlobals := (← asArr fs[6]! "globals").size
   let nFuncs := (← asArr fs[7]! "functions").size
   let targets ← Goose.Core.Decode.decodeMapped "target" fs[5]! (decNonlocalTarget nFuncs)
-  let tb : Tables := ⟨types, nGlobals, nFuncs, origins.size, 0, 0, 0, targets.size⟩
+  let tb : Tables := ⟨types, nGlobals, nFuncs, origins.size, 0, 0, 0, targets.size, 0⟩
   let globals ← Goose.Core.Decode.decodeMapped "global" fs[6]! (decGlobal tb)
   let funcs ← Goose.Core.Decode.decodeMapped "func" fs[7]! (decFunc tb)
   let entry ← checkIndex (← asNat fs[8]! "entry") nFuncs "function"
   pure { files, globals, funcs, entry, origins, structs, targets, types }
 
+def scan (bs : ByteArray) : Except String Unit := do
+  let some text := String.fromUTF8? bs | fail "input is not valid UTF-8"
+  Goose.Core.Decode.scan (text.replace "null" "0000" |>.toUTF8)
+
 def decodeBytes (bs : ByteArray) : Except String Module := do
-  Goose.Core.Decode.scan bs
+  scan bs
   let some text := String.fromUTF8? bs | fail "input is not valid UTF-8"
   match Lean.Json.parse text with
   | .error e => fail s!"JSON: {e}"
@@ -728,6 +785,12 @@ def internVTy : VTy → W Nat
   | .cancelled ty request => do
     let _ ← internTy ty
     addEntry (.cancelled ty request)
+  | .receiving ty request => do
+    let _ ← internTy ty
+    addEntry (.receiving ty request)
+  | .exitReservation ty request => do
+    let _ ← internTy ty
+    addEntry (.exitReservation ty request)
   | .pack parts => do
     for result in parts do
       let _ ← internTy result.ty
@@ -778,6 +841,10 @@ def wBytes (bytes : List UInt8) : String := wNats (bytes.map UInt8.toNat)
 def wEscape (edge : EscapeEdge) : String :=
   wRec "escape_edge" [toString edge.target,toString edge.block,wNats edge.args]
 
+private def wExitSource : ExitSource → String
+  | .newValue => wList [quote "new_value"]
+  | .namedAlias slot => wList [quote "named_alias",toString slot]
+
 def wOp (r : ValueId) : Op → W String
   | .render operand org => pure (wRec "i_render" [toString r,toString operand,wOpt org])
   | .bytes bytes org => pure (wRec "i_bytes" [toString r,wBytes bytes,wOpt org])
@@ -788,18 +855,36 @@ def wOp (r : ValueId) : Op → W String
   | .destAdapt id producer request org => do pure (wRec "i_dest_adapt" [toString r,toString id,← wTy producer,quote request.tag,wOpt org])
   | .destAdaptFinish id org => pure (wRec "i_dest_adapt_finish" [toString r,toString id,wOpt org])
   | .destFinish id org => pure (wRec "i_dest_finish" [toString r,toString id,wOpt org])
+  | .destPrepareNamed id slot org =>
+      pure (wRec "i_dest_prepare_named" [toString r,toString id,toString slot,wOpt org])
   | .destNamed slot org => pure (wRec "i_dest_named" [toString r,toString slot,wOpt org])
-  | .resultExitDest position org => pure (wRec "i_result_exit_dest" [toString r,toString position,wOpt org])
+  | .receivingOpen destination => pure (wRec "i_receiving_open" [toString r,toString destination])
+  | .targetReceiving target position org =>
+      pure (wRec "i_target_receiving" [toString r,toString target,toString position,wOpt org])
+  | .destRenew receiving => pure (wRec "i_dest_renew" [toString r,toString receiving])
+  | .destRefresh receiving previous =>
+      pure (wRec "i_dest_refresh" [toString r,toString receiving,toString previous])
+  | .exitWait receiving => pure (wRec "i_exit_wait" [toString r,toString receiving])
+  | .exitReserve receiving source org =>
+      pure (wRec "i_exit_reserve" [toString r,toString receiving,wExitSource source,wOpt org])
+  | .exitIsNamed ticket => pure (wRec "i_exit_is_named" [toString r,toString ticket])
+  | .exitAdopt receiving built =>
+      pure (wRec "i_exit_adopt" [toString r,toString receiving,toString built])
+  | .reservedDest ticket => pure (wRec "i_reserved_dest" [toString r,toString ticket])
+  | .reservedNamed ticket org => pure (wRec "i_reserved_named" [toString r,toString ticket,wOpt org])
+  | .exitLand ticket built org =>
+      pure (wRec "i_exit_land" [toString r,toString ticket,toString built,wOpt org])
+  | .receivingCancel receiving carried org =>
+      pure (wRec "i_receiving_cancel" [toString r,toString receiving,wNats carried,wOpt org])
   | .destAbandonNamed slot replacement org => pure (wRec "i_dest_abandon_named" [toString r,toString slot,toString replacement,wOpt org])
   | .destPublishRef id org => pure (wRec "i_dest_publish_ref" [toString r,toString id,wOpt org])
   | .destArg id org => pure (wRec "i_dest_arg" [toString r,toString id,wOpt org])
   | .destAbandon id org => pure (wRec "i_dest_abandon" [toString r,toString id,wOpt org])
   | .destValue id org => pure (wRec "i_dest_value" [toString r,toString id,wOpt org])
-  | .destRelocate id reason org => pure (wRec "i_dest_relocate" [toString r,toString id,quote reason.tag,wOpt org])
+  | .destRelocate id _ org => pure (wRec "i_dest_relocate" [toString r,toString id,quote "header-removal",wOpt org])
   | .destStage id org => pure (wRec "i_dest_stage" [toString r,toString id,quote "capacity-check",wOpt org])
   | .destFit id org => pure (wRec "i_dest_fit" [toString r,toString id,wOpt org])
   | .callConstruct callee args destinations org => pure (wRec "i_call_construct" [toString r,toString callee,wNats args,wNats destinations,wOpt org])
-  | .targetDest target position org => pure (wRec "i_target_dest" [toString r,toString target,toString position,wOpt org])
   | .constInt t n => do pure (wRec "i_int" [toString r, ← wTy (.int t), quote (toString n)])
   | .constBool b => pure (wRec "i_bool" [toString r, if b then "1" else "0"])
   | .constUnit => pure (wRec "i_unit" [toString r])
@@ -848,6 +933,14 @@ def wInst : Inst → W String
   | .eff (.destBind slot built org) => pure (wRec "x_dest_bind" [toString slot,toString built,wOpt org])
   | .eff (.destPublish built org) => pure (wRec "x_dest_publish" [toString built,wOpt org])
   | .eff (.destCancel cancelled org) => pure (wRec "x_dest_cancel" [toString cancelled,wOpt org])
+  | .eff (.receivingDrop receiving) => pure (wRec "x_receiving_drop" [toString receiving])
+  | .eff (.exitRelease ticket org) => pure (wRec "x_exit_release" [toString ticket,wOpt org])
+  | .eff (.exitRearm ticket org) => pure (wRec "x_exit_rearm" [toString ticket,wOpt org])
+  | .eff (.exitMarkNamed ticket org) => pure (wRec "x_exit_mark_named" [toString ticket,wOpt org])
+  | .eff (.exitSelect ticket source org) =>
+      pure (wRec "x_exit_select" [toString ticket,wExitSource source,wOpt org])
+  | .eff (.exitDiscard ticket carried org) =>
+      pure (wRec "x_exit_discard" [toString ticket,wNats carried,wOpt org])
   | .term (.invoke callee args dests normal forwarded escapes org) => pure (wRec "t_invoke" [toString callee,wNats args,wNats dests,toString normal,wNats forwarded,wList (escapes.map wEscape),wOpt org])
   | .term (.escape target results cancellations org) => pure (wRec "t_escape" [toString target,wNats results,wNats cancellations,wOpt org])
   | .def r op => wOp r op
@@ -885,8 +978,13 @@ def wRootRef : RootRef → String
 
 def wRootInfo (r : RootInfo) : String :=
   let rows tag rs := wList (rs.toList.map fun (i, roots) => wRec tag [toString i, wList (roots.map wRootRef)])
-  wRec "roots" [rows "vr" r.params, rows "cr" r.contents,
+  let fields := [rows "vr" r.params, rows "cr" r.contents,
     wList (r.results.toList.map fun roots => wList (roots.map wRootRef))]
+  wRec "roots" (match r.values with
+    | some values => fields ++ [r.slots.map (rows "sr") |>.getD "null", rows "er" values]
+    | none => match r.slots with
+      | none => fields
+      | some slots => fields ++ [rows "sr" slots])
 
 def wSummary : SummaryAnn → String
   | .unknown => wRec "summary_unknown" []
@@ -943,6 +1041,8 @@ def wTypeEntry (tab : Array VTy) (t : VTy) : String :=
   | .dest ty request => wRec "dest" [ix ty,quote request.tag]
   | .built ty request => wRec "built" [ix ty,quote request.tag]
   | .cancelled ty request => wRec "cancelled" [ix ty,quote request.tag]
+  | .receiving ty request => wRec "receiving" [ix ty,quote request.tag]
+  | .exitReservation ty request => wRec "exit_reservation" [ix ty,quote request.tag]
   | .pack parts =>
       let indexes := parts.map fun r => toString ((tab.findIdx? (· == carrierType r)).getD 0)
       wRec "tuple" [wList indexes]

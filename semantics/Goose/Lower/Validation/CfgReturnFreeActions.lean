@@ -20,6 +20,13 @@ theorem returnFree_read : ReturnFreeRun (read : B LEnv) := ReturnFreeRun.unchang
 
 theorem returnFree_get : ReturnFreeRun (get : B LS) := ReturnFreeRun.unchanged (by intros; rfl)
 
+theorem returnFree_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    ReturnFreeRun (recordReadValueRootRecipe value place) := by
+  apply ReturnFreeRun.of_blocks
+  intro env before
+  cases place <;> simp only [recordReadValueRootRecipe_run]
+  split <;> simp [recordValueRootSource_run]
+
 theorem returnFree_emitDef (op : Op) : ReturnFreeRun (emitDef op) := by
   intro env before result after run checked
   have emitted := checked.emitDef op env

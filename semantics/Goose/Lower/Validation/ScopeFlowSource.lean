@@ -23,7 +23,10 @@ theorem scopeFlow_lowerExpr (parents : Array (Option ScopeId)) (parent : Option 
     exact ScopeFlowAction.emitDef parents parent loop _
   | .read place, source => by
     simp only [lowerExpr]
-    exact (scopeFlow_lowerPlace parents parent loop place source).bind fun _ => ScopeFlowAction.emitDef parents parent loop _
+    exact (scopeFlow_lowerPlace parents parent loop place source).bind fun address =>
+      (ScopeFlowAction.emitDef parents parent loop (.load address)).bind fun value =>
+        (ScopeFlowAction.recordReadValueRootRecipe parents parent loop value place).bind fun _ =>
+          ScopeFlowAction.pure parents parent loop value
   | .ref mutability place, source => by
     simp only [lowerExpr]
     exact (scopeFlow_lowerPlace parents parent loop place source).bind fun value => ScopeFlowAction.borrowTo parents parent loop mutability value

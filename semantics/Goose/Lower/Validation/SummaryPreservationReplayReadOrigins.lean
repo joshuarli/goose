@@ -16,15 +16,14 @@ private theorem emitDef_current (op : Op) (le : LEnv) (ls : LS) :
 
 private theorem local_read_current (variableId : VarId) (le : LEnv) (ls : LS) :
     (lowerExpr (.read (.var variableId)) le ls).2.cur = ls.cur := by
-  let slot := Goose.Lower.emitDef (.slotAddr variableId) le ls
-  change (Goose.Lower.emitDef (.load slot.1) le slot.2).2.cur = ls.cur
+  rw [ReplayBuilder.readCurrent_eq]
   exact (emitDef_current _ _ _).trans (emitDef_current _ _ _)
 
 namespace ReplayBuilder
 
 theorem readExpressionWithOrigins {typingEnv : TEnv} {env : PEnv} {context : ContextId} {place : Place} {ty : Ty}
     {typingStart typingFinish : Nat} {before after : RState} {sourceRoots : List RootRef}
-    {results : Array (List RootRef)} {vt : Array (Option VTy)} {target : Core.Eff}
+    {results : Array (List RootRef)} {vt : Array (Option VTy)} {target : Core.Eff} {siteRoot : DemandNode}
     {scopeCount : Nat} {ls : LS} {upper : Prov}
     (checked : SourceReadableEnvironment typingEnv) (tables : SourceRootTables typingEnv env)
     (contextRow : env.mod.contexts[context]? = some env.ctx)
@@ -55,7 +54,10 @@ theorem readExpressionWithOrigins {typingEnv : TEnv} {env : PEnv} {context : Con
       place = .deref (.read (.var variableId)) → typingEnv.vars[variableId]? = some localVar →
       localVar.ty.isRefSlice = true → ls.cur.isSome = true →
       vt[(lowerExpr (.read (.var variableId)) (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1]? =
-        some (some (.data localVar.ty))) :
+        some (some (.data localVar.ty)))
+    (metadata : SourceCanonicalRootFloors.RecipeMetadataProjects env siteRoot
+      (lowerContextAt env.mod env.ctx env.impl)
+      (lowerExpr (.read place) (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).2) :
     ∃ next, ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
         (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
         (typedContextSlotUpper env.mod env.ctx env.impl)
@@ -79,8 +81,8 @@ theorem readExpressionWithOrigins {typingEnv : TEnv} {env : PEnv} {context : Con
       ⟨variableId, localVar, mu, sliceMu, element, rfl, variableRow, localType, rfl, elementFlat⟩
     · have actualRow : env.impl.vars[variableId]? = some localVar := by
         simpa only [tables.variablesEq] using variableRow
-      obtain ⟨next, generated, value, growth, origins⟩ := ready.acceptedLocalReadWithOrigins accepted contextRow implementationRow
-        actualRow source (by intro _ nonref; rw [reference] at nonref; cases nonref)
+      obtain ⟨next, generated, value, growth, origins, _⟩ := ready.acceptedLocalReadWithOrigins accepted contextRow implementationRow
+        actualRow source (by intro _ nonref; rw [reference] at nonref; cases nonref) metadata
       exact ⟨next, generated, fun live => (value live).1, growth, origins⟩
     · have actualRow : env.impl.vars[variableId]? = some localVar := by
         simpa only [tables.variablesEq] using variableRow
@@ -102,7 +104,7 @@ theorem readExpressionWithOrigins {typingEnv : TEnv} {env : PEnv} {context : Con
           simpa only [lowerPlace, local_read_current] using live
         simpa only [lowerPlace, identity] using resultType placeLive
       simpa only [identity] using ready.contentReadWithOrigins accepted contextRow implementationRow parameter parameterVariable
-        refSlice sourceParam wholeEffect addressTag contentTag
+        refSlice sourceParam wholeEffect addressTag contentTag (by simpa only [identity] using metadata)
   · have nonref : ty.isRefLike = false := by cases row : ty.isRefLike <;> simp_all
     obtain ⟨info, finish, placeTyped, _⟩ := tyExpr_read_place typed
     have sourceCopy := source
@@ -114,6 +116,7 @@ theorem readExpressionWithOrigins {typingEnv : TEnv} {env : PEnv} {context : Con
     obtain ⟨next, generated, value, nextGrowth, origins⟩ := middleReady.scalarReadWithOrigins ty nonref
       (lowerContextAt_parameterRoots_closed accepted contextRow implementationRow) placeReplay source wholeEffect
       (placeRun := rfl) input resultType
+      (nonrefRead_record_inactive typed nonref (by simpa [le, lowerEnv] using tables.variablesEq))
     refine ⟨next, generated, value, ?_, ?_⟩
     · intro old bound
       have growth : upper.vals.size ≤ middle.vals.size := by

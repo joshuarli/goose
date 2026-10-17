@@ -29,7 +29,10 @@ theorem resolved_lowerExpr : ∀ e : Expr, ResolvedExprAnnotations module e → 
     intro annotations
     try simp only [ResolvedExprAnnotations, ResolvedOptionalAnnotations] at annotations
     simp only [lowerExpr]
-    exact EmittedResolvedRun.bind (resolved_lowerPlace p (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2)) fun _ => resolved_emitDef tables _ (fun _ => by first | trivial | exact annotations.1)
+    exact EmittedResolvedRun.bind (resolved_lowerPlace p annotations) fun address =>
+      EmittedResolvedRun.bind (resolved_emitDef tables (.load address) (fun _ => trivial)) fun value =>
+        EmittedResolvedRun.bind (resolved_recordReadValueRootRecipe value p) fun _ =>
+          EmittedResolvedRun.pure module le value
   | .ref m p => by
     intro annotations
     try simp only [ResolvedExprAnnotations, ResolvedOptionalAnnotations] at annotations

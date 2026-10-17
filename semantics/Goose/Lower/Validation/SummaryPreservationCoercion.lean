@@ -23,6 +23,8 @@ def readonlySliceCoercion : Module :=
 theorem readonlySliceCoercion_core_accepted : Core.validate readonlySliceCoercion = .ok () := by
   cbv
 
+attribute [local cbv_opaque] Goose.GIR.replacementContentFlow
+
 theorem readonlySliceCoercion_gir_accepted :
     GIR.validate (lower readonlySliceCoercion) = .ok () := by
   cbv

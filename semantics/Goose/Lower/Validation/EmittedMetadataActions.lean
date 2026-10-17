@@ -41,6 +41,31 @@ theorem EmittedMetadataAction.emitDef (le : LEnv) (loop : Option LoopCtx) (op : 
   have final := checked.emitDef op
   simpa only [run] using final
 
+theorem EmittedMetadata.recordReadValueRootRecipe {le : LEnv} {before : LS}
+    (checked : EmittedMetadata le before) (value : ValueId) (place : Place) :
+    EmittedMetadata le (Goose.Lower.recordReadValueRootRecipe value place le before).2 := by
+  apply checked.of_preserving (types_recordReadValueRootRecipe value place le before _ _ rfl)
+  intro inst member
+  have blocks : (Goose.Lower.recordReadValueRootRecipe value place le before).2.blocks = before.blocks := by
+    cases place <;> simp only [recordReadValueRootRecipe_run] <;> first
+      | rfl
+      | (split <;> simp only [recordValueRootSource_run] <;> rfl)
+  have same : (Goose.Lower.recordReadValueRootRecipe value place le before).2.insts = before.insts := by
+    change List.flatMap (fun block => block.insts.toList)
+      (Goose.Lower.recordReadValueRootRecipe value place le before).2.blocks.toList = _
+    rw [blocks]
+    rfl
+  exact Or.inl (same ▸ member)
+
+theorem EmittedMetadataAction.recordReadValueRootRecipe (le : LEnv) (loop : Option LoopCtx)
+    (value : ValueId) (place : Place) :
+    EmittedMetadataAction le loop (Goose.Lower.recordReadValueRootRecipe value place) := by
+  refine ⟨?_, dense_recordReadValueRootRecipe value place, advB_recordReadValueRootRecipe value place,
+    generatedTargets_recordReadValueRootRecipe loop value place, types_recordReadValueRootRecipe value place⟩
+  intro before result after generated loopBounds loopTypes run checked
+  have final := checked.recordReadValueRootRecipe value place
+  simpa only [run] using final
+
 theorem EmittedMetadataAction.withLoop {le : LEnv} {action : B α}
     (checked : EmittedMetadataAction le none action) (loop : Option LoopCtx) :
     EmittedMetadataAction le loop action := by

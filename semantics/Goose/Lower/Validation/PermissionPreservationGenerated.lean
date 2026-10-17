@@ -31,6 +31,44 @@ private theorem freshWritableEvidence_recordValueRootRecipe {le : LEnv} {first :
 
 set_option maxHeartbeats 2000000
 
+private theorem freshWritableEvidence_recordRead {le : LEnv} {first : Nat}
+    {state : LS} {value : ValueId} (evidence : FreshWritableEvidence le first state value)
+    (place : Place) :
+    FreshWritableEvidence le first (recordReadValueRootRecipe value place le state).2 value := by
+  cases place <;> simp only [recordReadValueRootRecipe_run]
+  all_goals try exact evidence
+  split
+  · rw [recordValueRootSource_run]
+    simpa [FreshWritableEvidence, permissionFunc] using evidence
+  · exact evidence
+
+private theorem freshWritableEvidence_load_recordRead {le : LEnv} {before after : LS}
+    {address value : ValueId} {referent : Ty} {current : BlockId} (place : Place)
+    (checked : before.DenseDefinitions) (bounded : LiveBound before)
+    (live : before.cur = some current)
+    (run : (do let loaded ← emitDef (.load address)
+               recordReadValueRootRecipe loaded place
+               pure loaded) le before = (value, after))
+    (typed : after.vals[value]? = some (some (.data (.ref .mutable referent)))) :
+    FreshWritableEvidence le before.vals.size after value := by
+  obtain ⟨loaded, middle, emitted, rest⟩ := bind_eq.mp run
+  obtain ⟨unit, recorded, recordRun, result⟩ := bind_eq.mp rest
+  obtain ⟨same, sameState⟩ := pure_eq.mp result
+  subst loaded
+  subst recorded
+  have sizeEq : after.vals = middle.vals := by
+    have equation := congrArg Prod.snd recordRun
+    cases place <;> simp only [recordReadValueRootRecipe_run] at equation
+    all_goals try exact congrArg LS.vals equation.symm
+    split at equation
+    · rw [recordValueRootSource_run] at equation
+      simpa only using congrArg (fun state : LS => state.vals) equation.symm
+    · exact congrArg LS.vals equation.symm
+  have initial := freshWritableEvidence_load checked bounded live emitted (by simpa only [sizeEq] using typed)
+  have final := freshWritableEvidence_recordRead initial place
+  have sameAfter := congrArg Prod.snd recordRun
+  simpa only [sameAfter] using final
+
 mutual
 
 theorem lowerExpr_generated_binding (expr : Expr)
@@ -48,13 +86,14 @@ theorem lowerExpr_generated_binding (expr : Expr)
     have lowering := run
     simp only [lowerExpr] at lowering
     obtain ⟨address, middle, placeRun, emitted⟩ := bind_eq.mp lowering
-    have middleLive := (dead_emitDef (.load address)).live_before emitted live
+    have middleLive := ((dead_emitDef (.load address)).bind fun loaded =>
+      (dead_recordReadValueRootRecipe loaded place).bind fun _ => DeadRun.pure loaded).live_before emitted live
     have middleGenerated := generated.lowerPlace place placeRun
     have typed := lowerExpr_generated_typed (.read place) source run live (generated := generated)
     cases current : middle.cur with
     | none => simp [current] at middleLive
     | some block =>
-      exact (freshWritableEvidence_load middleGenerated.dense middleGenerated.live current emitted typed).weaken
+      exact (freshWritableEvidence_load_recordRead place middleGenerated.dense middleGenerated.live current emitted typed).weaken
         (advB_lowerPlace place _ _ _ _ placeRun).vals
   | ref mu place =>
     cases mu with
@@ -303,12 +342,13 @@ theorem lowerPlace_generated_binding (place : Place)
       have lowering := run
       simp only [lowerPlace, lowerExpr] at lowering
       obtain ⟨owner, middle, slotRun, emitted⟩ := bind_eq.mp lowering
-      have middleLive := (dead_emitDef (.load owner)).live_before emitted live
+      have middleLive := ((dead_emitDef (.load owner)).bind fun loaded =>
+        (dead_recordReadValueRootRecipe loaded (.var index)).bind fun _ => DeadRun.pure loaded).live_before emitted live
       have middleGenerated := generated.emitDef (.slotAddr index) slotRun
       cases current : middle.cur with
       | none => simp [current] at middleLive
       | some block =>
-        exact (freshWritableEvidence_load middleGenerated.dense middleGenerated.live current emitted typed).weaken
+        exact (freshWritableEvidence_load_recordRead (.var index) middleGenerated.dense middleGenerated.live current emitted typed).weaken
           (advB_emitDef (.slotAddr index) _ _ _ _ slotRun).vals
     · have ordinary : Core.sliceRefTy env expr = none := by
         cases expr <;> try rfl

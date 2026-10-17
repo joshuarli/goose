@@ -14,7 +14,9 @@ theorem unreachable_lowerExpr : ∀ e : Expr, UnreachableRun (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact unreachable_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact UnreachableRun.bind (unreachable_lowerPlace p) fun _ => unreachable_emitDef _
+    exact UnreachableRun.bind (unreachable_lowerPlace p) fun address =>
+      UnreachableRun.bind (unreachable_emitDef (.load address)) fun value =>
+        UnreachableRun.bind (unreachable_recordReadValueRootRecipe value p) fun _ => unreachable_pure value
   | .ref m p => by
     simp only [lowerExpr]
     exact UnreachableRun.bind (unreachable_lowerPlace p) fun r => unreachable_borrowTo m r

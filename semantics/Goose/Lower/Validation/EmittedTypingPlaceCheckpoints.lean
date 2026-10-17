@@ -5,6 +5,15 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
 
+theorem EmittedBuilder.recordReadValueRootRecipe {le : LEnv} {initial before : LS}
+    (builder : EmittedBuilder le initial before) (value : ValueId) (place : Place) :
+    EmittedBuilder le initial (Goose.Lower.recordReadValueRootRecipe value place le before).2 := by
+  apply builder.of_unchanged (Goose.Lower.recordReadValueRootRecipe value place)
+  all_goals
+    cases place <;> simp only [recordReadValueRootRecipe_run] <;> first
+      | rfl
+      | (split <;> simp only [recordValueRootSource_run] <;> rfl)
+
 theorem EmittedBuilder.freezeTo {le : LEnv} {initial before : LS}
     (builder : EmittedBuilder le initial before) (requested : Mutability) (value : ValueId) :
     EmittedBuilder le initial (Goose.Lower.freezeTo requested value le before).2 := by
@@ -99,23 +108,27 @@ theorem emitted_checked_lowerExpr_read {le : LEnv} {initial before : LS} (place 
       ∃ mu type, (lowerPlace place le before).2.vals[(lowerPlace place le before).1]? =
         some (some (.data (.ref mu type)))) :
     EmittedBuilder le initial (lowerExpr (.read place) le before).2 := by
-  apply child.emitDef (.load (lowerPlace place le before).1)
-  · intro active
-    cases current : (lowerPlace place le before).2.cur with
-    | none => simp [current] at active
-    | some block =>
-      obtain ⟨mu, type, row⟩ := typed block current
-      exact ⟨.data type, by
-        simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, row,
-          pure, Except.pure, bind, Except.bind]⟩
-  · intro active operand member
-    cases current : (lowerPlace place le before).2.cur with
-    | none => simp [current] at active
-    | some block =>
-      obtain ⟨mu, type, row⟩ := typed block current
-      have same : operand = (lowerPlace place le before).1 := by simpa [Op.uses] using member
-      subst operand
-      exact (Array.getElem?_eq_some_iff.mp row).1
+  let loaded := Goose.Lower.emitDef (.load (lowerPlace place le before).1) le (lowerPlace place le before).2
+  have loadBuilder : EmittedBuilder le initial loaded.2 := by
+    apply child.emitDef (.load (lowerPlace place le before).1)
+    · intro active
+      cases current : (lowerPlace place le before).2.cur with
+      | none => simp [current] at active
+      | some block =>
+        obtain ⟨mu, type, row⟩ := typed block current
+        exact ⟨.data type, by
+          simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, row,
+            pure, Except.pure, bind, Except.bind]⟩
+    · intro active operand member
+      cases current : (lowerPlace place le before).2.cur with
+      | none => simp [current] at active
+      | some block =>
+        obtain ⟨mu, type, row⟩ := typed block current
+        have same : operand = (lowerPlace place le before).1 := by simpa [Op.uses] using member
+        subst operand
+        exact (Array.getElem?_eq_some_iff.mp row).1
+  change EmittedBuilder le initial (Goose.Lower.recordReadValueRootRecipe loaded.1 place le loaded.2).2
+  exact loadBuilder.recordReadValueRootRecipe loaded.1 place
 
 
 theorem emitted_checked_lowerExpr_read_var {env : Core.TEnv} {variableId : VarId} {type : Ty}

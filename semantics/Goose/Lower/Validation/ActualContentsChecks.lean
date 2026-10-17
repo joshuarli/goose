@@ -14,13 +14,13 @@ private def env : TEnv :=
 private def place : Place := .deref (.ref .readOnly (.var 0))
 
 private def initial : LS :=
-  ⟨#[⟨[], #[]⟩, ⟨[(0, .data (.int .i64))], #[]⟩], #[some (.data (.int .i64))], some 0, [0]⟩
+  ⟨#[⟨[], #[]⟩, ⟨[(0, .data (.int .i64))], #[]⟩], #[some (.data (.int .i64))], some 0, [0], #[]⟩
 
 private def output : ValueId × LS := lowerPlace place (lowerEnv module env.vars []) initial
 
 private def finalState : LS :=
   ⟨#[⟨[], #[.def 1 (.slotAddr 0)]⟩, ⟨[(0, .data (.int .i64))], #[]⟩],
-    #[some (.data (.int .i64)), some (.data (.ref .readOnly (.arr (.int .i64) 1)))], some 0, [0]⟩
+    #[some (.data (.int .i64)), some (.data (.ref .readOnly (.arr (.int .i64) 1)))], some 0, [0], #[]⟩
 
 private theorem output_eq : output = (1, finalState) := rfl
 

@@ -66,6 +66,23 @@ def treeCleanupStep (row : PendingDestination) : ConstructionM Unit := do
   | _ => pure ()
   abandonDestination row.capability.id
 
+theorem treeCleanupStep_current_equation (row : PendingDestination) (state : ConstructionState)
+    (present : state.destinations[row.capability.id]? = some row) :
+    treeCleanupStep row state =
+      if destinationCanWrite state row.capability.id then
+        match row.progress with
+        | .suspended count _ => abandonDestination row.capability.id
+            { state with destinations := state.destinations.set! row.capability.id { row with progress := .open count } }
+        | _ => abandonDestination row.capability.id state
+      else .fault .protocol state := by
+  have inside := (Array.getElem?_eq_some_iff.mp present).1
+  simp only [treeCleanupStep, writableStep, writableDestination_result, present, bind]
+  cases writable : destinationCanWrite state row.capability.id with
+  | false => rfl
+  | true =>
+      cases progress : row.progress <;>
+        simp [progress, pure, bind, replaceStep, replaceDestination_result, inside]
+
 def treeAbandonRowState (state : ConstructionState) (row : PendingDestination) : ConstructionState :=
   { state with
     storage := state.storage.modify row.storage fun storage =>
@@ -265,6 +282,52 @@ private theorem treeCheckLoop_state (rows : List PendingDestination) (state : Co
       simp only [treeCheckLoop, List.forIn_cons, treeCheckBody, bind]
       cases row.progress <;> try rfl
       all_goals simpa only [treeCheckLoop, pure, bind, ConstructionM.fail, ConstructionResult.finalState] using ih
+
+def treeHasExiting (rows : List PendingDestination) : Bool :=
+  rows.any fun row => match row.progress with | .exiting _ _ => true | _ => false
+
+private theorem treeCheckLoop_equation (rows : List PendingDestination) (state : ConstructionState) :
+    treeCheckLoop rows state =
+      if treeHasExiting rows then .fault .protocol state else .ok PUnit.unit state := by
+  induction rows with
+  | nil => rfl
+  | cons row rest ih =>
+      simp only [treeCheckLoop, List.forIn_cons, treeCheckBody, bind]
+      cases progress : row.progress <;>
+        simp [treeHasExiting, progress, pure, bind, ConstructionM.fail, treeCheckLoop] at ih ⊢
+      all_goals exact ih
+
+theorem abandonTree_cleanup_equation (state : ConstructionState) (id : DestinationId) :
+    abandonTree id state = match state.destinations[id]? with
+      | none => .fault .destination state
+      | some parent =>
+          if destinationCanWrite state id then
+            match parent.progress with
+            | .open _ | .built _ | .suspended _ _ =>
+                if treeHasExiting (treeRows state id) then .fault .protocol state
+                else treeCleanupLoop (treeRows state id) state
+            | _ => .fault .protocol state
+          else .fault .protocol state := by
+  simp only [abandonTree, bind]
+  rw [writableDestination_result id state]
+  cases present : state.destinations[id]? with
+  | none => rfl
+  | some parent =>
+      cases writable : destinationCanWrite state id with
+      | false => rfl
+      | true =>
+          simp only [↓reduceIte]
+          cases progress : parent.progress <;> simp only [pure, bind, ConstructionM.get, ConstructionM.fail]
+          all_goals try rfl
+          all_goals
+            change ((treeCheckLoop (treeRows state id) >>= fun _ => (do
+              let _ ← forIn (treeRows state id) PUnit.unit treeActualSourceBody
+              pure ())) state) = _
+            rw [treeActualSourceBody_eq]
+            change ((treeCheckLoop (treeRows state id) >>= fun _ => treeSourceLoop (treeRows state id)) state) = _
+            rw [treeSourceLoop_eq]
+            by_cases exiting : treeHasExiting (treeRows state id) = true
+            all_goals simp only [treeCheckLoop_equation, exiting, Bool.false_eq_true, ↓reduceIte, bind]
 
 theorem treeRows_indexed (state : ConstructionState) (id : DestinationId)
     (indexed : DestinationCapabilitiesIndexed state) :

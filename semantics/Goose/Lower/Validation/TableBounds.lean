@@ -46,7 +46,7 @@ theorem lowerImpl_slot_scopes {module : Core.Module} {index : ImplId} {impl : Co
     subst slot
     have bound := (checkImpl_variable_bounds checked localVar
       (Array.mem_toList_iff.mpr (Array.mem_of_getElem? localRow))).2
-    simpa [lowerImpl, scopeParents] using bound
+    simpa [lowerImpl, lowerImplFromState, scopeParents] using bound
 
 theorem lowerImpl_function_origin {module : Core.Module} {index : ImplId} {impl : Core.Impl}
     (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl)

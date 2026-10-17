@@ -247,6 +247,22 @@ theorem shaped_recordValueRootRecipe (value : ValueId) (scope : ScopeId) :
     (fun _ => by rw [recordValueRootRecipe_run])
     (fun _ => by rw [recordValueRootRecipe_run])
 
+omit tables in
+theorem shaped_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    EmittedShapeRun module le (recordReadValueRootRecipe value place) := by
+  apply EmittedShapeRun.of_unchanged
+  all_goals
+    intro before
+    cases place with
+    | var variableId =>
+      rw [recordReadValueRootRecipe_run]
+      by_cases refSlice : (le.vars[variableId]?).any (fun localVar => localVar.ty.isRefSlice) = true <;>
+        simp [refSlice, recordValueRootSource_run]
+    | global _ => rw [recordReadValueRootRecipe_run]
+    | deref _ => rw [recordReadValueRootRecipe_run]
+    | elem _ _ _ => rw [recordReadValueRootRecipe_run]
+    | field _ _ => rw [recordReadValueRootRecipe_run]
+
 theorem shaped_ifE_recorded_core (cv : ValueId) (scope : ScopeId) {a1 a2 : B ValueId}
     (h1 : EmittedShapeRun module le a1) (h2 : EmittedShapeRun module le a2) :
     EmittedShapeRun module le (whenLive 0 fun _ => do

@@ -43,6 +43,35 @@ theorem lowerExpr_content_read_source_witness {env : PEnv} {context : ContextId}
       variableRow placeSource reference slots addressType
   let address := lowerPlace (.var param.var) le ls
   let read := lowerExpr (.read (.var param.var)) le ls
+  have readValue : read.1 = (emitDef (.load address.1) le address.2).1 := by
+    simp [read, address, lowerExpr_read_var_after_address]
+  have readCurrent : read.2.cur = (emitDef (.load address.1) le address.2).2.cur := by
+    dsimp only [read]
+    rw [lowerExpr_read_var_after_address]
+    dsimp only [address]
+    rw [recordReadValueRootRecipe_run]
+    simp only []
+    split
+    · rw [recordValueRootSource_run]
+    · rfl
+  have readBlockCount : read.2.blocks.size = (emitDef (.load address.1) le address.2).2.blocks.size := by
+    dsimp only [read]
+    rw [lowerExpr_read_var_after_address]
+    dsimp only [address]
+    rw [recordReadValueRootRecipe_run]
+    simp only []
+    split
+    · rw [recordValueRootSource_run]
+    · rfl
+  have readValueCount : read.2.vals.size = (emitDef (.load address.1) le address.2).2.vals.size := by
+    dsimp only [read]
+    rw [lowerExpr_read_var_after_address]
+    dsimp only [address]
+    rw [recordReadValueRootRecipe_run]
+    simp only []
+    split
+    · rw [recordValueRootSource_run]
+    · rfl
   have addressCurrent : address.2.cur = some block := by
     dsimp [address, lowerPlace]
     rw [emitDef_run _ _ current]
@@ -52,16 +81,15 @@ theorem lowerExpr_content_read_source_witness {env : PEnv} {context : ContextId}
     rw [emitDef_run _ _ current]
     simpa using blockBound
   have middleCurrent : read.2.cur = some block := by
-    change (emitDef (.load address.1) le address.2).2.cur = some block
+    rw [readCurrent]
     rw [emitDef_run _ _ addressCurrent]
     exact addressCurrent
   have middleBlockBound : block < read.2.blocks.size := by
-    change block < (emitDef (.load address.1) le address.2).2.blocks.size
+    rw [readBlockCount]
     rw [emitDef_run _ _ addressCurrent]
     simpa using addressBlockBound
   have valueBound : read.1 < read.2.vals.size := by
-    change (emitDef (.load address.1) le address.2).1 <
-      (emitDef (.load address.1) le address.2).2.vals.size
+    rw [readValue, readValueCount]
     rw [emitDef_run _ _ addressCurrent]
     simp
   have middleSymbols := lowerExpr_read_var_symbols symbols current blockBound param.var slotBound

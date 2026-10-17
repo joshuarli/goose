@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.CfgReadRecipes
 import Goose.Lower.Validation.CfgEdgeLoops
 import Goose.Lower.GeneratedBuilder
 
@@ -97,6 +98,16 @@ theorem generated_edge_isLive (env : LEnv) (context : Option LoopCtx) :
 
 theorem generated_edge_curBlock (env : LEnv) (context : Option LoopCtx) :
     GeneratedEdgeRun env context curBlock := GeneratedEdgeRun.unchanged (by intros; rw [curBlock_run])
+
+theorem generated_edge_recordReadValueRootRecipe (env : LEnv) (context : Option LoopCtx)
+    (value : ValueId) (place : Place) :
+    GeneratedEdgeRun env context (recordReadValueRootRecipe value place) := by
+  apply GeneratedEdgeRun.of_edgeRun (EdgeRun.of_tables (fun env state =>
+    ⟨(recordReadValueRootRecipe_tables value place env state).1,
+      (recordReadValueRootRecipe_tables value place env state).2.1⟩))
+  intro before result after run generated loop
+  exact generated.of_runs (dense_recordReadValueRootRecipe value place)
+    (generatedTargets_recordReadValueRootRecipe context value place) loop.targets run
 
 theorem generated_edge_emitDef (env : LEnv) (context : Option LoopCtx) (op : Op) :
     GeneratedEdgeRun env context (emitDef op) := by

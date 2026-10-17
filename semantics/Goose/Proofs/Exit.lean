@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionExecutionProtocolExitFrames
 import Goose.Construct.Exit
 import Goose.Construct.Eval
 import Goose.Proofs.Memory
@@ -338,7 +339,7 @@ theorem runtime_activation_catches (layout : LayoutEnv) (activation : RuntimeAct
     (resultTypes : List Goose.Construct.Ty) (origin : OriginId) (action : EvalM (List Goose.Construct.Carrier))
     (state afterOperands landed : ExecutionState) (carriers : List Goose.Construct.Carrier)
     (escaped : action state = .escape ⟨activation.act,exitTarget⟩ carriers afterOperands)
-    (completed : finishChannels layout resultTypes carriers origin { afterOperands with
+    (completed : finishChannels layout activation.channels resultTypes carriers origin { afterOperands with
       activations := afterOperands.activations.filter (fun current => current.act != activation.act) } = .ok () landed) :
     finishActivation layout activation resultTypes origin action state = .ok carriers landed := by
   simp [finishActivation, escaped, completed]
@@ -472,27 +473,42 @@ theorem target_activation_success (config : EvalConfig) (targetId : Nat) (target
 
 theorem return_from_after_operands (fuel : Nat) (config : EvalConfig)
     (environment activation : RuntimeActivation) (targetId : Nat) (target : NonlocalTarget)
-    (operands : List Goose.Construct.Expr) (origin : OriginId) (channels : List Channel) (carriers : List Goose.Construct.Carrier)
-    (state prepared afterOperands : ExecutionState)
+    (operands : List Goose.Construct.Expr) (origin : OriginId) (channels : List Channel) (carriers completed : List Goose.Construct.Carrier)
+    (state prepared afterOperands afterMaterialized afterReleased : ExecutionState)
     (present : config.module.targets[targetId]? = some target)
     (selected : selectTarget? target state.activations = some activation)
     (preparedChannels : exitChannels environment activation operands origin state = .ok channels prepared)
-    (evaluated : evalOperands fuel config environment channels operands prepared = .ok carriers afterOperands) :
+    (evaluated : evalOperands fuel config environment channels operands prepared = .ok carriers afterOperands)
+    (materialized : materializeOwnedCarriers origin
+      ((List.range (prepared.construction.exitReservations.size - state.construction.exitReservations.size)).map
+        (state.construction.exitReservations.size + ·)) carriers afterOperands = .ok completed afterMaterialized)
+    (released : ((do
+      for token in ((List.range (prepared.construction.exitReservations.size - state.construction.exitReservations.size)).map
+          (state.construction.exitReservations.size + ·)).reverse do
+        liftConstruction origin (releaseExitReservation token)) : EvalM Unit) afterMaterialized = .ok () afterReleased) :
     Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) state =
-      .escape ⟨activation.act,.nonlocal targetId⟩ carriers afterOperands := by
+      .escape ⟨activation.act,.nonlocal targetId⟩ completed afterReleased := by
   simp [Goose.Construct.execStmt, target_activation_success config targetId target activation state present selected,
-    preparedChannels, evaluated, Goose.Construct.escaped, bind]
+    withExitChannels, preparedChannels, evaluated, materialized, Goose.Construct.escaped, bind, pure] at released ⊢
+  simp only [released]
 
 theorem return_from_nearest_scope_dispatch (fuel : Nat) (config : EvalConfig)
     (environment catcher : RuntimeActivation) (targetId : Nat) (target : NonlocalTarget)
     (results : ImplId → List Goose.Construct.Ty) (operands : List Goose.Construct.Expr) (origin : OriginId)
-    (channels : List Channel) (carriers : List Goose.Construct.Carrier)
-    (state prepared afterOperands : ExecutionState) (scopes : List (RuntimeActivation × Nat × ScopeInst))
+    (channels : List Channel) (carriers completed : List Goose.Construct.Carrier)
+    (state prepared afterOperands afterMaterialized afterReleased : ExecutionState) (scopes : List (RuntimeActivation × Nat × ScopeInst))
     (present : config.module.targets[targetId]? = some target)
     (selected : selectTarget? target state.activations = some catcher)
     (distinct : (state.activations.map (·.act)).Nodup)
     (preparedChannels : exitChannels environment catcher operands origin state = .ok channels prepared)
-    (evaluated : evalOperands fuel config environment channels operands prepared = .ok carriers afterOperands) :
+    (evaluated : evalOperands fuel config environment channels operands prepared = .ok carriers afterOperands)
+    (materialized : materializeOwnedCarriers origin
+      ((List.range (prepared.construction.exitReservations.size - state.construction.exitReservations.size)).map
+        (state.construction.exitReservations.size + ·)) carriers afterOperands = .ok completed afterMaterialized)
+    (released : ((do
+      for token in ((List.range (prepared.construction.exitReservations.size - state.construction.exitReservations.size)).map
+          (state.construction.exitReservations.size + ·)).reverse do
+        liftConstruction origin (releaseExitReservation token)) : EvalM Unit) afterMaterialized = .ok () afterReleased) :
     ∃ discarded outer, state.activations = discarded ++ catcher :: outer ∧
       target.contains catcher.implementation = true ∧
       (∀ activation ∈ discarded, target.contains activation.implementation = false) ∧
@@ -500,56 +516,64 @@ theorem return_from_nearest_scope_dispatch (fuel : Nat) (config : EvalConfig)
         (runtimeDiscardHandlers config.layout results origin discarded
           (runtimeWithScopes scopes (Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) >>= fun _ => pure []))) state =
       finishActivation config.layout catcher (results catcher.implementation) origin
-        (fun _ => .escape ⟨catcher.act,.nonlocal targetId⟩ carriers
-          (runtimeDropActivations discarded (runtimeReleaseScopes scopes afterOperands))) state := by
+        (fun _ => .escape ⟨catcher.act,.nonlocal targetId⟩ completed
+          (runtimeDropActivations discarded (runtimeReleaseScopes scopes afterReleased))) state := by
   have returned := return_from_after_operands fuel config environment catcher targetId target operands origin
-    channels carriers state prepared afterOperands present selected preparedChannels evaluated
+    channels carriers completed state prepared afterOperands afterMaterialized afterReleased present selected preparedChannels evaluated materialized released
   obtain ⟨discarded,outer,shape,member,excluded,dispatched,_,_,_⟩ :=
     runtime_nearest_scope_dispatch config.layout results origin target (.nonlocal targetId) state.activations catcher distinct selected
       scopes (Goose.Construct.execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) >>= fun _ => pure [])
-      state afterOperands carriers (by simp [returned, bind])
+      state afterReleased completed (by simp [returned, bind])
   exact ⟨discarded,outer,shape,member,excluded,dispatched⟩
 
 
 theorem return_from_forward_after_producer (fuel : Nat) (config : EvalConfig)
     (environment activation : RuntimeActivation) (targetId : Nat) (target : NonlocalTarget)
     (producer : Goose.Construct.Expr) (origin : OriginId)
-    (channels : List Channel) (carriers : List Goose.Construct.Carrier)
-    (state prepared afterProducer : ExecutionState)
+    (channels : List Channel) (carriers completed : List Goose.Construct.Carrier)
+    (state prepared afterProducer afterMaterialized afterReleased : ExecutionState)
     (present : config.module.targets[targetId]? = some target)
     (selected : selectTarget? target state.activations = some activation)
     (preparedChannels : exitChannels environment activation
       (List.replicate activation.channels.length producer) origin state = .ok channels prepared)
-    (evaluated : evalProduce fuel config environment channels producer prepared = .ok carriers afterProducer) :
+    (evaluated : evalProduce fuel config environment channels producer prepared = .ok carriers afterProducer)
+    (materialized : materializeOwnedCarriers origin
+      ((List.range (prepared.construction.exitReservations.size - state.construction.exitReservations.size)).map
+        (state.construction.exitReservations.size + ·)) carriers afterProducer = .ok completed afterMaterialized)
+    (released : ((do
+      for token in ((List.range (prepared.construction.exitReservations.size - state.construction.exitReservations.size)).map
+          (state.construction.exitReservations.size + ·)).reverse do
+        liftConstruction origin (releaseExitReservation token)) : EvalM Unit) afterMaterialized = .ok () afterReleased) :
     Goose.Construct.execStmt (fuel + 1) config environment (.returnFromForward targetId producer origin) state =
-      .escape ⟨activation.act,.nonlocal targetId⟩ carriers afterProducer := by
+      .escape ⟨activation.act,.nonlocal targetId⟩ completed afterReleased := by
   simp [Goose.Construct.execStmt, target_activation_success config targetId target activation state present selected,
-    preparedChannels, evaluated, Goose.Construct.escaped, bind]
+    withExitChannels, preparedChannels, evaluated, materialized, Goose.Construct.escaped, bind, pure] at released ⊢
+  simp only [released]
 
 theorem enter_activation_catches_body_escape (fuel : Nat) (config : EvalConfig)
     (activation : RuntimeActivation) (exitTarget : ExitTarget) (implementation : Goose.Construct.Impl)
     (pre : List (VarId × Value)) (body : Goose.Construct.Block) (origin : OriginId)
     (carriers : List Goose.Construct.Carrier) (state afterOperands landed : ExecutionState)
     (present : config.module.impls[activation.implementation]? = some implementation)
-    (escaped : execResultBlockWith fuel config activation pre activation.channels body state =
+    (escaped : execActivationBody fuel config activation pre body state =
       .escape ⟨activation.act,exitTarget⟩ carriers afterOperands)
-    (completed : finishChannels config.layout (implementation.results.toList.map (·.ty)) carriers origin
+    (completed : finishChannels config.layout activation.channels (implementation.results.toList.map (·.ty)) carriers origin
       { afterOperands with activations := afterOperands.activations.filter (fun current => current.act != activation.act) } =
       .ok () landed) :
     enterActivation (fuel + 1) config activation pre body origin state = .ok carriers landed := by
-  simp [enterActivation, execActivationBody, present, finishActivation, escaped, completed, bind]
+  simp [enterActivation, present, finishActivation, escaped, completed, bind]
 
 theorem enter_activation_propagates_body_escape (fuel : Nat) (config : EvalConfig)
     (activation : RuntimeActivation) (implementation : Goose.Construct.Impl)
     (pre : List (VarId × Value)) (body : Goose.Construct.Block) (origin : OriginId)
     (target : ExitAddress) (carriers : List Goose.Construct.Carrier) (state afterOperands : ExecutionState)
     (present : config.module.impls[activation.implementation]? = some implementation)
-    (escaped : execResultBlockWith fuel config activation pre activation.channels body state =
+    (escaped : execActivationBody fuel config activation pre body state =
       .escape target carriers afterOperands) (other : target.activation ≠ activation.act) :
     enterActivation (fuel + 1) config activation pre body origin state =
       .escape target carriers { afterOperands with
         activations := afterOperands.activations.filter (fun current => current.act != activation.act) } := by
-  simp [enterActivation, execActivationBody, present, finishActivation, escaped, other, bind]
+  simp [enterActivation, present, finishActivation, escaped, other, bind]
 
 
 theorem result_block_releases_scope_on_escape (fuel : Nat) (config : EvalConfig)
@@ -568,7 +592,7 @@ theorem result_block_releases_scope_on_escape (fuel : Nat) (config : EvalConfig)
     execResultBlockWith (fuel + 1) config environment pre channels (.mk scope statements tail) state =
       .escape target carriers (releaseScopeState environment scope state.nextScope afterOperands) := by
   simp only [beq_iff_eq] at boundPre
-  simp [execResultBlockWith, Goose.Construct.freshScope, EvalM.get, EvalM.set, withScope, boundPre,
+  simp [execResultBlockWith, execResultScope, Goose.Construct.freshScope, EvalM.get, EvalM.set, withScope, boundPre,
     escaped, Goose.Construct.releaseScope, bind, pure]
 
 
@@ -584,37 +608,41 @@ theorem cleanup_replacement (origin : OriginId) (id replacementId superseded : D
   simp [cleanupDestination, protectedReplacement?, getDestination, EvalM.get, bind, pure, present, live,
     replacementPresent, replacementUse, owned]
 
-theorem protected_exit_payload_storage (origin : OriginId) (id replacementId superseded : DestinationId)
+theorem protected_exit_payload_storage (origin : OriginId) (incoming id replacementId superseded : DestinationId)
     (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress)
     (destination replacement : PendingDestination)
     (escaped : action state = .escape target [.completed replacementId] afterOperands)
+    (resolved : destinationCurrent afterOperands.construction incoming = .ok id)
     (present : afterOperands.construction.destinations[id]? = some destination)
     (live : activeProgress destination.progress = true)
     (replacementPresent : afterOperands.construction.destinations[replacementId]? = some replacement)
     (replacementUse : replacement.use = .replacement superseded)
     (owned : descendsFrom afterOperands.construction id superseded = true) :
-    (stepState (protectDestination origin id action state)).construction.storage =
+    (stepState (protectDestination origin incoming action state)).construction.storage =
       afterOperands.construction.storage := by
   have preserved := runtime_protected_cleanup_storage origin afterOperands id replacementId
   simp only [protectDestination, escaped]
+  simp only [cleanupReceivingDestination, receivingDestination, liftConstruction, resolved, bind]
   rw [cleanup_replacement origin id replacementId superseded afterOperands destination replacement
     present live replacementPresent replacementUse owned]
   cases result : liftConstruction origin (abandonPreservingExit id replacementId) afterOperands <;>
     simpa [result, stepState] using preserved
 
-theorem protected_exit_prior_output (origin : OriginId) (id replacementId superseded : DestinationId)
+theorem protected_exit_prior_output (origin : OriginId) (incoming id replacementId superseded : DestinationId)
     (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress)
     (destination replacement : PendingDestination)
     (escaped : action state = .escape target [.completed replacementId] afterOperands)
+    (resolved : destinationCurrent afterOperands.construction incoming = .ok id)
     (present : afterOperands.construction.destinations[id]? = some destination)
     (live : activeProgress destination.progress = true)
     (replacementPresent : afterOperands.construction.destinations[replacementId]? = some replacement)
     (replacementUse : replacement.use = .replacement superseded)
     (owned : descendsFrom afterOperands.construction id superseded = true) :
-    (stepState (protectDestination origin id action state)).construction.stdout =
+    (stepState (protectDestination origin incoming action state)).construction.stdout =
       afterOperands.construction.stdout := by
   have preserved := runtime_protected_cleanup_stdout origin afterOperands id replacementId
   simp only [protectDestination, escaped]
+  simp only [cleanupReceivingDestination, receivingDestination, liftConstruction, resolved, bind]
   rw [cleanup_replacement origin id replacementId superseded afterOperands destination replacement
     present live replacementPresent replacementUse owned]
   cases result : liftConstruction origin (abandonPreservingExit id replacementId) afterOperands <;>
@@ -630,27 +658,35 @@ theorem cleanup_selected_replacement (origin : OriginId) (id replacementId : Des
       liftConstruction origin (abandonPreservingExit id replacementId) state := by
   simp [cleanupDestination, getDestination, EvalM.get, bind, pure, present, live, selected]
 
+theorem cleanup_receiving_resolved (origin : OriginId) (incoming id : DestinationId)
+    (carriers : List Goose.Construct.Carrier) (state : ExecutionState)
+    (resolved : destinationCurrent state.construction incoming = .ok id) :
+    cleanupReceivingDestination origin incoming carriers state = cleanupDestination origin id carriers state := by
+  simp [cleanupReceivingDestination, receivingDestination, liftConstruction, resolved, bind]
+
 theorem protection_escape_state (origin : OriginId) (id : DestinationId)
     (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress)
     (carriers : List Goose.Construct.Carrier)
     (escaped : action state = .escape target carriers afterOperands) :
     stepState (protectDestination origin id action state) =
-      stepState (cleanupDestination origin id carriers afterOperands) := by
+      stepState (cleanupReceivingDestination origin id carriers afterOperands) := by
   simp only [protectDestination, escaped]
-  cases cleaned : cleanupDestination origin id carriers afterOperands <;> rfl
+  cases cleaned : cleanupReceivingDestination origin id carriers afterOperands <;> rfl
 
-theorem protected_exit_replacement_frame (origin : OriginId) (id replacementId : DestinationId)
+theorem protected_exit_replacement_frame (origin : OriginId) (incoming id replacementId : DestinationId)
     (action : EvalM α) (state afterOperands : ExecutionState) (target : ExitAddress)
     (destination : PendingDestination) (carriers : List Goose.Construct.Carrier)
     (escaped : action state = .escape target carriers afterOperands)
+    (resolved : destinationCurrent afterOperands.construction incoming = .ok id)
     (present : afterOperands.construction.destinations[id]? = some destination)
     (live : activeProgress destination.progress = true)
     (selected : protectedReplacement? afterOperands.construction id carriers = some replacementId) :
-    (stepState (protectDestination origin id action state)).construction.storage =
+    (stepState (protectDestination origin incoming action state)).construction.storage =
       afterOperands.construction.storage ∧
-    (stepState (protectDestination origin id action state)).construction.stdout =
+    (stepState (protectDestination origin incoming action state)).construction.stdout =
       afterOperands.construction.stdout := by
-  rw [protection_escape_state origin id action state afterOperands target carriers escaped,
+  rw [protection_escape_state origin incoming action state afterOperands target carriers escaped,
+    cleanup_receiving_resolved origin incoming id carriers afterOperands resolved,
     cleanup_selected_replacement origin id replacementId afterOperands destination carriers present live selected]
   exact ⟨runtime_protected_cleanup_storage origin afterOperands id replacementId,
     runtime_protected_cleanup_stdout origin afterOperands id replacementId⟩
@@ -695,6 +731,7 @@ theorem runtime_land_carrier_frames_objects (origin : OriginId) (carrier : Goose
     (stepState (landCarrier origin carrier state)).objects = state.objects := by
   cases carrier with
   | register value => rfl
+  | pendingNamed token => rfl
   | completed id =>
       apply runtime_bind_frames_objects (getDestination id)
       · exact runtime_get_destination_frames_objects id
@@ -702,7 +739,7 @@ theorem runtime_land_carrier_frames_objects (origin : OriginId) (carrier : Goose
         cases destination.use with
         | receiver => rfl
         | child owner => rfl
-        | replacement superseded => exact runtime_lift_frames_objects origin (landExitReplacement id) current
+        | replacement superseded => exact runtime_lift_frames_objects origin (landExitReplacementChain id) current
 
 
 
@@ -711,6 +748,7 @@ theorem runtime_finish_channel_frames_objects (layout : LayoutEnv) (origin : Ori
     (stepState (finishChannel layout origin carrier result state)).objects = state.objects := by
   cases carrier with
   | register value => rfl
+  | pendingNamed token => rfl
   | completed id =>
       apply runtime_bind_frames_objects (getDestination id)
       · exact runtime_get_destination_frames_objects id
@@ -769,6 +807,67 @@ theorem runtime_foreach_frames (field : ExecutionState → γ) (values : List α
     · intro _ after; rfl
   · intro _ after; rfl
 
+theorem runtime_receiving_destination_frames (field : ExecutionState → γ) (incoming : DestinationId)
+    (state : ExecutionState) : field (stepState (receivingDestination incoming state)) = field state := by
+  simp only [receivingDestination, liftConstruction]
+  cases destinationCurrent state.construction incoming <;> rfl
+
+theorem runtime_land_carriers_into_frames (field : ExecutionState → γ) (origin : OriginId)
+    (channels : List Channel) (carriers : List Goose.Construct.Carrier)
+    (landed : ∀ receiving replacement state,
+      field (stepState (liftConstruction origin (landExitReplacementInto receiving replacement) state)) = field state)
+    (state : ExecutionState) :
+    field (stepState (landCarriersInto origin channels carriers state)) = field state := by
+  unfold landCarriersInto
+  cases arity : (channels.length != carriers.length) with
+  | true => simp only [arity, ↓reduceIte]; rfl
+  | false =>
+      simp only [arity, Bool.false_eq_true, ↓reduceIte]
+      apply runtime_bind_frames field
+      · intro current
+        apply runtime_forin_loop_frames
+        intro pair member accumulator after
+        rcases pair with ⟨channel, carrier⟩
+        have completedCase (incoming replacement : DestinationId) :
+            field (stepState ((do
+              let receiving ← receivingDestination incoming
+              if receiving != replacement then
+                liftConstruction origin (landExitReplacementInto receiving replacement)
+              pure (ForInStep.yield PUnit.unit)) after)) = field after := by
+          apply runtime_bind_frames field (receivingDestination incoming)
+          · exact runtime_receiving_destination_frames field incoming
+          · intro receiving final
+            split
+            · apply runtime_bind_frames field (liftConstruction origin (landExitReplacementInto receiving replacement))
+              · exact landed receiving replacement
+              · intro _ done; rfl
+            · rfl
+        cases channel with
+        | register type => cases carrier <;> rfl
+        | construct incoming =>
+            cases carrier with
+            | register value | pendingNamed token => rfl
+            | completed replacement => exact completedCase incoming replacement
+        | completion token =>
+            cases carrier with
+            | register value => rfl
+            | pendingNamed pending =>
+                change field (stepState ((if token != pending then do
+                  Goose.Construct.fault .flow
+                  pure (ForInStep.yield PUnit.unit)
+                  else pure (ForInStep.yield PUnit.unit)) after)) = field after
+                split <;> rfl
+            | completed replacement =>
+                simp only [EvalM.get, bind]
+                cases ticket : after.construction.exitReservations[token]? with
+                | none => rfl
+                | some reservation =>
+                    cases reservation with
+                    | waiting incoming | restored | released => rfl
+                    | active role incoming selected snapshot =>
+                        exact completedCase selected replacement
+      · intro _ current; rfl
+
 theorem runtime_foreach_frames_objects (values : List α) (body : α → EvalM Unit)
     (frames : ∀ value state, (stepState (body value state)).objects = state.objects)
     (state : ExecutionState) :
@@ -781,11 +880,13 @@ theorem runtime_land_carriers_frames_objects (origin : OriginId) (carriers : Lis
   runtime_foreach_frames_objects carriers (landCarrier origin) (runtime_land_carrier_frames_objects origin) state
 
 
-theorem runtime_finish_channels_frames_objects (layout : LayoutEnv) (resultTypes : List Goose.Construct.Ty)
+theorem runtime_finish_channels_frames_objects (layout : LayoutEnv) (channels : List Channel) (resultTypes : List Goose.Construct.Ty)
     (carriers : List Goose.Construct.Carrier) (origin : OriginId) (state : ExecutionState) :
-    (stepState (finishChannels layout resultTypes carriers origin state)).objects = state.objects := by
-  apply runtime_bind_frames_objects (landCarriers origin carriers)
-  · exact runtime_land_carriers_frames_objects origin carriers
+    (stepState (finishChannels layout channels resultTypes carriers origin state)).objects = state.objects := by
+  apply runtime_bind_frames_objects (landCarriersInto origin channels carriers)
+  · apply runtime_land_carriers_into_frames (·.objects) origin channels carriers
+    intro receiving replacement current
+    exact runtime_lift_frames_objects origin (landExitReplacementInto receiving replacement) current
   · intro _ current
     split
     · rfl
@@ -800,10 +901,10 @@ theorem runtime_activation_landing_frames_objects (layout : LayoutEnv) (activati
     (escaped : action state = .escape ⟨activation.act,exitTarget⟩ carriers afterOperands) :
     (stepState (finishActivation layout activation resultTypes origin action state)).objects =
       afterOperands.objects := by
-  have framed := runtime_finish_channels_frames_objects layout resultTypes carriers origin
+  have framed := runtime_finish_channels_frames_objects layout activation.channels resultTypes carriers origin
     { afterOperands with activations := afterOperands.activations.filter (fun current => current.act != activation.act) }
   simp only [finishActivation,escaped,beq_self_eq_true,↓reduceIte]
-  cases completed : finishChannels layout resultTypes carriers origin
+  cases completed : finishChannels layout activation.channels resultTypes carriers origin
     { afterOperands with activations := afterOperands.activations.filter (fun current => current.act != activation.act) } <;>
     simpa [completed,stepState] using framed
 
@@ -883,6 +984,7 @@ theorem runtime_land_carrier_frames_output (origin : OriginId) (carrier : Goose.
     (stepState (landCarrier origin carrier state)).construction.stdout = state.construction.stdout := by
   cases carrier with
   | register value => rfl
+  | pendingNamed token => rfl
   | completed id =>
       apply runtime_bind_frames_output (getDestination id)
       · exact runtime_get_destination_frames_output id
@@ -890,7 +992,9 @@ theorem runtime_land_carrier_frames_output (origin : OriginId) (carrier : Goose.
         cases destination.use with
         | receiver => rfl
         | child owner => rfl
-        | replacement superseded => exact runtime_lift_frames_output origin (landExitReplacement id) (landExitReplacement_stdout id) current
+        | replacement superseded =>
+            exact runtime_lift_frames_output origin (landExitReplacementChain id)
+              (Goose.Proofs.ConstructionExecutionProtocol.landExitReplacementChain_stdout id) current
 
 
 
@@ -899,6 +1003,7 @@ theorem runtime_finish_channel_frames_output (layout : LayoutEnv) (origin : Orig
     (stepState (finishChannel layout origin carrier result state)).construction.stdout = state.construction.stdout := by
   cases carrier with
   | register value => rfl
+  | pendingNamed token => rfl
   | completed id =>
       apply runtime_bind_frames_output (getDestination id)
       · exact runtime_get_destination_frames_output id
@@ -933,11 +1038,14 @@ theorem runtime_land_carriers_frames_output (origin : OriginId) (carriers : List
   runtime_foreach_frames_output carriers (landCarrier origin) (runtime_land_carrier_frames_output origin) state
 
 
-theorem runtime_finish_channels_frames_output (layout : LayoutEnv) (resultTypes : List Goose.Construct.Ty)
+theorem runtime_finish_channels_frames_output (layout : LayoutEnv) (channels : List Channel) (resultTypes : List Goose.Construct.Ty)
     (carriers : List Goose.Construct.Carrier) (origin : OriginId) (state : ExecutionState) :
-    (stepState (finishChannels layout resultTypes carriers origin state)).construction.stdout = state.construction.stdout := by
-  apply runtime_bind_frames_output (landCarriers origin carriers)
-  · exact runtime_land_carriers_frames_output origin carriers
+    (stepState (finishChannels layout channels resultTypes carriers origin state)).construction.stdout = state.construction.stdout := by
+  apply runtime_bind_frames_output (landCarriersInto origin channels carriers)
+  · apply runtime_land_carriers_into_frames (·.construction.stdout) origin channels carriers
+    intro receiving replacement current
+    exact runtime_lift_frames_output origin (landExitReplacementInto receiving replacement)
+      (Goose.Proofs.ConstructionExecutionProtocol.landExitReplacementInto_stdout receiving replacement) current
   · intro _ current
     split
     · rfl
@@ -952,10 +1060,10 @@ theorem runtime_activation_landing_frames_output (layout : LayoutEnv) (activatio
     (escaped : action state = .escape ⟨activation.act,exitTarget⟩ carriers afterOperands) :
     (stepState (finishActivation layout activation resultTypes origin action state)).construction.stdout =
       afterOperands.construction.stdout := by
-  have framed := runtime_finish_channels_frames_output layout resultTypes carriers origin
+  have framed := runtime_finish_channels_frames_output layout activation.channels resultTypes carriers origin
     { afterOperands with activations := afterOperands.activations.filter (fun current => current.act != activation.act) }
   simp only [finishActivation,escaped,beq_self_eq_true,↓reduceIte]
-  cases completed : finishChannels layout resultTypes carriers origin
+  cases completed : finishChannels layout activation.channels resultTypes carriers origin
     { afterOperands with activations := afterOperands.activations.filter (fun current => current.act != activation.act) } <;>
     simpa [completed,stepState] using framed
 

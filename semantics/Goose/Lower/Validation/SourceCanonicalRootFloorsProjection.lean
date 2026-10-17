@@ -34,7 +34,7 @@ private theorem mapped_roots_agree (arguments : List (List RootRef)) (declared i
           simpa only [List.foldl_cons] using ih (unionRoots initial [.global global]) restOk
       | «local» slot => simp [mapCalleeRoots, reject] at mappedOk
 
-private theorem call_roots_agree (env : PEnv) (context : ContextId) (arguments : List (List RootRef))
+theorem sourceCallRoots_agrees (env : PEnv) (context : ContextId) (arguments : List (List RootRef))
     (before after : RState) (roots : List RootRef)
     (checked : rpCall env context arguments before = .ok (roots, after)) :
     sourceCallRoots env context arguments = roots := by
@@ -75,7 +75,7 @@ private theorem call_roots_agree (env : PEnv) (context : ContextId) (arguments :
                       funext prior root
                       cases root <;> rfl
 
-private theorem read_roots_agree (env : PEnv) (place : Place) (before after : RState)
+theorem sourceReadRoots_agrees (env : PEnv) (place : Place) (before after : RState)
     (roots : List RootRef) (checked : readRoots env place before = .ok (roots, after)) :
     sourceReadRoots env place = roots := by
   obtain ⟨_, shape⟩ := readRoots_ok env place before (roots, after) checked
@@ -120,7 +120,7 @@ theorem collectSourceExprRoots_agrees (env : PEnv) (expression : Expr) (table : 
       simp only [rpExpr] at checked
       obtain ⟨_, _, _, checked⟩ := (st_bind_ok _ _ _ _).mp checked
       obtain ⟨_, _, _, checked⟩ := (st_bind_ok _ _ _ _).mp checked
-      exact read_roots_agree env place _ _ roots checked
+      exact sourceReadRoots_agrees env place _ _ roots checked
   | ref permission place =>
       simp only [rpExpr] at checked
       exact collectSourcePlaceRoots_agrees env place table checked
@@ -150,7 +150,7 @@ theorem collectSourceExprRoots_agrees (env : PEnv) (expression : Expr) (table : 
       have same := collectSourceArgumentRoots_agrees env arguments table argumentsOk
       change sourceCallRoots env context (collectSourceArgumentRoots env arguments table).1 = roots
       rw [same]
-      exact call_roots_agree env context argumentRoots _ _ roots checked
+      exact sourceCallRoots_agrees env context argumentRoots _ _ roots checked
   | blockE body =>
       simp only [rpExpr] at checked
       obtain ⟨result, _, blockOk, checked⟩ := (st_bind_ok _ _ _ _).mp checked

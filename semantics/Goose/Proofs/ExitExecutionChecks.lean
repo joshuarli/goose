@@ -36,6 +36,7 @@ def returnedObservation : ExecutionResult → Option (List UInt8 × List Goose.C
   | .done .returned stdout events => some (stdout.data.toList, events)
   | _ => none
 
+set_option maxRecDepth 2048 in
 theorem recursiveDestinations_execution :
     returnedObservation (eval 200 .release recursiveDestinations) =
       some ([66, 10, 65, 10], [.begin 0, .begin 1, .write 1 0, .publish 1, .write 0 0, .publish 0]) := by
@@ -58,6 +59,7 @@ theorem recursive_live_activations_fresh :
       (Goose.Proofs.Exit.stepState (runModule 28 ⟨.release, recursiveDestinations⟩ .initial)) :=
   Goose.Proofs.ExitExecution.runModule_freshActivations _ _
 
+set_option maxRecDepth 2048 in
 theorem recursive_live_nearest_target :
     selectedActivation (targetActivation ⟨.release, recursiveDestinations⟩ 0
       (Goose.Proofs.Exit.stepState (runModule 28 ⟨.release, recursiveDestinations⟩ .initial))) = some 2 := by

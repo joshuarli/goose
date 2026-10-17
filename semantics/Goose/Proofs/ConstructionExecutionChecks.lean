@@ -102,6 +102,31 @@ theorem effectfulFill_execution :
 theorem zeroFill_rejected : validate (effectfulFill 0) =
     .error ⟨.type, "invalid fixed-array element or count"⟩ := by cbv
 
+def preparationEnvironment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
+
+def preparationOperands : List Expr :=
+  [.blockE (.mk 0 [.print [.text "operand"] 0] (some (.lit .i64 7))) 0, .lit .i64 8]
+
+def preparationChannels : List Channel := [.register (.int .i64), .construct 0]
+
+def preparationObservation : ExecutionStep α → Option (List UInt8)
+  | .stop (.fault .unbound) state => some state.construction.stdout.data.toList
+  | _ => none
+
+theorem values_preparation_failure_precedes_operands :
+    preparationObservation
+      (evalProduce 20 ⟨.release, rawBytes⟩ preparationEnvironment preparationChannels
+        (.values preparationOperands) .initial) = some [] := by
+  cbv
+
+theorem operands_without_outer_preparation_run_first_operand :
+    preparationObservation
+      (evalOperands 19 ⟨.release, rawBytes⟩ preparationEnvironment preparationChannels
+        preparationOperands .initial) = some [111, 112, 101, 114, 97, 110, 100, 10] := by
+  cbv
+
+#print axioms values_preparation_failure_precedes_operands
+#print axioms operands_without_outer_preparation_run_first_operand
 #print axioms rawBytes_validated
 #print axioms rawBytes_execution
 #print axioms terminalPrefix_validated

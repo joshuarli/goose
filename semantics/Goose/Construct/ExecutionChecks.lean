@@ -102,7 +102,7 @@ private def finishExplicitProducer (receiving producer localType : Ty) : EvalM N
   liftConstruction 0 (prepareNamedBinding id localType)
   liftConstruction 0 (writeElement id ⟨#[65]⟩)
   liftConstruction 0 (finishDestination id)
-  finishChannels ⟨#[]⟩ [producer] [.completed id] 0
+  finishChannels ⟨#[]⟩ [.construct id] [producer] [.completed id] 0
   pure id
 
 private def observesProducer (receiving producer localType : Ty) :
@@ -578,18 +578,57 @@ private def adaptedFixedCall : Module := moduleOf #[
 #guard observes adaptedFixedCall == some ("once\nAB\n".toUTF8.data.toList,
   [.begin 0, .write 0 0, .write 0 1, .publish 0])
 
-private def adaptedFixedCallAbort : Module := moduleOf #[
-  implementation "entry" #[localVar "result" (.varr (.int .u8))]
-    (.mk 0 [.letS 0 (.call 1 [] 0) 0] none),
-  implementation "fixed" #[] (.mk 0 []
-    (some (.arrLit (.arr (.int .u8) 2) [.lit .u8 65,
-      .blockE (.mk 1 [.print [.text "effect"] 0, .abort "stop" 0] (some (.lit .u8 66))) 0] 0)))
-    #[⟨.arr (.int .u8) 2, .register, none⟩]]
+private def adaptedFixedCallAbort : Module :=
+  let module := moduleOf #[
+    implementation "entry" #[localVar "result" (.varr (.int .u8))]
+      (.mk 0 [.letS 0 (.call 1 [] 0) 0] none),
+    implementation "fixed" #[] (.mk 0 []
+      (some (.arrLit (.arr (.int .u8) 2) [.lit .u8 65,
+        .blockE (.mk 1 [.print [.text "effect"] 0, .abort "stop" 0] (some (.lit .u8 66))) 0] 0)))
+      #[⟨.arr (.int .u8) 2, .register, none⟩]]
+  { module with
+    types := #[.int .u8, .varr (.int .u8), .arr (.int .u8) 2]
+    contexts := module.impls.mapIdx fun index impl =>
+      ⟨index, "", [], List.replicate impl.results.size [], []⟩
+    origins := #[⟨0, 17, "let"⟩] }
+
+#guard Run.validateBytes (Writer.module adaptedFixedCallAbort).toUTF8 == ("[\"ok\"]", 0)
 
 #guard match eval 1000 .release adaptedFixedCallAbort with
   | .done (.aborted .userAbort 0) stdout events =>
+      stdout.data.toList == "effect\n".toUTF8.data.toList && events == []
+  | _ => false
+
+private def constructedVariableCallAbort : Module :=
+  let producer := adaptedFixedCallAbort.impls[1]
+  { adaptedFixedCallAbort with impls := (adaptedFixedCallAbort.impls.set! 1
+      { producer with
+        results := #[⟨.varr (.int .u8), .value, none⟩]
+        body := .mk 0 [] (some (.arrLit (.varr (.int .u8)) [
+          .blockE (.mk 1 [.print [.text "effect"] 0, .abort "stop" 0]
+            (some (.lit .u8 65))) 0] 0)) }) }
+
+#guard Run.validateBytes (Writer.module constructedVariableCallAbort).toUTF8 == ("[\"ok\"]", 0)
+
+#guard match eval 1000 .release constructedVariableCallAbort with
+  | .done (.aborted .userAbort 0) stdout events =>
       stdout.data.toList == "effect\n".toUTF8.data.toList && events == [.begin 0]
   | _ => false
+
+private def unitExpressionInValueBlock : Module :=
+  let fixed := Expr.arrLit (.arr (.int .u8) 2) [.lit .u8 65, .lit .u8 66] 0
+  let unitExpression := Expr.ifE (.bool false)
+    (.mk 2 [.ifS (.bool false) (.mk 3 [.breakValue fixed 0] none) none 0] none)
+    (.mk 4 [] none) 0
+  let entry := adaptedFixedCallAbort.impls[0]
+  { adaptedFixedCallAbort with impls := (adaptedFixedCallAbort.impls.set! 0
+      { entry with body := .mk 0 [
+        .letS 0 (.blockE (.mk 1 [.expr unitExpression 0] (some fixed)) 0) 0,
+        .print [.view (.of (.var 0))] 0] none }) }
+
+#guard Run.validateBytes (Writer.module unitExpressionInValueBlock).toUTF8 == ("[\"ok\"]", 0)
+#guard observes unitExpressionInValueBlock == some ("AB\n".toUTF8.data.toList,
+  [.begin 0, .write 0 0, .write 0 1, .publish 0])
 
 private def sliceCopy : Module := moduleOf #[implementation "entry"
   #[localVar "owner" (.grow (.int .u8)), localVar "slice" (.slice .readOnly (.int .u8)),

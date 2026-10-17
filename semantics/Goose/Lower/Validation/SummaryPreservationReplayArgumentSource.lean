@@ -1,9 +1,8 @@
-import Goose.Lower.Validation.SummaryPreservationReplayArguments
 import Goose.Core.Sound.Invert
 
 namespace Goose.Lower.Validation.SummaryPreservation
 
-open Goose.Core Goose.Core.Sound Goose.GIR
+open Goose.Core Goose.Core.Sound
 
 def ArgumentTyping (env : TEnv) (argument : Arg) (start finish : Nat) : Prop :=
   match argument with

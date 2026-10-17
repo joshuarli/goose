@@ -5,6 +5,48 @@ namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Proofs.Fuel
 open Goose.Core.Sound
 
+private theorem postAfterReadValueRootRecipe {cfg : Cfg} {env : Env} {cx : FnCtx}
+    {ls ls1 ls2 : LS} {fr fr' : GIR.Frame} {pt : Pt} {cells : List (ValueId × RVal)}
+    (post : Post cfg env cx ls fr ls1 fr' pt cells)
+    {value : ValueId} {place : Place} {le : LEnv}
+    (recorded : recordReadValueRootRecipe value place le ls1 = ((), ls2)) :
+    Post cfg env cx ls fr ls2 fr' pt cells := by
+  have hrecordState : (recordReadValueRootRecipe value place le ls1).2 = ls2 :=
+    congrArg Prod.snd recorded
+  have hblocks : ls2.blocks = ls1.blocks := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  have hvals : ls2.vals = ls1.vals := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  have hcur : ls2.cur = ls1.cur := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  have hstack : ls2.stack = ls1.stack := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  rcases post with ⟨hpp, hhas, hlt, hmono, hsame, hrel⟩
+  refine ⟨by simpa [LS.pp, hblocks, hcur] using hpp, hhas, ?_, ?_, hsame,
+    hrel.stack_eq hstack⟩
+  · simpa [hvals] using hlt
+  · simpa [hvals] using hmono
+
 theorem lowerExpr_read_var_fuelBoundAt {cfg : Cfg} {env : Env} {cx : FnCtx} {ls after : LS}
     {fr : Frame} {pt : Pt} {resultId varId : Nat} {le : LEnv} {fuel : Nat} {state : St}
     (rel : Rel cfg env cx fr ls) (point : ls.pp = some pt)
@@ -13,17 +55,34 @@ theorem lowerExpr_read_var_fuelBoundAt {cfg : Cfg} {env : Env} {cx : FnCtx} {ls 
     FuelBoundAt 2 fuel cx pt fr (fun n => evalExpr n cfg env (.read (.var varId)))
       (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId, .val value)]) state := by
   simp only [lowerExpr, bind_eq] at lowering
-  obtain ⟨address, middle, placeRun, definition⟩ := lowering
-  have middleExtension := extension.of_adv (adv_emitDef definition)
+  obtain ⟨address, middle, placeRun, readRun⟩ := lowering
+  rcases readRun with ⟨value, afterLoad, load, unitResult, afterRecord, record, returned⟩
+  cases unitResult
+  rw [pure_run] at returned
+  rcases Prod.mk.inj returned with ⟨rfl, rfl⟩
+  have recordAdvance : afterLoad.Adv afterRecord :=
+    advB_recordReadValueRootRecipe value (.var varId) le afterLoad () afterRecord record
+  have extensionAfterLoad : ExtT afterLoad cx.fn.blocks := extension.of_adv recordAdvance
+  have middleExtension : ExtT middle cx.fn.blocks :=
+    extension.of_adv ((adv_emitDef load).trans recordAdvance)
   have first := lowerPlace_var_fuelBoundAt (fuel := fuel) (state := state) rel point placeRun middleExtension
   have composed : FuelBoundAt 1 fuel cx pt fr
       (fun n => evalPlace n cfg env (.var varId) >>= readLoc)
-      (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId, .val value)]) state := by
+      (fun readValue _ pt' fr' =>
+        Post cfg env cx ls fr afterRecord fr' pt' [(value, .val readValue)]) state := by
     refine first.bind ?_
     intro location next pt' fr' done post residual bound
     have cell := post.has (address, .val (.ref location)) (by simp)
-    exact leaf_def_fuelBoundAt post definition extension (by intro f args org h; cases h)
-      RVal.val (sourceFuel := 1) (by simp only [execPure, getVal_of cell, expectRef, pure_bind])
+    have loadBound : FuelBoundAt 1 residual cx pt' fr'
+        (fun _ => readLoc location)
+        (fun readValue _ point'' frame'' =>
+          Post cfg env cx ls fr afterLoad frame'' point'' [(value, .val readValue)]) next := by
+      exact leaf_def_fuelBoundAt post load extensionAfterLoad
+        (by intro f args org h; cases h) RVal.val (sourceFuel := 1) (by
+          simp only [execPure, getVal_of cell, expectRef, pure_bind])
+    exact FuelBoundAt.mono loadBound (by
+      intro readValue final point'' frame'' postAfterLoad
+      exact postAfterReadValueRootRecipe postAfterLoad record)
   exact composed.of_source (otherFuel := 2) (by simp only [evalExpr])
 
 theorem typedPlaceFuelBound_deref {sourceFuel fuel : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}

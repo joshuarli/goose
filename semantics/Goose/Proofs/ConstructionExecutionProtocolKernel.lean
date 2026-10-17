@@ -1,5 +1,4 @@
-import Goose.Construct.Runtime
-import Goose.Proofs.Exit
+import Goose.Construct.Destination
 
 set_option Elab.async false
 
@@ -51,12 +50,5 @@ class ConstructionProtocolPrimitives (predicate : ConstructionState → Prop) : 
     predicate state → predicate { state with storage := storage }
   preserves : ∀ {α : Type} (action : ConstructionM α), ConstructionPrimitive action →
     ∀ state, predicate state → predicate (action state).finalState
-
-def ExecutionInvariant (predicate : ConstructionState → Prop) (state : ExecutionState) : Prop :=
-  predicate state.construction
-
-def PreservesConstructionInvariant (predicate : ConstructionState → Prop) (action : EvalM α) : Prop :=
-  ∀ state, ExecutionInvariant predicate state →
-    ExecutionInvariant predicate (Goose.Proofs.Exit.stepState (action state))
 
 end Goose.Proofs.ConstructionExecutionProtocol

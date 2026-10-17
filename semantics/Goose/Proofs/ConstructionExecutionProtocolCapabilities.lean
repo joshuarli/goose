@@ -1,5 +1,6 @@
 import Goose.Proofs.ConstructionExecutionProtocol
 import Goose.Proofs.ConstructionExecutionProtocolCapabilitiesPrimitives
+import Goose.Proofs.ConstructionExecutionProtocolCapabilitiesReservation
 
 set_option Elab.async false
 
@@ -46,11 +47,13 @@ theorem destinationCapabilitiesPrimitives : ConstructionProtocolPrimitives Desti
 theorem evaluation_destination_capabilities (fuel : Nat) (config : EvalConfig) :
     EvaluationPreservesConstructionInvariant (predicate := DestinationCapabilitiesIndexed) fuel config := by
   letI := destinationCapabilitiesPrimitives
+  letI := destinationCapabilitiesReservationPrimitives
   exact evaluation_preservesConstructionInvariant fuel config
 
 theorem runModule_preserves_destination_capabilities (fuel : Nat) (config : EvalConfig) :
     PreservesConstructionInvariant DestinationCapabilitiesIndexed (runModule fuel config) := by
   letI := destinationCapabilitiesPrimitives
+  letI := destinationCapabilitiesReservationPrimitives
   exact runModule_preservesConstructionInvariant fuel config
 
 theorem runModule_destination_capabilities_from_protocol (fuel : Nat) (config : EvalConfig) :

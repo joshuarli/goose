@@ -22,7 +22,9 @@ theorem storageWalk_source_read {env : Core.TEnv} {results : List Ty} {stack : L
   intro type start finish source visible loop
   obtain ⟨info, childFinish, childSource, _⟩ := tyExpr_read_place source
   exact (child childSource visible loop).bind fun value =>
-    StorageWalkAction.emitDef _ stack loop (.load value) (by simp [StorageInstructionVisible])
+    (StorageWalkAction.emitDef _ stack loop (.load value) (by simp [StorageInstructionVisible])).bind fun loaded =>
+      (StorageWalkAction.recordReadValueRootRecipe _ stack loop loaded place).bind fun _ =>
+        StorageWalkAction.pure _ stack loop loaded
 
 theorem storageWalk_source_reference {env : Core.TEnv} {results : List Ty} {stack : List ScopeId}
     (requested : Mutability) (place : Place) (child : StorageWalkSourcePlace env results stack place) :
@@ -64,7 +66,9 @@ theorem storageWalk_source_dereference {env : Core.TEnv} {results : List Ty} {st
       | var index =>
         exact (StorageWalkAction.emitDef _ stack loop (.slotAddr index)
           (fun _ descriptor row => storageWalk_visible_slot visible (storageWalk_sliceRef_visible special) results row)).bind fun value =>
-            StorageWalkAction.emitDef _ stack loop (.load value) (by simp [StorageInstructionVisible])
+            (StorageWalkAction.emitDef _ stack loop (.load value) (by simp [StorageInstructionVisible])).bind fun loaded =>
+              (StorageWalkAction.recordReadValueRootRecipe _ stack loop loaded (.var index)).bind fun _ =>
+                StorageWalkAction.pure _ stack loop loaded
       | _ => simp [Core.sliceRefTy] at special
     | _ => simp [Core.sliceRefTy] at special
 

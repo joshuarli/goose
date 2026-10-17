@@ -11,9 +11,16 @@ inductive RVal
   | rendered (bytes : ByteArray)
   | view (view : RuntimeView) (source : Option Core.CopySource := none)
   | dest (id : DestinationId)
+  | ownerExtension (id : DestinationId) (snapshot : PendingDestination)
   | built (id : DestinationId)
   | cancelled (id : DestinationId)
   | directCancelled (id : DestinationId)
+  | receiving (id : DestinationId) (owner : ActId)
+  | waitingReservation (token : ExitReservationId) (incoming : DestinationId) (owner : ActId)
+      (receiver : ValueId)
+  | exitReservation (token : Option ExitReservationId) (selected incoming : DestinationId)
+      (receiver : ValueId)
+      (kind : ExitTicketKind) (org : Option OriginId)
   | pack (carriers : List Carrier)
 
 structure Config where
@@ -30,6 +37,18 @@ structure Frame where
   parameterOrdinals : List StorageId := []
   copySources : Std.HashMap ValueId Core.CopySource := {}
   pushOwners : List (Loc × Loc) := []
+  ownerExtensionSnapshots : List (DestinationId × PendingDestination) := []
+  waitingCancelWitnesses : List (ValueId × ValueId × ExitReservationId × List DestinationId) := []
+  waitingTickets : List (ValueId × ExitReservationId) := []
+  waitingReceipts : List (ValueId × Goose.Construct.BorrowedWaitingExitReservation) := []
+  releasedWaitingTickets : List ValueId := []
+  terminalWaitingRelease : Bool := false
+  landedExitTickets : List ValueId := []
+  releasedAdoptedTickets : List ValueId := []
+
+inductive ExecOutcome
+  | returned (carriers : List Carrier)
+  | escaped (address : ExitAddress) (carriers : List Carrier) (cancellations : List RVal)
 
 private def getCell (frame : Frame) (id : ValueId) : EvalM RVal :=
   match frame.vals[id]? with
@@ -51,15 +70,31 @@ private def getDest (frame : Frame) (id : ValueId) : EvalM DestinationId := do
 private def getBuilt (frame : Frame) (id : ValueId) : EvalM DestinationId := do
   match ← getCell frame id with | .built id => pure id | _ => fault .shape
 
+private def getReceiving (frame : Frame) (id : ValueId) : EvalM (DestinationId × ActId) := do
+  match ← getCell frame id with | .receiving destination owner => pure (destination,owner) | _ => fault .shape
+
+private def restoreCompletedChildOwner (frame : Frame) (incoming : DestinationId)
+    (carried : List DestinationId) : EvalM Unit := do
+  match frame.ownerExtensionSnapshots.find? (·.1 == incoming) with
+  | some (_,snapshot) => restoreCompletedOwner snapshot incoming carried
+  | none => pure ()
+
+private def getExitReservation (frame : Frame) (id : ValueId) :
+    EvalM (Option ExitReservationId × DestinationId × DestinationId × ValueId × ExitTicketKind × Option OriginId) := do
+  match ← getCell frame id with
+  | .exitReservation token selected incoming receiver source org => pure (token,selected,incoming,receiver,source,org)
+  | _ => fault .shape
+
+private def getWaitingExitReservation (frame : Frame) (id : ValueId) :
+    EvalM (ExitReservationId × DestinationId × ActId × ValueId) := do
+  match ← getCell frame id with
+  | .waitingReservation token incoming owner receiver => pure (token,incoming,owner,receiver)
+  | _ => fault .shape
+
 private def getProtocol (frame : Frame) (id : ValueId) : EvalM DestinationId := do
   match ← getCell frame id with
   | .dest id | .built id | .cancelled id => pure id
   | _ => fault .shape
-
-private def hasDirectTargetCancellation (frame : Frame) (id : DestinationId) : Bool :=
-  frame.vals.toList.any fun (_, value) => match value with
-    | .directCancelled found => found == id
-    | _ => false
 
 private def getCarrier (frame : Frame) (id : ValueId) : EvalM Carrier := do
   match ← getCell frame id with
@@ -83,6 +118,23 @@ private def bindParams (frame : Frame) (params : List (ValueId × VTy)) (values 
 
 private def origin (org : Option OriginId) : EvalM OriginId :=
   match org with | some org => pure org | none => fault .unbound
+
+private def liftProtocol (action : ConstructionM α) : EvalM α := fun state =>
+  match action state.construction with
+  | .ok value construction => .ok value { state with construction }
+  | .fault _ construction => .stop (.fault .flow) { state with construction }
+
+private def releaseReservationsForStop (first : Nat) : EvalM Unit := do
+  let size := (← EvalM.get).construction.exitReservations.size
+  unless first ≤ size do fault .flow
+  for offset in (List.range (size - first)).reverse do
+    let token := first + offset
+    let state ← EvalM.get
+    match state.construction.exitReservations[token]? with
+    | some .released => pure ()
+    | some (.waiting _) | some (.active ..) | some .restored =>
+        liftProtocol (releaseExitReservation token)
+    | _ => fault .flow
 
 private def numeric (org : Option OriginId) (action : Except Core.NumAbort Int) : EvalM Int :=
   match action with
@@ -127,7 +179,13 @@ private def sourceOfLocation (location : Loc) : EvalM Core.CopySource := do
   pure (.storage object location.path)
 
 private def openReceiver (fuel : Nat) (config : Config) (function : Func) (frame : Frame)
-    (receiver : DestReceiver) (logical : Ty) (request : Core.ConstructionRequest) (count : Option Nat) (org : OriginId) : EvalM DestinationId := do
+    (receiver : DestReceiver) (logical : Ty) (request : Core.ConstructionRequest) (count : Option Nat) (org : OriginId) : EvalM (DestinationId × Option PendingDestination) := do
+  let snapshot (stored : StoredValue) : EvalM (Option PendingDestination) := do
+    match stored.destination with
+    | none => pure none
+    | some id => do
+        let parent ← getDestination id
+        pure (if parent.progress matches .built _ then some parent else none)
   let fresh (location : Loc) (receiving : Ty) : EvalM DestinationId := do
     let storage ← reserveRootObject location.root
     let capability : Core.Destination Ty := ⟨0,location,receiving,logical,request,0,frame.activation.act⟩
@@ -135,27 +193,30 @@ private def openReceiver (fuel : Nat) (config : Config) (function : Func) (frame
   match receiver with
   | .slot slot => do
       let some descriptor := function.slots[slot]? | fault .unbound
-      fresh (← slotLoc function frame slot) descriptor.ty
+      pure (← fresh (← slotLoc function frame slot) descriptor.ty, none)
   | .global global => do
       let some descriptor := config.module.globals[global]? | fault .unbound
-      fresh ⟨.global global,[]⟩ descriptor.ty
+      pure (← fresh ⟨.global global,[]⟩ descriptor.ty, none)
   | .arg _ position => do
       let scope ← freshScope
-      fresh ⟨.local frame.activation.act scope (function.slots.size + position),[]⟩ logical
+      pure (← fresh ⟨.local frame.activation.act scope (function.slots.size + position),[]⟩ logical, none)
   | .append reference | .whole reference => do
       let location ← expectRef (← getValue frame reference)
       if receiver matches .whole _ then truncateOwner fuel config.layout location 0 org
       let .stored stored ← readLoc fuel config.layout location | fault .shape
+      let ownerSnapshot ← snapshot stored
       let id ← ownerDestination config.layout stored request count org
       let state ← EvalM.get
       let some pending := state.construction.destinations[id]? | fault .unbound
       let pending := { pending with capability := { pending.capability with receiver := location, logicalType := logical } }
       EvalM.set { state with construction := { state.construction with destinations := state.construction.destinations.set! id pending } }
-      pure id
+      pure (id,ownerSnapshot)
   | .push reference => do
       let location ← expectRef (← getValue frame reference)
       let .stored stored ← readLoc fuel config.layout location | fault .shape
-      openElementReceiving config.layout frame.activation.act location stored logical count org
+      let ownerSnapshot ← snapshot stored
+      let id ← openElementReceiving config.layout frame.activation.act location stored logical count org
+      pure (id,ownerSnapshot)
 
 private def publishDestination (fuel : Nat) (config : Config) (id : DestinationId) (org : OriginId)
     (elementReceiver : Option Loc := none) : EvalM Unit := do
@@ -266,19 +327,20 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
           let value := (← expectInt (← getValue frame id)).2
           if value < 0 then abortAt .capacity (← origin org)
           pure value.toNat
-        pure (.dest (← openReceiver fuel config function frame receiver ty request count (← origin org)))
+        let (id,snapshot) ← openReceiver fuel config function frame receiver ty request count (← origin org)
+        pure (match snapshot with | some snapshot => .ownerExtension id snapshot | none => .dest id)
     | .destChild parent element org =>
         pure (.dest (← liftConstruction (← origin org) (openChild (← getDest frame parent) element (← receivingLayout config.layout element))))
-    | .destAdapt destination producer request org =>
+    | .destAdapt destination producer _ org =>
         let id ← getDest frame destination
-        liftConstruction (← origin org) (adaptConstructionDestination id producer request)
+        liftConstruction (← origin org) (adaptDestinationType id producer)
         pure (.dest id)
     | .destAdaptFinish closed org =>
-        let id ← getProtocol frame closed
-        liftConstruction (← origin org) (finishConstructionAdaptation id)
+        let _ ← origin org
         match ← getCell frame closed with
-        | .built _ => pure (.built id)
-        | .cancelled _ => pure (.cancelled id)
+        | .built id => pure (.built id)
+        | .cancelled id => pure (.cancelled id)
+        | .directCancelled id => pure (.directCancelled id)
         | _ => fault .shape
     | .destFinish destination org =>
         let id ← getDest frame destination
@@ -287,23 +349,186 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
           unless progressCount pending.progress == some expected do fault .flow
         liftConstruction (← origin org) (finishDestination id)
         pure (.built id)
+    | .destPrepareNamed destination slot org => do
+        let id ← getDest frame destination
+        let some localSlot := function.slots[slot]? | fault .unbound
+        liftConstruction (← origin org) (prepareNamedBinding id localSlot.ty)
+        pure (.dest id)
     | .destNamed slot _ =>
         let some id := frame.named.lookup slot | fault .unbound
         pure (.built (← completedDestination id))
-    | .resultExitDest position org =>
-        let some (.construct id) := frame.activation.channels[position]? | fault .shape
-        let destination ← getDestination id
-        match destination.progress with
-        | .open 0 => pure (.dest id)
-        | _ => pure (.dest (← liftConstruction (← origin org) (openExitReplacement id)))
-    | .targetDest target position org =>
+    | .receivingOpen destination =>
+        pure (.receiving (← getDest frame destination) frame.activation.act)
+    | .targetReceiving target position org =>
+        let _ ← origin org
         let some target := config.module.targets[target]? | fault .unbound
         let some activation := selectTarget? target (← EvalM.get).activations | fault .flow
         let some (.construct id) := activation.channels[position]? | fault .shape
-        let destination ← getDestination id
-        match destination.progress with
-        | .open 0 => pure (.dest id)
-        | _ => pure (.dest (← liftConstruction (← origin org) (openExitReplacement id)))
+        pure (.receiving id activation.act)
+    | .exitWait receiver => do
+        let (incoming,owner) ← getReceiving frame receiver
+        unless owner == frame.activation.act do fault .flow
+        let token ← liftProtocol (waitExitDestination incoming)
+        pure (.waitingReservation token incoming owner receiver)
+    | .destRenew receiver =>
+        let (incoming,_) ← getReceiving frame receiver
+        pure (.dest (← liftProtocol (renewReceivingDestination incoming)))
+    | .destRefresh receiver previous =>
+        let (incoming,_) ← getReceiving frame receiver
+        let _ ← getDest frame previous
+        pure (.dest (← liftProtocol (renewReceivingDestination incoming)))
+    | .exitReserve receiver source org =>
+        let (incoming,_) ← getReceiving frame receiver
+        let coreSource ← match source with
+          | .newValue => pure Goose.Construct.ExitSource.newValue
+          | .namedAlias slot => do
+              let some alias := frame.named.lookup slot | fault .unbound
+              pure (if alias == (← receivingDestination incoming) then
+                Goose.Construct.ExitSource.namedResult else .newValue)
+        let (token,selected) ← liftConstruction (← origin org) (reserveExitDestination incoming coreSource)
+        pure (.exitReservation (some token) selected incoming receiver (.reserved source) org)
+    | .exitIsNamed ticket => do
+        let (token,_,_,_,kind,_) ← getExitReservation frame ticket
+        unless kind matches .reserved (.namedAlias _) do fault .flow
+        let some token := token | fault .flow
+        let state ← EvalM.get
+        let isNamed := match state.construction.exitReservations[token]? with
+          | some (.active (.named _) ..) => true
+          | some (.active .fresh ..) => false
+          | _ => false
+        pure (.value (.bool isNamed))
+    | .exitAdopt receiver built =>
+        let (incoming,_) ← getReceiving frame receiver
+        let built ← getBuilt frame built
+        pure (.exitReservation none built incoming receiver .adopted none)
+    | .reservedDest ticket =>
+        let (token,selected,_,_,kind,_) ← getExitReservation frame ticket
+        unless (match kind with
+          | .reserved .newValue | .reserved (.namedAlias _) => true
+          | _ => false) do fault .flow
+        let some token := token | fault .flow
+        let state ← EvalM.get
+        unless (match state.construction.exitReservations[token]? with
+          | some (.active .fresh ..) => true
+          | _ => false) do fault .flow
+        pure (.dest selected)
+    | .reservedNamed ticket operationOrigin =>
+        let (token,_,_,_,kind,_) ← getExitReservation frame ticket
+        unless (match kind with | .reserved (.namedAlias _) => true | _ => false) do fault .flow
+        let some token := token | fault .flow
+        let state ← EvalM.get
+        unless (match state.construction.exitReservations[token]? with
+          | some (.active (.named .ready) ..) => true
+          | _ => false) do fault .flow
+        let selected ← liftConstruction (← origin operationOrigin) (materializeNamedReservation token)
+        pure (.built (← completedDestination selected))
+    | .exitLand ticket built org =>
+        let (token,selected,incoming,_,kind,_) ← getExitReservation frame ticket
+        let id ← getBuilt frame built
+        let landing ← match kind,token with
+          | .reserved _, some token => liftConstruction (← origin org) (landExitReservation token id)
+          | .adopted, none => do
+              unless id == selected do fault .flow
+              if (← receivingDestination incoming) != id then
+                liftConstruction (← origin org) (landExitReplacementInto incoming id)
+              pure id
+          | _, _ => fault .flow
+        pure (.built landing)
+    | .receivingCancel receiver carried org =>
+        let (incoming,owner) ← getReceiving frame receiver
+        let ids ← carried.mapM (getBuilt frame)
+        let carriers := ids.map Carrier.completed
+        let current ← receivingDestination incoming
+        let sourceOrg ← origin org
+        let cleanup := do
+          if !ids.contains current then cleanupReceivingDestination sourceOrg incoming carriers
+          restoreCompletedChildOwner frame incoming ids
+        match frame.waitingCancelWitnesses.filter (·.1 == receiver) with
+        | [(_,waitingTicket,token,protectedCarriers)] => do
+            unless owner == frame.activation.act do fault .flow
+            unless ids == protectedCarriers do fault .flow
+            let state ← EvalM.get
+            unless (match state.construction.exitReservations[token]? with
+              | some .released => true
+              | _ => false) do fault .flow
+            let adopted : List DestinationId := frame.vals.toList.filterMap fun (valueId,value) =>
+              match value with
+              | .exitReservation none selected candidate candidateReceiver .adopted _ =>
+                  if candidate == incoming && candidateReceiver == receiver &&
+                      !frame.releasedAdoptedTickets.contains valueId &&
+                      !frame.landedExitTickets.contains valueId then some selected else none
+              | _ => none
+            let selectedTickets := frame.vals.toList.filterMap fun (valueId,value) =>
+              match value with
+              | .exitReservation (some selectedToken) selected candidate candidateReceiver (.reserved _) _ =>
+                  let active := match state.construction.exitReservations[selectedToken]? with
+                    | some (.active ..) => true
+                    | _ => false
+                  if candidate == incoming && candidateReceiver == receiver && active then
+                    some (valueId,selectedToken,selected) else none
+              | _ => none
+            let supersedingTicket := match selectedTickets with
+              | [(_,selectedToken,_)] => some selectedToken
+              | _ => none
+            let exactSelection := match selectedTickets, ids with
+              | [(_,selectedToken,selected)],_ =>
+                  let active := match state.construction.exitReservations[selectedToken]? with
+                    | some (.active _ selectedIncoming selectedDestination _) =>
+                        selectedIncoming == incoming && selectedDestination == selected
+                    | _ => false
+                  let carriesSelection := ids.any fun built =>
+                    match destinationCurrent state.construction selected,
+                        state.construction.destinations[built]? with
+                    | .ok resolved, some destination =>
+                        built == resolved ||
+                          (match exitLandingAnchor (state.construction.destinations.size + 1)
+                              built destination.storage (some resolved) state.construction with
+                            | .ok _ _ => true
+                            | .fault _ _ => false)
+                    | _, _ => false
+                  active && carriesSelection
+              | _,_ => false
+            let unrelatedAuthority := frame.vals.toList.any fun (id,value) =>
+              if id == waitingTicket then false else
+              match value with
+              | .waitingReservation token candidate _ candidateReceiver =>
+                  candidate == incoming && candidateReceiver == receiver &&
+                    !(frame.releasedWaitingTickets.contains id) &&
+                    (state.construction.exitReservations[token]?).any (fun reservation => reservation matches .waiting ..)
+              | .exitReservation (some selectedToken) _ candidate candidateReceiver _ _ =>
+                  if candidateReceiver != receiver then false else
+                  if candidate != incoming then false else
+                  if exactSelection && supersedingTicket == some selectedToken then false else
+                    match state.construction.exitReservations[selectedToken]? with
+                    | some .released => false
+                    | _ => true
+              | .exitReservation none selected candidate candidateReceiver .adopted _ =>
+                  candidateReceiver == receiver && candidate == incoming &&
+                    !frame.releasedAdoptedTickets.contains id && !frame.landedExitTickets.contains id &&
+                    !ids.contains selected
+              | _ => false
+            unless !unrelatedAuthority do fault .flow
+            match exactSelection with
+            | true => do
+                cleanup
+                pure (.directCancelled current)
+            | false => do
+                unless adopted.all ids.contains do fault .flow
+                if adopted.isEmpty then pure (.directCancelled current) else do
+                  let state ← EvalM.get
+                  let selected := adopted.any fun built => built == current ||
+                    (protectedReplacement? state.construction current [Carrier.completed built]).isSome
+                  unless selected do fault .flow
+                  cleanup
+                  pure (.directCancelled current)
+        | [] => do
+            let destination ← getDestination current
+            let state ← EvalM.get
+            let direct := !activeProgress destination.progress || ids.contains current ||
+              (protectedReplacement? state.construction current carriers).isSome
+            cleanup
+            pure (if direct then .directCancelled current else .cancelled current)
+        | _ => fault .flow
     | .destAbandonNamed slot replacement org =>
         let some id := frame.named.lookup slot | fault .unbound
         let replacement ← getBuilt frame replacement
@@ -342,8 +567,14 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
         let pending ← getDestination id
         let storage ← getStorage pending.storage
         let start := pending.capability.start
-        let storage := { storage with bytes := storage.bytes.extract 0 start ++ ⟨#[0,0,0,0]⟩ ++ storage.bytes.extract start storage.bytes.size }
-        let pending := { pending with layout := .packed, capability := { pending.capability with request := .value }, writeEnd := pending.writeEnd + 4 }
+        let prefixPresent := pending.layout == .packed && pending.capability.request == .value
+        let storage := if prefixPresent then storage else
+          { storage with bytes := storage.bytes.extract 0 start ++ ⟨#[0,0,0,0]⟩ ++ storage.bytes.extract start storage.bytes.size }
+        let capability := { pending.capability with request := .value }
+        let pending := { pending with
+          layout := .packed,
+          capability := capability,
+          writeEnd := pending.writeEnd + (if prefixPresent then 0 else 4) }
         EvalM.set { state with construction := { state.construction with storage := state.construction.storage.set! pending.storage storage, destinations := state.construction.destinations.set! id pending } }
         let _ ← origin org
         pure (.dest id)
@@ -354,9 +585,6 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
             liftConstruction (← origin org) (removeConstructionHeader id)
             let pending ← getDestination id
             liftConstruction (← origin org) (restoreReceivingLayout id (← receivingLayout config.layout pending.capability.layout))
-        | .exitValue =>
-            unless hasDirectTargetCancellation frame id do
-              liftConstruction (← origin org) (landExitReplacement id)
         pure (.built id)
     | .destStage destination org =>
         let id ← getDest frame destination
@@ -517,14 +745,115 @@ def evalEffect : Nat → Config → Func → Frame → Effect → EvalM Frame
         | _ => fault .shape
         let _ ← origin org
         pure frame
+    | .receivingDrop receiving =>
+        let _ ← getReceiving frame receiving
+        pure frame
+    | .exitRelease ticket org =>
+        let _ ← origin org
+        match ← getCell frame ticket with
+        | .waitingReservation token _ owner _ => do
+            unless owner == frame.activation.act && !frame.releasedWaitingTickets.contains ticket do fault .flow
+            liftProtocol (releaseExitReservation token)
+            pure { frame with
+              waitingReceipts := frame.waitingReceipts.filter (·.1 != ticket)
+              releasedWaitingTickets := ticket :: frame.releasedWaitingTickets
+              terminalWaitingRelease := true }
+        | .exitReservation (some token) .. => do
+            unless !frame.terminalWaitingRelease do fault .flow
+            liftProtocol (releaseExitReservation token)
+            pure { frame with waitingReceipts := frame.waitingReceipts.filter (·.1 != ticket) }
+        | .exitReservation none .. => do
+            let (_,_,_,_,kind,_) ← getExitReservation frame ticket
+            unless kind == .adopted && frame.landedExitTickets.contains ticket &&
+                !frame.releasedAdoptedTickets.contains ticket && !frame.terminalWaitingRelease do
+              fault .flow
+            pure { frame with releasedAdoptedTickets := ticket :: frame.releasedAdoptedTickets }
+        | _ => fault .shape
+    | .exitRearm ticket org => do
+        let _ ← origin org
+        let (token,incoming,owner,receiver) ← match ← getCell frame ticket with
+          | .exitReservation (some token) _ incoming receiver (.reserved _) _ =>
+              pure (token,incoming,frame.activation.act,receiver)
+          | _ => fault .flow
+        unless frame.waitingTickets.any (·.1 == ticket) &&
+            !frame.releasedWaitingTickets.contains ticket && !frame.terminalWaitingRelease &&
+            !frame.landedExitTickets.contains ticket do
+          fault .flow
+        let (receiverIncoming,receiverOwner) ← getReceiving frame receiver
+        unless receiverIncoming == incoming && receiverOwner == owner do fault .flow
+        let some (_,receipt) := frame.waitingReceipts.find? (·.1 == ticket) | fault .flow
+        unless receipt.token == token && receipt.incoming == incoming do fault .flow
+        let state ← EvalM.get
+        unless (state.construction.exitReservations[token]?).any (fun reservation =>
+            match reservation with
+            | .active _ activeIncoming _ _ => activeIncoming == incoming
+            | .restored => true
+            | _ => false) do
+          fault .flow
+        liftProtocol (cancelExitReservation token [])
+        liftProtocol (rearmExitReservation receipt)
+        let waiting : RVal := .waitingReservation token incoming owner receiver
+        pure { frame with vals := frame.vals.insert ticket waiting }
+    | .exitSelect ticket source org => do
+        let (token,incoming,owner,receiver) ← getWaitingExitReservation frame ticket
+        unless owner == frame.activation.act do fault .flow
+        let selectedSource ← match source with
+          | .newValue => pure Goose.Construct.ExitSource.newValue
+          | .namedAlias slot => do
+              let some alias := frame.named.lookup slot | fault .unbound
+              pure (if alias == (← receivingDestination incoming) then
+                Goose.Construct.ExitSource.namedResult else .newValue)
+        let selected ← liftConstruction (← origin org) (selectWaitingExitDestination token selectedSource)
+        let value := .exitReservation (some token) selected incoming receiver (.reserved source) org
+        pure { frame with vals := frame.vals.insert ticket value }
+    | .exitMarkNamed ticket org =>
+        let (token,selected,_,_,kind,_) ← getExitReservation frame ticket
+        let .reserved (.namedAlias slot) := kind | fault .flow
+        let some token := token | fault .flow
+        unless frame.named.lookup slot == some selected do fault .flow
+        liftConstruction (← origin org) (markNamedReservation token)
+        pure frame
+    | .exitDiscard ticket carried org =>
+        match ← getCell frame ticket with
+        | .waitingReservation token _ owner receiver => do
+            unless owner == frame.activation.act do fault .flow
+            let carried ← carried.mapM (getBuilt frame)
+            liftConstruction (← origin org) do
+              cancelExitReservation token carried
+              releaseExitReservation token
+            pure { frame with
+              waitingCancelWitnesses := (receiver,ticket,token,carried) :: frame.waitingCancelWitnesses
+              waitingReceipts := frame.waitingReceipts.filter (·.1 != ticket) }
+        | .exitReservation (some token) _ _ _ kind _ => do
+            unless kind matches .reserved .. do fault .flow
+            let carried ← carried.mapM (getBuilt frame)
+            liftConstruction (← origin org) do
+              cancelExitReservation token carried
+              releaseExitReservation token
+            pure { frame with waitingReceipts := frame.waitingReceipts.filter (·.1 != ticket) }
+        | _ => fault .shape
 
-def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (List Carrier)
+def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM ExecOutcome
   | 0, _, _, _, _ => timeout
   | fuel + 1, config, function, frame, instructions => do
+    if frame.terminalWaitingRelease then
+      match instructions with
+      | .eff (.exitRelease ticket _) :: _ =>
+          unless !frame.releasedWaitingTickets.contains ticket do fault .flow
+          match ← getCell frame ticket with
+          | .waitingReservation _ _ owner _ => unless owner == frame.activation.act do fault .flow
+          | _ => fault .flow
+      | .term (.abort ..) :: _ | .term (.exit ..) :: _ | .term .unreachable :: _ =>
+          unless frame.waitingTickets.all (fun (ticket,_) => frame.releasedWaitingTickets.contains ticket) do
+            fault .flow
+      | _ => fault .flow
     match instructions with
     | [] => fault .flow
     | .def result op :: rest =>
         let value ← evalOp fuel config function frame op
+        let (value,ownerExtensionSnapshots) := match value with
+          | .ownerExtension id snapshot => (RVal.dest id,(id,snapshot) :: frame.ownerExtensionSnapshots)
+          | _ => (value,frame.ownerExtensionSnapshots)
         let copySource ← match op with
           | .load reference => do
               match value with
@@ -539,7 +868,28 @@ def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (Li
               pure (((← getDestination id).capability.receiver, ← expectRef (← getValue frame reference)) :: frame.pushOwners)
           | _, _ => pure frame.pushOwners
         let sources := match copySource with | some source => frame.copySources.insert result source | none => frame.copySources.erase result
-        executeInsts fuel config function { frame with vals := frame.vals.insert result value, copySources := sources, pushOwners := receivers } rest
+        let nextFrame := match op, value with
+          | .exitWait _, .waitingReservation token .. =>
+              { frame with waitingTickets := (result,token) :: frame.waitingTickets, ownerExtensionSnapshots := ownerExtensionSnapshots }
+          | _, _ => { frame with ownerExtensionSnapshots := ownerExtensionSnapshots }
+        let nextFrame := match op with
+          | .exitLand ticket .. =>
+              { nextFrame with landedExitTickets := ticket :: nextFrame.landedExitTickets }
+          | .receivingCancel receiver .. =>
+              { nextFrame with waitingCancelWitnesses := nextFrame.waitingCancelWitnesses.filter (·.1 != receiver) }
+          | _ => nextFrame
+        let waitingReceipts ← match op,value with
+          | .exitWait _, .waitingReservation token .. => do
+              let state ← EvalM.get
+              let some receipt := captureWaitingExitReservation token state.construction | fault .flow
+              pure ((result,receipt) :: frame.waitingReceipts.filter (·.1 != result))
+          | _, _ => pure frame.waitingReceipts
+        executeInsts fuel config function {
+          nextFrame with
+          vals := nextFrame.vals.insert result value
+          copySources := sources
+          pushOwners := receivers
+          waitingReceipts } rest
     | .eff effect :: rest =>
         executeInsts fuel config function (← evalEffect fuel config function frame effect) rest
     | .term term :: _ => match term with
@@ -547,24 +897,25 @@ def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (Li
       | .condbr condition left la right ra =>
           let condition ← expectBool (← getValue frame condition)
           executeBlock fuel config function frame (if condition then left else right) (← (if condition then la else ra).mapM (getCell frame))
-      | .ret results _ => results.mapM (getCarrier frame)
+      | .ret results _ => pure (.returned (← results.mapM (getCarrier frame)))
       | .abort kind org => abortAt kind (← origin org)
       | .exit value _ => EvalM.stop (.exit (← expectInt (← getValue frame value)).2)
       | .unreachable => fault .flow
-      | .escape targetId results _ _ =>
+      | .escape targetId results cancellations _ =>
           let some target := config.module.targets[targetId]? | fault .unbound
           let some activation := selectTarget? target (← EvalM.get).activations | fault .flow
           let carriers ← results.mapM (getCarrier frame)
-          fun state => .escape ⟨activation.act,.nonlocal targetId⟩ carriers state
+          let cancellations ← cancellations.mapM (getCell frame)
+          pure (.escaped ⟨activation.act,.nonlocal targetId⟩ carriers cancellations)
       | .invoke callee args destinations normal forwarded escapes org =>
           let arguments ← args.mapM (getValue frame)
           let destinations ← destinations.mapM (getDest frame)
           let forwarded ← forwarded.mapM (getCell frame)
           let org ← origin org
           fun state =>
-            match executeFn fuel config callee arguments destinations org state with
-            | .ok results state => executeBlock fuel config function frame normal ((results.map fun carrier => packResults [carrier]) ++ forwarded) state
-            | .escape address results state =>
+            match executeFnOutcome fuel config callee arguments destinations org state with
+            | .ok (.returned results) state => executeBlock fuel config function frame normal ((results.map fun carrier => packResults [carrier]) ++ forwarded) state
+            | .ok (.escaped address results cancellations) state =>
                 match address.target with
                 | .ordinary => .stop (.fault .flow) state
                 | .nonlocal targetId =>
@@ -576,24 +927,25 @@ def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (Li
                         else match escapes.find? (fun edge => edge.target == targetId) with
                         | none => .stop (.fault .flow) state
                         | some edge =>
-                            let leading := results.map (fun carrier => packResults [carrier]) ++ destinations.map RVal.cancelled
+                            let leading := results.map (fun carrier => packResults [carrier]) ++ cancellations
                             (do executeBlock fuel config function frame edge.block (leading ++ (← edge.args.mapM (getCell frame)))) state
+            | .escape _ _ state => .stop (.fault .flow) state
             | .stop stop state => .stop stop state
             | .jump target kind state => .jump target kind state
 
-def executeBlock : Nat → Config → Func → Frame → BlockId → List RVal → EvalM (List Carrier)
+def executeBlock : Nat → Config → Func → Frame → BlockId → List RVal → EvalM ExecOutcome
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, function, frame, block, arguments => do
     let some block := function.blocks[block]? | fault .unbound
     executeInsts fuel config function (← bindParams frame block.params arguments) block.insts
 
-def executeFn : Nat → Config → FnId → List Value → List DestinationId → OriginId → EvalM (List Carrier)
+def executeFnOutcome : Nat → Config → FnId → List Value → List DestinationId → OriginId → EvalM ExecOutcome
   | 0, _, _, _, _, _ => timeout
   | fuel + 1, config, functionId, arguments, destinations, org => do
     let some function := config.module.funcs[functionId]? | fault .unbound
-    executeFunction fuel config functionId function arguments destinations org
+    executeFunctionOutcome fuel config functionId function arguments destinations org
 
-def executeFunction : Nat → Config → FnId → Func → List Value → List DestinationId → OriginId → EvalM (List Carrier)
+def executeFunctionOutcome : Nat → Config → FnId → Func → List Value → List DestinationId → OriginId → EvalM ExecOutcome
   | 0, _, _, _, _, _, _ => timeout
   | fuel + 1, config, functionId, function, arguments, destinations, org => do
     unless arguments.length == function.params.length do fault .arity
@@ -624,8 +976,48 @@ def executeFunction : Nat → Config → FnId → Func → List Value → List D
     let frame : Frame := { function := functionId, activation, parameterOrdinals }
     let arguments := (arguments.zip function.params |>.zip parameterOrdinals).map (fun ((value,ty),ordinal) =>
       if ty matches .slice .. then RVal.copied value (.storage ordinal []) else RVal.value value) ++ destinations.map RVal.dest
-    fun state => mapStepState (fun state => { state with activations := state.activations.filter (fun activation => activation.act != act) })
-      (executeBlock fuel config function frame 0 arguments state)
+    fun state =>
+      let removeActivation (state : ExecutionState) :=
+        { state with activations := state.activations.filter (fun activation => activation.act != act) }
+      let firstReservation := state.construction.exitReservations.size
+      match executeBlock fuel config function frame 0 arguments state with
+      | .stop reason stopped =>
+          match releaseReservationsForStop firstReservation stopped with
+          | .ok () cleaned => .stop reason (removeActivation cleaned)
+          | .stop cleanupReason cleaned => .stop cleanupReason (removeActivation cleaned)
+          | .escape _ _ cleaned | .jump _ _ cleaned => .stop (.fault .flow) (removeActivation cleaned)
+      | .ok outcome state =>
+          let state := removeActivation state
+          let finish carriers state :=
+            match finishChannels config.layout activation.channels
+                (function.results.map (·.ty)) carriers org state with
+            | .ok () finished => ExecutionStep.ok
+                (match outcome with
+                | .returned _ => .returned carriers
+                | .escaped address _ cancellations => .escaped address carriers cancellations)
+                finished
+            | .stop reason failed => .stop reason failed
+            | .escape target carriers failed => .escape target carriers failed
+            | .jump target kind failed => .jump target kind failed
+          match outcome with
+          | .returned carriers => finish carriers state
+          | .escaped address carriers cancellations =>
+              if address.activation == act then finish carriers state
+              else .ok (.escaped address carriers cancellations) state
+      | .escape _ _ state => .stop (.fault .flow) (removeActivation state)
+      | .jump target kind state => .jump target kind (removeActivation state)
+
+def executeFn (fuel : Nat) (config : Config) (functionId : FnId) (arguments : List Value)
+    (destinations : List DestinationId) (org : OriginId) : EvalM (List Carrier) := do
+  match ← executeFnOutcome fuel config functionId arguments destinations org with
+  | .returned carriers => pure carriers
+  | .escaped .. => fault .flow
+
+def executeFunction (fuel : Nat) (config : Config) (functionId : FnId) (function : Func)
+    (arguments : List Value) (destinations : List DestinationId) (org : OriginId) : EvalM (List Carrier) := do
+  match ← executeFunctionOutcome fuel config functionId function arguments destinations org with
+  | .returned carriers => pure carriers
+  | .escaped .. => fault .flow
 end
 
 end Goose.Construct.GIR

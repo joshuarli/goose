@@ -305,22 +305,30 @@ def channelsFor (module : LayoutEnv) (owner : ActId) (results : List ResultDescr
     | .value => do pure (.construct (← newDestination module owner descriptor.ty .value origin))
     | .elementRun => do pure (.construct (← newDestination module owner descriptor.ty .elementRun origin))
 
+def receivingDestination (id : DestinationId) : EvalM DestinationId :=
+  liftConstruction 0 fun state =>
+    match destinationCurrent state id with
+    | .ok current => .ok current state
+    | .error kind => .fault kind state
+
+def receivingAction (origin : OriginId) (incoming : DestinationId)
+    (action : DestinationId → ConstructionM α) : EvalM α :=
+  liftConstruction origin do
+    action (← renewReceivingDestination incoming)
+
 def completedDestination (id : DestinationId) : EvalM DestinationId := do
   let destination ← getDestination id
   match destination.progress with
   | .built _ | .published _ | .attached _ => pure id
-  | _ =>
-      let state ← EvalM.get
-      let some replacement := state.construction.destinations.toList.reverse.find? (fun current =>
-        current.backing.receiverStorage == destination.backing.receiverStorage &&
-        current.capability.start == destination.capability.start &&
-        current.capability.owner == destination.capability.owner &&
-        (match current.progress with | .built _ | .published _ | .attached _ => true | _ => false)) | fault .flow
-      pure replacement.capability.id
+  | _ => fault .flow
+
+def completedReceivingDestination (id : DestinationId) : EvalM DestinationId := do
+  completedDestination (← receivingDestination id)
 
 def carrierValue : Carrier → EvalM Value
   | .register value => pure value
   | .completed destination => do pure (.stored (← storedDestination destination))
+  | .pendingNamed _ => fault .flow
 
 def singleCarrier (carriers : List Carrier) : EvalM Carrier :=
   match carriers with
@@ -328,10 +336,12 @@ def singleCarrier (carriers : List Carrier) : EvalM Carrier :=
   | [] => pure (.register .unit)
   | _ => fault .arity
 
-def publishCarriers (origin : OriginId) (carriers : List Carrier) : EvalM Unit :=
-  liftConstruction origin (publishOperation (carriers.filterMap fun carrier => match carrier with
-    | .completed destination => some destination
-    | .register _ => none))
+def publishCarriers (origin : OriginId) (carriers : List Carrier) : EvalM Unit := do
+  let ids ← carriers.mapM fun carrier => match carrier with
+    | .completed destination => pure (some destination)
+    | .register _ => pure none
+    | .pendingNamed _ => fault .flow
+  liftConstruction origin (publishOperation (ids.filterMap id))
 
 structure RuntimeView where
   location : Loc
@@ -375,7 +385,7 @@ def protectedReplacement? (state : ConstructionState) (id : DestinationId)
           let replacement ← state.destinations[replacementId]?
           match replacement.use with
           | .replacement superseded =>
-              if descendsFrom state id superseded then some replacementId else none
+              if descendsFrom state id superseded || descendsFrom state superseded id then some replacementId else none
           | _ => none
       | _ => none
 
@@ -398,9 +408,13 @@ def mapStepState (change : ExecutionState → ExecutionState) : ExecutionStep α
   | .escape target carriers state => .escape target carriers (change state)
   | .jump target kind state => .jump target kind (change state)
 
+def cleanupReceivingDestination (origin : OriginId) (incoming : DestinationId)
+    (carriers : List Carrier) : EvalM Unit := do
+  cleanupDestination origin (← receivingDestination incoming) carriers
+
 def protectDestination (origin : OriginId) (id : DestinationId) (action : EvalM α) : EvalM α := fun state =>
   let cleanup := fun (carriers : List Carrier) (result : ExecutionState → ExecutionStep α) (state' : ExecutionState) =>
-    match cleanupDestination origin id carriers state' with
+    match cleanupReceivingDestination origin id carriers state' with
     | .ok () state'' => result state''
     | .stop reason state'' => ExecutionStep.stop reason state''
     | .escape target carriers state'' => ExecutionStep.escape target carriers state''
@@ -445,19 +459,39 @@ def currentBreak (act : ActId) (scope : Option BreakScope := none) : EvalM Break
 def landCarrier (origin : OriginId) (carrier : Carrier) : EvalM Unit := do
   match carrier with
   | .register _ => pure ()
+  | .pendingNamed _ => fault .flow
   | .completed id =>
       let destination ← getDestination id
       match destination.use with
-      | .replacement _ => liftConstruction origin (landExitReplacement id)
+      | .replacement _ => liftConstruction origin (landExitReplacementChain id)
       | _ => pure ()
 
 def landCarriers (origin : OriginId) (carriers : List Carrier) : EvalM Unit := do
   for carrier in carriers do landCarrier origin carrier
 
+def landCarriersInto (origin : OriginId) (channels : List Channel) (carriers : List Carrier) : EvalM Unit := do
+  if channels.length != carriers.length then fault .arity
+  for (channel, carrier) in channels.zip carriers do
+    match channel, carrier with
+    | .construct incoming, .completed replacement =>
+        let receiving ← receivingDestination incoming
+        if receiving != replacement then
+          liftConstruction origin (landExitReplacementInto receiving replacement)
+    | .completion token, .pendingNamed pending =>
+        if token != pending then fault .flow
+    | .completion token, .completed replacement =>
+        let some (.active _ _ selected _) := (← EvalM.get).construction.exitReservations[token]? | fault .flow
+        let receiving ← receivingDestination selected
+        if receiving != replacement then
+          liftConstruction origin (landExitReplacementInto receiving replacement)
+    | .register _, .register _ => pure ()
+    | _, _ => fault .shape
+
 def finishChannel (layout : LayoutEnv) (origin : OriginId) (carrier : Carrier)
     (result : Ty) : EvalM Unit := do
   match carrier with
   | .register _ => pure ()
+  | .pendingNamed _ => fault .flow
   | .completed id =>
       let destination ← getDestination id
       if destination.adaptation.isSome then
@@ -469,9 +503,9 @@ def finishChannel (layout : LayoutEnv) (origin : OriginId) (carrier : Carrier)
           liftConstruction origin (restoreReceivingLayout id (← receivingLayout layout destination.capability.layout))
         liftConstruction origin (adaptDestinationType id result)
 
-def finishChannels (layout : LayoutEnv) (resultTypes : List Ty)
+def finishChannels (layout : LayoutEnv) (channels : List Channel) (resultTypes : List Ty)
     (carriers : List Carrier) (origin : OriginId) : EvalM Unit := do
-  landCarriers origin carriers
+  landCarriersInto origin channels carriers
   if carriers.length != resultTypes.length then fault .arity
   for (carrier, result) in carriers.zip resultTypes do finishChannel layout origin carrier result
 
@@ -479,7 +513,7 @@ def finishActivation (layout : LayoutEnv) (activation : RuntimeActivation) (resu
     (origin : OriginId) (action : EvalM (List Carrier)) : EvalM (List Carrier) := fun state =>
   let finish := fun carriers state' =>
     let state' := { state' with activations := state'.activations.filter (fun current => current.act != activation.act) }
-    match finishChannels layout resultTypes carriers origin state' with
+    match finishChannels layout activation.channels resultTypes carriers origin state' with
     | .ok () state'' => ExecutionStep.ok carriers state''
     | .stop reason state'' => ExecutionStep.stop reason state''
     | .escape target escaped state'' => ExecutionStep.escape target escaped state''
@@ -510,7 +544,8 @@ def quoteBytes (bytes : ByteArray) : ByteArray := Id.run do
 
 def copyValue : Nat → LayoutEnv → DestinationId → Value → OriginId → Option Core.CopySource → EvalM Unit
   | 0, _, _, _, _, _ => timeout
-  | fuel + 1, config, destination, value, origin, source => do
+  | fuel + 1, config, incoming, value, origin, source => do
+      let destination ← liftConstruction origin (renewReceivingDestination incoming)
       let pending ← getDestination destination
       let some element := elementType pending.capability.logicalType | fault .shape
       match value with
@@ -555,17 +590,111 @@ def deliverCarriers (fuel : Nat) (layout : LayoutEnv) (channels : List Channel)
     | .construct _, .completed destination => pure (.completed destination)
     | .construct destination, .register value =>
         copyValue fuel layout destination value origin none
-        pure (.completed destination)
+        pure (.completed (← completedReceivingDestination destination))
     | .register _, .completed _ => fault .shape
+    | _, .pendingNamed _ => fault .flow
+    | .completion _, _ => fault .flow
 
 def repeatElement : Nat → LayoutEnv → DestinationId → Ty → DestinationId → OriginId → EvalM Unit
   | 0, _, _, _, _, _ => timeout
-  | fuel + 1, config, parent, element, source, origin => do
+  | fuel + 1, config, incoming, element, source, origin => do
+      let parent ← liftConstruction origin (renewReceivingDestination incoming)
       let stored ← storedDestination source
       let storage ← getStorage stored.storage
       let finish ← liftLayout (packedEnd fuel config element storage.bytes stored.start)
       liftConstruction origin (recordCopy (.repeat source) parent)
       liftConstruction origin (writeElement parent (storage.bytes.extract stored.start finish))
+
+def restoreCompletedOwner (snapshot : PendingDestination) (incoming : DestinationId)
+    (carried : List DestinationId) : EvalM Unit := do
+  let .built originalCount := snapshot.progress | fault .flow
+  let current ← receivingDestination incoming
+  let state ← EvalM.get
+  if carried.any (fun id => (state.construction.destinations[id]?).any fun row =>
+      (match row.progress with | .built _ => true | _ => false) &&
+        descendsFrom state.construction id current) then pure ()
+  else do
+    let child ← getDestination current
+    let parent ← getDestination snapshot.capability.id
+    match parent.progress, child.progress with
+    | .suspended count expected, .abandoned | .suspended count expected, .cancelled =>
+        if count != originalCount || expected != current || child.use != .child snapshot.capability.id ||
+            { parent with progress := snapshot.progress } != snapshot then fault .flow
+        let state ← EvalM.get
+        EvalM.set { state with construction := { state.construction with
+          destinations := state.construction.destinations.set! snapshot.capability.id snapshot } }
+    | _, _ => pure ()
+
+def withOwnerExtension (stored : StoredValue) (allocate : EvalM DestinationId)
+    (action : DestinationId → EvalM α) : EvalM α := do
+  let snapshot ← match stored.destination with
+    | none => pure none
+    | some id => do
+        let parent ← getDestination id
+        pure (match parent.progress with | .built _ => some parent | _ => none)
+  let destination ← allocate
+  let guarded : EvalM α := fun state =>
+    let finish := fun (carriers : List Carrier) (result : ExecutionState → ExecutionStep α) (state' : ExecutionState) =>
+      match snapshot with
+      | none => result state'
+      | some parent =>
+          match restoreCompletedOwner parent destination
+              (carriers.filterMap fun carrier => match carrier with | .completed id => some id | _ => none) state' with
+          | .ok () final => result final
+          | .stop reason final => .stop reason final
+          | .escape target carriers final => .escape target carriers final
+          | .jump target kind final => .jump target kind final
+    match action destination state with
+    | .escape target carriers state' => finish carriers (.escape target carriers) state'
+    | .jump target kind state' =>
+        finish (match kind with | .breakValue carriers => carriers | .continueLoop => [])
+          (.jump target kind) state'
+    | result => result
+  guarded
+
+def prepareNamedCarrierAt (origin : OriginId) (token : ExitReservationId)
+    (incoming : DestinationId) (stored : StoredValue) : EvalM (Option Carrier) := do
+  let selected ← receivingDestination incoming
+  match (← EvalM.get).construction.exitReservations[token]? with
+  | some (.active (.named .awaitingSource) _ expected _) =>
+      if expected != selected || stored.destination != some selected then fault .flow
+      let parent ← getDestination selected
+      let count ← match parent.progress with
+        | .built count | .suspended count _ | .exiting count _ => pure count
+        | _ => fault .flow
+      if parent.storage != stored.storage || parent.capability.start != stored.start ||
+          !stored.ty.adaptsTo parent.capability.logicalType || count != stored.count then fault .flow
+      liftConstruction origin (markNamedReservation token)
+      pure (some (.pendingNamed token))
+  | some (.active .fresh _ _ _) => pure none
+  | _ => fault .flow
+
+def prepareNamedCarrier (origin : OriginId) (incoming : DestinationId)
+    (stored : StoredValue) : EvalM (Option Carrier) := do
+  let selected ← receivingDestination incoming
+  if stored.destination != some selected then pure none
+  else do
+    let state ← EvalM.get
+    let token := (List.range state.construction.exitReservations.size).reverse.find? fun (token : Nat) =>
+      match state.construction.exitReservations[token]? with
+      | some (.active (.named _) _ receiving _) => receiving == selected
+      | _ => false
+    match token with
+    | none => pure none
+    | some token =>
+        let parent ← getDestination selected
+        let count ← match parent.progress with
+          | .built count | .suspended count _ | .exiting count _ => pure count
+          | _ => fault .flow
+        if parent.storage != stored.storage || parent.capability.start != stored.start ||
+            !stored.ty.adaptsTo parent.capability.logicalType || count != stored.count then fault .flow
+        liftConstruction origin (markNamedReservation token)
+        pure (some (.pendingNamed token))
+
+def materializeNamedCarriers (origin : OriginId) (carriers : List Carrier) : EvalM (List Carrier) :=
+  carriers.mapM fun carrier => match carrier with
+    | .pendingNamed token => do pure (.completed (← liftConstruction origin (materializeNamedReservation token)))
+    | carrier => pure carrier
 
 def ownerDestination (module : LayoutEnv) (stored : StoredValue) (request : Core.ConstructionRequest)
     (knownCount : Option Nat) (origin : OriginId) : EvalM DestinationId := do

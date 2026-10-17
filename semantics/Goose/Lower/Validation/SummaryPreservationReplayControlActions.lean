@@ -48,7 +48,7 @@ theorem patchTerm (block : BlockId) (term : Term)
       (Goose.Lower.patchTerm block term le ls).2 upper := by
   rw [patchTerm_run]
   have next := appendInst_refined_witness blockBound ready.roots ready.effects closed delta
-  refine ⟨next.1, next.2, ready.symbols.patchTerm blockBound symbols, ?_, ready.slotsEq⟩
+  refine ⟨next.1, next.2, ready.symbols.patchTerm blockBound symbols, ?_, ready.slotsEq, ready.recipes.same rfl⟩
   intro current row
   simpa [LS.appendInst] using ready.current current row
 

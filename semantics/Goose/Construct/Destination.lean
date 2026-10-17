@@ -48,7 +48,7 @@ structure ReceivingAdaptation where
   request : ConstructionRequest
   layout : ReceivingLayout
   start : Nat
-  deriving Repr
+  deriving DecidableEq, Repr
 
 structure PendingDestination where
   capability : Core.Destination Ty
@@ -60,18 +60,46 @@ structure PendingDestination where
   rollbackEnd : Nat
   knownCount : Option Nat
   adaptation : Option ReceivingAdaptation := none
-  deriving Repr
+  deriving DecidableEq, Repr
 
 def PendingDestination.storage (destination : PendingDestination) : StorageId :=
   destination.backing.writeStorage
+
+inductive NamedReservationStage
+  | awaitingSource
+  | ready
+  | materialized
+  deriving DecidableEq, Repr
+
+inductive ExitReservationRole
+  | fresh
+  | named (stage : NamedReservationStage)
+  deriving DecidableEq, Repr
+
+inductive ExitReservation
+  | waiting (incoming : DestinationId)
+  | active (role : ExitReservationRole) (incoming selected : DestinationId) (snapshot : PendingDestination)
+  | restored
+  | released
+  deriving Repr
+
+inductive ExitSource
+  | newValue
+  | namedResult
+  deriving DecidableEq, Repr
+
+abbrev ExitReservationId := Nat
 
 structure ConstructionState where
   storage : Array ReceivingStorage
   destinations : Array PendingDestination
   events : List ConstructionEvent
   stdout : ByteArray
+  destinationSuccessors : List (DestinationId × DestinationId) := []
+  exitReservations : Array ExitReservation := #[]
+  destinationResumptions : List (DestinationId × PendingDestination) := []
 
-def ConstructionState.initial : ConstructionState := ⟨#[], #[], [], ByteArray.empty⟩
+def ConstructionState.initial : ConstructionState := ⟨#[], #[], [], ByteArray.empty, [], #[], []⟩
 
 inductive ConstructionFault
   | storage
@@ -104,6 +132,41 @@ def get : ConstructionM ConstructionState := fun state => .ok state state
 
 def set (state : ConstructionState) : ConstructionM Unit := fun _ => .ok () state
 end ConstructionM
+
+def destinationCurrentSteps : Nat → ConstructionState → DestinationId →
+    Except ConstructionFault DestinationId
+  | 0, _, _ => .error .ownership
+  | fuel + 1, state, id =>
+      if id < state.destinations.size then
+        match state.destinationSuccessors.lookup id with
+        | none => .ok id
+        | some next =>
+            if id < next then destinationCurrentSteps fuel state next else .error .ownership
+      else .error .destination
+
+def destinationCurrent (state : ConstructionState) (id : DestinationId) :
+    Except ConstructionFault DestinationId :=
+  destinationCurrentSteps (state.destinations.size + 1) state id
+
+theorem destinationCurrentSteps_zero (state : ConstructionState) (id : DestinationId) :
+    destinationCurrentSteps 0 state id = .error .ownership := rfl
+
+theorem destinationCurrentSteps_succ (fuel : Nat) (state : ConstructionState) (id : DestinationId) :
+    destinationCurrentSteps (fuel + 1) state id =
+      if id < state.destinations.size then
+        match state.destinationSuccessors.lookup id with
+        | none => .ok id
+        | some next =>
+            if id < next then destinationCurrentSteps fuel state next else .error .ownership
+      else .error .destination := rfl
+
+theorem destinationCurrent_result (state : ConstructionState) (id : DestinationId) :
+    destinationCurrent state id = destinationCurrentSteps (state.destinations.size + 1) state id := rfl
+
+theorem destinationCurrent_unaliased (state : ConstructionState) (id : DestinationId)
+    (inside : id < state.destinations.size) (unaliased : state.destinationSuccessors.lookup id = none) :
+    destinationCurrent state id = .ok id := by
+  simp [destinationCurrent, destinationCurrentSteps, inside, unaliased]
 
 private def lookupDestination (id : DestinationId) : ConstructionM PendingDestination := do
   match (← ConstructionM.get).destinations[id]? with
@@ -723,6 +786,256 @@ def openExitReplacement (supersededId : DestinationId) : ConstructionM Destinati
   emit (.begin id)
   pure id
 
+def releaseExitReservation (token : ExitReservationId) : ConstructionM Unit := do
+  let state ← ConstructionM.get
+  match state.exitReservations[token]? with
+  | some (.active ..) | some (.waiting _) | some .restored =>
+      ConstructionM.set { state with exitReservations := state.exitReservations.set! token .released }
+  | _ => ConstructionM.fail .protocol
+
+structure BorrowedWaitingExitReservation where
+  private mk ::
+  token : ExitReservationId
+  incoming : DestinationId
+
+def captureWaitingExitReservation (token : ExitReservationId) (state : ConstructionState) :
+    Option BorrowedWaitingExitReservation :=
+  match state.exitReservations[token]? with
+  | some (.waiting incoming) => some (BorrowedWaitingExitReservation.mk token incoming)
+  | _ => none
+
+theorem captureWaitingExitReservation_source (token : ExitReservationId) (state : ConstructionState)
+    (borrowed : BorrowedWaitingExitReservation)
+    (captured : captureWaitingExitReservation token state = some borrowed) :
+    borrowed.token = token ∧ state.exitReservations[token]? = some (.waiting borrowed.incoming) := by
+  unfold captureWaitingExitReservation at captured
+  split at captured
+  · cases captured
+    exact ⟨rfl, ‹_ = _›⟩
+  · cases captured
+
+def rearmExitReservation (borrowed : BorrowedWaitingExitReservation) : ConstructionM Unit := do
+  let token := borrowed.token
+  let incoming := borrowed.incoming
+  let state ← ConstructionM.get
+  match state.exitReservations[token]? with
+  | some .restored =>
+      let current ← match destinationCurrent state incoming with
+        | .ok current => pure current
+        | .error kind => ConstructionM.fail kind
+      let _ ← lookupDestination current
+      ConstructionM.set { state with exitReservations := state.exitReservations.set! token (.waiting incoming) }
+  | _ => ConstructionM.fail .protocol
+
+def cancelExitReservation (token : ExitReservationId) (carried : List DestinationId) : ConstructionM Unit := do
+  let state ← ConstructionM.get
+  match state.exitReservations[token]? with
+  | some .restored => pure ()
+  | some (.waiting _) => pure ()
+  | some (.active (.named _) _ _ _) =>
+      ConstructionM.set { state with exitReservations := state.exitReservations.set! token .restored }
+  | some (.active .fresh _ reserved snapshot) =>
+      let selected ← match destinationCurrent state reserved with
+        | .ok id => pure id
+        | .error kind => ConstructionM.fail kind
+      if carried.any (fun id => descendantOf state.destinations selected id) then pure ()
+      else
+        let destination ← lookupDestination selected
+        if active destination then abandonTree selected
+        if reserved != snapshot.capability.id then
+          let superseded ← lookupDestination snapshot.capability.id
+          match superseded.progress with
+          | .exiting _ expected =>
+              if expected != selected then ConstructionM.fail .ownership
+          | _ => ConstructionM.fail .protocol
+          replaceDestination snapshot.capability.id snapshot
+        else
+          let state ← ConstructionM.get
+          ConstructionM.set { state with
+            destinationResumptions := (selected, snapshot) :: state.destinationResumptions }
+        let state ← ConstructionM.get
+        ConstructionM.set { state with exitReservations := state.exitReservations.set! token .restored }
+  | _ => ConstructionM.fail .protocol
+
+def restoreNamedDestination (id : DestinationId) : ConstructionM Unit := do
+  let state ← ConstructionM.get
+  let tokens : List Nat := (List.range state.exitReservations.size).reverse.filter fun (token : Nat) =>
+    match state.exitReservations[token]? with
+    | some (.active .fresh _ selected snapshot) =>
+        selected != id && descendantOf state.destinations id snapshot.capability.id
+    | _ => false
+  for token in tokens do cancelExitReservation token []
+
+def renewReceivingDestination (incoming : DestinationId) : ConstructionM DestinationId := do
+  let state ← ConstructionM.get
+  let id ← match destinationCurrent state incoming with
+    | .ok id => pure id
+    | .error kind => ConstructionM.fail kind
+  let destination ← lookupDestination id
+  match destination.progress with
+  | .abandoned | .cancelled =>
+      let state ← ConstructionM.get
+      let some snapshot := state.destinationResumptions.lookup id | ConstructionM.fail .protocol
+      let storage ← lookupStorage snapshot.storage
+      let storage ← match snapshot.adaptation with
+        | some receiving =>
+            if hasPrefix receiving.layout receiving.request &&
+                !hasPrefix snapshot.layout snapshot.capability.request then
+              if snapshot.capability.start != receiving.start + 4 ||
+                  storage.bytes.size != receiving.start then ConstructionM.fail .ownership
+              pure { storage with bytes := storage.bytes ++ lengthPrefix }
+            else pure storage
+        | none => pure storage
+      if storage.bytes.size < snapshot.capability.start then ConstructionM.fail .ownership
+      let next := state.destinations.size
+      let capability := { snapshot.capability with id := next }
+      let replacement := { snapshot with
+        capability := capability
+        progress := .open 0
+        writeEnd := capability.start + (if hasPrefix snapshot.layout capability.request then 4 else 0) }
+      let ownerUpdate ← match snapshot.use with
+        | .receiver => pure none
+        | .child parent => do
+            let owner ← lookupDestination parent
+            match owner.progress with
+            | .suspended count expected =>
+                if expected != id then ConstructionM.fail .ownership
+                pure (some (parent, { owner with progress := .suspended count next }))
+            | _ => ConstructionM.fail .protocol
+        | .replacement parent => do
+            let owner ← lookupDestination parent
+            match owner.progress with
+            | .exiting count expected =>
+                if expected != id then ConstructionM.fail .ownership
+                pure (some (parent, { owner with progress := .exiting count next }))
+            | _ => ConstructionM.fail .protocol
+      ConstructionM.set { state with
+        destinations := state.destinations.push replacement
+        destinationSuccessors := (id, next) :: state.destinationSuccessors }
+      if let some (parent, owner) := ownerUpdate then replaceDestination parent owner
+      replaceStorage snapshot.storage storage
+      if hasPrefix snapshot.layout capability.request then
+        replaceStorage snapshot.storage { storage with bytes := storage.bytes ++ lengthPrefix }
+      emit (.begin next)
+      match snapshot.backing with
+      | .staged _ _ => emit (.stage next)
+      | .direct _ => pure ()
+      pure next
+  | _ => pure id
+
+private def exitFrontier : Nat → DestinationId → ConstructionM DestinationId
+  | 0, _ => ConstructionM.fail .ownership
+  | fuel + 1, id => do
+      let destination ← lookupDestination id
+      match destination.progress with
+      | .exiting _ replacement =>
+          let selected ← lookupDestination replacement
+          if selected.use != .replacement id then ConstructionM.fail .ownership
+          exitFrontier fuel replacement
+      | _ => pure id
+
+theorem exitFrontier_open (fuel id count : Nat) (state : ConstructionState)
+    (destination : PendingDestination)
+    (present : state.destinations[id]? = some destination)
+    (opened : destination.progress = .open count) :
+    exitFrontier (fuel + 1) id state = .ok id state := by
+  simp [exitFrontier, lookupDestination_result, present, opened, ConstructionM.get, bind, pure]
+
+private def prepareExitDestination (incoming : DestinationId) (source : ExitSource) :
+    ConstructionM (DestinationId × PendingDestination) := do
+  let named := source == .namedResult
+  let current ← renewReceivingDestination incoming
+  let state ← ConstructionM.get
+  let current ← if named then pure current else exitFrontier (state.destinations.size + 1) current
+  let snapshot ← lookupDestination current
+  let direct := match snapshot.progress with | .open 0 => true | _ => false
+  let selected ← if direct || named then pure current else openExitReplacement current
+  pure (selected, snapshot)
+
+theorem prepareExitDestination_equation (incoming : DestinationId) (source : ExitSource) :
+    prepareExitDestination incoming source = (do
+      let named := source == .namedResult
+      let current ← renewReceivingDestination incoming
+      let state ← ConstructionM.get
+      let current ← if named then pure current else exitFrontier (state.destinations.size + 1) current
+      let snapshot ← lookupDestination current
+      let direct := match snapshot.progress with | .open 0 => true | _ => false
+      let selected ← if direct || named then pure current else openExitReplacement current
+      pure (selected, snapshot)) := rfl
+
+def reserveExitDestination (incoming : DestinationId) (source : ExitSource) :
+    ConstructionM (ExitReservationId × DestinationId) := do
+  let (selected, snapshot) ← prepareExitDestination incoming source
+  let state ← ConstructionM.get
+  let token := state.exitReservations.size
+  ConstructionM.set { state with exitReservations := state.exitReservations.push (.active (if source == .namedResult then .named .awaitingSource else .fresh) incoming selected snapshot) }
+  pure (token, selected)
+
+def waitExitDestination (incoming : DestinationId) : ConstructionM ExitReservationId := do
+  let state ← ConstructionM.get
+  let token := state.exitReservations.size
+  ConstructionM.set { state with exitReservations := state.exitReservations.push (.waiting incoming) }
+  pure token
+
+def selectWaitingExitDestination (token : ExitReservationId) (source : ExitSource) :
+    ConstructionM DestinationId := do
+  let state ← ConstructionM.get
+  let some (.waiting incoming) := state.exitReservations[token]? | ConstructionM.fail .protocol
+  let (selected, snapshot) ← prepareExitDestination incoming source
+  let state ← ConstructionM.get
+  ConstructionM.set { state with exitReservations := state.exitReservations.set! token (.active (if source == .namedResult then .named .awaitingSource else .fresh) incoming selected snapshot) }
+  pure selected
+
+def markNamedReservation (token : ExitReservationId) : ConstructionM Unit := do
+  let state ← ConstructionM.get
+  let (incoming, selected) ← match state.exitReservations[token]? with
+    | some (.active (.named .awaitingSource) incoming selected _) => pure (incoming, selected)
+    | _ => ConstructionM.fail .protocol
+  let source ← lookupDestination selected
+  let count ← match source.progress with
+    | .built count | .suspended count _ | .exiting count _ => pure count
+    | _ => ConstructionM.fail .protocol
+  let storage ← lookupStorage source.storage
+  if source.capability.start > source.writeEnd || source.writeEnd > storage.bytes.size then
+    ConstructionM.fail .ownership
+  let snapshot := { source with progress := .built count }
+  let state ← ConstructionM.get
+  ConstructionM.set { state with exitReservations := state.exitReservations.set! token (.active (.named .ready) incoming selected snapshot) }
+
+def materializeNamedReservation (token : ExitReservationId) : ConstructionM DestinationId := do
+  let state ← ConstructionM.get
+  let (incoming, selected, snapshot) ← match state.exitReservations[token]? with
+    | some (.active (.named .ready) incoming selected snapshot) => pure (incoming, selected, snapshot)
+    | _ => ConstructionM.fail .protocol
+  restoreNamedDestination selected
+  let parent ← lookupDestination selected
+  if { parent with progress := snapshot.progress } != snapshot then ConstructionM.fail .ownership
+  let .built originalCount := snapshot.progress | ConstructionM.fail .protocol
+  match parent.progress with
+  | .built count => if count != originalCount then ConstructionM.fail .ownership
+  | .suspended count expected =>
+      if count != originalCount then ConstructionM.fail .ownership
+      let state ← ConstructionM.get
+      let current ← match destinationCurrent state expected with
+        | .ok id => pure id
+        | .error kind => ConstructionM.fail kind
+      let child ← lookupDestination current
+      if current != expected || child.use != .child selected ||
+          child.backing.receiverStorage != parent.storage then ConstructionM.fail .ownership
+      let storage ← lookupStorage parent.storage
+      if parent.writeEnd > storage.bytes.size then ConstructionM.fail .ownership
+      match child.backing with
+      | .direct _ => if child.rollbackEnd < parent.writeEnd then ConstructionM.fail .ownership
+      | .staged _ _ => pure ()
+      if active child then abandonTree current
+  | _ => ConstructionM.fail .protocol
+  let storage ← lookupStorage snapshot.storage
+  if snapshot.writeEnd > storage.bytes.size then ConstructionM.fail .ownership
+  replaceDestination selected snapshot
+  let state ← ConstructionM.get
+  ConstructionM.set { state with exitReservations := state.exitReservations.set! token (.active (.named .materialized) incoming selected snapshot) }
+  pure selected
+
 def protectedExitDiscarded (state : ConstructionState) (id replacementId : DestinationId) :
     Except ConstructionFault (List PendingDestination) := do
   let some replacement := state.destinations[replacementId]? | throw .destination
@@ -732,11 +1045,13 @@ def protectedExitDiscarded (state : ConstructionState) (id replacementId : Desti
   let some superseded := state.destinations[supersededId]? | throw .destination
   match superseded.progress with
   | .exiting _ expected => if expected != replacementId then throw .ownership
+  | .abandoned | .cancelled => pure ()
   | _ => throw .protocol
   let some destination := state.destinations[id]? | throw .destination
   if !active destination || destination.storage != replacement.storage ||
       destination.capability.start > replacement.capability.start ||
-      !descendantOf state.destinations supersededId id || id == replacementId then
+      !(descendantOf state.destinations supersededId id ||
+        descendantOf state.destinations id supersededId) || id == replacementId then
     throw .ownership
   pure (state.destinations.toList.reverse.filter fun destination =>
     destination.capability.id != replacementId &&
@@ -918,6 +1233,85 @@ def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := 
     | .replacement _ => ConstructionM.fail .protocol
   landCompletedReplacement replacementId supersededId count replacement superseded parentUpdate
 
+
+def exitLandingAnchor : Nat → DestinationId → StorageId → Option DestinationId →
+    ConstructionM (DestinationId × PendingDestination × List DestinationId)
+  | 0, _, _, _ => ConstructionM.fail .ownership
+  | fuel + 1, selected, storage, receiving => do
+      let replacement ← lookupDestination selected
+      let supersededId ← match replacement.use with
+        | .replacement id => pure id
+        | _ => ConstructionM.fail .protocol
+      let superseded ← lookupDestination supersededId
+      if superseded.storage != storage || supersededId ≥ selected then ConstructionM.fail .ownership
+      match superseded.progress with
+      | .exiting _ expected => if expected != selected then ConstructionM.fail .ownership
+      | .abandoned | .cancelled => pure ()
+      | _ => ConstructionM.fail .protocol
+      if receiving == some supersededId then pure (supersededId, superseded, [supersededId])
+      else
+        match superseded.use with
+        | .replacement _ =>
+            let (anchor, destination, chain) ← exitLandingAnchor fuel supersededId storage receiving
+            pure (anchor, destination, supersededId :: chain)
+        | _ =>
+            if receiving.isSome then ConstructionM.fail .ownership
+            else pure (supersededId, superseded, [supersededId])
+
+def commitExitReplacement (receiving : Option DestinationId) (replacementId : DestinationId) : ConstructionM Unit := do
+  let replacement ← lookupDestination replacementId
+  let count ← match replacement.progress with
+    | .built count => pure count
+    | _ => ConstructionM.fail .protocol
+  let state ← ConstructionM.get
+  let (anchorId, anchor, chain) ← exitLandingAnchor (state.destinations.size + 1) replacementId replacement.storage receiving
+  let parentUpdate ← match anchor.use with
+    | .receiver => pure none
+    | .child parentId => do
+        let parent ← lookupDestination parentId
+        match parent.progress with
+        | .suspended count expected =>
+            if expected != anchorId then ConstructionM.fail .ownership
+            pure (some (parentId, { parent with progress := .suspended count replacementId }))
+        | _ => ConstructionM.fail .protocol
+    | .replacement parentId => do
+        let parent ← lookupDestination parentId
+        match parent.progress with
+        | .exiting count expected =>
+            if expected != anchorId then ConstructionM.fail .ownership
+            pure (some (parentId, { parent with progress := .exiting count replacementId }))
+        | _ => ConstructionM.fail .protocol
+  landCompletedReplacement replacementId anchorId count replacement anchor parentUpdate
+  let state ← ConstructionM.get
+  ConstructionM.set { state with
+    destinationSuccessors := chain.map (fun id => (id, replacementId)) ++ state.destinationSuccessors }
+
+def landExitReplacementChain (replacementId : DestinationId) : ConstructionM Unit :=
+  commitExitReplacement none replacementId
+
+def landExitReplacementInto (receiving replacementId : DestinationId) : ConstructionM Unit :=
+  commitExitReplacement (some receiving) replacementId
+
+def landExitReservation (token : ExitReservationId) (built : DestinationId) : ConstructionM DestinationId := do
+  let state ← ConstructionM.get
+  let (incoming, selected) ← match state.exitReservations[token]? with
+    | some (.active .fresh incoming selected _) |
+      some (.active (.named .materialized) incoming selected _) => pure (incoming, selected)
+    | _ => ConstructionM.fail .protocol
+  let selected ← match destinationCurrent state selected with
+    | .ok id => pure id
+    | .error kind => ConstructionM.fail kind
+  if selected != built && !descendantOf state.destinations selected built then
+    ConstructionM.fail .ownership
+  let destination ← lookupDestination built
+  match destination.progress with
+  | .built _ => pure ()
+  | _ => ConstructionM.fail .protocol
+  let receiving ← match destinationCurrent state incoming with
+    | .ok id => pure id
+    | .error kind => ConstructionM.fail kind
+  if receiving != built then landExitReplacementInto receiving built
+  pure built
 
 def recordCopy (source : CopySource) (id : DestinationId) : ConstructionM Unit := do
   let destination ← writableDestination id

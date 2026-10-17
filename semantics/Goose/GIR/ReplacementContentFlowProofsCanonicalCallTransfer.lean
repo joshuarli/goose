@@ -286,8 +286,8 @@ theorem State.CanonicalWithin.call {module : Module} {states : Array State}
     {block : Block} (blockMember : block ∈ func.blocks.toList)
     (called : Inst.def value (.call fn args origin) ∈ block.insts) :
     (step module states func vt state (.def value (.call fn args origin))).CanonicalWithin func vt provenance := by
-  let exposed := ReplacementContentFlow.Model.touchValues vt state (accessOperands (.def value (.call fn args origin)))
-  have initial : exposed.CanonicalWithin func vt provenance := before.touchValues _
+  let exposed := state
+  have initial : exposed.CanonicalWithin func vt provenance := before
   have mutated := initial.callState_closed calleeAt effectsAt calleeBounded supported unique closed parameters
     contentExternal contracts contentTypes arguments references observed admitted blockMember called
   have argumentBounds : ∀ index, index < callee.params.length →

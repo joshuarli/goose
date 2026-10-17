@@ -1,0 +1,60 @@
+import Goose.Lower.Validation.ReplacementContentFlowSourceOccurrenceControlContracts
+import Goose.Lower.Validation.ReplacementContentFlowSourceOccurrenceAccessKernel
+import Goose.Lower.Validation.SummaryPreservationReplayTypedBounds
+import Goose.Lower.Validation.SummaryPreservationSourceContextEnvironment
+
+namespace Goose.Lower.Validation.ReplacementContentFlowSource
+
+open Goose.Core Goose.Core.Sound Goose.GIR SummaryPreservation
+
+theorem occurrenceReplay_bound {typingEnv : TEnv} {env : PEnv} {context : ContextId}
+    {results : Array (List RootRef)} {vt : Array (Option VTy)} {target : Core.Eff}
+    {scopeCount : Nat} {siteRoot : DemandNode} {siteTargets : List BlockId} (bound : Bound)
+    (source : SourceContextEnvironment typingEnv env context)
+    (child : ∀ expression, bound = .expr expression ∨ bound = .fromEnd expression → ∀ initial upper,
+      ExpressionOccurrenceReplayAt typingEnv env results vt target scopeCount siteRoot siteTargets expression initial upper) :
+    ∀ initial upper, BoundOccurrenceReplayAt typingEnv env results vt target scopeCount siteRoot siteTargets bound initial upper := by
+  intro initial upper here start finish before after typed replay ceiling ready sites targets generated native metadata continuation
+  cases bound with
+  | omitted => exact ⟨upper, ready, by simp [lowerBound, pure_run, Bnd.uses], (fun _ _ => rfl), .refl _ _, sites⟩
+  | expr expression | fromEnd expression =>
+    obtain ⟨integer, childFinish, childTyped⟩ := tyBound_child typed
+    obtain ⟨roots, middle, childReplay, tail⟩ := (st_bind_ok _ _ _ _).mp replay
+    have sourceEq := congrArg Prod.snd ((st_pure_ok _ _ _).mp tail)
+    dsimp only at sourceEq
+    subst after
+    obtain ⟨next, nextReady, value, retained, ledger, finalSites⟩ :=
+      child expression (by simp) initial upper (accessChildPresent here 0 rfl)
+        (.int integer) start childFinish before middle roots childTyped childReplay ceiling ready sites targets generated native metadata continuation
+    refine ⟨next, nextReady, ?_, retained, ?_, finalSites⟩
+    · intro live
+      simpa [lowerBound, bind_run, pure_run, Bnd.uses] using (value live).bound
+    · exact ledger.underRoot (accessChildNode 0 rfl)
+
+theorem accessBoundScalar {typingEnv : TEnv} {env : PEnv} {context : ContextId}
+    {vt : Array (Option VTy)} {bound : Bound} {start finish : Nat} {initial : LS}
+    (source : SourceContextEnvironment typingEnv env context)
+    (typed : tyBound typingEnv bound start = .ok ((), finish))
+    (generated : GeneratedBuilderState initial)
+    (native : NativeRows vt (lowerBound bound (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2)
+    (live : (lowerBound bound (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2.cur.isSome = true) :
+    ∀ value ∈ (lowerBound bound (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).1.uses,
+      valRefLike vt value = false := by
+  cases bound with
+  | omitted => simp [lowerBound, pure_run, Bnd.uses]
+  | expr expression | fromEnd expression =>
+    obtain ⟨integer, childFinish, childTyped⟩ := tyBound_child typed
+    have environment : lowerEnv typingEnv.mod typingEnv.vars env.impl.results.toList =
+        lowerEnv env.mod env.impl.vars env.impl.results.toList := by
+      rw [← source.tables.moduleEq, ← source.tables.variablesEq]
+    have expressionNative : NativeRows vt
+        (lowerExpr expression (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 := by
+      simpa only [lowerBound, bind_run, pure_run] using native
+    have expressionLive : (lowerExpr expression (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2.cur.isSome = true := by
+      simpa only [lowerBound, bind_run, pure_run] using live
+    have scalar := expressionNative.scalar_expression generated childTyped
+      (value := (lowerExpr expression (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).1)
+      (by rw [environment]) expressionLive rfl
+    simpa [lowerBound, bind_run, pure_run, Bnd.uses] using scalar
+
+end Goose.Lower.Validation.ReplacementContentFlowSource

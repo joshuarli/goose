@@ -133,9 +133,8 @@ theorem storage_lowerExpr (expr : Expr) {env : Core.TEnv} (sourceTypes : SourceR
     · intro state current bounds
       exact storage_lowerBlock elseBody sourceTypes.exprEnv elseSource results none [] true current trivial
     · intro _ _ _ _ state
-      exact (StorageAt.joinValue _ state _ _ _ _).bind
-        ((StorageAt.recordValueRootRecipe _ _ _ (sourceBlockScope thenBody)).bind
-          (StorageAt.pure _ _ _))
+      apply (StorageAt.joinValue _ state _ _ _ _).bind
+      exact (StorageAt.recordValueRootRecipe _ _ _ (sourceBlockScope thenBody)).bind (StorageAt.pure _ _ _)
 termination_by sizeOf expr
 
 theorem storage_lowerPlace (place : Place) {env : Core.TEnv} (sourceTypes : SourceReadableEnvironment env)

@@ -33,16 +33,6 @@ private theorem emits_unchanged (action : B α)
   rw [run] at same
   exact .of_blocks same
 
-theorem ReplacementSitesFree.recordValueRootRecipe (le : LEnv) (before : LS) (value : ValueId)
-    (sourceScope : ScopeId) :
-    ReplacementSitesFree (root := root) (targets := targets) le before
-      (Goose.Lower.recordValueRootRecipe value sourceScope) := by
-  refine .of_runs ?_ (types_recordValueRootRecipe value sourceScope)
-    (generatedTargetFrame_recordValueRootRecipe none value sourceScope)
-  apply emits_unchanged
-  intro env state
-  rw [recordValueRootRecipe_run]
-
 private theorem emits_newBlock (types : List VTy) : EmitsOnlyRun NotReplacement (newBlock types) := by
   intro le before result after run
   rw [newBlock_run_general] at run

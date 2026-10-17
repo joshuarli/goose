@@ -105,6 +105,30 @@ private def genericOwnerScalarArgument : Core.Module :=
         body := .mk 0 [] (some (.lit .i64 1)) },
     contexts := input.contexts.modify 2 fun context => { context with varRoots := [(0, [.global 0])] } }
 #guard match Core.validate genericOwnerScalarArgument with | .error rejection => rejection.rule == .whole | _ => false
-#guard match GIR.validate (lower genericOwnerScalarArgument) with | .error rejection => rejection.code == .v060 | _ => false
+#guard (GIR.validate (lower genericOwnerScalarArgument)).toBool
+
+private def separateOwnerScalarArgument : Core.Module :=
+  let input := genericOwnerScalarArgument
+  let owner := Ty.growshrink (.int .i64)
+  { input with
+    globals := input.globals.push ⟨"owner", owner, .mutable, .arrLit owner [], 0⟩,
+    impls := input.impls.modify 2 fun impl =>
+      { impl with summary := .known ⟨[], [], [], [], [], false, false⟩ },
+    contexts := input.contexts.modify 1 fun context =>
+      { context with varRoots := [(0, [.global 1])] } }
+
+private def genericOwnerGrowArgument : Core.Module :=
+  let input := genericOwnerScalarArgument
+  let owner := Ty.growshrink (.int .i64)
+  { input with
+    globals := input.globals.modify 0 fun global =>
+      { global with ty := owner, init := .arrLit owner [] },
+    impls := input.impls.modify 2 fun impl =>
+      { impl with vars := #[⟨"q", .ref .readOnly owner, .immutable, 0, 0⟩] } }
+
+#guard (Core.validate separateOwnerScalarArgument).toBool
+#guard (GIR.validate (lower separateOwnerScalarArgument)).toBool
+#guard match Core.validate genericOwnerGrowArgument with | .error rejection => rejection.rule == .whole | _ => false
+#guard match GIR.validate (lower genericOwnerGrowArgument) with | .error rejection => rejection.code == .v060 | _ => false
 
 end Goose.Lower.Validation.ReplacementEmptyContentChecks

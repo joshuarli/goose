@@ -30,11 +30,13 @@ inductive Value
 inductive Carrier
   | register (value : Value)
   | completed (destination : DestinationId)
+  | pendingNamed (ticket : ExitReservationId)
   deriving Repr
 
 inductive Channel
   | register (ty : Ty)
   | construct (destination : DestinationId)
+  | completion (ticket : ExitReservationId)
   deriving Repr
 
 inductive ExecutionResult

@@ -80,6 +80,23 @@ theorem SnapshotSourceAction.lowerArgs {le : LEnv} (args : List Arg)
   ⟨source, dense_lowerArgs args, advB_lowerArgs args, generatedTargets_lowerArgs none args,
     types_lowerArgs args, generatedTargetFrame_lowerArgs none args⟩
 
+theorem SnapshotSourceAction.recordReadValueRootRecipe (le : LEnv) (loop : Option LoopCtx)
+    (value : ValueId) (place : Place) :
+    SnapshotSourceAction le loop (Goose.Lower.recordReadValueRootRecipe value place) := by
+  refine ⟨SnapshotTraceRun.same_values (dense_recordReadValueRootRecipe value place)
+    (advB_recordReadValueRootRecipe value place) (types_recordReadValueRootRecipe value place)
+    (generatedTargetFrame_recordReadValueRootRecipe loop value place) ?_,
+    dense_recordReadValueRootRecipe value place, advB_recordReadValueRootRecipe value place,
+    generatedTargets_recordReadValueRootRecipe loop value place, types_recordReadValueRootRecipe value place,
+    generatedTargetFrame_recordReadValueRootRecipe loop value place⟩
+  intro before result after run
+  have values : (Goose.Lower.recordReadValueRootRecipe value place le before).2.vals = before.vals := by
+    cases place <;> simp only [recordReadValueRootRecipe_run] <;> first
+      | rfl
+      | (split <;> simp only [recordValueRootSource_run] <;> rfl)
+  rw [run] at values
+  exact congrArg Array.size values
+
 theorem SnapshotSourceAction.read (le : LEnv) (loop : Option LoopCtx)  :
     SnapshotSourceAction le loop (read : B LEnv) := by
   refine ⟨SnapshotTraceRun.same_values (dense_read) (advB_read) (types_read)

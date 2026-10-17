@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.CfgReadRecipes
 import Goose.Lower.Validation.CfgEntryTargets
 
 namespace Goose.Lower.Validation
@@ -84,6 +85,12 @@ theorem entry_emitTerm (loop : Option LoopCtx) (term : Term)
   apply EntryRun.of_targets (advB_emitTerm term)
   intro env before bounded targets
   exact bounded.emitTerm term (references before targets) env
+
+theorem entry_recordReadValueRootRecipe (loop : Option LoopCtx) (value : ValueId) (place : Place) :
+    EntryRun loop (recordReadValueRootRecipe value place) := by
+  apply EntryRun.of_targets (advB_recordReadValueRootRecipe value place)
+  intro env before bounded _
+  exact bounded.of_blocks (recordReadValueRootRecipe_tables value place env before).1
 
 theorem entry_recordValueRootRecipe (loop : Option LoopCtx) (value : ValueId) (sourceScope : ScopeId) :
     EntryRun loop (recordValueRootRecipe value sourceScope) := by

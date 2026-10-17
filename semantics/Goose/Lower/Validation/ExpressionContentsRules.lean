@@ -28,6 +28,20 @@ theorem freshContentsEvidence_intrinsic {le : LEnv} {before after : LS}
   apply freshContentsEvidence_definition checked bounded live run
   cases intrinsic <;> simp only [ContentsOperation, typedPermissions, recorded, beq_self_eq_true]
 
+theorem FreshContentsEvidence.recordReadValueRootRecipe {le : LEnv} {first : Nat}
+    {before : LS} {value : ValueId} (evidence : FreshContentsEvidence le first before value)
+    (place : Place) :
+    FreshContentsEvidence le first (Goose.Lower.recordReadValueRootRecipe value place le before).2 value := by
+  have values : (Goose.Lower.recordReadValueRootRecipe value place le before).2.vals = before.vals := by
+    cases place <;> simp only [recordReadValueRootRecipe_run] <;> first
+      | rfl
+      | (split <;> simp only [recordValueRootSource_run] <;> rfl)
+  have blocks : (Goose.Lower.recordReadValueRootRecipe value place le before).2.blocks = before.blocks := by
+    cases place <;> simp only [recordReadValueRootRecipe_run] <;> first
+      | rfl
+      | (split <;> simp only [recordValueRootSource_run] <;> rfl)
+  simpa only [FreshContentsEvidence, permissionFunc, values, blocks] using evidence
+
 theorem lowerExpr_read_fresh_contents_of_place {le : LEnv} {before middle after : LS}
     {place : Place} {address value : ValueId} {mu : Mutability} {target : Ty} {current : BlockId}
     (placeRun : lowerPlace place le before = (address, middle))
@@ -38,9 +52,13 @@ theorem lowerExpr_read_fresh_contents_of_place {le : LEnv} {before middle after 
   have typed : (Op.load address).resultTy (tyEnv le middle) = .ok (.data (.ref .mutable target)) := by
     simp [Op.resultTy, TyEnv.refTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, placeTyped,
       pure, Except.pure, bind, Except.bind]
-  have emitted : emitDef (.load address) le middle = (value, after) := by
-    simpa only [lowerExpr, bind_run, placeRun] using run
-  exact freshContentsEvidence_intrinsic (.load _) typed checked bounded live emitted
+  let emitted := emitDef (.load address) le middle
+  have shape : (emitted.1, (recordReadValueRootRecipe emitted.1 place le emitted.2).2) =
+      (value, after) := by
+    simpa only [lowerExpr, bind_run, placeRun, pure_run, emitted] using run
+  cases shape
+  exact (freshContentsEvidence_intrinsic (.load _) typed checked bounded live
+    (rfl : emitDef (.load address) le middle = emitted)).recordReadValueRootRecipe place
 
 theorem lowerExpr_pop_fresh_contents_of_owner {le : LEnv} {before middle after : LS}
     {owner : Place} {address value : ValueId} {mu : Mutability} {ownerTy target : Ty}

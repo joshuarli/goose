@@ -34,7 +34,7 @@ theorem lowerContextRootCeiling_below_refined (module : Core.Module) (ctx : Cont
         · intro candidate candidateMember
           have same : candidate = index := RootRef.param.inj (List.mem_singleton.mp candidateMember)
           subst candidate
-          simpa only [lowerContextAt, lowerImpl, List.length_map, Array.length_toList] using
+          simpa only [lowerContextAt, lowerImpl, lowerImplFromState, List.length_map, Array.length_toList] using
             (Array.getElem?_eq_some_iff.mp parameterRow).1
         · simp
       · simp at selected

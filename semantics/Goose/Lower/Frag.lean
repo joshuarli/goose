@@ -33,6 +33,30 @@ theorem bind_run (x : B α) (f : α → B β) (le : LEnv) (ls : LS) :
 
 theorem pure_run (a : α) (le : LEnv) (ls : LS) : (pure a : B α) le ls = (a, ls) := rfl
 
+theorem lowerExpr_read_run (place : Place) (le : LEnv) (state : LS) :
+    lowerExpr (.read place) le state =
+      let (address, state1) := lowerPlace place le state
+      let (value, state2) := emitDef (.load address) le state1
+      let (_, state3) := recordReadValueRootRecipe value place le state2
+      (value, state3) := by
+  rfl
+
+theorem recordValueRootSource_run (value : ValueId) (source : ValueRootSource) (le : LEnv) (state : LS) :
+    recordValueRootSource value source le state =
+      ((), { state with valueRootRecipes :=
+        if state.cur.isSome && (match state.vals[value]?.join with
+          | some (.data type) => type.isRefLike
+          | some (.view ..) => true
+          | none => false)
+        then state.valueRootRecipes.push (value, source)
+        else state.valueRootRecipes }) := by
+  unfold recordValueRootSource
+  simp only [modify, modifyGet, MonadStateOf.modifyGet]
+  cases enabled : state.cur.isSome && (match state.vals[value]?.join with
+    | some (.data type) => type.isRefLike
+    | some (.view ..) => true
+    | none => false) <;> simp [enabled]
+
 theorem recordValueRootRecipe_run (value : ValueId) (sourceScope : ScopeId) (le : LEnv) (state : LS) :
     recordValueRootRecipe value sourceScope le state =
       ((), { state with valueRootRecipes :=
@@ -40,14 +64,65 @@ theorem recordValueRootRecipe_run (value : ValueId) (sourceScope : ScopeId) (le 
           | some (.data type) => type.isRefLike
           | some (.view ..) => true
           | none => false)
-        then state.valueRootRecipes.push (value, sourceScope)
+        then state.valueRootRecipes.push (value, .conditionalScope sourceScope)
         else state.valueRootRecipes }) := by
-  unfold recordValueRootRecipe
-  simp only [modify, modifyGet, MonadStateOf.modifyGet]
-  cases enabled : state.cur.isSome && (match state.vals[value]?.join with
-    | some (.data type) => type.isRefLike
-    | some (.view ..) => true
-    | none => false) <;> simp [enabled]
+  simpa [recordValueRootRecipe] using
+    recordValueRootSource_run value (.conditionalScope sourceScope) le state
+
+theorem recordReadValueRootRecipe_run (value : ValueId) (place : Place) (le : LEnv) (state : LS) :
+    recordReadValueRootRecipe value place le state =
+      match place with
+      | .var variableId =>
+        if (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) then
+          recordValueRootSource value (.refSliceVar variableId) le state
+        else ((), state)
+      | _ => ((), state) := by
+  cases place with
+  | var variableId =>
+    cases enabled : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+      simp [recordReadValueRootRecipe, bind_run, read_apply, pure_run, enabled]
+  | global _ => simp [recordReadValueRootRecipe, pure_run]
+  | deref _ => simp [recordReadValueRootRecipe, pure_run]
+  | elem _ _ _ => simp [recordReadValueRootRecipe, pure_run]
+  | field _ _ => simp [recordReadValueRootRecipe, pure_run]
+
+theorem recordValueRootSource_push_source (value : ValueId) (source : ValueRootSource)
+    (le : LEnv) (state : LS) (recordedSource : ValueRootSource)
+    (recorded :
+      (recordValueRootSource value source le state).2.valueRootRecipes =
+        state.valueRootRecipes.push (value, recordedSource)) :
+    recordedSource = source ∧ state.cur.isSome = true ∧
+      (match state.vals[value]?.join with
+        | some (.data type) => type.isRefLike
+        | some (.view ..) => true
+        | none => false) = true := by
+  rw [recordValueRootSource_run] at recorded
+  by_cases current : state.cur.isSome
+  · by_cases live : (match state.vals[value]?.join with
+      | some (.data type) => type.isRefLike
+      | some (.view ..) => true
+      | none => false) = true
+    · simp [current, live] at recorded
+      have atLast := congrArg (fun recipes : Array (ValueId × ValueRootSource) =>
+        recipes[state.valueRootRecipes.size]?) recorded
+      simp only [Array.getElem?_push_size, Option.some.injEq] at atLast
+      exact ⟨(congrArg Prod.snd atLast).symm, current, live⟩
+    · simp [current, live] at recorded
+  · simp [current] at recorded
+
+theorem recordReadValueRootRecipe_push_source (value : ValueId) (variableId : VarId)
+    (le : LEnv) (state : LS) (source : ValueRootSource)
+    (recorded :
+      (recordReadValueRootRecipe value (.var variableId) le state).2.valueRootRecipes =
+        state.valueRootRecipes.push (value, source)) :
+    source = .refSliceVar variableId ∧
+      (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) = true := by
+  rw [recordReadValueRootRecipe_run] at recorded
+  by_cases readSource : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) = true
+  · simp [readSource] at recorded
+    have inversion := recordValueRootSource_push_source value (.refSliceVar variableId) le state source recorded
+    exact ⟨inversion.1, readSource⟩
+  · simp [readSource] at recorded
 
 theorem bind_eq {x : B α} {f : α → B β} {le : LEnv} {ls : LS} {r : β} {ls' : LS} :
     (x >>= f) le ls = (r, ls') ↔ ∃ a ls1, x le ls = (a, ls1) ∧ f a le ls1 = (r, ls') := by
@@ -725,10 +800,10 @@ theorem AdvB.bind {x : B α} {f : α → B β} (hx : AdvB x) (hf : ∀ a, AdvB (
   obtain ⟨a, ls1, h1, h2⟩ := bind_eq.mp h
   exact (hx _ _ _ _ h1).trans (hf a _ _ _ _ h2)
 
-theorem advB_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
-    AdvB (recordValueRootRecipe value sourceScope) := by
+theorem advB_recordValueRootSource (value : ValueId) (source : ValueRootSource) :
+    AdvB (recordValueRootSource value source) := by
   intro le state result after run
-  rw [recordValueRootRecipe_run] at run
+  rw [recordValueRootSource_run] at run
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj run
   refine {
     ext := ?_
@@ -747,10 +822,35 @@ theorem advB_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
       | some (.data type) => type.isRefLike
       | some (.view ..) => true
       | none => false)
-    · refine ⟨[(value, sourceScope)], ?_⟩
+    · refine ⟨[(value, source)], ?_⟩
       simp [enabled]
     · refine ⟨[], ?_⟩
       simp [enabled]
+
+theorem advB_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    AdvB (recordValueRootRecipe value sourceScope) := by
+  simpa [recordValueRootRecipe] using
+    advB_recordValueRootSource value (.conditionalScope sourceScope)
+
+theorem advB_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    AdvB (recordReadValueRootRecipe value place) := by
+  cases place with
+  | var variableId =>
+    unfold recordReadValueRootRecipe
+    refine AdvB.bind ?_ fun le => ?_
+    · intro env state result after run
+      rw [read_apply] at run
+      obtain ⟨rfl, rfl⟩ := Prod.mk.inj run
+      exact .refl _
+    · by_cases refSlice : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice)
+      · simp [refSlice]
+        exact advB_recordValueRootSource value (.refSliceVar variableId)
+      · simp [refSlice]
+        exact AdvB.pure _
+  | global _ => simp [recordReadValueRootRecipe]; exact AdvB.pure _
+  | deref _ => simp [recordReadValueRootRecipe]; exact AdvB.pure _
+  | elem _ _ _ => simp [recordReadValueRootRecipe]; exact AdvB.pure _
+  | field _ _ => simp [recordReadValueRootRecipe]; exact AdvB.pure _
 
 theorem advB_emitDef (op : Op) : AdvB (emitDef op) := fun _ _ _ _ h => adv_emitDef h
 theorem advB_emitEffect (e : Effect) : AdvB (emitEffect e) := fun _ _ _ _ h => adv_emitEffect h
@@ -1629,7 +1729,9 @@ theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact advB_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact AdvB.bind (advB_lowerPlace p) fun _ => advB_emitDef _
+    exact AdvB.bind (advB_lowerPlace p) fun r =>
+      AdvB.bind (advB_emitDef (.load r)) fun value =>
+        AdvB.bind (advB_recordReadValueRootRecipe value p) fun _ => AdvB.pure value
   | .ref m p => by
     simp only [lowerExpr]
     exact AdvB.bind (advB_lowerPlace p) fun r => advB_borrowTo m r

@@ -25,6 +25,20 @@ theorem result_touchValues (f : Func) (vt : Array (Option VTy)) (state : State)
     result f vt (touchValues vt state accesses) value op = result f vt state value op := by
   cases op <;> rfl
 
+theorem callState_result_touchValues (module : Module) (states : Array State) (func : Func)
+    (types : Array (Option VTy)) (state : State) (accesses args : List ValueId) (fn : FnId) :
+    (callState module states func (touchValues types state accesses) fn args).1 =
+      (callState module states func state fn args).1 := by
+  cases calleeAt : module.funcs[fn]? with
+  | none => simp [callState,calleeAt]
+  | some callee =>
+      cases effectsAt : states[fn]? with
+      | none => simp [callState,calleeAt,effectsAt]
+      | some effects =>
+          rw [callState_result _ _ _ _ _ _ _ _ calleeAt effectsAt,
+            callState_result _ _ _ _ _ _ _ _ calleeAt effectsAt]
+          rfl
+
 theorem step_def_values (m : Module) (states : Array State) (f : Func)
     (vt : Array (Option VTy)) (state : State) (value : ValueId) (op : Op) :
     (step m states f vt state (.def value op)).values = addFlow state.values value
@@ -34,7 +48,7 @@ theorem step_def_values (m : Module) (states : Array State) (f : Func)
             else .known []
         | _ => result f vt state value op) := by
   cases op <;> simp only [step, Id.run_pure, touchValues_values, result_touchValues]
-  rw [callState_values, touchValues_values]
+  rw [callState_values,callState_result_touchValues]
 
 theorem step_def_values_within {m : Module} {states : Array State} {f observer : Func}
     {vt : Array (Option VTy)} {state : State} {value : ValueId} {op : Op}
@@ -115,7 +129,7 @@ theorem step_returned (m : Module) (states : Array State) (f : Func)
   cases inst with
   | «def» value op =>
       cases op <;> simp only [step, Id.run_pure, touchValues_returned]
-      rw [callState_returned, touchValues_returned]
+      rw [callState_returned]
   | eff effect =>
       cases effect <;> simp only [step, Id.run_pure, touchValues_returned]
       split

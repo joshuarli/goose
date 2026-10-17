@@ -106,6 +106,16 @@ def TyEnv.destTy (env : TyEnv) (v : ValueId) : TyR (Ty × ConstructionRequest) :
   | .dest t r => pure (t,r)
   | _ => tyErr "expected open destination"
 
+def TyEnv.receivingTy (env : TyEnv) (v : ValueId) : TyR (Ty × ConstructionRequest) := do
+  match ← env.valTy v with
+  | .receiving t r => pure (t,r)
+  | _ => tyErr "expected receiving handle"
+
+def TyEnv.exitReservationTy (env : TyEnv) (v : ValueId) : TyR (Ty × ConstructionRequest) := do
+  match ← env.valTy v with
+  | .exitReservation t r => pure (t,r)
+  | _ => tyErr "expected exit reservation"
+
 def TyEnv.builtTy (env : TyEnv) (v : ValueId) : TyR (Ty × ConstructionRequest) := do
   match ← env.valTy v with
   | .built t r => pure (t,r)
@@ -186,13 +196,69 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
   | .destFinish destination _ => do
     let (ty, request) ← env.destTy destination
     pure (.built ty request)
+  | .destPrepareNamed destination slot _ => do
+    let (ty, request) ← env.destTy destination
+    let some localSlot := env.slots[slot]? | tyErr "named preparation slot outside table"
+    let _ ← env.namedResult slot
+    unless request == .value && localSlot.ty.adaptsTo ty do
+      tyErr "named preparation slot differs from destination value layout"
+    pure (.dest ty request)
   | .destNamed slot _ => do
     let result ← env.namedResult slot
     pure (carrierType result)
-  | .resultExitDest position _ => env.resultDestination env.results position
-  | .targetDest target position _ => do
+  | .receivingOpen destination => do
+    let (ty, request) ← env.destTy destination
+    pure (.receiving ty request)
+  | .targetReceiving target position _ => do
     let some results := env.targets[target]? | tyErr "target outside table"
-    env.resultDestination results position
+    match ← env.resultDestination results position with
+    | .dest ty request => pure (.receiving ty request)
+    | _ => tyErr "target result has no receiving channel"
+  | .destRenew receiving => do
+    let (ty, request) ← env.receivingTy receiving
+    pure (.dest ty request)
+  | .destRefresh receiving previous => do
+    let (ty, request) ← env.receivingTy receiving
+    unless (← env.destTy previous) == (ty,request) do tyErr "refreshed writer differs from receiving protocol"
+    pure (.dest ty request)
+  | .exitReserve receiving source _ => do
+    let (ty, request) ← env.receivingTy receiving
+    if let .namedAlias slot := source then
+      let named ← env.namedResult slot
+      unless named.request matches .value | .elementRun do
+        tyErr "named alias candidate is not a constructed result"
+      let namedRequest : ConstructionRequest :=
+        if named.request == .value then .value else .elementRun
+      unless (named.ty, namedRequest) == (ty,request) do
+        tyErr "named alias candidate differs from receiving protocol"
+    pure (.exitReservation ty request)
+  | .exitWait receiving => do
+    let (ty, request) ← env.receivingTy receiving
+    pure (.exitReservation ty request)
+  | .exitIsNamed ticket => do
+    let _ ← env.exitReservationTy ticket
+    pure (.data .bool)
+  | .exitAdopt receiving built => do
+    let expected ← env.receivingTy receiving
+    unless (← env.builtTy built) == expected do tyErr "adopted completion differs from receiving protocol"
+    pure (.exitReservation expected.1 expected.2)
+  | .reservedDest ticket => do
+    let (ty, request) ← env.exitReservationTy ticket
+    pure (.dest ty request)
+  | .reservedNamed ticket _ => do
+    let (ty, request) ← env.exitReservationTy ticket
+    pure (.built ty request)
+  | .exitLand ticket built _ => do
+    let expected ← env.exitReservationTy ticket
+    unless (← env.builtTy built) == expected do tyErr "exit landing result differs from reservation"
+    pure (.built expected.1 expected.2)
+  | .receivingCancel receiving carried _ => do
+    let (ty, request) ← env.receivingTy receiving
+    for carrier in carried do
+      match ← env.valTy carrier with
+      | .built _ _ => pure ()
+      | _ => tyErr "receiving cancellation carriers must be completions"
+    pure (.cancelled ty request)
   | .destAbandonNamed slot replacement _ => do
     let result ← env.namedResult slot
     unless (← env.valTy replacement) == carrierType result do tyErr "named replacement result mismatch"

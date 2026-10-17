@@ -164,9 +164,12 @@ theorem value_lowerExpr : ∀ expr : Expr, ValueRun (lowerExpr expr)
   | .bool _ => by
     simp only [lowerExpr]
     exact value_emitDef _
-  | .read _ => by
+  | .read place => by
     simp only [lowerExpr]
-    exact ValueRun.prepend fun _ => value_emitDef _
+    exact ValueRun.prepend fun _ =>
+      ValueRun.post (value_emitDef _)
+        (fun value => advB_recordReadValueRootRecipe value place)
+        (fun value => dead_recordReadValueRootRecipe value place)
   | .slice _ _ _ _ _ => by
     simp only [lowerExpr]
     exact ValueRun.prepend fun _ => ValueRun.prepend fun _ => ValueRun.prepend fun _ => value_emitDef _

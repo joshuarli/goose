@@ -28,6 +28,8 @@ theorem specializedContentResult_core_accepted :
     Core.validate specializedContentResult = .ok () := by
   cbv
 
+attribute [local cbv_opaque] Goose.GIR.replacementContentFlow
+
 theorem specializedContentResult_gir_accepted :
     GIR.validate (lower specializedContentResult) = .ok () := by
   cbv

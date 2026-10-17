@@ -6,7 +6,7 @@ open Goose.Core Goose.Core.Sound Goose.GIR
 
 theorem readExpression {typingEnv : TEnv} {env : PEnv} {context : ContextId} {place : Place} {ty : Ty}
     {typingStart typingFinish : Nat} {before after : RState} {sourceRoots : List RootRef}
-    {results : Array (List RootRef)} {vt : Array (Option VTy)} {target : Core.Eff}
+    {results : Array (List RootRef)} {vt : Array (Option VTy)} {target : Core.Eff} {siteRoot : DemandNode}
     {scopeCount : Nat} {ls : LS} {upper : Prov}
     (checked : SourceReadableEnvironment typingEnv) (tables : SourceRootTables typingEnv env)
     (contextRow : env.mod.contexts[context]? = some env.ctx)
@@ -37,7 +37,10 @@ theorem readExpression {typingEnv : TEnv} {env : PEnv} {context : ContextId} {pl
       place = .deref (.read (.var variableId)) → typingEnv.vars[variableId]? = some localVar →
       localVar.ty.isRefSlice = true → ls.cur.isSome = true →
       vt[(lowerExpr (.read (.var variableId)) (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1]? =
-        some (some (.data localVar.ty))) :
+        some (some (.data localVar.ty)))
+    (metadata : SourceCanonicalRootFloors.RecipeMetadataProjects env siteRoot
+      (lowerContextAt env.mod env.ctx env.impl)
+      (lowerExpr (.read place) (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).2) :
     ∃ next, ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
         (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
         (typedContextSlotUpper env.mod env.ctx env.impl)
@@ -47,7 +50,7 @@ theorem readExpression {typingEnv : TEnv} {env : PEnv} {context : ContextId} {pl
           (lowerExpr (.read place) (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).2
           (lowerExpr (.read place) (lowerEnv env.mod env.impl.vars env.impl.results.toList) ls).1 sourceRoots (.data ty)) ∧
       ∀ old, old < upper.vals.size → rootsAt next.vals old = rootsAt upper.vals old := by
-  obtain ⟨next, completed, value, retained, _⟩ := readExpressionWithOrigins checked tables contextRow implementationRow typed ready source wholeEffect placeStep resultType holderType
+  obtain ⟨next, completed, value, retained, _⟩ := readExpressionWithOrigins checked tables contextRow implementationRow typed ready source wholeEffect placeStep resultType holderType metadata
   exact ⟨next, completed, value, retained⟩
 
 end Goose.Lower.Validation.SummaryPreservation.ReplayBuilder

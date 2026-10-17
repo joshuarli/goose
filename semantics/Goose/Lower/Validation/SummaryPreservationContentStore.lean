@@ -26,6 +26,8 @@ def contentElementStore : Module :=
 theorem contentElementStore_core_accepted : Core.validate contentElementStore = .ok () := by
   cbv
 
+attribute [local cbv_opaque] Goose.GIR.replacementContentFlow
+
 theorem contentElementStore_gir_accepted :
     GIR.validate (lower contentElementStore) = .ok () := by
   cbv

@@ -52,7 +52,8 @@ theorem lowerExpr_generated_typed (e : Expr)
     have lowering := run
     simp only [lowerExpr] at lowering
     obtain ⟨address, mid, placeRun, emitted⟩ := bind_eq.mp lowering
-    have midLive := (dead_emitDef (.load address)).live_before emitted live
+    have midLive := ((dead_emitDef (.load address)).bind fun value =>
+      (dead_recordReadValueRootRecipe value p).bind fun _ => DeadRun.pure value).live_before emitted live
     obtain ⟨mu, typed⟩ := lowerPlace_generated_typed p placeSource placeRun midLive
     cases current : mid.cur with
     | none => simp [current] at midLive
@@ -867,7 +868,8 @@ theorem lowerExpr_generated_contents (expr : Expr)
     have lowering := run
     simp only [lowerExpr] at lowering
     obtain ⟨address, middle, placeRun, emitted⟩ := bind_eq.mp lowering
-    have middleLive := (dead_emitDef (.load address)).live_before emitted live
+    have middleLive := ((dead_emitDef (.load address)).bind fun value =>
+      (dead_recordReadValueRootRecipe value place).bind fun _ => DeadRun.pure value).live_before emitted live
     have middleGenerated := generated.lowerPlace place placeRun
     cases current : middle.cur with
     | none => simp [current] at middleLive

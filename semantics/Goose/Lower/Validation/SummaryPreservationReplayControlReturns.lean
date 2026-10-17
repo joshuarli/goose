@@ -68,7 +68,10 @@ theorem coerceResult (value : ValueId) (origin : OriginId) (sourceRoots : List R
       coerceResult_refined_witness_growth origin ready.symbols current (ready.current block current)
         ready.roots ready.effects (input live).1 (input live).2 originBound
     exact ⟨next, ⟨roots, effects, symbols, fun candidate row => by
-      rw [selected] at row; cases row; exact blockBound, slotEq.trans ready.slotsEq⟩,
+      rw [selected] at row; cases row; exact blockBound, slotEq.trans ready.slotsEq,
+      ready.recipes.prefix (recipesUnchangedB_coerceResult value origin le ls) retained (by
+        rw [ready.roots.valueSize, roots.valueSize]
+        exact (advB_coerceResult value origin le ls _ _ rfl).vals)⟩,
       fun _ => ⟨valueBound, refined⟩, retained⟩
 
 theorem returnValue {sourceModule : Core.Module} {ctx : Context} {impl : Impl}

@@ -30,9 +30,13 @@ theorem cfg_source_dereference {env : Core.TEnv} {results : List Ty} (expr : Exp
   | some ty =>
     cases expr with
     | read place =>
-      cases place <;> simp only [Core.sliceRefTy] at special
-      all_goals try contradiction
-      exact (generated_edge_emitDef _ _ _).bind fun _ => generated_edge_emitDef _ _ _
+      cases place with
+      | var index =>
+        exact (generated_edge_emitDef _ _ (.slotAddr index)).bind fun address =>
+          (generated_edge_emitDef _ _ (.load address)).bind fun value =>
+            (generated_edge_recordReadValueRootRecipe _ _ value (.var index)).bind fun _ =>
+              generated_edge_pure _ _ value
+      | _ => simp [Core.sliceRefTy] at special
     | _ => simp [Core.sliceRefTy] at special
 
 theorem cfg_source_element {env : Core.TEnv} {results : List Ty} (view : View) (index : Expr) (origin : OriginId)

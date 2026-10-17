@@ -1,4 +1,5 @@
 import Goose.Core.Demand
+import Goose.Core.Sound.Frame
 import Goose.Lower.Validation.SourceCanonicalRootFloorsRows
 import Goose.Lower.Validation.SourceCanonicalRootFloorsRecipes
 
@@ -27,33 +28,60 @@ def sourceNodeRootTable (env : PEnv) (root : DemandNode) : SourceRootTable :=
       (collectSourceBlockRoots env body
         (Array.replicate (scopeParents (blockScopes none body)).size none)).2
 
-def RecipeMetadataProjects (env : PEnv) (root : DemandNode) (func : GIR.Func)
-    (state : LS) : Prop :=
-  ∀ recipe ∈ state.valueRootRecipes,
+structure RecipeMetadataProjects (env : PEnv) (root : DemandNode) (func : GIR.Func)
+    (state : LS) : Prop where
+  covered : ∀ recipe ∈ state.valueRootRecipes,
+    ∃ roots, (recipe.1, roots) ∈ func.roots.values.getD #[]
+  project : ∀ recipe ∈ state.valueRootRecipes,
     ∀ roots, (recipe.1, roots) ∈ func.roots.values.getD #[] →
-      roots = lowerContextRootCeiling env.ctx env.impl
-        ((sourceNodeRootTable env root)[recipe.2]?.join.getD [])
+      roots = lowerValueRootCeiling env (sourceNodeRootTable env root) recipe.2
 
 theorem RecipeMetadataProjects.restrict {env : PEnv} {root : DemandNode}
     {func : GIR.Func} {before after : LS}
     (projects : RecipeMetadataProjects env root func after)
     (retained : ∀ recipe ∈ before.valueRootRecipes, recipe ∈ after.valueRootRecipes) :
     RecipeMetadataProjects env root func before := by
-  intro recipe member roots row
-  exact projects recipe (retained recipe member) roots row
+  constructor
+  · intro recipe member
+    exact projects.covered recipe (retained recipe member)
+  · intro recipe member roots row
+    exact projects.project recipe (retained recipe member) roots row
+
+theorem RecipeMetadataProjects.refSliceVar_row {env : PEnv} {root : DemandNode}
+    {func : GIR.Func} {state : LS} (projects : RecipeMetadataProjects env root func state)
+    {value : ValueId} {varId : VarId}
+    (recorded : (value, .refSliceVar varId) ∈ state.valueRootRecipes)
+    {rowRoots : List RootRef} (row : (value, rowRoots) ∈ func.roots.values.getD #[]) :
+    rowRoots = lowerValueRootCeiling env #[] (.refSliceVar varId) :=
+  projects.project (value, .refSliceVar varId) recorded rowRoots row
+
+theorem RecipeMetadataProjects.refSliceVar_annotation_subset {env : PEnv} {root : DemandNode}
+    {func : GIR.Func} {state : LS} (projects : RecipeMetadataProjects env root func state)
+    {value : ValueId} {varId : VarId}
+    (recorded : (value, .refSliceVar varId) ∈ state.valueRootRecipes)
+    {rowRoots : List RootRef} (row : (value, rowRoots) ∈ func.roots.values.getD #[]) :
+    ((env.ann varId).getD []) ⊆ rowRoots := by
+  rw [projects.refSliceVar_row recorded row]
+  exact Goose.Core.Sound.unionRoots_left _ _
 
 theorem lowerContextAt_recipeMetadataProjects (module : Core.Module) (ctx : Context) (impl : Impl) :
     RecipeMetadataProjects ⟨module, impl, ctx, []⟩ (.block impl.body)
       (lowerContextAt module ctx impl) (lowerImplState module impl) := by
-  intro recipe member roots row
-  exact lowerValueRootRows_exact ⟨module, impl, ctx, []⟩ _ _
-    (lowerImplState_recipes module impl).1 member row
+  constructor
+  · intro recipe member
+    exact ⟨_, lowerValueRootRows_contains ⟨module, impl, ctx, []⟩ _ _ member⟩
+  · intro recipe member roots row
+    exact lowerValueRootRows_exact ⟨module, impl, ctx, []⟩ _ _
+      (lowerImplState_recipes module impl).1 member row
 
 theorem lowerGlobal_recipeMetadataProjects (module : Core.Module) (global : Core.Global) :
     RecipeMetadataProjects ⟨module, initImpl, initContext, []⟩ (.expression global.init)
       (lowerGlobal module global).init (globalRecipeState module global) := by
-  intro recipe member roots row
-  exact lowerValueRootRows_exact ⟨module, initImpl, initContext, []⟩ _ _
-    (globalRecipeState_recipes module global).1 member row
+  constructor
+  · intro recipe member
+    exact ⟨_, lowerValueRootRows_contains ⟨module, initImpl, initContext, []⟩ _ _ member⟩
+  · intro recipe member roots row
+    exact lowerValueRootRows_exact ⟨module, initImpl, initContext, []⟩ _ _
+      (globalRecipeState_recipes module global).1 member row
 
 end Goose.Lower.Validation.SourceCanonicalRootFloors

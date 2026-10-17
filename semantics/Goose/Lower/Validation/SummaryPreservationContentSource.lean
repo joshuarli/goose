@@ -60,7 +60,9 @@ theorem rpExpr_content_place_contract {env : PEnv} {context : ContextId} {index 
 
 theorem lowerExpr_read_var_after_address (varId : VarId) (le : LEnv) (ls : LS) :
     lowerExpr (.read (.var varId)) le ls =
-      emitDef (.load (lowerPlace (.var varId) le ls).1) le (lowerPlace (.var varId) le ls).2 := rfl
+      let loaded := emitDef (.load (lowerPlace (.var varId) le ls).1) le
+        (lowerPlace (.var varId) le ls).2
+      (loaded.1, (recordReadValueRootRecipe loaded.1 (.var varId) le loaded.2).2) := rfl
 
 
 theorem lowerExpr_read_var_symbols {ls : LS} {le : LEnv} {scopeCount : Nat}
@@ -81,12 +83,21 @@ theorem lowerExpr_read_var_symbols {ls : LS} {le : LEnv} {scopeCount : Nat}
     dsimp [address, lowerPlace]
     rw [emitDef_run _ _ current]
     simp
+  have loadedSymbols : (emitDef (.load address.1) le address.2).2.SymbolWF le scopeCount := by
+    rw [emitDef_run _ _ middleCurrent]
+    apply LS.SymbolWF.emitDef middleSymbols middleCurrent middleBlockBound
+    apply Inst.SymbolsWithin.def
+    · simpa [Op.uses] using addressBound
+    · simp [Op.origin]
+    · simp [Op.SymbolRefsValid]
   rw [lowerExpr_read_var_after_address]
-  rw [emitDef_run _ _ middleCurrent]
-  apply LS.SymbolWF.emitDef middleSymbols middleCurrent middleBlockBound
-  apply Inst.SymbolsWithin.def
-  · simpa [Op.uses] using addressBound
-  · simp [Op.origin]
-  · simp [Op.SymbolRefsValid]
+  change (recordReadValueRootRecipe (emitDef (.load address.1) le address.2).1 (.var varId) le
+    (emitDef (.load address.1) le address.2).2).2.SymbolWF le scopeCount
+  rw [recordReadValueRootRecipe_run]
+  simp only []
+  split
+  · rw [recordValueRootSource_run]
+    exact ⟨loadedSymbols.definitions, loadedSymbols.instructions⟩
+  · exact loadedSymbols
 
 end Goose.Lower.Validation.SummaryPreservation

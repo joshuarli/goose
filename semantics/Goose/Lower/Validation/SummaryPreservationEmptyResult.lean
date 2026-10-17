@@ -22,6 +22,8 @@ theorem emptyParameterResult_core_accepted :
     Core.validate emptyParameterResult = .ok () := by
   cbv
 
+attribute [local cbv_opaque] Goose.GIR.replacementContentFlow
+
 theorem emptyParameterResult_gir_accepted :
     GIR.validate (lower emptyParameterResult) = .ok () := by
   cbv
@@ -42,7 +44,7 @@ theorem partialParameterResult_core_rejected :
 
 theorem partialParameterResult_gir_rejected :
     GIR.validate (lower partialParameterResult) =
-      .error ⟨.v050, "function receiver result 0 root info omits a root returned by the body"⟩ := by
+      .error ⟨.v050, "declared regions: receiver root info does not bound a stored, returned, or passed region"⟩ := by
   cbv
 
 end Goose.Lower.Validation.SummaryPreservation

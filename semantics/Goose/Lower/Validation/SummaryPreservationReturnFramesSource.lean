@@ -4,9 +4,9 @@ namespace Goose.Lower.Validation.SummaryPreservation.ReturnFrames
 
 open Goose.Core Goose.GIR Goose.Lower.Validation
 
-variable {avoid : List ValueId × Option OriginId}
-
 mutual
+
+variable {avoid : List ValueId × Option OriginId}
 
 theorem returnAbsent_lowerExpr : ∀ e : Expr, ReturnFreeExpr e → ReturnAbsentRun (avoid := avoid) (lowerExpr e)
   | .structLit t es, free => by
@@ -16,7 +16,8 @@ theorem returnAbsent_lowerExpr : ∀ e : Expr, ReturnFreeExpr e → ReturnAbsent
   | .bool b, free => by simp only [lowerExpr]; exact returnAbsent_emitDef _
   | .read p, free => by
     simp only [lowerExpr]
-    exact ReturnAbsentRun.bind (returnAbsent_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun _ => returnAbsent_emitDef _
+    exact ReturnAbsentRun.bind (returnAbsent_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun address => ReturnAbsentRun.bind (returnAbsent_emitDef (.load address)) fun value =>
+      ReturnAbsentRun.bind (returnAbsent_recordReadValueRootRecipe value p) fun _ => returnAbsent_pure value
   | .ref m p, free => by
     simp only [lowerExpr]
     exact ReturnAbsentRun.bind (returnAbsent_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun r => returnAbsent_borrowTo m r
@@ -66,9 +67,7 @@ theorem returnAbsent_lowerExpr : ∀ e : Expr, ReturnFreeExpr e → ReturnAbsent
   | .ifE c t f, free => by
     simp only [lowerExpr]
     exact ReturnAbsentRun.bind (returnAbsent_lowerExpr c (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun cv =>
-      returnAbsent_ifE_core cv (sourceBlockScope t)
-        (returnAbsent_lowerBlock none [] true t (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2))
-        (returnAbsent_lowerBlock none [] true f (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2))
+      returnAbsent_ifE_recorded_core cv (sourceBlockScope t) (returnAbsent_lowerBlock none [] true t (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) (returnAbsent_lowerBlock none [] true f (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2))
   | .blockE b, free => by
     simp only [lowerExpr]
     exact returnAbsent_lowerBlock none [] true b (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)

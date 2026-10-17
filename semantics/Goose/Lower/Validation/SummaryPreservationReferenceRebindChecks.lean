@@ -28,6 +28,8 @@ def undeclaredReferenceVariableRebind : Module :=
 theorem referenceVariableRebind_core_accepted : Core.validate referenceVariableRebind = .ok () := by
   cbv
 
+attribute [local cbv_opaque] Goose.GIR.replacementContentFlow
+
 theorem referenceVariableRebind_gir_accepted : GIR.validate (lower referenceVariableRebind) = .ok () := by
   cbv
 

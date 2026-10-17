@@ -140,6 +140,18 @@ theorem StorageWalkAction.observe (slots : Array Slot) (stack : List ScopeId)
   rw [same]
   exact config
 
+theorem StorageWalkAction.recordReadValueRootRecipe (slots : Array Slot) (stack : List ScopeId)
+    (loop : Option LoopCtx) (value : ValueId) (place : Place) :
+    StorageWalkAction slots stack loop (Goose.Lower.recordReadValueRootRecipe value place) := by
+  refine ⟨advB_recordReadValueRootRecipe value place, ?_⟩
+  intro env before entry exit config context stackEq
+  cases place <;> simp only [recordReadValueRootRecipe_run]
+  all_goals try exact ⟨entry, exit, config, ScopeMapAdvance.refl _ _ _⟩
+  split
+  · rw [recordValueRootSource_run]
+    exact ⟨entry, exit, config.of_state rfl rfl rfl, ScopeMapAdvance.refl _ _ _⟩
+  · exact ⟨entry, exit, config, ScopeMapAdvance.refl _ _ _⟩
+
 theorem StorageWalkAction.emitDef (slots : Array Slot) (stack : List ScopeId)
     (loop : Option LoopCtx) (op : Op)
     (visible : ∀ result, StorageInstructionVisible slots stack (.def result op)) :

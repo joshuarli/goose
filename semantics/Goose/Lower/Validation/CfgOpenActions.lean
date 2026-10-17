@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.CfgReadRecipes
 import Goose.Lower.Validation.CfgOpenHeader
 
 namespace Goose.Lower.Validation
@@ -20,6 +21,12 @@ theorem OpenAction.of_state {action : B α} (advance : AdvB action)
     (blocks : ∀ env state, (action env state).2.blocks = state.blocks)
     (current : ∀ env state, (action env state).2.cur = state.cur) : OpenAction action :=
   ⟨advance, opens_of_state_unchanged blocks current⟩
+
+theorem open_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    OpenAction (recordReadValueRootRecipe value place) :=
+  OpenAction.of_state (advB_recordReadValueRootRecipe value place)
+    (fun env state => (recordReadValueRootRecipe_tables value place env state).1)
+    (fun env state => (recordReadValueRootRecipe_tables value place env state).2.2)
 
 theorem open_emitDef (op : Op) : OpenAction (emitDef op) := ⟨advB_emitDef op, opens_emitDef op⟩
 theorem open_emitEffect (effect : Effect) : OpenAction (emitEffect effect) :=

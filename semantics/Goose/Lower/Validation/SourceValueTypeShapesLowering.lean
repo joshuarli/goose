@@ -30,7 +30,10 @@ theorem shaped_lowerExpr : ∀ e : Expr, ShapeExprAnnotations module e → Emitt
     intro annotations
     try simp only [ShapeExprAnnotations, ShapeOptionalAnnotations] at annotations
     simp only [lowerExpr]
-    exact EmittedShapeRun.bind (shaped_lowerPlace p (by first | exact annotations | exact annotations.1 | exact annotations.2 | exact annotations.2.1 | exact annotations.2.2 | exact annotations.2.2.1 | exact annotations.2.2.2)) fun _ => shaped_emitDef tables _ (fun _ => by first | trivial | exact annotations.1)
+    exact EmittedShapeRun.bind (shaped_lowerPlace p annotations) fun address =>
+      EmittedShapeRun.bind (shaped_emitDef tables (.load address) (fun _ => trivial)) fun value =>
+        EmittedShapeRun.bind (shaped_recordReadValueRootRecipe (module := module) (le := le) value p) fun _ =>
+          EmittedShapeRun.pure module le value
   | .ref m p => by
     intro annotations
     try simp only [ShapeExprAnnotations, ShapeOptionalAnnotations] at annotations

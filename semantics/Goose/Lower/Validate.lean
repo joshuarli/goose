@@ -1068,13 +1068,35 @@ theorem lowerPlace_field_symbolRun_of {le : LEnv} {scopeCount : Nat}
     simp [Op.origin] at ho
   · simp [Op.SymbolRefsValid]
 
+theorem LS.SymbolRun.recordRead {le : LEnv} {scopeCount : Nat} {ls : LS}
+    {action : B ValueId} (place : Goose.Core.Place)
+    (source : LS.SymbolRun le scopeCount ls (fun value => [value]) action) :
+    LS.SymbolRun le scopeCount ls (fun value => [value]) (do
+      let value ← action
+      recordReadValueRootRecipe value place
+      pure value) := by
+  intro wf current result after run
+  obtain ⟨value, mid, firstRun, rest⟩ := bind_eq.mp run
+  obtain ⟨unit, recorded, recordRun, pureRun⟩ := bind_eq.mp rest
+  obtain ⟨rfl, rfl⟩ := pure_eq.mp pureRun
+  have preserved := source wf current value mid firstRun
+  cases place <;> simp only [recordReadValueRootRecipe_run] at recordRun
+  all_goals try split at recordRun
+  all_goals try rw [recordValueRootSource_run] at recordRun
+  all_goals obtain ⟨rfl, rfl⟩ := Prod.mk.inj recordRun
+  all_goals exact ⟨⟨preserved.1.definitions, preserved.1.instructions⟩, preserved.2⟩
+
 theorem lowerExpr_read_var_symbolRun {le : LEnv} {scopeCount : Nat} (x : Goose.Core.VarId)
     {ls : LS} (hx : x < le.slots.size) :
     LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr (.read (.var x))) := by
   change LS.SymbolRun le scopeCount ls (fun v => [v])
-    (do let r ← lowerPlace (.var x); emitDef (.load r))
+    (do let r ← lowerPlace (.var x)
+        let value ← emitDef (.load r)
+        recordReadValueRootRecipe value (.var x)
+        pure value)
   apply LS.SymbolRun.bind (lowerPlace_var_symbolRun x hx)
   intro r ls hls hc hr
+  apply LS.SymbolRun.recordRead (.var x)
   apply LS.SymbolRun.emitDef
   · intro live u hu
     simp [Op.uses] at hu
@@ -1089,9 +1111,13 @@ theorem lowerExpr_read_symbolRun_of {le : LEnv} {scopeCount : Nat}
     (hplace : LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace p)) :
     LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr (.read p)) := by
   change LS.SymbolRun le scopeCount ls (fun v => [v])
-    (do let r ← lowerPlace p; emitDef (.load r))
+    (do let r ← lowerPlace p
+        let value ← emitDef (.load r)
+        recordReadValueRootRecipe value p
+        pure value)
   apply LS.SymbolRun.bind hplace
   intro r ls1 hls1 hc1 hr
+  apply LS.SymbolRun.recordRead p
   apply LS.SymbolRun.emitDef
   · intro live u hu
     simp [Op.uses] at hu

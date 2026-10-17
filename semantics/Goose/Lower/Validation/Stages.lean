@@ -34,7 +34,7 @@ theorem gir_validate_stages (module : Module) :
       (checkAll module.infos fun info =>
         asCheck .v080 info.label (checkEvidence module info.f info.vt)) = .ok () ∧
       (checkAll module.infos fun info => checkOrigins module.profile info.label info.f) = .ok () := by
-  simp only [validate, unit_bind_ok]
+  simp only [validate, checkShrinkReplace_canonical, unit_bind_ok]
   rfl
 
 end Goose.Lower.Validation

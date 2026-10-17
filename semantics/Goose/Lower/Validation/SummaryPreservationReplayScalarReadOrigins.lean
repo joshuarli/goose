@@ -19,7 +19,8 @@ theorem scalarReadWithOrigins {env : PEnv} {place : Place} {initialSource before
     (placeRun : lowerPlace place le initial = (address, ls))
     (input : ls.cur.isSome = true → address < ls.vals.size ∧
       RootsRefine func (rootsAt upper.vals address) placeRoots)
-    (resultType : ls.cur.isSome = true → vt[ls.vals.size]? = some (some (.data ty))) :
+    (resultType : ls.cur.isSome = true → vt[ls.vals.size]? = some (some (.data ty)))
+    (inactive : ∀ value state, Goose.Lower.recordReadValueRootRecipe value place le state = ((), state)) :
     ∃ next, ReplayBuilder module results vt func target le scopeCount slots
         (lowerExpr (.read place) le initial).2 next ∧
       ((lowerExpr (.read place) le initial).2.cur.isSome = true →
@@ -29,10 +30,11 @@ theorem scalarReadWithOrigins {env : PEnv} {place : Place} {initialSource before
       ((lowerExpr (.read place) le initial).2.cur.isSome = true →
         address < (lowerExpr (.read place) le initial).2.vals.size ∧
         RootsRefine func (rootsAt next.vals address) placeRoots) := by
-  obtain ⟨next, completed, value, retained⟩ := ready.scalarRead ty nonref closed placeReplay source wholeEffect placeRun input resultType
+  obtain ⟨next, completed, value, retained⟩ := ready.scalarRead ty nonref closed placeReplay source wholeEffect placeRun input resultType inactive
   refine ⟨next, completed, value, retained, ?_⟩
   have whole : lowerExpr (.read place) le initial = Goose.Lower.emitDef (.load address) le ls := by
-    simp only [lowerExpr, bind_run, placeRun]
+    rw [lowerExpr_read_run, placeRun]
+    simp only [inactive]
   intro live
   rw [whole] at live ⊢
   cases current : ls.cur with
