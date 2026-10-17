@@ -63,4 +63,38 @@ theorem lowerExpr_bool_reflectAtFuel {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls
   exact leaf_def_reflectAtFuel (Post.init hrel hpp) hdef hext
     (by intro f args org h; cases h) (.val ·) (sourceFuel := 1) hx
 
+theorem lowerPlace_var_reflectAtFuel {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls1 : LS}
+    {fr : Frame} {pt : Pt} {le : LEnv} {r : ValueId} {fuel : Nat}
+    (hrel : Rel cfg env cx fr ls) (hpp : ls.pp = some pt)
+    (hlow : lowerPlace (.var x) le ls = (r, ls1)) (hext : ExtT ls1 cx.fn.blocks) :
+    ReflectAtFuel fuel cx pt fr (fun n => evalPlace n cfg env (.var x))
+      (fun result _ pt' fr' =>
+        Post cfg env cx ls fr ls1 fr' pt' [(r, .val (.ref result))]) state := by
+  have hdef : emitDef (.slotAddr x) le ls = (r, ls1) := by
+    simpa only [lowerPlace] using hlow
+  have hx : execPure cx fr (.slotAddr x) =
+      evalPlace 1 cfg env (.var x) >>= fun result => pure (.val (.ref result)) := by
+    simp only [execPure]
+    rw [slotRoot_eq hrel x]
+    simp [evalPlace]
+  exact leaf_def_reflectAtFuel (Post.init hrel hpp) hdef hext
+    (by intro f args org h; cases h) (fun result => .val (.ref result))
+    (sourceFuel := 1) hx
+
+theorem lowerPlace_global_reflectAtFuel {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls1 : LS}
+    {fr : Frame} {pt : Pt} {le : LEnv} {r : ValueId} {fuel : Nat}
+    (hrel : Rel cfg env cx fr ls) (hpp : ls.pp = some pt)
+    (hlow : lowerPlace (.global g) le ls = (r, ls1)) (hext : ExtT ls1 cx.fn.blocks) :
+    ReflectAtFuel fuel cx pt fr (fun n => evalPlace n cfg env (.global g))
+      (fun result _ pt' fr' =>
+        Post cfg env cx ls fr ls1 fr' pt' [(r, .val (.ref result))]) state := by
+  have hdef : emitDef (.globalAddr g) le ls = (r, ls1) := by
+    simpa only [lowerPlace] using hlow
+  have hx : execPure cx fr (.globalAddr g) =
+      evalPlace 1 cfg env (.global g) >>= fun result => pure (.val (.ref result)) := by
+    simp [execPure, evalPlace]
+  exact leaf_def_reflectAtFuel (Post.init hrel hpp) hdef hext
+    (by intro f args org h; cases h) (fun result => .val (.ref result))
+    (sourceFuel := 1) hx
+
 end Goose.Lower
