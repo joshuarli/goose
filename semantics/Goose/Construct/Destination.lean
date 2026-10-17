@@ -234,12 +234,22 @@ private def lengthPrefix : ByteArray := ⟨#[0, 0, 0, 0]⟩
 private def hasPrefix (layout : ReceivingLayout) (request : ConstructionRequest) : Bool :=
   layout == .packed && request == .value
 
+theorem hasPrefix_result (layout : ReceivingLayout) (request : ConstructionRequest) :
+    hasPrefix layout request = (layout == .packed && request == .value) := rfl
+
 private def available (layout : ReceivingLayout) (storage : ReceivingStorage) (count : Nat) : Bool :=
   match layout with
   | .limited capacity _ => storage.publishedCount + count ≤ capacity
   | .fixed expected => count ≤ expected
   | .packed => count < 2 ^ 32
   | .elements => true
+
+theorem available_result (layout : ReceivingLayout) (storage : ReceivingStorage) (count : Nat) :
+    available layout storage count = match layout with
+      | .limited capacity _ => storage.publishedCount + count ≤ capacity
+      | .fixed expected => count ≤ expected
+      | .packed => count < 2 ^ 32
+      | .elements => true := rfl
 
 private def writingAvailable (destination : PendingDestination) (storage : ReceivingStorage) (count : Nat) : Bool :=
   match destination.backing with
@@ -248,6 +258,24 @@ private def writingAvailable (destination : PendingDestination) (storage : Recei
       | some receiving => available receiving.layout storage count
       | none => true
   | .staged _ _ => true
+
+theorem writingAvailable_result (destination : PendingDestination) (storage : ReceivingStorage)
+    (count : Nat) :
+    writingAvailable destination storage count = match destination.backing with
+      | .direct _ =>
+          (match destination.layout with
+          | .limited capacity _ => storage.publishedCount + count ≤ capacity
+          | .fixed expected => count ≤ expected
+          | .packed => count < 2 ^ 32
+          | .elements => true) &&
+          (match destination.adaptation with
+          | some receiving => match receiving.layout with
+              | .limited capacity _ => storage.publishedCount + count ≤ capacity
+              | .fixed expected => count ≤ expected
+              | .packed => count < 2 ^ 32
+              | .elements => true
+          | none => true)
+      | .staged _ _ => true := rfl
 
 private def active (destination : PendingDestination) : Bool :=
   match destination.progress with
@@ -689,6 +717,19 @@ private def protectedAbandonment : List PendingDestination → ConstructionM Uni
           destinations := state.destinations.set! id { destination with progress := .abandoned }
           events := state.events ++ [.abandon id] }
       else .fault .destination state
+
+theorem protectedAbandonment_nil_transition (state : ConstructionState) :
+    protectedAbandonment [] state = .ok () state := rfl
+
+theorem protectedAbandonment_cons_transition (destination : PendingDestination)
+    (rest : List PendingDestination) (state : ConstructionState) :
+    protectedAbandonment (destination :: rest) state =
+      if destination.capability.id < state.destinations.size then
+        protectedAbandonment rest { state with
+          destinations := state.destinations.set! destination.capability.id
+            { destination with progress := .abandoned }
+          events := state.events ++ [.abandon destination.capability.id] }
+      else .fault .destination state := rfl
 
 private theorem protectedAbandonment_storage (discarded : List PendingDestination) (state : ConstructionState) :
     (protectedAbandonment discarded state).finalState.storage = state.storage := by
@@ -3856,6 +3897,10 @@ private theorem indexed_protectedAbandonment (discarded : List PendingDestinatio
       · apply ih
         exact indexed_set_array state destination.capability.id _ valid rfl
       · exact valid
+
+theorem protectedAbandonment_destination_capabilities (discarded : List PendingDestination) :
+    PreservesDestinationCapabilities (protectedAbandonment discarded) :=
+  indexed_protectedAbandonment discarded
 
 theorem abandonPreservingExit_destination_capabilities (id replacement : DestinationId) :
     PreservesDestinationCapabilities (abandonPreservingExit id replacement) := by
