@@ -69,7 +69,7 @@ theorem killEmptyFactSources_retains {facts operands : List ValueId}
 theorem transferEmptyInst_clear_has_owner (module : GIR.Module) (types : Array (Option VTy))
     (provenance : ReplacementQueries) (facts : List ValueId) (owner : ValueId) (origin : Option OriginId) :
     owner ∈ transferEmptyInst module types provenance facts (.eff (.clear owner origin)) := by
-  simp only [transferEmptyInst, emptyFactSourceOperands, killEmptyFactSources, List.foldl_nil]
+  simp only [transferEmptyInst, emptyFactSourceOperands, ReplacementContentFlow.Model.loadedResults, killEmptyFactSources, List.foldl_nil]
   split
   · rename_i present
     exact List.contains_iff_mem.mp present

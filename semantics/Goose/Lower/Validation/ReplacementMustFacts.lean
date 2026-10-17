@@ -46,29 +46,18 @@ theorem transferEmptyInst_mono (module : GIR.Module) (types : Array (Option VTy)
     (queries : ReplacementQueries) (inst : Inst) {before after : List ValueId}
     (subset : before ⊆ after) :
     transferEmptyInst module types queries before inst ⊆ transferEmptyInst module types queries after inst := by
+  apply killEmptyFactSources_mono
+  apply killEmptyFactSources_mono
   cases inst with
   | «def» value op =>
-    cases op <;> dsimp only [transferEmptyInst]
-    all_goals
-      repeat' first
+    cases op <;> first
       | exact subset
       | exact killEmptyFacts_mono subset _ _
-      | exact killEmptyFactSources_mono subset _ _ _
-      | apply killEmptyFacts_mono
-      | apply killEmptyFactSources_mono
-      | split
   | eff effect =>
-    cases effect <;> dsimp only [transferEmptyInst]
-    all_goals
-      repeat' first
+    cases effect <;> first
       | exact subset
       | exact clearFacts_mono subset _
-      | exact killEmptyFacts_mono subset _ _
-      | exact killEmptyFactSources_mono subset _ _ _
-      | apply killEmptyFacts_mono
-      | apply killEmptyFactSources_mono
-      | split
-  | term term => exact killEmptyFactSources_mono subset _ _ _
+  | term term => exact subset
 
 theorem transferEmptyBlock_mono (module : GIR.Module) (types : Array (Option VTy))
     (queries : ReplacementQueries) (block : GIR.Block) {before after : List ValueId}
