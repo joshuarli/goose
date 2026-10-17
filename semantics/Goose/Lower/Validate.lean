@@ -459,7 +459,7 @@ private theorem LS.DenseDefinitions.modifyNoNewDefs {ls : LS} {b : BlockId}
   rw [LS.DenseDefinitions, heq]
   exact h
 
-private theorem LS.insts.modifyPush {ls : LS} {b : BlockId} (hb : b < ls.blocks.size)
+theorem LS.insts.modifyPush {ls : LS} {b : BlockId} (hb : b < ls.blocks.size)
     (i : Inst) :
     List.Perm
       ({ ls with blocks := ls.blocks.modify b fun blk =>
