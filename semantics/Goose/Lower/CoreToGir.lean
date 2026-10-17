@@ -243,11 +243,13 @@ def freezeTo (m : Mutability) (r : ValueId) : B ValueId := do
   | _, _ => pure r
 
 def borrowTo (m : Mutability) (r : ValueId) : B ValueId := do
-  match m, (← read).mod.profile, (← valTy r) with
-  | .mutable, .shrink, .data (.ref .mutable (.grow _))
-  | .mutable, .shrink, .data (.ref .mutable (.growshrink _)) =>
-    emitDef (.ownerBorrow r)
-  | _, _, _ => freezeTo m r
+  let env ← read
+  let ty ← valTy r
+  let owner := match ty with
+    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+    | _ => false
+  if m == .mutable && env.mod.profile == .shrink && owner then emitDef (.ownerBorrow r)
+  else freezeTo m r
 
 def coerceTo (target : Ty) (r : ValueId) (org : OriginId) : B ValueId := do
   match target, (← valTy r) with
