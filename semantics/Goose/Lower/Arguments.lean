@@ -56,13 +56,14 @@ theorem argClaim_byRef {n : Nat} {p : Place} (hp : PlaceLowerClaim n p)
   intro le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerArg, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, h2⟩ := hlow
-  rcases freezeTo_cases h2 with ⟨hr, hls⟩ | hf
+  rcases borrowTo_ref_cases h2 with ⟨hr, hls⟩ | hf | hf
   · subst hr; subst hls
     simp only [evalArg]
     refine SimG.bind (hp le ls r ls' pt cfg env cx fr h1 hpp hext hrel)
       fun l pt1 fr1 P1 => ?_
     exact SimG.ret P1
-  · have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef hf)
+  all_goals
+    have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef hf)
     simp only [evalArg]
     refine SimG.bind (hp le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel)
       fun l pt1 fr1 P1 => ?_
@@ -156,13 +157,14 @@ theorem argEClaim_byRef {n : Nat} {cfg : Cfg} {p : Place} (hp : PlaceEClaim n cf
   intro le ls r ls' pt env cx fr hlow hpp hext hrel hmod hgir
   simp only [lowerArg, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, h2⟩ := hlow
-  rcases freezeTo_cases h2 with ⟨hr, hls⟩ | hf
+  rcases borrowTo_ref_cases h2 with ⟨hr, hls⟩ | hf | hf
   · subst hr; subst hls
     simp only [evalArg]
     refine SimE.bind (hp le ls r ls' pt env cx fr h1 hpp hext hrel hmod hgir)
       fun l pt1 fr1 P1 => ?_
     exact SimE.ret P1
-  · have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef hf)
+  all_goals
+    have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef hf)
     simp only [evalArg]
     refine SimE.bind (hp le ls rp ls1 pt env cx fr h1 hpp hext1 hrel hmod hgir)
       fun l pt1 fr1 P1 => ?_

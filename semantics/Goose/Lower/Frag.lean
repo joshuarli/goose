@@ -716,6 +716,16 @@ theorem borrowTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS}
     · rw [if_neg borrow] at h
       exact Or.inl h
 
+theorem borrowTo_ref_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS}
+    {r' : ValueId} {ls' : LS} (h : borrowTo m r le ls = (r', ls')) :
+    (r' = r ∧ ls' = ls) ∨ emitDef (.refFreeze r) le ls = (r', ls') ∨
+      emitDef (.ownerBorrow r) le ls = (r', ls') := by
+  rcases borrowTo_cases h with freeze | owner
+  · rcases freezeTo_cases freeze with same | emitted
+    · exact Or.inl same
+    · exact Or.inr (Or.inl emitted)
+  · exact Or.inr (Or.inr owner)
+
 theorem adv_joinValue {ls0 ls1 : LS} (h : ls0.Adv ls1) {endT endF : Option BlockId} {vt vf : ValueId}
     (hT : ∀ b, endT = some b → Mine ls0 b) (hF : ∀ b, endF = some b → Mine ls0 b)
     {le : LEnv} {r : ValueId} {ls' : LS} (hj : joinValue endT vt endF vf le ls1 = (r, ls')) :
