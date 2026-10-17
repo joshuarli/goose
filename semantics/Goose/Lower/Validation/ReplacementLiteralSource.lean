@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ReplacementReconstructed
+import Goose.Lower.Validation.ReplacementScalarSource
 import Goose.Lower.Validation.ReplacementEmission
 import Goose.Lower.Validation.FreshRunSource
 
@@ -160,6 +160,27 @@ theorem replacementRegion_scalar_literal_closed {env : LEnv} {before cleared cap
     builder blocks slots globals sigs structs profile graphs source literals rhsRun clearedLive extension
   exact replacementRegion_closed_of_emission live clearRun emitted
     (advB_lowerExpr (.arrLit ty exprs) _ _ _ _ rhsRun) bounded frames framed extension shaped closed blocks
+
+theorem lowerExpr_scalar_array_apart {env : LEnv} {before captured : LS}
+    {queries : ReplacementQueries} {owner value : ValueId} {ty : Ty} {exprs : List Expr}
+    {sourceEnv : Core.TEnv} {result : Ty} {start finish : Nat}
+    (source : Core.tyExpr sourceEnv (.arrLit ty exprs) start = .ok (result, finish))
+    (scalars : ∀ expr ∈ exprs, ScalarSourceExpr expr)
+    (run : lowerExpr (.arrLit ty exprs) env before = (value, captured))
+    (live : LiveBound before) (extension : captured.Ext state) :
+    EmitsOnly (ReplacementInstApart module (func.valueTypes module) queries owner) before captured := by
+  change (lowerExprs exprs >>= fun values => emitDef (.arrLit ty values)) env before = (value, captured) at run
+  obtain ⟨values, middle, first, next⟩ := bind_eq.mp run
+  have firstExtension := (adv_emitDef next).ext.trans extension
+  have firstApart : EmitsOnly (ReplacementInstApart module (func.valueTypes module) queries owner) before middle := by
+    apply (scalarSource_lowerExprs scalars env before values middle first).map
+    intro inst member scalar
+    obtain ⟨value, op, rfl, scalar⟩ := scalar
+    exact replacementScalarApart_of_source_graphs builder blocks slots globals sigs structs profile graphs
+      (extension_inst_member firstExtension member) scalar
+  have middleLive := liveBound_of_adv (advB_lowerExprs exprs _ _ _ _ first) live
+  exact firstApart.trans (emitsOnly_literal_of_source_graphs builder blocks slots globals sigs structs profile
+    graphs source next middleLive extension)
 
 end ScalarLiterals
 
