@@ -54,7 +54,7 @@ theorem replacementScalarApart_of_source_graphs
     have finalRow := typePrefix.typed operand operandType row
     simpa only [valRefLike, retained, finalRow, Option.getD_some] using absent
 
-theorem replacementLiteralApart_of_source_graphs
+theorem replacementFlatLiteralApart_of_source_graphs
     {module : GIR.Module} {func : Func} {le : LEnv} {state : LS}
     (builder : EmittedBuilder le initState state)
     (blocks : func.blocks = finishBlocks state.blocks)
@@ -66,14 +66,13 @@ theorem replacementLiteralApart_of_source_graphs
     (graphs : MutableSnapshotGraphs module func state)
     {queries : ReplacementQueries} {owner value : ValueId} {ty : Ty} {operands : List ValueId}
     (definition : Inst.def value (.arrLit ty operands) ∈ state.insts)
-    {sourceEnv : Core.TEnv} {exprs : List Expr} {result : Ty} {start finish : Nat}
-    (source : Core.tyExpr sourceEnv (.arrLit ty exprs) start = .ok (result, finish)) :
+    (flat : ∀ element, arrayElem? ty = some element → element.flat = true) :
     ReplacementInstApart module (func.valueTypes module) queries owner (.def value (.arrLit ty operands)) := by
   have retained := valueTypes_eq_retained_of_source_graphs builder blocks slots globals sigs structs profile graphs
   obtain ⟨site, output, block, trace, checkpoint, extension, live, fresh, typed, recorded, typePrefix⟩ :=
     builder.sites value (.arrLit ty operands) definition
   obtain ⟨element, shape, operandTypes, count, capacity, resultType⟩ := arrLit_metadata typed
-  have flat := source_arrLit_element_flat source shape
+  have flat := flat element shape
   have elementNotRef : element.isRefLike = false := by
     cases element <;> simp_all [Ty.flat, Ty.isRefLike]
   have resultNotRef : ty.isRefLike = false := by
@@ -90,5 +89,23 @@ theorem replacementLiteralApart_of_source_graphs
     cases accessed
   · intro resultValue function args origin same
     cases same
+
+theorem replacementLiteralApart_of_source_graphs
+    {module : GIR.Module} {func : Func} {le : LEnv} {state : LS}
+    (builder : EmittedBuilder le initState state)
+    (blocks : func.blocks = finishBlocks state.blocks)
+    (slots : func.slots = le.slots)
+    (globals : (module.globals.map fun global => (global.ty, global.kind)) = le.globals)
+    (sigs : (module.funcs.map fun signature => (signature.params, signature.results)) = le.sigs)
+    (structs : module.structs = le.mod.structs)
+    (profile : module.profile = le.mod.profile)
+    (graphs : MutableSnapshotGraphs module func state)
+    {queries : ReplacementQueries} {owner value : ValueId} {ty : Ty} {operands : List ValueId}
+    (definition : Inst.def value (.arrLit ty operands) ∈ state.insts)
+    {sourceEnv : Core.TEnv} {exprs : List Expr} {result : Ty} {start finish : Nat}
+    (source : Core.tyExpr sourceEnv (.arrLit ty exprs) start = .ok (result, finish)) :
+    ReplacementInstApart module (func.valueTypes module) queries owner (.def value (.arrLit ty operands)) :=
+  replacementFlatLiteralApart_of_source_graphs builder blocks slots globals sigs structs profile graphs
+    definition (fun _ shape => source_arrLit_element_flat source shape)
 
 end Goose.Lower.Validation

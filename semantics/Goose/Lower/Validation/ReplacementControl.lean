@@ -98,4 +98,54 @@ theorem emitsOnly_shortCircuit {property : Inst → Prop} (terms : ∀ term, pro
   intro _
   exact .pure _ _
 
+theorem emitsOnly_fork (property : Inst → Prop) (terms : ∀ term, property (.term term))
+    (value : ValueId) : EmitsOnlyRun property (fork value) := by
+  unfold fork
+  apply EmitsOnlyRun.bind (emitsOnly_newBlock property [])
+  rintro ⟨yes, _⟩
+  apply EmitsOnlyRun.bind (emitsOnly_newBlock property [])
+  rintro ⟨no, _⟩
+  apply EmitsOnlyRun.bind (emitsOnly_emitTerm _ (terms _))
+  intro _
+  exact .pure _ _
+
+theorem emitsOnly_patchBrs (property : Inst → Prop) (terms : ∀ term, property (.term term))
+    (join : BlockId) (branches : List (BlockId × ValueId)) : EmitsOnlyRun property (patchBrs join branches) := by
+  induction branches with
+  | nil => exact .pure _ _
+  | cons branch rest ih =>
+    obtain ⟨block, value⟩ := branch
+    apply EmitsOnlyRun.bind (emitsOnly_pushInst block (.term (.br join [value])) (terms _))
+    intro _
+    exact ih
+
+theorem emitsOnly_joinValue (property : Inst → Prop) (terms : ∀ term, property (.term term))
+    (yes no : Option BlockId) (yesValue noValue : ValueId) :
+    EmitsOnlyRun property (joinValue yes yesValue no noValue) := by
+  unfold joinValue
+  split
+  · apply EmitsOnlyRun.bind (emitsOnly_setCur property none)
+    intro _
+    exact .pure _ _
+  · apply EmitsOnlyRun.bind (EmitsOnlyRun.unchanged (fun env state => congrArg LS.blocks (valTy_run _ env state)))
+    intro type
+    apply EmitsOnlyRun.bind (emitsOnly_newBlock property [type])
+    rintro ⟨join, params⟩
+    apply EmitsOnlyRun.bind (emitsOnly_patchBrs property terms join _)
+    intro _
+    apply EmitsOnlyRun.bind (emitsOnly_setCur property (some join))
+    intro _
+    exact .pure _ _
+
+theorem EmitsOnlyRun.inScope {property : Inst → Prop} (scope : ScopeId) {action : B α}
+    (emitted : EmitsOnlyRun property action) : EmitsOnlyRun property (Goose.Lower.inScope scope action) := by
+  unfold Goose.Lower.inScope
+  apply EmitsOnlyRun.bind (EmitsOnlyRun.unchanged (fun _ _ => rfl))
+  intro _
+  apply EmitsOnlyRun.bind emitted
+  intro value
+  apply EmitsOnlyRun.bind (EmitsOnlyRun.unchanged (fun _ _ => rfl))
+  intro _
+  exact .pure _ _
+
 end Goose.Lower.Validation
