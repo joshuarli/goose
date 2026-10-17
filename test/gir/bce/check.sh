@@ -55,13 +55,17 @@ for name in returned aborted called looping call_kill scope_kill loop_counter; d
     "$jaq" -e '.[0:3] == ["module", "gir-h/0.4", "core-pilot"]' "$high" >/dev/null ||
         fail "$name did not export the pilot profile"
     proven=$("$jaq" '[.. | arrays | select(.[0]? == "i_index_proven")] | length' "$high")
+    checked=$("$jaq" '[.. | arrays | select(.[0]? == "i_index")] | length' "$high")
     case $name in
         returned|aborted|called|looping)
             [ "$proven" -gt 0 ] || fail "$name emitted no proven index"
             "$jaq" -e '[.. | arrays | select(.[0]? == "certificate")] | length > 0' "$high" >/dev/null ||
                 fail "$name emitted no certificate"
             ;;
-        *) [ "$proven" -eq 0 ] || fail "$name eliminated an index after a conservative kill" ;;
+        *)
+            [ "$checked" -gt 0 ] || fail "$name emitted no checked index after a conservative kill"
+            [ "$proven" -eq 0 ] || fail "$name eliminated an index after a conservative kill"
+            ;;
     esac
     [ "$("$tool" gir-validate "$high")" = '["ok"]' ] || fail "$name independent validation"
     "$tool" gir-reencode "$high" >"$roundtrip"
