@@ -6,17 +6,60 @@
 
 ## Current checkpoint
 
-The integrated source checkpoint is `master` at `4f7ccf1a`. The semantic tree is unchanged from `f885b7be`, and the verification files match the frozen source at `dc7cb23b`. The checked closure contains 216 changed or new Lean roots since `09374665`, plus `Goose.Audit`, across 1,290 modules. The full closure was rehashed. Audit checked 171 registered claims using only `propext`, `Classical.choice`, and `Quot.sound`. This is source-closure and transitive-claim evidence, not a fresh `goose-semantics` executable build or audit.
+The integrated source checkpoint is `master` at `4f7ccf1a`. The semantic tree is unchanged from `f885b7be`. Staging snapshot `d8b16216` passed a 1,308-module source-aware rehash, but it is a source-only region-aligned stage, not a closing candidate. Full validation, whole-evaluation proofs, fresh executable audit, same-checkpoint parity, final regression, and performance gates remain open.
 
-Native construction evidence remains bounded to its frozen lane snapshots. The 224 ASan/UBSan configurations cover 28 C++ utility cases at native freeze `1bde5daa`, before the later ExitRearm operation. The emitted C matched the frozen emitter byte-for-byte, and the run compared output, status, and trace events. Six fixtures also have fresh direct Core validation and execution receipts; the other 22 cases do not have a matching fresh Core receipt. A separate nine-fixture source comparison covered both numeric profiles at `-O0` and `-O2`, with Debug and release drivers, but used no sanitizers and did not use the integrated `4f7ccf1a` compiler. A three-unit C++ run and Debug source9 comparison were reported for frozen `a25b99e4`; their exact checks have not been replayed against `4f7ccf1a`, so they do not qualify this root. These receipts do not establish current cross-layer parity. The later ExitRearm change is not covered by the 224-case matrix.
+### Evidence by scope
+
+#### Source kernel and transitive audit
+
+At `4f7ccf1a`, the semantic and verifier sources match the frozen `dc7cb23b` tree. The selected source closure covers 216 changed or new Lean roots since `09374665`, plus `Goose.Audit`, for 1,290 modules. `verify_closure.py` fully rehashed the closure. The exact selected command is in `.work/wt/resume-semantic-check-nextplain/.work/tmp/nextplain-command.txt`; its completion log is `nextplain-closure-restart.log`. The separate `Goose.Audit` import reported 171 claims using only `propext`, `Classical.choice`, and `Quot.sound`; the runner and output are `.work/tmp/nextplain-audit.lean` and `.work/tmp/nextplain-audit.jsonl` in that worktree. This is source elaboration and a transitive declaration audit, not an executable `goose-semantics` build or audit.
+
+The staged region-aligned snapshot `d8b16216daee678d5f766e7665d070cc11e1beab` rehashed 144 changed roots plus `Goose.Audit`, 1,308 modules in 1,309 jobs, and all 171 audit registrations. The invocation and result are in `.work/wt/resume-native-regions-aligned/.work/tmp/regions-aligned-check1-resumed.log`. This snapshot does not include the subsequent model-knownness and SSA-value metadata, whole-evaluation proofs, Core/runtime updates, or GIR-H 0.5. It is not the integrated root.
+
+Three closed lowering results remain valid for the definitions they state. `28eb9cc1` proves forward lowering preservation for accepted Core modules at every source fuel bound. `1da41160` checks reverse execution and all-fuel target-fault exclusion. `770db8aa` proves the converse fuel bound `8 * (moduleSyntaxCap + 1) * (targetFuel + 2) + 1`; its 265-module closure and independent review passed. Neither direction assumes source termination or an owner-shape certificate. These model results do not establish C++ lowering or native-emitter correctness.
+
+#### Fresh executable semantics
+
+No fresh `goose-semantics` Main build or executable audit is established for the integrated root. The old 158- and 157-claim executable audits in the historical campaign log are not current evidence. The source-level audit above does not replace this gate.
+
+#### Production C++ units
+
+Three focused units passed on isolated source commit `561a0f52`, based on `4f7ccf1a` plus source-root-ceiling changes. This is not an integrated Debug compiler or a current-root receipt. From that worktree, the three commands were:
+
+```sh
+TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir.cpp -pthread -lm -o .work/tmp/compiler_gir-source-roots && .work/tmp/compiler_gir-source-roots
+TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir_effects.cpp -pthread -lm -o .work/tmp/compiler_gir_effects-source-roots && .work/tmp/compiler_gir_effects-source-roots
+TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir_reservations.cpp -pthread -lm -o .work/tmp/compiler_gir_reservations-source-roots && .work/tmp/compiler_gir_reservations-source-roots
+```
+
+#### Construction Core, GIR, and native execution
+
+The bounded construction packet combines native freeze `f8bbed7c`, high-GIR commits `4abec5a3` and `2dac55da`, independent high-GIR freeze `4e5d1c65`, and the exact Core source `d03511ca`. It is not integrated into one `master` Main build. The earlier 224-configuration matrix is a pre-Rearm historical receipt; the bounded packet below supersedes it.
+
+The fresh Core probe decoded and validated 35 selected fixtures, then ran each in both numeric profiles at fuel 10,000. It recorded stdout, status, and normalized events. From `resume-construction-ownership`, the command was `TMPDIR="$PWD/.work/tmp" LEAN_PATH="$PWD/semantics/.lake/build/lib/lean" /home/josh/.local/lib/lean4/v4.34.1/bin/lean -j1 -M4096 .work/tmp/rearm-final-35-core-probe.lean > .work/tmp/rearm-final-35-core-probe.log 2>&1`. The source and result are `rearm-final-35-core-probe.lean` and `.log`. The fixtures are the 35 `*.core.json` files under `resume-native-trace/.work/tmp/interrupted-native/rearm-frozen-packet`.
+
+The independent GIR-H check decoded, validated, and wrote back all 35 fixtures, then compared 70 release/debug executions with Core. Its case list and result are in `finish-construct-gir/.work/tmp/gir-current35-corpus.log`. The native selector is `test/compiler_gir_reservations.cpp`. The combined oracle comparison ran all 280 sanitized C executions against Core stdout, status, and trace events. The exact command was `TMPDIR="$PWD/.work/tmp" python3 .work/tmp/interrupted-native/compare-rearm-fresh-oracle.py` from `resume-native-trace`. The 248, 16, and 16 configuration records are in `rearm-final-matrix.log`, `rearm-named-matrix.log`, and `rearm-child-matrix.log`. The 280 generated C files and runtime headers matched the final emitter in `rearm-frozen-bytecompare.log`.
+
+The four-profile native receiving-lifetime guards passed in `rearm-frozen-lifetimes.log`, run with `python3 test/semantics/native_receiving_lifetimes.py --emitter .work/tmp/interrupted-native/rearm-frozen-utility --sanitize`. The unsanitized nine-fixture Debug/release source comparison passed 36 `-O0`/`-O2` runs plus CLI and I/O controls. The command used `python3 test/semantics/native_construction_trace.py --goose .work/tmp/interrupted-native/driver-build/goose --semantics /home/josh/d/goose/.work/wt/resume-audit/semantics/.lake/build/bin/goose-semantics --cc clang`; its result is `rearm-frozen-source9.log`. These bounded receipts do not establish same-checkpoint parity with integrated `master` or a fresh Main build.
 
 Named-value sampling allocates no storage. A reference call retains one two-pointer `owner_ref` record per distinct binding in that callee scope; repeated samples reuse the record. That is 16 bytes on a 64-bit target, as described in the [native construction contract](goose-ir-construction-native.md). This is a representation fact, not a performance result.
 
-The remaining proof work includes full GIR validation for summaries, roots, queries, readiness, and SSA ceilings, plus whole-evaluation `TH-CON` and `TH-EXIT`. The current root has no parity receipt for proof, Core, GIR, and native checks against one source checkpoint. A fresh executable semantics build and audit, final regression gates, binary-size qualification, and timed performance gates also remain open. Newer region, runtime, occurrence, ownership, and construction changes are separate lane results until integrated and checked together.
+#### Resource and performance
 
-Resource observations are limited to two sampled process-tree cases: a warm 1,290-module closure at about 1.09 GiB and an existing serial compiler fixture at about 1.52 GiB. Sampling can miss peaks, and summed RSS counts shared pages more than once. No full-rebuild aggregate peak, worst-case memory bound, binary-size result, or timing result is established. The performance gates remain open.
+Two sampled process-tree cases measured a warm 1,290-module closure at about 1.09 GiB and an existing serial compiler fixture at about 1.52 GiB. The samples and sampler are `nextplain-rss-warm.log`, `verifier-rss-real-inputs.log`, and `sample-verifier-rss.py` in `resume-semantic-check-nextplain/.work/tmp`. Sampling can miss peaks, and summed RSS counts shared pages more than once. No full-rebuild aggregate peak, worst-case memory bound, binary-size result, or timing result is established. Performance gates remain open.
 
-The trust boundary is unchanged. The proof does not establish correctness of the C++ frontend or exporter, C++ emitter, C compiler or linker, or operating system. See the [trust ledger](../../semantics/trust.md) for the checked boundary.
+#### Remaining proof obligations
+
+The accepted-Core-to-GIR-validation theorem remains open. Source-derived summary effects, stored provenance fixed points, basic entry/symbol/type/CFG/storage/scope/permission checks, and the initial root/return analyses have checked subclaims. The current collector and record changes still need to flow through the whole proof. The remaining validation assembly is:
+
+- Carry `RecipeBounds` through persistent per-SSA metadata. Derive `RecipeMetadataProjects` from the source collector, exact `Adv.recipePrefix` transitions, and `ifE` source records. Prove the successful-recipe visitor agrees with source provenance and floors.
+- Close context and global-initializer occurrence replay, then instantiate it at the actual function, entry, and initializer finish points. `SourceCanonicalFacts`, `SourceReady`, and the `Model` knownness/readiness certificate are not completed public premises.
+- Prove computed provenance is bounded by the selected slot, value, and formal seeds. Assemble strict `V050` summary, load, call, result, and effect checks against actual source occurrences and raw root ceilings.
+- Prove known and normalized queries and `Apart` for each demanded native operand and call. Feed those facts through the consuming RHS occurrence, demand and physical-disjointness checks, and the shrink-replacement frame trace.
+
+The whole-evaluation `TH-CON` and `TH-EXIT` proofs also remain open. Checked components include 23-form initial lifecycle/trace and successor-bound lemmas, token cleanup and release cases, and ordinary use/backing/source/receiver-boundary preservation. They do not establish the whole theorem. The missing ownership assembly includes positive-fuel-23 source induction and accepted `runModule`; reservation `SourceState` preservation across renew, reserve, select, cancel, materialize, and owner restoration with scope-frontier evidence; saved/local receiving boundaries and allocated-channel correspondence through protected-destination and owner-extension continuations; protected-prefix geometry and local byte-frame behavior at stop; and the exact seven construction rules plus post-operand `TH-EXIT` extraction.
+
+The proof boundary excludes correctness of the C++ frontend/exporter, C++ emitter, C compiler or linker, and operating system. See the [trust ledger](../../semantics/trust.md).
 
 ## Historical handoff (2026-10-14; superseded)
 
