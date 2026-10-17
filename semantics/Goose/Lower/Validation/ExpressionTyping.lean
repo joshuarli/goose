@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.ScalarTyping
 import Goose.Lower.Validation.ViewTyping
 
 namespace Goose.Lower.Validation
