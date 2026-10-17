@@ -4,6 +4,16 @@ namespace Goose.GIR
 
 open Goose.Core
 
+theorem Func.checkAdmittedRegions_value {m : Module} {vt : Array (Option VTy)}
+    {f : Func} {p : Prov} (checked : f.checkAdmittedRegions m vt p = .ok ())
+    {value : ValueId} {ceiling : List RootRef}
+    (row : (value, ceiling) ∈ (f.roots.values.getD #[]).toList) :
+    valRefLike vt value = true ∧ rootsAt p.vals value ⊆ ceiling := by
+  have admitted := (List.all_eq_true.mp (Func.checkAdmittedRegions_values checked))
+    (value, ceiling) row
+  simp only [Bool.and_eq_true, List.all_eq_true, List.contains_iff_mem] at admitted
+  exact admitted
+
 private theorem except_bind_ok {α β : Type} {action : Except String α}
     {next : α → Except String β} {result : β}
     (checked : (action >>= next) = .ok result) :
