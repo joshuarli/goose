@@ -152,6 +152,6 @@ theorem effects_fold_step (module : GIR.Module) (func : Func) (provenance : Prov
     func.effects module provenance = func.blocks.toList.foldl
       (fun effect block => block.insts.foldl
         (func.effectStep module (func.valueTypes module) provenance) effect) {} := by
-  simp only [Func.effects, Array.foldl_toList]
+  simp only [Func.effects, Func.effectsOfTypes, Array.foldl_toList]
 
 end Goose.Lower.Validation.SummaryPreservation

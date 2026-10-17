@@ -355,9 +355,11 @@ def Func.effectStep (m : Module) (vt : Array (Option VTy)) (f : Func) (p : Prov)
   | .term (.abort ..) | .term (.exit ..) => { e with aborts := true }
   | _ => e
 
-def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
-  let vt := f.valueTypes m
+def Func.effectsOfTypes (m : Module) (vt : Array (Option VTy)) (f : Func) (p : Prov) : Core.Eff :=
   f.blocks.foldl (fun acc block => block.insts.foldl (f.effectStep m vt p) acc) {}
+
+def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
+  f.effectsOfTypes m (f.valueTypes m) p
 
 /-- Every found target is declared. -/
 def Func.targetsWithin (f : Func) (what : String) (found declared : List Target) : Except String Unit :=
