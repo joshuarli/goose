@@ -69,4 +69,42 @@ private def scalarGlobalWrite : Core.Module :=
 #guard (Core.validate scalarGlobalWrite).toBool
 #guard (GIR.validate (lower scalarGlobalWrite)).toBool
 
+private def genericOwnerScalarCall (write : Bool) : Core.Module :=
+  let owner := Ty.growshrink (.int .i64)
+  let input := if write then scalarGlobalWrite else scalarGlobalRead
+  { input with
+    impls := input.impls.modify 1 fun impl =>
+      { impl with
+        params := #[⟨0, .byRef⟩],
+        vars := #[⟨"p", .ref .mutable owner, .immutable, 0, 0⟩],
+        body := .mk 0 [.assignWhole (.deref (.read (.var 0))) (.arrLit owner [.call 2 [] 0]) 0] none },
+    contexts := input.contexts.modify 1 fun context =>
+      { context with varRoots := [(0, [.param 0])] } }
+#guard (Core.validate (genericOwnerScalarCall false)).toBool
+#guard (Core.validate (genericOwnerScalarCall true)).toBool
+#guard (GIR.validate (lower (genericOwnerScalarCall false))).toBool
+#guard (GIR.validate (lower (genericOwnerScalarCall true))).toBool
+
+private def genericOwnerDeclaredRead : Core.Module :=
+  let input := genericOwnerScalarCall false
+  { input with impls := input.impls.modify 2 fun impl =>
+    { impl with summary := .known ⟨[.global 0], [], [], [], [], false, false⟩ } }
+#guard match Core.validate genericOwnerDeclaredRead with | .error rejection => rejection.rule == .whole | _ => false
+#guard match GIR.validate (lower genericOwnerDeclaredRead) with | .error rejection => rejection.code == .v060 | _ => false
+
+private def genericOwnerScalarArgument : Core.Module :=
+  let input := genericOwnerScalarCall false
+  let owner := Ty.growshrink (.int .i64)
+  { input with
+    impls := input.impls.modify 1 (fun impl =>
+      { impl with body := .mk 0 [.assignWhole (.deref (.read (.var 0)))
+          (.arrLit owner [.call 2 [.byRef .readOnly (.global 0)] 0]) 0] none }) |>.modify 2 fun impl =>
+      { impl with
+        params := #[⟨0, .byRef⟩],
+        vars := #[⟨"q", .ref .readOnly (.int .i64), .immutable, 0, 0⟩],
+        body := .mk 0 [] (some (.lit .i64 1)) },
+    contexts := input.contexts.modify 2 fun context => { context with varRoots := [(0, [.global 0])] } }
+#guard match Core.validate genericOwnerScalarArgument with | .error rejection => rejection.rule == .whole | _ => false
+#guard match GIR.validate (lower genericOwnerScalarArgument) with | .error rejection => rejection.code == .v060 | _ => false
+
 end Goose.Lower.Validation.ReplacementEmptyContentChecks
