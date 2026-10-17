@@ -91,7 +91,7 @@ def ReturnFreeStoppingStmt (noReturn : ContextId → Bool) : Stmt → Prop
   | _ => False
 
 def ReturnFreeStoppingBlock (noReturn : ContextId → Bool) : Block → Prop
-  | .mk _ stmts _ => ReturnFreeStoppingStmts noReturn stmts
+  | .mk _ stmts value => ReturnFreeStoppingStmts noReturn stmts ∧ ReturnFreeValue value
 
 def ReturnFreeStoppingStmts (noReturn : ContextId → Bool) : List Stmt → Prop
   | [] => False
