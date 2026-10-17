@@ -253,10 +253,6 @@ theorem definitions_coerceResult (value : ValueId) (org : OriginId) :
   | none => exact DefinitionRun.pure _
   | some destination => exact definitions_coerceTo destination value org
 
-theorem definitions_implOfContext (c : ContextId) : DefinitionRun (implOfContext c) := by
-  unfold implOfContext
-  exact DefinitionRun.bind definitions_read fun _ => DefinitionRun.pure _
-
 theorem definitions_growOwner (r : ValueId) : DefinitionRun (growOwner r) := by
   unfold growOwner
   refine DefinitionRun.bind (definitions_valTy r) fun t => ?_
@@ -526,7 +522,7 @@ theorem definitions_lowerExpr : ∀ e : Expr, DefinitionRun (lowerExpr e)
     exact DefinitionRun.bind (definitions_lowerExpr e) fun a => DefinitionRun.bind (definitions_intTyOf a) fun _ => definitions_emitDef _
   | .call c args org => by
     simp only [lowerExpr]
-    exact DefinitionRun.bind (definitions_lowerArgs args) fun _ => DefinitionRun.bind (definitions_implOfContext c) fun _ =>
+    exact DefinitionRun.bind (definitions_lowerArgs args) fun _ =>
       DefinitionRun.bind (definitions_emitDef _) fun r => DefinitionRun.bind definitions_read fun le => by
         cases le.mod.noReturn c <;> simp only [Bool.false_eq_true, ↓reduceIte] <;>
           first | exact DefinitionRun.pure _ | exact DefinitionRun.bind (definitions_emitTerm _) fun _ => DefinitionRun.pure _
@@ -786,8 +782,8 @@ theorem definitions_finishFunction (impl : Impl) (value : ValueId) :
 theorem definitions_initState : DefinitionsValid initState := by
   simp [DefinitionsValid, LS.defs, initState]
 
-theorem lowerImplAt_unique_definitions (module : Core.Module) (index : ImplId) (impl : Core.Impl) :
-    ((lowerImplAt module index impl).blocks.toList.flatMap GIR.Block.defs).Nodup := by
+theorem lowerImpl_unique_definitions (module : Core.Module) (impl : Core.Impl) :
+    ((lowerImpl module impl).blocks.toList.flatMap GIR.Block.defs).Nodup := by
   let action : B Unit := do
     let (entry, params) ← newBlock (impl.params.toList.map fun param => .data (tyOfVar impl param.var))
     setCur (some entry)
@@ -828,15 +824,22 @@ theorem lower_unique_definitions (module : Core.Module) (func : Func)
     (member : func ∈ (lower module).funcs.toList ++ (lower module).globals.toList.map (·.init)) :
     (func.blocks.toList.flatMap GIR.Block.defs).Nodup := by
   rcases List.mem_append.mp member with implementation | initializer
-  · obtain ⟨index, lookup⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp implementation)
-    change (module.impls.mapIdx fun index impl => lowerImplAt module index impl)[index]? = some func at lookup
-    rw [Array.getElem?_mapIdx] at lookup
-    cases source : module.impls[index]? with
-    | none => simp [source] at lookup
-    | some impl =>
-      simp only [source, Option.map_some, Option.some.injEq] at lookup
+  · change func ∈ (module.contexts.map fun ctx =>
+        match (module.impls.map fun impl => (impl, lowerImpl module impl))[ctx.impl]? with
+        | some (impl, body) => { body with roots := lowerContextRootInfo ctx impl }
+        | none => invalidContextFunction ctx).toList at implementation
+    simp only [Array.toList_map, List.mem_map] at implementation
+    obtain ⟨ctx, _, equality⟩ := implementation
+    rw [Array.getElem?_map] at equality
+    cases source : module.impls[ctx.impl]? with
+    | none =>
+      simp only [source, Option.map_none] at equality
       subst func
-      exact lowerImplAt_unique_definitions _ _ _
+      simp [invalidContextFunction]
+    | some impl =>
+      simp only [source, Option.map_some] at equality
+      subst func
+      exact lowerImpl_unique_definitions module impl
   · obtain ⟨global, globalMember, rfl⟩ := List.mem_map.mp initializer
     change global ∈ (module.globals.map (lowerGlobal module)).toList at globalMember
     simp only [Array.toList_map, List.mem_map] at globalMember
@@ -867,8 +870,8 @@ theorem finishFunction_block_count (impl : Core.Impl) (value : ValueId) (le : LE
     · simp only [emitTerm_block_count]
       omega
 
-theorem lowerImplAt_blocks_nonempty (module : Core.Module) (index : ImplId) (impl : Core.Impl) :
-    0 < (lowerImplAt module index impl).blocks.size := by
+theorem lowerImpl_blocks_nonempty (module : Core.Module) (impl : Core.Impl) :
+    0 < (lowerImpl module impl).blocks.size := by
   let env := lowerEnv module impl.vars impl.results.toList
   let start := newBlock (impl.params.toList.map fun param => .data (tyOfVar impl param.var)) env initState
   let entered := (setCur (some start.1.1) env start.2).2
