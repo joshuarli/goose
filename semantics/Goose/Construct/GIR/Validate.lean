@@ -471,6 +471,18 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
     for block in f.blocks do
       for inst in block.insts do
         let get (id : ValueId) := roots[id]?.getD []
+        let callResultRoots (callee : FnId) (args destinations : List ValueId) : List (List RootRef) := Id.run do
+          let some definition := m.funcs[callee]? | return []
+          let returned := (returns[callee]?.getD []).map (externalRoots (args.map get))
+          let mut pending := destinations
+          let mut rows := []
+          for (descriptor,position) in definition.results.zipIdx do
+            if descriptor.request == .register then
+              rows := rows ++ [returned[position]?.getD []]
+            else
+              rows := rows ++ [pending.head?.map get |>.getD []]
+              pending := pending.drop 1
+          return rows
         match inst with
         | .def id op =>
             match op with
@@ -482,7 +494,10 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
                       for root in get arg do
                         if let .local slot := root then
                           slots := slots.set! slot ((slots[slot]?.getD [] ++ contents).eraseDups)
-                let rows := (returns[callee]?.getD []).map (externalRoots (args.map get))
+                let rows := match op with
+                  | .call callee args _ => (returns[callee]?.getD []).map (externalRoots (args.map get))
+                  | .callConstruct callee args destinations _ => callResultRoots callee args destinations
+                  | _ => []
                 packs := packs.set! id (mergeRootRows (packs[id]?.getD []) rows)
             | _ => pure ()
             let found : List RootRef := match op with
@@ -513,8 +528,8 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
                 | .push reference | .append reference | .whole reference => get reference
                 | .arg _ _ => []
               | .destNamed slot _ => [.local slot]
-              | .call callee args _ | .callConstruct callee args _ _ =>
-                  externalRoots (args.map get) ((returns[callee]?.getD []).flatten)
+              | .call .. | .callConstruct .. =>
+                  (packs[id]?.getD []).flatten
               | .result pack position => (packs[pack]?.getD [])[position]?.getD []
               | _ => []
             roots := roots.set! id ((get id ++ found).eraseDups)
@@ -537,13 +552,17 @@ private def storageRoots (m : Module) (f : Func) (returns : Array (List (List Ro
                   | .invoke callee _ _ normal _ _ _ =>
                       if target == normal then (m.funcs[callee]?).map (·.results.length) |>.getD 0 else targetBlock.params.length - args.length
                   | _ => 0
-                if let .invoke callee callArgs _ normal _ escapeEdges _ := term then
-                  let rows := if target == normal then returns[callee]?.getD [] else
-                    match escapeEdges.find? (·.block == target) with
-                    | some edge => returns[escapeResultIndex m callee edge.target]?.getD []
-                    | none => []
-                  for ((id,_),row) in targetBlock.params.zip rows do
-                    roots := roots.set! id ((get id ++ externalRoots (callArgs.map get) row).eraseDups)
+                let rows := match term with
+                  | .invoke callee callArgs destinations normal _ escapeEdges _ =>
+                      if target == normal then callResultRoots callee callArgs destinations else
+                        let returned := match escapeEdges.find? (·.block == target) with
+                          | some edge => (returns[escapeResultIndex m callee edge.target]?.getD []).map
+                              (externalRoots (callArgs.map get))
+                          | none => []
+                        returned ++ destinations.map get
+                  | _ => []
+                for ((id,_),row) in targetBlock.params.zip rows do
+                  roots := roots.set! id ((get id ++ row).eraseDups)
                 for ((id,type), arg) in (targetBlock.params.drop skip).zip args do
                   roots := roots.set! id ((get id ++ get arg).eraseDups)
                   if type matches .pack .. then
@@ -1205,7 +1224,8 @@ private def checkKnownCounts (m : Module) (f : Func) : Check Unit := do
                   | some (.arr _ length) => count := count.map (· + length)
                   | _ => count := none
             | .eff (.destText destination _ _) | .eff (.destCopy destination _ _) => if aliases.contains destination then count := none
-            | .def result (.destStage source _) | .def result (.destValue source _) => if aliases.contains source then aliases := result :: aliases
+            | .def result (.destAdapt source ..) | .def result (.destStage source _) |
+                .def result (.destValue source _) => if aliases.contains source then aliases := result :: aliases
             | .def _ (.callConstruct _ _ destinations _) | .term (.invoke _ _ destinations _ _ _ _) => if destinations.any aliases.contains then count := none
             | .def _ (.destFinish destination _) =>
                 if aliases.contains destination then

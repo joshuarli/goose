@@ -1381,3 +1381,106 @@ private def abortBeforeAdaptationFinish : Module :=
   | _ => false)
 
 end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def adaptedKnownCount (bytes : List UInt8) : Module :=
+  let owner := Ty.grow (.int .u8)
+  moduleOf #[function "entry" #[⟨[],[
+    .eff (.enter 0),.def 0 (.constInt .i64 1),
+    .def 1 (.destOpen (.slot 0) owner .value (some 0) (some 0)),
+    .def 2 (.destAdapt 1 byteTy .value (some 0)),.eff (.destBytes 2 bytes (some 0)),
+    .def 3 (.destFinish 2 (some 0)),.def 4 (.destAdaptFinish 3 (some 0)),
+    .eff (.destPublish 4 (some 0)),.eff (.leave 0),.term (.ret [] none)]⟩]
+    #[⟨owner,.mutable,0,0⟩]]
+
+#guard (match Validate.validate (adaptedKnownCount [65,66]) with
+  | .error error => error.code == .v060
+  | _ => false)
+#guard (Validate.validate (adaptedKnownCount [65])).isOk
+
+private def invokeReadOnlyForward : Module :=
+  let ty := Ty.arr (.int .u8) 1
+  let entry := function "entry" #[
+    ⟨[],[
+      .eff (.enter 0),.def 0 (.constInt .u8 65),.def 1 (.arrLit ty [0]),
+      .eff (.slotInit 0 1 (some 0)),.def 2 (.slotAddr 0),.def 3 (.refFreeze 2),
+      .term (.invoke 1 [] [] 1 [3] [] (some 0))]⟩,
+    ⟨[(4,.data (.ref .readOnly ty))],[
+      .def 5 (.snapshot .borrowed 4),.def 6 (.constInt .i64 0),.def 7 (.indexChecked 5 6 (some 0)),
+      .def 8 (.constInt .u8 66),.eff (.store 7 8 (some 0)),.eff (.leave 0),.term (.ret [] none)]⟩]
+    #[⟨ty,.immutable,0,0⟩]
+  let callee := function "callee" #[⟨[],[.term (.ret [] none)]⟩]
+  moduleOf #[entry,callee]
+
+#guard (match Validate.validate invokeReadOnlyForward with
+  | .error error => error.code == .v030
+  | _ => false)
+
+private def invokeWritableForward : Module :=
+  let ty := Ty.arr (.int .u8) 1
+  let entry := function "entry" #[
+    ⟨[],[
+      .eff (.enter 0),.def 0 (.constInt .u8 65),.def 1 (.arrLit ty [0]),
+      .eff (.slotInit 0 1 (some 0)),.def 2 (.slotAddr 0),.term (.invoke 1 [] [] 1 [2] [] (some 0))]⟩,
+    ⟨[(3,.data (.ref .mutable ty))],[
+      .def 4 (.snapshot .borrowed 3),.def 5 (.constInt .i64 0),.def 6 (.indexChecked 4 5 (some 0)),
+      .def 7 (.constInt .u8 66),.eff (.store 6 7 (some 0)),
+      .eff (.print [.val 4] (some 0)),.eff (.leave 0),.term (.ret [] none)]⟩]
+    #[⟨ty,.mutable,0,0⟩]
+  let callee := function "callee" #[⟨[],[.term (.ret [] none)]⟩]
+  moduleOf #[entry,callee]
+
+#guard (Validate.validate invokeWritableForward).isOk
+#guard observation invokeWritableForward == some ([66,10],[])
+
+private def publishCalledLocalRef : Module :=
+  let byteTy := Ty.varr (.int .u8)
+  let ownerTy := Ty.grow byteTy
+  let entry := function "entry" #[⟨[],[
+    .def 0 (.call 1 [] (some 0)),.def 1 (.snapshot .borrowed 0),
+    .eff (.print [.val 1] (some 0)),.term (.ret [] none)]⟩]
+  let maker := function "maker" #[⟨[],[
+    .eff (.enter 0),.def 0 (.constInt .i64 0),
+    .def 1 (.destOpen (.slot 0) ownerTy .value (some 0) (some 0)),
+    .def 2 (.destFinish 1 (some 0)),.eff (.destPublish 2 (some 0)),.def 3 (.slotAddr 0),
+    .def 4 (.destOpen (.push 3) byteTy .value none (some 0)),
+    .def 5 (.callConstruct 2 [] [4] (some 0)),.def 6 (.destPublishRef 5 (some 0)),
+    .eff (.leave 0),.term (.ret [6] (some 0))]⟩]
+    #[⟨ownerTy,.mutable,0,0⟩] [⟨.ref .mutable byteTy,.register,none⟩]
+  let producer := function "producer" #[⟨[(0,.dest byteTy .value)],[
+    .eff (.destBytes 0 [65] (some 0)),.def 1 (.destFinish 0 (some 0)),.term (.ret [1] (some 0))]⟩]
+    #[] [⟨byteTy,.value,none⟩]
+  moduleOf #[entry,maker,producer]
+
+#guard (match Validate.validate publishCalledLocalRef with
+  | .error error => error.code == .v040
+  | _ => false)
+
+private def invokePublishesLocalRef : Module :=
+  let byteTy := Ty.varr (.int .u8)
+  let ownerTy := Ty.grow byteTy
+  let entry := function "entry" #[⟨[],[
+    .def 0 (.call 1 [] (some 0)),.def 1 (.snapshot .borrowed 0),
+    .eff (.print [.val 1] (some 0)),.term (.ret [] (some 0))]⟩]
+  let caller := function "caller" #[
+    ⟨[],[
+      .eff (.enter 0),.def 0 (.constInt .i64 0),
+      .def 1 (.destOpen (.slot 0) ownerTy .value (some 0) (some 0)),
+      .def 2 (.destFinish 1 (some 0)),.eff (.destPublish 2 (some 0)),.def 3 (.slotAddr 0),
+      .def 4 (.destOpen (.push 3) byteTy .value none (some 0)),
+      .term (.invoke 2 [] [4] 1 [] [] (some 0))]⟩,
+    ⟨[(5,.data (.int .i64)),(6,.built byteTy .value)],[
+      .def 7 (.destPublishRef 6 (some 0)),.eff (.leave 0),.term (.ret [7] (some 0))]⟩]
+    #[⟨ownerTy,.mutable,0,0⟩] [⟨.ref .mutable byteTy,.register,none⟩]
+  let producer := function "producer" #[⟨[(0,.dest byteTy .value)],[
+    .def 1 (.constInt .i64 1),.eff (.destBytes 0 [65] (some 0)),
+    .def 2 (.destFinish 0 (some 0)),.term (.ret [1,2] (some 0))]⟩]
+    #[] [⟨.int .i64,.register,none⟩,⟨byteTy,.value,none⟩]
+  moduleOf #[entry,caller,producer]
+
+#guard (match Validate.validate invokePublishesLocalRef with
+  | .error error => error.code == .v040
+  | _ => false)
+
+end Goose.Construct.GIR.Checks

@@ -447,8 +447,8 @@ def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (
   let start := Array.replicate f.numValues (true, true)
   let round (caps : Array (Bool × Bool)) := Id.run do
     let mut next := caps
-    if let some entry := f.blocks[0]? then
-      for (v, _) in entry.params do next := next.set! v (meet (capAt next v) (typed v))
+    for block in f.blocks do
+      for (v, _) in block.params do next := next.set! v (meet (capAt next v) (typed v))
     for b in f.blocks do
       for i in b.insts do
         match i with
@@ -477,14 +477,17 @@ def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (
             | _ => typed v
           next := next.set! v (meet (capAt next v) c)
         | .term term =>
-          let edges := match term with
-            | .br target args => [(target, args)]
-            | .condbr _ t ta e ea => [(t, ta), (e, ea)]
+          let edges : List (BlockId × List ValueId) := match term with
+            | .br target args => [(target,args)]
+            | .condbr _ left leftArgs right rightArgs => [(left,leftArgs),(right,rightArgs)]
+            | .invoke _ _ _ normal forwarded escapes _ =>
+                (normal,forwarded) :: escapes.map (fun edge => (edge.block,edge.args))
             | _ => []
           for (target, args) in edges do
             if let some dest := f.blocks[target]? then
-              for ((v, _), arg) in dest.params.zip args do
-                next := next.set! v (meet (capAt next v) (capAt caps arg))
+              let leading := dest.params.length - args.length
+              for ((v, _), arg) in (dest.params.drop leading).zip args do
+                next := next.set! v (meet (capAt next v) (meet (capAt caps arg) (typed v)))
         | _ => pure ()
     return next
   let rec fix : Nat → Array (Bool × Bool) → Array (Bool × Bool)
