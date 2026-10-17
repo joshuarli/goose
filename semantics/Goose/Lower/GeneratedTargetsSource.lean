@@ -17,7 +17,7 @@ theorem generatedTargets_lowerExpr (lc : Option LoopCtx) : ∀ e : Expr, Generat
     exact GeneratedTargetRun.bind (generatedTargets_lowerPlace lc p) fun _ => generatedTargets_emitDef lc _
   | .ref m p => by
     simp only [lowerExpr]
-    exact GeneratedTargetRun.bind (generatedTargets_lowerPlace lc p) fun r => generatedTargets_freezeTo lc m r
+    exact GeneratedTargetRun.bind (generatedTargets_lowerPlace lc p) fun r => generatedTargets_borrowTo lc m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact GeneratedTargetRun.bind (generatedTargets_lowerView lc v) fun _ => GeneratedTargetRun.bind (generatedTargets_lowerBound lc lo) fun _ =>
@@ -87,7 +87,7 @@ theorem generatedTargets_lowerArg (lc : Option LoopCtx) : ∀ a : Arg, Generated
   | .byVal e => by simp only [lowerArg]; exact generatedTargets_lowerExpr lc e
   | .byRef m p => by
     simp only [lowerArg]
-    exact GeneratedTargetRun.bind (generatedTargets_lowerPlace lc p) fun r => generatedTargets_freezeTo lc m r
+    exact GeneratedTargetRun.bind (generatedTargets_lowerPlace lc p) fun r => generatedTargets_borrowTo lc m r
 
 theorem generatedTargets_lowerArgs (lc : Option LoopCtx) : ∀ as : List Arg, GeneratedTargetRun lc (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact generatedTargets_pure lc _
