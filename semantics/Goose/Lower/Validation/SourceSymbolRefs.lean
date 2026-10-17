@@ -75,6 +75,30 @@ theorem LS.SourceSymbolsRun.of_unchanged {le : LEnv} {scopeCount : Nat} {action 
   subst after
   exact checked
 
+theorem LS.SourceSymbolsRun.of_insts_stack {le : LEnv} {scopeCount : Nat} {action : B α}
+    (sameInsts : ∀ state, (action le state).2.insts = state.insts)
+    (sameStack : ∀ state, (action le state).2.stack = state.stack) :
+    LS.SourceSymbolsRun le scopeCount action := by
+  intro before result after run checked
+  have stateEq := congrArg Prod.snd run
+  have instEq := congrArg LS.insts stateEq
+  have stackEq := congrArg LS.stack stateEq
+  rw [sameInsts before] at instEq
+  rw [sameStack before] at stackEq
+  refine ⟨?_, ?_⟩
+  · intro inst member
+    exact checked.1 inst (by rw [← instEq] at member; exact member)
+  · intro scope member
+    exact checked.2 scope (by rw [← stackEq] at member; exact member)
+
+theorem LS.SourceSymbolsRun.bind {le : LEnv} {scopeCount : Nat} {action : B α}
+    {next : α → B β} (first : LS.SourceSymbolsRun le scopeCount action)
+    (second : ∀ value, LS.SourceSymbolsRun le scopeCount (next value)) :
+    LS.SourceSymbolsRun le scopeCount (action >>= next) := by
+  intro before result after run checked
+  obtain ⟨value, mid, firstRun, secondRun⟩ := bind_eq.mp run
+  exact second value _ _ _ secondRun (first _ _ _ firstRun checked)
+
 theorem LS.SourceSymbolsRun.curBlock {le : LEnv} {scopeCount : Nat} :
     LS.SourceSymbolsRun le scopeCount Goose.Lower.curBlock := by
   apply LS.SourceSymbolsRun.of_unchanged
@@ -111,13 +135,21 @@ theorem LS.SourceSymbolsRun.readAction {le : LEnv} {scopeCount : Nat} :
   intro state
   rfl
 
-theorem LS.SourceSymbolsRun.bind {le : LEnv} {scopeCount : Nat} {action : B α}
-    {next : α → B β} (first : LS.SourceSymbolsRun le scopeCount action)
-    (second : ∀ value, LS.SourceSymbolsRun le scopeCount (next value)) :
-    LS.SourceSymbolsRun le scopeCount (action >>= next) := by
-  intro before result after run checked
-  obtain ⟨value, mid, firstRun, secondRun⟩ := bind_eq.mp run
-  exact second value _ _ _ secondRun (first _ _ _ firstRun checked)
+theorem LS.SourceSymbolsRun.newBlock {le : LEnv} {scopeCount : Nat} (types : List VTy) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.newBlock types) := by
+  apply LS.SourceSymbolsRun.of_insts_stack
+  · intro state
+    simp [newBlock_run_general, LS.insts, Array.toList_push]
+  · intro state
+    simp [newBlock_run_general]
+
+theorem LS.SourceSymbolsRun.setCur {le : LEnv} {scopeCount : Nat} (current : Option BlockId) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.setCur current) := by
+  apply LS.SourceSymbolsRun.of_insts_stack
+  · intro state
+    simp [setCur_run, LS.insts]
+  · intro state
+    simp [setCur_run]
 
 theorem LS.sourceSymbols_appendInst {le : LEnv} {scopeCount : Nat} {before : LS}
     (checked : LS.SourceSymbolsWF le scopeCount before) (block : BlockId) (inst : Inst)
@@ -593,6 +625,46 @@ theorem LS.SourceSymbolsRun.emitTerm {le : LEnv} {scopeCount : Nat} (term : Term
     have appended := LS.sourceSymbols_appendInst checked block (.term term)
       (Inst.SourceSymbolsWithin.term (scopeCount := scopeCount) origin)
     simpa only [LS.SourceSymbolsWF, LS.insts, LS.appendInst] using appended
+
+theorem LS.SourceSymbolsRun.fork {le : LEnv} {scopeCount : Nat} (condition : ValueId) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.fork condition) := by
+  simp only [Goose.Lower.fork]
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.newBlock [])
+    (LS.SourceSymbolsRun.newBlock [])
+  intro _
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.newBlock [])
+    (LS.SourceSymbolsRun.newBlock [])
+  intro _
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitTerm _)
+  · apply LS.SourceSymbolsRun.emitTerm
+    intro origin equality
+    simp [Term.origin] at equality
+  · intro _
+    exact LS.SourceSymbolsRun.pure _
+
+theorem LS.SourceSymbolsRun.scFork {le : LEnv} {scopeCount : Nat}
+    (isAnd : Bool) (condition : ValueId) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.scFork isAnd condition) := by
+  simp only [Goose.Lower.scFork]
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.newBlock [])
+    (LS.SourceSymbolsRun.newBlock [])
+  intro _
+  apply LS.SourceSymbolsRun.bind (action := Goose.Lower.newBlock [.data .bool])
+    (LS.SourceSymbolsRun.newBlock [.data .bool])
+  intro _
+  cases isAnd <;> simp only [Bool.false_eq_true, ↓reduceIte]
+  · apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitTerm _)
+    · apply LS.SourceSymbolsRun.emitTerm
+      intro origin equality
+      simp [Term.origin] at equality
+    · intro _
+      exact LS.SourceSymbolsRun.pure _
+  · apply LS.SourceSymbolsRun.bind (action := Goose.Lower.emitTerm _)
+    · apply LS.SourceSymbolsRun.emitTerm
+      intro origin equality
+      simp [Term.origin] at equality
+    · intro _
+      exact LS.SourceSymbolsRun.pure _
 
 theorem LS.SourceSymbolsRun.lowerExpr_call {le : LEnv} {scopeCount : Nat}
     {context : Core.ContextId} {args : List Core.Arg} {origin : Core.OriginId}
