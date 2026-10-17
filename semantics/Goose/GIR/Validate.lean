@@ -706,11 +706,20 @@ def checkRootAnnotationsOf (m : Module) (vts : Array (Array (Option VTy)))
             unless declared == [.param j] || expected.all declared.contains do
               violation .v050 s!"{calleeLabel} parameter {j} root info omits a root passed at a call site"
           if callee.params[j].isRefSlice then
-            let actual := argumentContents f p args[j]!
-            let declared := (callee.roots.contents.find? (·.1 == j)).map (·.2) |>.getD []
-            let mapped := mapContentRoots f p args declared
-            unless actual.all mapped.contains do
-              violation .v050 s!"{calleeLabel} content root info for parameter {j} omits a root passed at a call site"
+            if let some (_, declared) := callee.roots.contents.find? (·.1 == j) then
+              let actual := argumentContents f p args[j]!
+              let mapped := mapContentRoots f p args declared
+              unless actual.all mapped.contains do
+                violation .v050 s!"{calleeLabel} content root info for parameter {j} omits a root passed at a call site"
+      | .def result (.load address) =>
+        match vt[result]? with
+        | some (some (.data (.slice ..))) =>
+          for root in rootsAt p.vals address do
+            if let .param parameter := root then
+              if (f.params[parameter]?).any Ty.isRefSlice &&
+                  (f.roots.contents.find? (·.1 == parameter)).isNone then
+                violation .v050 s!"{label} reads slice contents through parameter {parameter} without content root info"
+        | _ => pure ()
       | _ => pure ()
 
 def checkRootAnnotations (m : Module) (vts : Array (Array (Option VTy)))
