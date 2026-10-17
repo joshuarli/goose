@@ -207,10 +207,10 @@ theorem provStart_values_size (func : Func) (types : Array (Option VTy)) :
     (provStart types func).vals.size = func.numValues := by
   unfold provStart
   cases row : func.blocks[0]? with
-  | none => simp
+  | none => simp [Func.valueRootSeeds]
   | some block =>
     apply List.foldlRecOn (motive := fun vals : Array (List RootRef) => vals.size = func.numValues)
-      block.params.zipIdx _ (by simp)
+      block.params.zipIdx _ (by simp [Func.valueRootSeeds])
     intro vals size pair member
     dsimp only
     split <;> simpa using size
