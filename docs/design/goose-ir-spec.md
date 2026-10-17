@@ -1143,6 +1143,8 @@ Owner parameter and output indices are one-based primitive positions. `l_control
 
 A receiving view borrowed from a dynamically active target does not own that target activation's control state; dropping a descendant view cannot release the outer activation's control. A receiving drop is invalid while the handle owns a writable attempt, delegated lease, or exit reservation. An independent completed value may outlive the dropped handle.
 
+When a variable-array read carries an owner binding, `l_control_owner_is_named` selects its read path. The named path uses `l_control_named_base` and `l_control_named_count` with the exact retained whole-reference value; the binding and reference must identify the same raw node, and the retained value must still be readable. It does not resolve a historical source through successors. Child references clear the named binding. An empty or mutable-owner binding uses the existing static array read instead; that path does not consult named-value storage or copy or repack the value.
+
 Receiving handles and exit reservations remain implicit, dominating SSA authorities across CFG and invoke edges. They cannot be transferred through block parameters or explicit edge arguments. Raw `dest`, `built`, and `cancelled` carriers continue to use explicit edge arguments.
 
 | Tag | Fields after the tag | Result type | Token role |
@@ -1152,6 +1154,9 @@ Receiving handles and exit reservations remain implicit, dominating SSA authorit
 | `l_control_call_param` | `val` result, `nat` result position | `ptr` | Incoming receiving-channel token. |
 | `l_control_call_get` | `val` result, `val` call token, `nat` result position | `ptr` | Returned receiving-channel token. |
 | `l_control_owner_none` | `val` result | `ptr` | Empty named-owner binding. |
+| `l_control_owner_is_named` | `val` result, `val` binding | `bool` | Report whether the binding retains a named immutable value and select the named or ordinary read path. |
+| `l_control_named_base` | `val` result, `val` binding, `val` whole reference | `ptr` | Read the retained named value's element base after validating exact whole-reference identity and lifetime. |
+| `l_control_named_count` | `val` result, `val` binding, `val` whole reference | `i64` | Read the retained named value's element count after validating exact whole-reference identity and lifetime. |
 | `l_control_named_bind` | `val` result, `val` raw built metadata | `ptr` | Owner binding for a non-grow named source. |
 | `l_control_owner_bind` | `val` result, `val` receiving, `val` header, `[val]` stack | `ptr` | Named-owner binding. The stack list has one pointer. |
 | `l_control_owner_param` | `val` result, `nat` primitive position | `ptr` | Owner binding for a source parameter. |
