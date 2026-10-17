@@ -227,7 +227,7 @@ theorem EachLoopState.bodySource {cfg : Cfg} {env : Env} {initial state elementS
         not_false_eq_true, List.nodup_nil, and_true]
       intro equal
       exact Nat.ne_of_lt (Nat.lt_succ_self x) (equal.trans afterX)
-  apply eachBlockSource_reserved source.accepted plan.bodyContext (eachCorePre x idx element i)
+  apply blockSource_reserved source.accepted plan.bodyContext (eachCorePre x idx element i)
     (x :: idx.toList) x active access (may ▸ source.protection) (may ▸ runtime.observed)
     runtime.classified source.permission (eachBody_input_frame runtime) plan.typed plan.rooted
     plan.effects names distinct
