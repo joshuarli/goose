@@ -53,7 +53,7 @@ theorem returnFree_eachElemValue (slot : VarId) (byRef : Bool)
       dsimp only
       cases declaration.ty <;> first
         | exact returnFree_pure _
-        | exact returnFree_freezeTo _ _
+        | exact returnFree_borrowTo _ _
 
 theorem returnFree_fork (condition : ValueId) : ReturnFreeRun (fork condition) := by
   unfold fork

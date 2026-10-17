@@ -119,6 +119,12 @@ theorem entry_freezeTo (loop : Option LoopCtx) (m : Mutability) (r : ValueId) : 
     | exact entry_pure loop _
     | (rename_i t; cases t <;> first | exact entry_pure loop _ | (rename_i m' _; cases m' <;> first | exact entry_pure loop _ | exact entry_emitDef loop _))
 
+theorem entry_borrowTo (loop : Option LoopCtx) (mu : Mutability) (value : ValueId) : EntryRun loop (borrowTo mu value) := by
+  intro env before result after run bounded targets
+  rcases borrowTo_cases run with frozen | emitted
+  · exact entry_freezeTo loop mu value env before result after frozen bounded targets
+  · exact entry_emitDef loop _ env before result after emitted bounded targets
+
 theorem entry_coerceTo (loop : Option LoopCtx) (target : Ty) (r : ValueId) (org : OriginId) : EntryRun loop (coerceTo target r org) := by
   unfold coerceTo
   refine EntryRun.bind (entry_valTy loop r) fun source => ?_
