@@ -71,6 +71,18 @@ inductive HolderAtom (func : Func) (payload : Ty) (upper : List RootRef) : Atom 
 def HolderRoots (func : Func) (payload : Ty) (upper : List RootRef) (roots : Roots) : Prop :=
   roots.AtomsWithin (HolderAtom func payload upper)
 
+theorem HolderAtom.local {func : Func} {payload : Ty} {upper : List RootRef} {slot : SlotId}
+    (physical : HolderAtom func payload upper (.local slot)) :
+    ∃ storage, func.slots[slot]? = some storage ∧ storage.ty = payload ∧ RootRef.local slot ∈ upper := by
+  cases physical with
+  | slot _ storage row type member => exact ⟨storage,row,type,member⟩
+
+theorem HolderAtom.param {func : Func} {payload : Ty} {upper : List RootRef} {index : Nat}
+    (physical : HolderAtom func payload upper (.param index)) :
+    ∃ mutability, func.params[index]? = some (.ref mutability payload) ∧ RootRef.param index ∈ upper := by
+  cases physical with
+  | parameter _ mutability row member => exact ⟨mutability,row,member⟩
+
 theorem HolderAtom.mono {func : Func} {payload : Ty} {small large : List RootRef} {atom : Atom}
     (bounded : HolderAtom func payload small atom) (subset : small ⊆ large) :
     HolderAtom func payload large atom := by
@@ -156,6 +168,25 @@ theorem HolderRoots.content_symbolic_typed {func : Func} {state : State} {payloa
           have slice := paramOk_refLike_payload parameters row reference
           have found : (func.params[index]?).any Ty.isRefSlice = true := by simp [row, slice]
           simpa [found] using contents index mutability row included
+
+theorem HolderRoots.content_reference {func : Func} {state : State} {payload : Ty}
+    {mutability : Mutability} {upper : List RootRef} {address : Roots} {predicate : Atom → Prop}
+    (physical : HolderRoots func (.ref mutability payload) upper address)
+    (parameters : ∀ type ∈ func.params, type.paramOk = true)
+    (slots : ∀ slot storage, func.slots[slot]? = some storage → storage.ty = .ref mutability payload →
+      RootRef.local slot ∈ upper → (flowAt state.slots slot).AtomsWithin predicate) :
+    (content func state address).AtomsWithin predicate := by
+  cases address with
+  | pending => trivial
+  | unknown => exact False.elim physical
+  | known atoms =>
+      apply Roots.AtomsWithin.bind_known
+      intro atom member
+      cases physical atom member with
+      | slot slot storage row type included => exact slots slot storage row type included
+      | parameter index sourceMutability row included =>
+          have impossible := paramOk_refLike_payload parameters row (by simp [Ty.isRefLike])
+          simp [Ty.isRefSlice] at impossible
 
 #print axioms HolderRoots.content_symbolic
 #print axioms HolderRoots.symbolic

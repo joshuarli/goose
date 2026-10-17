@@ -1,4 +1,6 @@
 import Goose.GIR.ReplacementContentFlowProofsCanonicalStart
+import Goose.GIR.ReplacementContentFlowProofsCanonicalOwners
+import Goose.GIR.ReplacementContentFlowProofsCanonicalWriteRows
 
 namespace Goose.GIR.ReplacementContentFlow.Model
 
@@ -20,8 +22,15 @@ structure State.CanonicalWithin (func : Func) (vt : Array (Option VTy)) (provena
   shape : state.Shape func
   values : SymbolicCells func (rootsAt provenance.vals) state.values
   memory : state.CanonicalMemory func provenance
+  writeRows : WriteRows func state.writes
   holderValues : HolderValues func vt provenance state.values
   holderSlots : HolderSlots func provenance state.slots
+  ownerValues : OwnerValues func vt state.values
+  ownerSlots : OwnerSlots func state.slots
+  returned : ∀ type, func.results = [type] → type.isRefLike = true →
+    SymbolicRootsRefine func state.returned (func.roots.results[0]?.getD [])
+  returnedOwners : ∀ mutability payload, func.results = [.ref mutability payload] →
+    payload.ownerElem?.isSome = true → OwnerOrigins func payload state.returned
 
 theorem HolderValues.set {func : Func} {vt : Array (Option VTy)} {provenance : Prov}
     {values : Array Roots} {index : Nat} {roots : Roots}
@@ -93,8 +102,15 @@ theorem start_canonicalWithin (func : Func) (vt : Array (Option VTy)) (provenanc
       ∀ pair index, (pair,index) ∈ entry.params.zipIdx → valRefLike vt pair.1 = true →
         RootRef.param index ∈ rootsAt provenance.vals pair.1) :
     (start func vt).CanonicalWithin func vt provenance :=
-  ⟨start_shape _ _,start_canonicalValues _ _ _ seeds,start_canonicalMemory _ _ _ unique,
-    start_holderValues _ _ _ parameters seeds,start_holderSlots _ _ _⟩
+  ⟨start_shape _ _,start_canonicalValues _ _ _ seeds,start_canonicalMemory _ _ _ unique,start_writeRows _ _,
+    start_holderValues _ _ _ parameters seeds,start_holderSlots _ _ _,
+    start_ownerValues _ _ parameters,start_ownerSlots _ _,by
+      intro type result reference
+      rw [start_returned]
+      exact .known_empty _ _,by
+      intro mutability payload result owner
+      rw [start_returned]
+      simp [OwnerOrigins,Roots.AtomsWithin]⟩
 
 theorem State.Extends.canonicalWithin {func : Func} {vt : Array (Option VTy)} {provenance : Prov}
     {before after : State} (growth : before.Extends after)
@@ -106,12 +122,23 @@ theorem State.Extends.canonicalWithin {func : Func} {vt : Array (Option VTy)} {p
     exact (growth.values.values index).symbolicRootsRefine
       (bounded.values index (by simpa [growth.values.size] using member))
   · exact growth.canonicalMemory bounded.memory
+  · exact growth.writes.writeRows bounded.writeRows
   · intro value member mutability payload type reference
     exact Roots.Extends.atomsWithin (growth.values.values value)
       (bounded.holderValues value (by simpa [growth.values.size] using member) mutability payload type reference)
   · intro slot storage row member mutability payload type reference
     exact Roots.Extends.atomsWithin (growth.slots.values slot)
       (bounded.holderSlots slot storage row (by simpa [growth.slots.size] using member) mutability payload type reference)
+  · intro value member mutability payload type owner
+    exact Roots.Extends.atomsWithin (growth.values.values value)
+      (bounded.ownerValues value (by simpa [growth.values.size] using member) mutability payload type owner)
+  · intro slot storage row member mutability payload type owner
+    exact Roots.Extends.atomsWithin (growth.slots.values slot)
+      (bounded.ownerSlots slot storage row (by simpa [growth.slots.size] using member) mutability payload type owner)
+  · intro type result reference
+    exact growth.returned.symbolicRootsRefine (bounded.returned type result reference)
+  · intro mutability payload result owner
+    exact growth.returned.atomsWithin (bounded.returnedOwners mutability payload result owner)
 
 #print axioms start_canonicalWithin
 #print axioms State.Extends.canonicalWithin

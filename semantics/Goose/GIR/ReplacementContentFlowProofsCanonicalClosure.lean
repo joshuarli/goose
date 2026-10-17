@@ -184,6 +184,97 @@ theorem provStep_store_roots {results : Array (List RootRef)} {vt : Array (Optio
   apply added
   simpa [values] using member
 
+private def edgeParameter (state : Prov × Bool) (pair : (ValueId × VTy) × ValueId) : Prov × Bool :=
+  let (values,changed) := Goose.GIR.addTo state.1.vals pair.1.1 (rootsAt state.1.vals pair.2)
+  ({ state.1 with vals := values },state.2 || changed)
+
+private theorem edgeParameter_eta :
+    (fun (state : Prov × Bool) (pair : (ValueId × VTy) × ValueId) =>
+      ({ state.1 with vals := (Goose.GIR.addTo state.1.vals pair.1.1 (rootsAt state.1.vals pair.2)).1 },
+        state.2 || (Goose.GIR.addTo state.1.vals pair.1.1 (rootsAt state.1.vals pair.2)).2)) = edgeParameter := by
+  funext state pair
+  cases state
+  cases pair
+  rfl
+
+private theorem edgeParameter_growth (state : Prov × Bool) (pair : (ValueId × VTy) × ValueId) :
+    RootTableGrowth state.1.vals (edgeParameter state pair).1.vals := addTo_growth _ _ _
+
+private theorem edgeFold_growth (state : Prov × Bool) (pairs : List ((ValueId × VTy) × ValueId)) :
+    RootTableGrowth state.1.vals (pairs.foldl edgeParameter state).1.vals := by
+  apply List.foldlRecOn (motive := fun current : Prov × Bool => RootTableGrowth state.1.vals current.1.vals)
+    pairs _ (.refl _)
+  intro current prior pair _
+  exact prior.trans (edgeParameter_growth _ _)
+
+private theorem edgeFold_size (state : Prov × Bool) (pairs : List ((ValueId × VTy) × ValueId)) :
+    (pairs.foldl edgeParameter state).1.vals.size = state.1.vals.size := by
+  apply List.foldlRecOn (motive := fun current : Prov × Bool => current.1.vals.size = state.1.vals.size)
+    pairs _ rfl
+  intro current prior pair _
+  simp only [edgeParameter,Goose.GIR.addTo]
+  split <;> simpa using prior
+
+private theorem edgeFold_contains (state : Prov × Bool) (pairs : List ((ValueId × VTy) × ValueId))
+    {parameter : ValueId × VTy} {argument : ValueId} (member : (parameter,argument) ∈ pairs)
+    (bounded : parameter.1 < state.1.vals.size) :
+    rootsAt state.1.vals argument ⊆ rootsAt (pairs.foldl edgeParameter state).1.vals parameter.1 := by
+  obtain ⟨before,after,split⟩ := List.mem_iff_append.mp member
+  let middle := before.foldl edgeParameter state
+  have prior := edgeFold_growth state before
+  have sizes : middle.1.vals.size = state.1.vals.size := edgeFold_size _ _
+  have added := addTo_contains (table := middle.1.vals) (index := parameter.1)
+    (roots := rootsAt middle.1.vals argument) (by rw [sizes]; exact bounded)
+  have continued := edgeFold_growth (edgeParameter middle (parameter,argument)) after
+  rw [split,List.foldl_append,List.foldl_cons]
+  intro root included
+  exact continued parameter.1 (added (prior argument included))
+
+theorem provStep_br_roots {results : Array (List RootRef)} {vt : Array (Option VTy)}
+    {func : Func} {provenance : Prov} {target : BlockId} {args : List ValueId} {block : Block}
+    (targetAt : func.blocks[target]? = some block)
+    (quiet : func.provStep results vt (provenance,false) (.term (.br target args)) = (provenance,false))
+    {parameter : ValueId × VTy} {argument : ValueId} (member : (parameter,argument) ∈ block.params.zip args)
+    (bounded : parameter.1 < provenance.vals.size) :
+    rootsAt provenance.vals argument ⊆ rootsAt provenance.vals parameter.1 := by
+  have equation : func.provStep results vt (provenance,false) (.term (.br target args)) =
+      (block.params.zip args).foldl edgeParameter (provenance,false) := by
+    simp only [Func.provStep,targetAt]
+    rw [edgeParameter_eta]
+  have included := edgeFold_contains (provenance,false) (block.params.zip args) member bounded
+  rw [← equation,quiet] at included
+  exact included
+
+theorem provStep_condbr_roots {results : Array (List RootRef)} {vt : Array (Option VTy)}
+    {func : Func} {provenance : Prov} {condition thenTarget elseTarget : ValueId}
+    {thenArgs elseArgs : List ValueId} {thenBlock elseBlock : Block}
+    (thenAt : func.blocks[thenTarget]? = some thenBlock) (elseAt : func.blocks[elseTarget]? = some elseBlock)
+    (quiet : func.provStep results vt (provenance,false)
+      (.term (.condbr condition thenTarget thenArgs elseTarget elseArgs)) = (provenance,false)) :
+    (∀ parameter argument, (parameter,argument) ∈ thenBlock.params.zip thenArgs →
+      parameter.1 < provenance.vals.size → rootsAt provenance.vals argument ⊆ rootsAt provenance.vals parameter.1) ∧
+    (∀ parameter argument, (parameter,argument) ∈ elseBlock.params.zip elseArgs →
+      parameter.1 < provenance.vals.size → rootsAt provenance.vals argument ⊆ rootsAt provenance.vals parameter.1) := by
+  let middle := (thenBlock.params.zip thenArgs).foldl edgeParameter (provenance,false)
+  have equation : func.provStep results vt (provenance,false)
+      (.term (.condbr condition thenTarget thenArgs elseTarget elseArgs)) =
+      (elseBlock.params.zip elseArgs).foldl edgeParameter middle := by
+    simp only [Func.provStep,thenAt,elseAt,middle]
+    rw [edgeParameter_eta]
+  have final : (elseBlock.params.zip elseArgs).foldl edgeParameter middle = (provenance,false) :=
+    equation.symm.trans quiet
+  have prior := edgeFold_growth (provenance,false) (thenBlock.params.zip thenArgs)
+  have continued := edgeFold_growth middle (elseBlock.params.zip elseArgs)
+  rw [final] at continued
+  constructor
+  · intro parameter argument member bounded root included
+    exact continued parameter.1 (edgeFold_contains (provenance,false) _ member bounded included)
+  · intro parameter argument member bounded root included
+    have bound : parameter.1 < middle.1.vals.size := by rw [edgeFold_size]; exact bounded
+    have added := edgeFold_contains middle (elseBlock.params.zip elseArgs) member bound
+    rw [final] at added
+    exact added (prior argument included)
+
 #print axioms provStep_def_roots
 #print axioms provStep_slotInit_roots
 #print axioms provStep_store_roots
