@@ -63,10 +63,10 @@ theorem typedBlock {module : GIR.Module} {results : Array (List RootRef)}
     | some expression => exact effectRefinement_before_expression rootValue wholeEffect
   apply ready.blockAction loop bindings want scope statements value sourceRoots (.data type)
     scopeBound metadata values roots
-  · intro state provenance stateReady
+  · intro state provenance _entry stateReady
     exact statementChild env1 env2 tn1 tn2 _ sourceMiddle state provenance
       declaredTables.1 declaredTables.2.1 typedStatements rootStatements statementEffect stateReady
-  · intro state provenance stateReady
+  · intro state provenance _entry stateReady
     apply stateReady.blockValue want value sourceRoots (.data type)
     · intro absent
       subst value

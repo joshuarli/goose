@@ -51,11 +51,15 @@ theorem blockAction (loop : Option LoopCtx) (bindings : List (SlotId × ValueId 
     (roots : ∀ binding ∈ bindings, ∀ root ∈ rootsAt upper.vals binding.2.1,
       root ∈ rootsAt upper.slots binding.1)
     (statementChild : ∀ state provenance,
+      state = (initSlots bindings le (Goose.Lower.pushScope scope le
+        (Goose.Lower.emitEffect (.enter scope) le ls).2).2).2 →
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots
           (lowerStmts loop statements le state).2 next ∧
         ∀ index, index < provenance.vals.size → rootsAt next.vals index = rootsAt provenance.vals index)
     (valueChild : ∀ state provenance,
+      state = (lowerStmts loop statements le (initSlots bindings le
+        (Goose.Lower.pushScope scope le (Goose.Lower.emitEffect (.enter scope) le ls).2).2).2).2 →
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots
           (lowerBlockValue want value le state).2 next ∧
@@ -87,9 +91,9 @@ theorem blockAction (loop : Option LoopCtx) (bindings : List (SlotId × ValueId 
     rw [sameCurrent, sameValues]
     exact values
   have initializedReady := scopedReady.initialSlots bindings metadata scopedValues roots
-  obtain ⟨middle, bodyReady, bodyRoots⟩ := statementChild initialized upper initializedReady
+  obtain ⟨middle, bodyReady, bodyRoots⟩ := statementChild initialized upper rfl initializedReady
   let body := lowerStmts loop statements le initialized
-  obtain ⟨next, valueReady, returned, nextRoots⟩ := valueChild body.2 middle bodyReady
+  obtain ⟨next, valueReady, returned, nextRoots⟩ := valueChild body.2 middle rfl bodyReady
   let produced := lowerBlockValue want value le body.2
   have leaveReady := valueReady.leave scope scopeBound
   have completed := leaveReady.popScope
