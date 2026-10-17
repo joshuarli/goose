@@ -47,7 +47,7 @@ def ContentsOperation (globalKinds : Array VarKind) (structs : Array StructDef)
   | .fieldAddr owner index => authorized owner ∧ ∃ mu id fields descriptor field,
       types[owner]? = some (some (.data (.ref mu (.structT id fields)))) ∧
       structs[id]? = some descriptor ∧ descriptor.fields[index]? = some field ∧ field.contents = .mutable
-  | .snapshot _ owner | .refElem owner _ | .indexChecked owner _ _ | .indexProven owner _ => authorized owner
+  | .ownerBorrow owner | .snapshot _ owner | .refElem owner _ | .indexChecked owner _ _ | .indexProven owner _ => authorized owner
   | _ => (typedPermissions types value).2 = true
 
 theorem ContentsOperation.check {globalKinds : Array VarKind} {structs : Array StructDef}
@@ -67,7 +67,7 @@ theorem ContentsOperation.check {globalKinds : Array VarKind} {structs : Array S
   | fieldAddr owner index =>
     obtain ⟨member, mu, id, fields, descriptor, field, typed, descriptorRow, fieldRow, writable⟩ := operation
     simp [Func.permissionOfOp, typed, descriptorRow, fieldRow, writable, present owner member]
-  | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ =>
+  | ownerBorrow owner | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ =>
     exact present owner operation
   | _ => exact operation
 
