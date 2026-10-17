@@ -1,4 +1,5 @@
 import Goose.GIR.Effects
+import Goose.GIR.AdmittedRegions
 import Goose.GIR.ReplacementContentFlow
 import Goose.GIR.Evidence
 import Goose.Core.Demand
@@ -1044,6 +1045,7 @@ def validate (m : Module) : Check Unit := do
     if let some msg := w.scopes then violation .v040 msg
   let types := m.implTypes
   let res := resultRoots m types
+  asCheck .v050 "declared regions" (m.checkAdmittedRegions types res m.rootCount)
   checkAll (List.range m.funcs.size) (checkSummaryOf m types res m.rootCount)
   let replacementFlow := replacementContentFlow m
   checkAll m.infos fun i =>

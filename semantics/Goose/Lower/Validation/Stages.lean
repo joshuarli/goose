@@ -25,6 +25,8 @@ theorem gir_validate_stages (module : Module) :
         checkPermissions module info.label info.f info.vt) = .ok () ∧
       (checkAll walks fun walk => do
         if let some message := walk.scopes then violation .v040 message) = .ok () ∧
+      asCheck .v050 "declared regions"
+        (module.checkAdmittedRegions module.implTypes (resultRoots module module.implTypes) module.rootCount) = .ok () ∧
       (checkAll (List.range module.funcs.size)
         (checkSummaryOf module module.implTypes (resultRoots module module.implTypes) module.rootCount)) = .ok () ∧
       (checkAll module.infos fun info =>
