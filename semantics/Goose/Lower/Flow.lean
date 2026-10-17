@@ -7,7 +7,7 @@ open Goose.Core Goose.GIR
 
 def stmtReturnOk : Stmt → Bool
   | .ret none _ => true
-  | .ret (some e) _ => exprOk e
+  | .ret (some _) _ => false
   | stmt => stmtOk stmt
 
 def stmtsReturnOk : List Stmt → Bool

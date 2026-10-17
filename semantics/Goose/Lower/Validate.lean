@@ -459,7 +459,7 @@ private theorem LS.DenseDefinitions.modifyNoNewDefs {ls : LS} {b : BlockId}
   rw [LS.DenseDefinitions, heq]
   exact h
 
-private theorem LS.insts.modifyPush {ls : LS} {b : BlockId} (hb : b < ls.blocks.size)
+theorem LS.insts.modifyPush {ls : LS} {b : BlockId} (hb : b < ls.blocks.size)
     (i : Inst) :
     List.Perm
       ({ ls with blocks := ls.blocks.modify b fun blk =>
@@ -1349,8 +1349,8 @@ theorem LS.symbolWF_initState (le : LEnv) (scopeCount : Nat) :
   intro i hi
   simp [LS.insts, initState] at hi
 
-theorem lowerImplAt_start_symbols (m : Goose.Core.Module) (impl : Goose.Core.Impl)
-    (implId scopeCount : Nat) :
+theorem lowerImpl_start_symbols (m : Goose.Core.Module) (impl : Goose.Core.Impl)
+    (scopeCount : Nat) :
     let le := lowerEnv m impl.vars impl.results.toList
     let start := Goose.Lower.newBlock (impl.params.toList.map fun p => .data (tyOfVar impl p.var))
       le initState
@@ -1439,7 +1439,7 @@ theorem lowerEnv_globals_size (m : Core.Module) (vars : Array Core.LocalVar) :
   simp [lowerEnv]
 
 theorem lowerEnv_sigs_size (m : Core.Module) (vars : Array Core.LocalVar) :
-    (lowerEnv m vars []).sigs.size = m.impls.size := by
+    (lowerEnv m vars []).sigs.size = m.contexts.size := by
   simp [lowerEnv]
 
 theorem lowerPlace_var_symbolRun_of_tyPlace {le : LEnv} {scopeCount : Nat}

@@ -231,66 +231,85 @@ private def Module.baseTyEnv (m : Module) (f : Func) : TyEnv :=
     structs := m.structs
     profile := m.profile }
 
+def typedPermissions (vt : Array (Option VTy)) (v : ValueId) : Bool × Bool :=
+  match vt[v]? with
+  | some (some (.data (.ref mu _))) => (mu == .mutable, mu == .mutable)
+  | some (some (.view mu _)) => (mu == .mutable, mu == .mutable)
+  | _ => (false, false)
+
+def permissionsAt (caps : Array (Bool × Bool)) (v : ValueId) : Bool × Bool :=
+  caps[v]?.getD (false, false)
+
+def meetPermissions (a b : Bool × Bool) : Bool × Bool :=
+  (a.1 && b.1, a.2 && b.2)
+
+def Func.permissionOfOp (globalKinds : Array VarKind) (structs : Array StructDef)
+    (f : Func) (vt : Array (Option VTy)) (caps : Array (Bool × Bool)) (value : ValueId)
+    (op : Op) : Bool × Bool :=
+  match op with
+  | .slotAddr s => match f.slots[s]? with
+    | some sl => (sl.kind == .mutable, true)
+    | none => (false, false)
+  | .globalAddr g => match globalKinds[g]? with
+    | some kind => (kind == .mutable, true)
+    | none => (false, false)
+  | .refFreeze _ => (false, false)
+  | .fieldAddr owner field =>
+    match vt[owner]? with
+    | some (some (.data (.ref _ (.structT sid _)))) =>
+      match (structs[sid]?).bind (fun d => d.fields[field]?) with
+      | some fd => ((permissionsAt caps owner).2 && fd.binding == .mutable,
+          (permissionsAt caps owner).2 && fd.contents == .mutable)
+      | none => (false, false)
+    | _ => (false, false)
+  | .snapshot _ owner =>
+    let writable := (permissionsAt caps owner).2
+    (writable, writable)
+  | .refElem owner _ | .indexChecked owner _ _ | .indexProven owner _ =>
+    ((permissionsAt caps owner).2, (permissionsAt caps owner).2)
+  | _ => typedPermissions vt value
+
+def Term.permissionEdges (term : Term) : List (BlockId × List ValueId) :=
+  match term with
+  | .br target args => [(target, args)]
+  | .condbr _ t ta e ea => [(t, ta), (e, ea)]
+  | _ => []
+
+def Func.permissionRound (globalKinds : Array VarKind) (structs : Array StructDef)
+    (f : Func) (vt : Array (Option VTy)) (caps : Array (Bool × Bool)) :
+    Array (Bool × Bool) := Id.run do
+  let mut next := caps
+  if let some entry := f.blocks[0]? then
+    for (v, _) in entry.params do next := next.set! v (meetPermissions (permissionsAt next v) (typedPermissions vt v))
+  for b in f.blocks do
+    for i in b.insts do
+      match i with
+      | .def v op =>
+        let c := f.permissionOfOp globalKinds structs vt caps v op
+        next := next.set! v (meetPermissions (permissionsAt next v) c)
+      | .term term =>
+        let edges := term.permissionEdges
+        for (target, args) in edges do
+          if let some dest := f.blocks[target]? then
+            for ((v, _), arg) in dest.params.zip args do
+              next := next.set! v (meetPermissions (permissionsAt next v) (permissionsAt caps arg))
+      | _ => pure ()
+  return next
+
+def Func.permissionFix (globalKinds : Array VarKind) (structs : Array StructDef)
+    (f : Func) (vt : Array (Option VTy)) : Nat → Array (Bool × Bool) → Array (Bool × Bool)
+  | 0, _ => Array.replicate f.numValues (false, false)
+  | fuel + 1, caps =>
+    let next := f.permissionRound globalKinds structs vt caps
+    if next == caps then caps else f.permissionFix globalKinds structs vt fuel next
+
 /-- Binding and contents capabilities are intersected over every incoming CFG
 edge. Starting at the top permits owned references through loops; entry
 parameters and every defining operation constrain the descending fixed point. -/
 def Func.permissionsFromTables (globalKinds : Array VarKind) (structs : Array StructDef)
-    (f : Func) (vt : Array (Option VTy)) : Array (Bool × Bool) := Id.run do
-  let typed (v : ValueId) : Bool × Bool := match vt[v]? with
-    | some (some (.data (.ref mu _))) => (mu == .mutable, mu == .mutable)
-    | some (some (.view mu _)) => (mu == .mutable, mu == .mutable)
-    | _ => (false, false)
-  let capAt (caps : Array (Bool × Bool)) (v : ValueId) := caps[v]?.getD (false, false)
-  let meet (a b : Bool × Bool) := (a.1 && b.1, a.2 && b.2)
-  let start := Array.replicate f.numValues (true, true)
-  let round (caps : Array (Bool × Bool)) := Id.run do
-    let mut next := caps
-    if let some entry := f.blocks[0]? then
-      for (v, _) in entry.params do next := next.set! v (meet (capAt next v) (typed v))
-    for b in f.blocks do
-      for i in b.insts do
-        match i with
-        | .def v op =>
-          let c := match op with
-            | .slotAddr s => match f.slots[s]? with
-              | some sl => (sl.kind == .mutable, true)
-              | none => (false, false)
-            | .globalAddr g => match globalKinds[g]? with
-              | some kind => (kind == .mutable, true)
-              | none => (false, false)
-            | .refFreeze _ => (false, false)
-            | .fieldAddr owner field =>
-              match vt[owner]? with
-              | some (some (.data (.ref _ (.structT sid _)))) =>
-                match (structs[sid]?).bind (fun d => d.fields[field]?) with
-                | some fd => ((capAt caps owner).2 && fd.binding == .mutable,
-                    (capAt caps owner).2 && fd.contents == .mutable)
-                | none => (false, false)
-              | _ => (false, false)
-            | .snapshot _ owner =>
-              let writable := (capAt caps owner).2
-              (writable, writable)
-            | .refElem owner _ | .indexChecked owner _ _ | .indexProven owner _ =>
-              ((capAt caps owner).2, (capAt caps owner).2)
-            | _ => typed v
-          next := next.set! v (meet (capAt next v) c)
-        | .term term =>
-          let edges := match term with
-            | .br target args => [(target, args)]
-            | .condbr _ t ta e ea => [(t, ta), (e, ea)]
-            | _ => []
-          for (target, args) in edges do
-            if let some dest := f.blocks[target]? then
-              for ((v, _), arg) in dest.params.zip args do
-                next := next.set! v (meet (capAt next v) (capAt caps arg))
-        | _ => pure ()
-    return next
-  let rec fix : Nat → Array (Bool × Bool) → Array (Bool × Bool)
-    | 0, _ => Array.replicate f.numValues (false, false)
-    | fuel + 1, caps =>
-      let next := round caps
-      if next == caps then caps else fix fuel next
-  return fix (2 * f.numValues + 2) start
+    (f : Func) (vt : Array (Option VTy)) : Array (Bool × Bool) :=
+  f.permissionFix globalKinds structs vt (2 * f.numValues + 2)
+    (Array.replicate f.numValues (true, true))
 
 def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (Bool × Bool) :=
   f.permissionsFromTables (m.globals.map (·.kind)) m.structs vt

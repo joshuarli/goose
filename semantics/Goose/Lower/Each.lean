@@ -5,6 +5,7 @@ import Goose.Core.Sound.Invert
 import Goose.Core.Sound.Spec
 import Goose.Lower.LoopFlow
 import Goose.Lower.RuntimeSim
+import Goose.Lower.RangeBack
 
 namespace Goose.Lower
 
@@ -522,7 +523,7 @@ def preparedEach (n : Nat) (cfg : Cfg) (env : Env) (x : VarId) (idx : Option Var
         | .ret v => pure (.ret v)
     else pure (.normal .unit)
 
-private theorem each_step (n : Nat) (cfg : Cfg) (env : Env) (x : VarId)
+theorem eachCoreStep (n : Nat) (cfg : Cfg) (env : Env) (x : VarId)
     (idx : Option VarId) (byRef : Bool) (body : Core.Block) (vw : ViewVal) (i : Nat) :
     execEach (n + 1) cfg env x idx byRef body vw i =
       ((if vw.resizable then lengthLoc vw.loc else pure vw.len) >>= fun len =>
@@ -543,7 +544,7 @@ theorem prepareReturn_execEach (n : Nat) (cfg : Cfg) (env : Env) (x : VarId)
     (idx : Option VarId) (byRef : Bool) (body : Core.Block) (vw : ViewVal) (i : Nat) :
     (execEach (n + 1) cfg env x idx byRef body vw i >>= prepareReturn env) =
       preparedEach n cfg env x idx byRef body vw i := by
-  rw [each_step]
+  rw [eachCoreStep]
   simp only [preparedEach, bind_assoc]
   congr 1
   funext len
@@ -595,7 +596,7 @@ theorem each_sim_bounded (n : Nat) (cx : FnCtx) (cfg : Cfg) (env : Env)
   | zero =>
     intro i fr _
     simp only [execEach]
-    exact SimE.of_timeout_bind
+    exact SimE.of_simG SimG.of_timeout_bind
   | succ n ih =>
     intro i fr hinv
     rw [prepareReturn_execEach]
@@ -740,30 +741,8 @@ theorem eachBack_goes (cx : FnCtx) (le : LEnv) (ls ls' : LS) (pt : Pt) (fr : Fra
     ∃ fr', Goes cx pt fr (hb, 0) fr' ∧ Same counter fr fr' ∧
       fr'.vals[counter]? = some (.val (.int .i64 (i + 1 : Nat))) ∧
       fr'.act = fr.act ∧ fr'.scopes = fr.scopes ∧ fr'.depth = fr.depth := by
-  obtain ⟨_, hcur, _, _⟩ := LS.pp_some hpp
-  rw [rangeBack, bind_run, isLive_run hcur] at hback
-  simp only [ite_true, bind_eq] at hback
-  obtain ⟨next, lsNext, hnext, hterm⟩ := hback
-  have hextNext := hext.of_adv (adv_emitTerm hterm)
-  obtain ⟨hnextId, _, _, hppNext, hnextInst⟩ := emitDef_facts hnext hpp hextNext
-  obtain ⟨_, _, _, htermInst⟩ := emitTerm_facts hterm hppNext hext
-  have hiNext : instAt cx.fn pt = some (.def next (.next .i64 counter)) := by
-    rw [instAt_eq]
-    exact hnextInst
-  have hnextPure : execPure cx fr (.next .i64 counter) =
-      pure (.val (.int .i64 (i + 1 : Nat))) := by
-    simp [execPure, getVal_of hcounter, expectInt]
-  have gnext := Goes.def_pure hiNext (by simp) hnextPure
-  have hiTerm : instAt cx.fn (pt.1, pt.2 + 1) = some (.term (.br hb [next])) := by
-    rw [instAt_eq]
-    exact htermInst
-  obtain ⟨block, hblock, hparams⟩ := hheader
-  have gback := goes_br1 hiTerm hblock hparams (Frame.set_get fr next (.val (.int .i64 (i + 1 : Nat))))
-  let after := (fr.set next (.val (.int .i64 (i + 1 : Nat)))).set counter
-    (.val (.int .i64 (i + 1 : Nat)))
-  refine ⟨after, gnext.trans gback, ?_, Frame.set_get _ _ _, rfl, rfl, rfl⟩
-  have hnextBound : counter ≤ next := by rw [hnextId]; exact Nat.le_of_lt hc
-  exact (Same.set fr hnextBound _).trans (Same.set _ (Nat.le_refl counter) _) (Nat.le_refl _)
+  simpa using rangeBack_goes cx le ls ls' pt fr counter hb .i64 .i64 (i : Int)
+    hback hpp hext hc hcounter hheader
 
 theorem eachLen_inv_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
     {ls ls' : LS} {counter view sampled result : ValueId} {owner : Option ValueId}

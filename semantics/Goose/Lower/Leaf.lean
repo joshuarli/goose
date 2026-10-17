@@ -4,10 +4,44 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR
 
+theorem checkCapacityAtOrg_some (l : Loc) (count : Nat) (org : OriginId) :
+    checkCapacityAtOrg l count (some org) = checkAppendCapacity l count org := by
+  funext s
+  cases hread : readLoc l s with
+  | stop err state => simp [checkCapacityAtOrg, checkAppendCapacity, hread, bind_apply]
+  | ok value state =>
+    cases value <;>
+      simp [checkCapacityAtOrg, checkAppendCapacity, hread, abortAtOrg, abortAt,
+        M.stop, bind_apply, pure_apply, M.instMonad, M.bind', M.pure']
+
+def BndSpec (len : Nat) (dflt : Int) : Bnd → Int → List (ValueId × RVal) → Prop
+  | .omitted, k, cells => k = dflt ∧ cells = []
+  | .val v, k, cells => ∃ t, cells = [(v, .val (.int t k))]
+  | .fromEnd v, k, cells => ∃ t kk, k = (len : Int) - kk ∧ cells = [(v, .val (.int t kk))]
+
+theorem evalBnd_of_spec {fr : Frame} {len : Nat} {dflt : Int} {bnd : Bnd} {k : Int}
+    {cells : List (ValueId × RVal)} (hs : BndSpec len dflt bnd k cells)
+    (hc : ∀ p ∈ cells, fr.vals[p.1]? = some p.2) : evalBnd fr len dflt bnd = pure k := by
+  cases bnd with
+  | omitted => obtain ⟨rfl, -⟩ := hs; rfl
+  | val v =>
+    obtain ⟨t, rfl⟩ := hs
+    have := hc (v, .val (.int t k)) (by simp)
+    simp only [evalBnd, getVal_of this, Goose.Core.expectInt, pure_bind]
+  | fromEnd v =>
+    obtain ⟨t, kk, rfl, rfl⟩ := hs
+    have := hc (v, .val (.int t kk)) (by simp)
+    simp only [evalBnd, getVal_of this, Goose.Core.expectInt, pure_bind]
+
 theorem Post.init {cfg : Cfg} {env : Env} {cx : FnCtx} {ls : LS} {fr : Frame} {pt : Pt}
     (hrel : Rel cfg env cx fr ls) (hpp : ls.pp = some pt) : Post cfg env cx ls fr ls fr pt [] :=
   ⟨hpp, by simp, by simp, Nat.le_refl _, Same.refl _ _, hrel⟩
 
+
+theorem Post.nil {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls' : LS} {fr fr' : Frame} {pt' : Pt}
+    (hpp : ls'.pp = some pt') (hmono : ls.vals.size ≤ ls'.vals.size) (hsame : Same ls.vals.size fr fr')
+    (hrel : Rel cfg env cx fr' ls') : Post cfg env cx ls fr ls' fr' pt' [] :=
+  ⟨hpp, by simp, by simp, hmono, hsame, hrel⟩
 
 theorem Post.comp {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls1 ls2 : LS} {fr fr1 fr2 : Frame}
     {pt1 pt2 : Pt} {c1 c2 : List (ValueId × RVal)}
@@ -115,22 +149,17 @@ theorem mapList_getVal_cells {fr : Frame} : ∀ {rs : List ValueId} {vs : List V
   | _ :: _, [], hl, _ => absurd hl (by simp)
 
 
-theorem implOfContext_run (c : ContextId) (le : LEnv) (ls : LS) :
-    implOfContext c le ls = (((le.mod.contexts[c]?).map (·.impl)).getD 0, ls) := rfl
-
 theorem lowerExpr_call_split {c : ContextId} {args : List Arg} {org : OriginId}
     {le : LEnv} {ls ls' : LS} {r : ValueId}
     (h : lowerExpr (.call c args org) le ls = (r, ls')) :
     ∃ ids middle after,
       lowerArgs args le ls = (ids, middle) ∧
-      emitDef (.call (((le.mod.contexts[c]?).map (·.impl)).getD 0) ids (some org)) le middle =
+      emitDef (.call c ids (some org)) le middle =
         (r, after) ∧
       ((le.mod.noReturn c = true ∧ emitTerm .unreachable le after = ((), ls')) ∨
         (le.mod.noReturn c = false ∧ ls' = after)) := by
   simp only [lowerExpr, bind_eq] at h
-  obtain ⟨ids, middle, ha, f, middle', hf, id, after, hd, reader, same, hr, ht⟩ := h
-  rw [implOfContext_run] at hf
-  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hf
+  obtain ⟨ids, middle, ha, id, after, hd, reader, same, hr, ht⟩ := h
   rw [read_apply] at hr
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj hr
   by_cases hn : le.mod.noReturn c = true

@@ -162,6 +162,7 @@ theorem stmt_each_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (hsourceMode : ∀ owner view output,
       lowerEachSource source le ls = ((owner, view), output) →
       ∀ vw state, evalView n cfg env source s = .ok vw state →
+      ∀ finalPoint, output.pp = some finalPoint →
       (regrowOf owner le output).1 = eachSourceRegrows penv.access source)
     (allowed bodyAllowed : ViewVal → Nat → St → Prop)
     (hinitial : ∀ vw state, evalView n cfg env source s = .ok vw state → allowed vw 0 state)
@@ -201,7 +202,7 @@ theorem stmt_each_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
   refine SimEAt.bind (hsource owner view lsSource hSource hextSource)
     fun vw sourceState sourcePoint sourceFrame hSourceRun PSource => ?_
   have hmode : regrow = vw.resizable := by
-    have hm := hsourceMode owner view lsSource hSource vw sourceState hSourceRun
+    have hm := hsourceMode owner view lsSource hSource vw sourceState hSourceRun sourcePoint PSource.pp
     rw [hRegrow] at hm
     exact hm.trans (eachSourceRegrows_of_aliases (hsourceAliases vw sourceState hSourceRun))
   have hview : sourceFrame.vals[view]? = some (.view vw) :=
@@ -338,7 +339,8 @@ theorem stmt_each_typed_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCt
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.forEach x idx source byRef body org) >>= prepareReturn env)
       (StmtFlowPost cfg env cx ls fr ls') s := by
   apply stmt_each_flow_sim_at n cfg env cx le ls ls' fr pt s lc x idx source byRef body org
-    sourceEnv after sc next next' hvars htype penv world element hsource hsourceAliases hsourceMode
+    sourceEnv after sc next next' hvars htype penv world element hsource hsourceAliases
+    (fun owner view output hlow value state success _ _ => hsourceMode owner view output hlow value state success)
     (fun vw i state => allowed vw i state ∧ Core.Sound.EachViewOk state.store vw element)
     (fun vw i state => allowed vw i state ∧ Goose.Proofs.Memory.LocTy state.store
       ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩ element)
@@ -399,7 +401,8 @@ theorem stmt_each_retained_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : F
   obtain ⟨alias, hsingle, hquery⟩ := Core.Sound.forEach_retained_query_exists hretained
   have hmember : alias ∈ aliases := by simp [hsingle]
   apply stmt_each_flow_sim_at n cfg env cx le ls ls' fr pt s lc x idx source byRef body org
-    sourceEnv after sc next next' hvars htype penv world element hsource hsourceAliases hsourceMode
+    sourceEnv after sc next next' hvars htype penv world element hsource hsourceAliases
+    (fun owner view output hlow value state success _ _ => hsourceMode owner view output hlow value state success)
     (fun vw i state => allowed vw i state ∧ Core.Sound.EachViewOk state.store vw element ∧
       Core.Sound.ViewAliases cfg.mod world penv env state.store source vw element)
     (fun vw i state => allowed vw i state ∧ Core.Sound.EachViewOk state.store vw element ∧

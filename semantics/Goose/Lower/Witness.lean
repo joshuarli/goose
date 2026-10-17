@@ -4,18 +4,11 @@ import Goose.Lower.Commands
 import Goose.Lower.While
 import Goose.Lower.Range
 
-/-!
-Checks that the lowering theorem is not vacuous: committed goldens inside the
-fragment it covers, and the fact that the interpreter of the lowered module
-agrees with Core on each, in both numeric profiles.
--/
-
 namespace Goose.Lower.Witness
 
 open Goose.Proofs.Lower
 
-/-- Whether a Core module, given as the bytes of its file, is in the fragment. -/
-def covered (bs : ByteArray) : Bool :=
+def legacyCovered (bs : ByteArray) : Bool :=
   match Core.Decode.decodeBytes bs with
   | .ok m => moduleOk m
   | .error _ => false
@@ -41,7 +34,6 @@ def exitCode : String := include_str "../../../test/gir/golden/gir_exit_code.cor
 def blockValue : String := include_str "../../../test/gir/golden/gir_ord02.core.json"
 def structLocal : String := include_str "../../../test/semantics/golden/struct_local.core.json"
 
-/-- A short instance of the committed counting while, with the same condition and body. -/
 def countingWhile : String :=
   (include_str "../../../test/gir/golden/gir_loop_small.core.json").replace "\"20000\"" "\"3\""
 
@@ -57,18 +49,33 @@ def hasCoveredWhile (bs : ByteArray) : Bool :=
     | .while c body _ => exprOk c && blockOk body
     | _ => false
 
-#guard covered straight.toUTF8
-#guard covered branches.toUTF8
-#guard covered assertFail.toUTF8
-#guard covered userAbort.toUTF8
-#guard covered exitCode.toUTF8
-#guard covered blockValue.toUTF8
-#guard covered divZero.toUTF8
-#guard covered sliceOob.toUTF8
-#guard covered intOverflow.toUTF8
+def coreAccepted (bs : ByteArray) : Bool :=
+  match Core.Decode.decodeBytes bs with
+  | .ok m => match Core.validate m with
+    | .ok _ => true
+    | .error _ => false
+  | .error _ => false
 
-#guard covered countingWhile.toUTF8
-#guard covered nestedWhile.toUTF8
+#guard !legacyCovered straight.toUTF8
+#guard coreAccepted straight.toUTF8
+#guard !legacyCovered branches.toUTF8
+#guard coreAccepted branches.toUTF8
+#guard legacyCovered assertFail.toUTF8
+#guard legacyCovered userAbort.toUTF8
+#guard legacyCovered exitCode.toUTF8
+#guard !legacyCovered blockValue.toUTF8
+#guard coreAccepted blockValue.toUTF8
+#guard !legacyCovered divZero.toUTF8
+#guard coreAccepted divZero.toUTF8
+#guard !legacyCovered sliceOob.toUTF8
+#guard coreAccepted sliceOob.toUTF8
+#guard !legacyCovered intOverflow.toUTF8
+#guard coreAccepted intOverflow.toUTF8
+
+#guard !legacyCovered countingWhile.toUTF8
+#guard coreAccepted countingWhile.toUTF8
+#guard !legacyCovered nestedWhile.toUTF8
+#guard coreAccepted nestedWhile.toUTF8
 #guard (agreeLine .release nestedWhile.toUTF8).startsWith "[\"agree\",[\"done\",[\"returned\"],\"3\\n\"]"
 #guard (agreeLine .debug nestedWhile.toUTF8).startsWith "[\"agree\",[\"done\",[\"returned\"],\"3\\n\"]"
 #guard hasCoveredWhile countingWhile.toUTF8
@@ -82,13 +89,33 @@ def hasCoveredWhile (bs : ByteArray) : Bool :=
 #guard (agreeLine .debug branches.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"assert\""
 #guard (agreeLine .debug intOverflow.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"int_overflow\""
 
-#guard covered structLocal.toUTF8
+#guard !legacyCovered structLocal.toUTF8
+#guard coreAccepted structLocal.toUTF8
 #guard (agreeLine .release structLocal.toUTF8).startsWith
   "[\"agree\",[\"done\",[\"returned\"],\"1 42 7\\n\"]"
 #guard (agreeLine .debug structLocal.toUTF8).startsWith
   "[\"agree\",[\"done\",[\"returned\"],\"1 42 7\\n\"]"
 
 open Goose.Core Goose.GIR
+
+def legacyControlModule : Core.Module :=
+  let impl : Core.Impl :=
+    { name := "main", params := #[], results := #[], vars := #[],
+      body := .mk 0 [.ifS (.bool true) (.mk 1 [.print [.text "control"] 1] none) none 0,
+        .while (.bool false) (.mk 2 [] none) 2, .ret none 3] none,
+      summary := .unknown }
+  { files := #["legacy-control.goose"], types := #[], globals := #[],
+    impls := #[impl], contexts := #[⟨0, "main", [], [], []⟩], entry := 0,
+    origins := #[⟨0, 1, "if"⟩, ⟨0, 1, "print"⟩, ⟨0, 1, "while"⟩, ⟨0, 1, "return"⟩] }
+
+#guard moduleOk legacyControlModule
+#guard match Core.validate legacyControlModule, GIR.validate (lower legacyControlModule) with
+  | .ok _, .ok _ => true
+  | _, _ => false
+#guard [NumProfile.release, .debug].all fun profile =>
+  match Core.eval 30 profile legacyControlModule, GIR.run 100 profile (lower legacyControlModule) with
+  | .done .returned "control\n", .done .returned "control\n" => true
+  | _, _ => false
 
 def rangeBody : Core.Block :=
   .mk 1 [.print [.expr (.read (.var 0))] 0] none

@@ -4,30 +4,6 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR
 
-def returnWhileTail (n : Nat) (cfg : Cfg) (env : Env) (c : Expr) (body : Core.Block) : Flow → M Flow
-  | .normal _ | .cont => execWhile n cfg env c body >>= prepareReturn env
-  | .brk => pure (.normal .unit)
-  | .ret value => pure (.ret value)
-
-def preparedWhile (n : Nat) (cfg : Cfg) (env : Env) (c : Expr) (body : Core.Block) : M Flow := do
-  let branch ← expectBool (← evalExpr n cfg env c)
-  if branch then
-    (execBlock n cfg env [] body >>= prepareReturn env) >>= returnWhileTail n cfg env c body
-  else pure (.normal .unit)
-
-theorem prepareReturn_execWhile (n : Nat) (cfg : Cfg) (env : Env) (c : Expr) (body : Core.Block) :
-    (execWhile (n + 1) cfg env c body >>= prepareReturn env) =
-      preparedWhile n cfg env c body := by
-  simp only [execWhile, preparedWhile, bind_assoc]
-  congr 1
-  funext value
-  congr 1
-  funext branch
-  cases branch <;> simp only [Bool.false_eq_true, ↓reduceIte, pure_bind, prepareReturn, bind_assoc]
-  congr 1
-  funext flow
-  cases flow <;> simp [prepareReturn, returnWhileTail, bind_assoc, pure_bind]
-
 def WhileFlowSimulation (n : Nat) (c : Expr) (body : Core.Block) : Prop :=
   ∀ (le : LEnv) (ls ls' : LS) (hb : BlockId) (cfg : Cfg) (env : Env) (cx : FnCtx),
     lowerWhile hb (lowerExpr c)

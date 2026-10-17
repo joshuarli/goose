@@ -1,4 +1,8 @@
 import Goose.Lower.Call
+import Goose.Lower.TypedCall
+import Goose.Lower.TypedStatements
+import Goose.Lower.TypedTransfers
+import Goose.Lower.TypedLists
 
 namespace Goose.Lower.CallChecks
 
@@ -25,7 +29,7 @@ def source : Core.Module :=
   { files := #["calls.goose"], types := #[.int .i64], globals := #[],
     impls := #[first, second, main], contexts := #[⟨1, "second", [], [[]], []⟩,
       ⟨0, "first", [], [[]], []⟩, ⟨2, "main", [], [], []⟩], entry := 2,
-    origins := #[⟨0, 1, "call"⟩] }
+    origins := #[⟨0, 1, "expr"⟩] }
 
 def argumentBuilder : LS :=
   (lowerArgs arguments (lowerEnv source variables []) initialBuilder).2
@@ -103,12 +107,41 @@ def referenceSource : Core.Module :=
   { files := #["reference.goose"], types := #[.int .i64, .ref .readOnly (.int .i64)],
     globals := #[], impls := #[referenceCallee, main],
     contexts := #[⟨0, "reference", [(0, [.param 0])], [[]], []⟩,
-      ⟨1, "main", [], [], []⟩], entry := 1, origins := #[⟨0, 1, "param"⟩] }
+      ⟨1, "main", [], [], []⟩], entry := 1, origins := #[⟨0, 1, "expr"⟩] }
 
-theorem concrete_reference_callee (profile : NumProfile) (n : Nat) :
-    CalleeCallClaim n ⟨profile, referenceSource⟩ 0 :=
-  calleeCallClaim_flow (ctx := ⟨0, "reference", [(0, [.param 0])], [[]], []⟩)
-    (impl := referenceCallee) rfl rfl rfl rfl profile n
+private theorem referenceExprClaim (n : Nat) (cfg : Cfg) (results : List Ty) :
+    TypedExprClaim n cfg results (.read (.deref (.read (.var 0)))) := by
+  cases n with
+  | zero => exact typedExprClaim_zero cfg results _
+  | succ n =>
+    apply typedExprClaim_read
+    cases n with
+    | zero => exact typedPlaceClaim_zero cfg results _
+    | succ n =>
+      apply typedPlaceClaim_deref
+      cases n with
+      | zero => exact typedExprClaim_zero cfg results _
+      | succ n => exact typedExprClaim_read (typedPlaceClaim_var n cfg results 0)
+
+theorem concrete_reference_callee (profile : NumProfile) (n : Nat)
+    (pre : List (SlotId × ValueId × OriginId)) (pre' : List (VarId × Val)) :
+    TypedBlockLoopSimulation n ⟨profile, referenceSource⟩ [.int .i64] none pre pre' false
+      referenceCallee.body := by
+  cases n with
+  | zero => exact typedBlockLoopSimulation_zero _ _ _ _ _ _ _
+  | succ n =>
+    apply typedBlockLoopSimulation_succ
+    · cases n with
+      | zero => exact typedStatementsLoopSimulation_zero _ _ _ _
+      | succ k =>
+        apply typedStatementsLoopSimulation_cons
+        · cases k with
+          | zero => exact typedStatementLoopSimulation_zero _ _ _ _
+          | succ k =>
+            exact typedStatementLoopSimulation_return_some
+              (referenceExprClaim k ⟨profile, referenceSource⟩ [.int .i64])
+        · exact typedStatementsLoopSimulation_nil _ _ _ _
+    · trivial
 
 theorem concrete_reference_argument (profile : NumProfile) (n : Nat) :
     ArgsEClaim n ⟨profile, referenceSource⟩ [.byRef .readOnly (.var 0)] := by
@@ -121,12 +154,27 @@ theorem concrete_reference_argument (profile : NumProfile) (n : Nat) :
   | succ n =>
     exact argEClaim_byRef (PlaceLowerClaim.toEventual ((claims n).place (.var 0) rfl)) _
 
-theorem concrete_reference_call_expression (profile : NumProfile) (n : Nat) :
-    ExprEClaim n ⟨profile, referenceSource⟩ (.call 0 [.byRef .readOnly (.var 0)] 0) := by
+theorem concrete_reference_call_expression (profile : NumProfile) (n : Nat) (results : List Ty) :
+    TypedExprClaim n ⟨profile, referenceSource⟩ results (.call 0 [.byRef .readOnly (.var 0)] 0) := by
   cases n with
-  | zero => exact exprEClaim_zero _ _
+  | zero => exact typedExprClaim_zero _ _ _
   | succ n =>
-    exact exprEClaim_call (concrete_reference_argument profile n) (concrete_reference_callee profile n)
+    cases n with
+    | zero => exact typedExprClaim_call_one _ _ _ _ _
+    | succ k =>
+      apply typedExprClaim_call_of_blocks
+      · apply typedArgsClaim
+        intro arg member
+        simp only [List.mem_singleton] at member
+        subst arg
+        exact typedArgClaim_byRef (typedPlaceClaim_var k ⟨profile, referenceSource⟩ results 0) .readOnly
+      · intro ctx impl contextAt implementationAt pre
+        have contextEq : ctx = ⟨0, "reference", [(0, [.param 0])], [[]], []⟩ := by
+          simpa [referenceSource] using contextAt.symm
+        subst ctx
+        have implEq : impl = referenceCallee := by simpa [referenceSource] using implementationAt.symm
+        subst impl
+        exact concrete_reference_callee profile k (callPre referenceCallee) pre
 
 def abortCallee : Impl :=
   { name := "abort", params := #[], results := #[], vars := #[],
@@ -161,7 +209,7 @@ theorem concrete_noReturn_call_expression (profile : NumProfile) (n : Nat) :
 
 #guard [NumProfile.release, .debug].all fun profile =>
   match enterCall 20 ⟨profile, source⟩ 4 0 [] St.initial,
-      callFn 30 ⟨profile, lower source⟩ 4 1 [] St.initial with
+      callFn 30 ⟨profile, lower source⟩ 4 0 [] St.initial with
   | .ok (.int .i64 9) coreState, .ok (.int .i64 9) girState =>
     coreState.trace == girState.trace && coreState.nextAct == girState.nextAct &&
       coreState.nextScope == girState.nextScope &&
