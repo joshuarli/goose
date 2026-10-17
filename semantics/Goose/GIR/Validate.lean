@@ -838,18 +838,17 @@ def replacementParameterContentsStable (m : Module) (f : Func) (vt : Array (Opti
   !(f.blocks.toList.flatMap (·.insts)).any fun
     | .eff (.store address value _) => valRefLike vt value && !known value && external address
     | .def _ (.call fn args _) =>
-        if args.any (fun value => valRefLike vt value && known value) then false else
-          match m.funcs[fn]? with
-          | none => true
-          | some callee =>
-              match callee.summary with
-              | .unknown => true
-              | .known summary => (summary.writes ++ summary.rebinds).any fun
-                  | .global _ => true
-                  | .param parameter =>
-                      match args[parameter]? with
-                      | none => true
-                      | some value => external value
+        match m.funcs[fn]? with
+        | none => true
+        | some callee =>
+            match callee.summary with
+            | .unknown => true
+            | .known summary => (summary.writes ++ summary.rebinds).any fun
+                | .global _ => true
+                | .param parameter =>
+                    match args[parameter]? with
+                    | none => true
+                    | some value => external value
     | _ => false
 
 def replacementEmptyOp (f : Func) (vt : Array (Option VTy)) (p : Prov)
@@ -945,18 +944,17 @@ def callSummaryRoots (m : Module) (queries : ReplacementQueries) (fn : FnId)
           let annotated := ((callee.roots.params.find? (·.1 == i)).map (·.2)).getD [] |>.filterMap fun
             | .global g => some (.global g)
             | _ => none
-          pure (unionRoots roots (actual ++ annotated))
+          pure (if actual.isEmpty then roots else unionRoots roots (actual ++ annotated))
 
 def callDependencies (m : Module) (vt : Array (Option VTy)) (queries : ReplacementQueries)
     (fn : FnId) (args : List ValueId) : ReplacementRootQuery :=
-  if args.any (fun arg => valRefLike vt arg && queries.value arg == some []) then some [] else
-    let argumentRoots := args.foldlM (init := []) fun roots arg => do
-      if !valRefLike vt arg then pure roots else
-        let actual ← queries.value arg
-        pure (unionRoots roots actual)
-    argumentRoots.bind fun roots => do
-      let touched ← callSummaryRoots m queries fn args
-      pure (unionRoots roots touched)
+  let argumentRoots := args.foldlM (init := []) fun roots arg => do
+    if !valRefLike vt arg then pure roots else
+      let actual ← queries.value arg
+      pure (unionRoots roots actual)
+  argumentRoots.bind fun roots => do
+    let touched ← callSummaryRoots m queries fn args
+    pure (unionRoots roots touched)
 
 /-- Values evaluated as sources by an instruction. Mutation targets are handled
 separately, calls use their summary, and edge arguments only transport facts

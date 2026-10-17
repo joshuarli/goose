@@ -83,6 +83,6 @@ private def queryTypes : Array (Option GIR.VTy) :=
 
 private def emptyQueries : GIR.ReplacementQueries := ⟨#[(1, [])], #[[.global 0], [.param 1]], #[]⟩
 #guard GIR.transferEmptyInst (lower module) queryTypes emptyQueries [0] (.def 2 (.load 1)) == [0]
-#guard GIR.transferEmptyInst (lower module) queryTypes emptyQueries [0] (.def 2 (.call 99 [1] none)) == [0]
+#guard GIR.transferEmptyInst (lower module) queryTypes emptyQueries [0] (.def 2 (.call 99 [1] none)) == []
 
 end Goose.Lower.Validation.ReplacementChecks

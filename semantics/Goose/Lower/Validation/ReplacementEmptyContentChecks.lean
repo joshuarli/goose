@@ -102,8 +102,8 @@ private def rawReceiver (aliased called knownSummary emptyStored : Bool) : GIR.M
 #guard match GIR.validate (rawReceiver true true true false) with | .error e => e.code == .v060 | _ => false
 #guard (GIR.validate (rawReceiver false false false true)).toBool
 #guard (GIR.validate (rawReceiver true false false true)).toBool
-#guard (GIR.validate (rawReceiver false true true true)).toBool
-#guard (GIR.validate (rawReceiver true true true true)).toBool
+#guard match GIR.validate (rawReceiver false true true true) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (rawReceiver true true true true) with | .error e => e.code == .v060 | _ => false
 
 private def globalMutation (knownSummary : Bool) : GIR.Module :=
   let header : GIR.Global :=
@@ -131,5 +131,24 @@ private def globalMutation (knownSummary : Bool) : GIR.Module :=
 
 #guard match GIR.validate (globalMutation false) with | .error e => e.code == .v060 | _ => false
 #guard match GIR.validate (globalMutation true) with | .error e => e.code == .v060 | _ => false
+
+private def globalMutationWithEmptyArgument (knownSummary : Bool) : GIR.Module :=
+  let input := globalMutation knownSummary
+  { input with funcs := input.funcs.modify 1 (fun receiver =>
+      { receiver with
+        params := receiver.params ++ [sliceTy],
+        roots := { receiver.roots with params := receiver.roots.params.push (1, []) },
+        blocks := receiver.blocks.modify 0 fun block =>
+          { block with
+            params := block.params ++ [(7, .data sliceTy)],
+            insts := block.insts.map fun
+              | .def value (.call fn _ origin) => .def value (.call fn [7] origin)
+              | inst => inst } }) |>.modify 2 fun callee =>
+      { callee with
+        params := [sliceTy], roots := { params := #[(0, [])] },
+        blocks := callee.blocks.modify 0 fun block => { block with params := [(4, .data sliceTy)] } } }
+
+#guard match GIR.validate (globalMutationWithEmptyArgument false) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (globalMutationWithEmptyArgument true) with | .error e => e.code == .v060 | _ => false
 
 end Goose.Lower.Validation.ReplacementEmptyContentChecks
