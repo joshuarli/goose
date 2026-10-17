@@ -60,7 +60,7 @@ theorem generatedTargets_eachElemValue (loop : Option LoopCtx) (slot : VarId) (b
       dsimp only
       cases declaration.ty <;> first
         | exact generatedTargets_pure loop _
-        | exact generatedTargets_freezeTo loop _ _
+        | exact generatedTargets_borrowTo loop _ _
 
 theorem generatedTargets_fork (loop : Option LoopCtx) (condition : ValueId) :
     GeneratedTargetRun loop (fork condition) := by
