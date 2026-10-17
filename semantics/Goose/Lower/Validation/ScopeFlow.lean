@@ -247,6 +247,22 @@ theorem ScopeFlowAction.freezeTo (parents : Array (Option ScopeId)) (parent : Op
         | exact ScopeFlowAction.pure parents parent loop _
         | exact ScopeFlowAction.emitDef parents parent loop _))
 
+theorem ScopeFlowAction.borrowTo (parents : Array (Option ScopeId)) (parent : Option ScopeId)
+    (loop : Option LoopCtx) (mutability : Mutability) (value : ValueId) :
+    ScopeFlowAction parents parent loop (Goose.Lower.borrowTo mutability value) := by
+  unfold Goose.Lower.borrowTo
+  refine (ScopeFlowAction.read parents parent loop).bind fun env =>
+    (ScopeFlowAction.valTy parents parent loop value).bind fun type => ?_
+  dsimp only
+  split
+  all_goals
+    first
+    | (simp only [Bool.and_false, Bool.false_eq_true, ↓reduceIte];
+        exact ScopeFlowAction.freezeTo parents parent loop mutability value)
+    | (split <;> first
+        | exact ScopeFlowAction.emitDef parents parent loop _
+        | exact ScopeFlowAction.freezeTo parents parent loop mutability value)
+
 theorem ScopeFlowAction.coerceTo (parents : Array (Option ScopeId)) (parent : Option ScopeId)
     (loop : Option LoopCtx)
     (target : Ty) (value : ValueId) (origin : OriginId) :
@@ -331,7 +347,7 @@ theorem ScopeFlowAction.eachElemValue (parents : Array (Option ScopeId)) (parent
     | some localVar =>
       dsimp only
       cases localVar.ty with
-      | ref mutability type => exact ScopeFlowAction.freezeTo parents parent loop mutability element
+      | ref mutability type => exact ScopeFlowAction.borrowTo parents parent loop mutability element
       | _ => exact ScopeFlowAction.pure parents parent loop _
 
 

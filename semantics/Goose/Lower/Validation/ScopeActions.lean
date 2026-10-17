@@ -158,6 +158,22 @@ theorem ScopeAction.freezeTo (parents : Array (Option ScopeId)) (parent : Option
         | exact ScopeAction.pure parents parent _
         | exact ScopeAction.emitDef parents parent _))
 
+theorem ScopeAction.borrowTo (parents : Array (Option ScopeId)) (parent : Option ScopeId)
+    (mutability : Mutability) (value : ValueId) :
+    ScopeAction parents parent (Goose.Lower.borrowTo mutability value) := by
+  unfold Goose.Lower.borrowTo
+  refine (ScopeAction.read parents parent).bind fun env =>
+    (ScopeAction.valTy parents parent value).bind fun type => ?_
+  dsimp only
+  split
+  all_goals
+    first
+    | (simp only [Bool.and_false, Bool.false_eq_true, ↓reduceIte];
+        exact ScopeAction.freezeTo parents parent mutability value)
+    | (split <;> first
+        | exact ScopeAction.emitDef parents parent _
+        | exact ScopeAction.freezeTo parents parent mutability value)
+
 theorem ScopeAction.coerceTo (parents : Array (Option ScopeId)) (parent : Option ScopeId)
     (target : Ty) (value : ValueId) (origin : OriginId) :
     ScopeAction parents parent (Goose.Lower.coerceTo target value origin) := by
@@ -233,7 +249,7 @@ theorem ScopeAction.eachElemValue (parents : Array (Option ScopeId)) (parent : O
     | some localVar =>
       dsimp only
       cases localVar.ty with
-      | ref mutability type => exact ScopeAction.freezeTo parents parent mutability element
+      | ref mutability type => exact ScopeAction.borrowTo parents parent mutability element
       | _ => exact ScopeAction.pure parents parent _
 
 end Goose.Lower.Validation
