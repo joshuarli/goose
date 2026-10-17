@@ -1,3 +1,4 @@
+import Goose.Proofs.ExitExecutionInvocationStatementsDefinitions
 import Goose.Proofs.ExitExecutionInvocationProducers
 import Goose.Proofs.ExitExecutionInvocationValues
 
@@ -54,6 +55,10 @@ inductive ExitCallSite (config : EvalConfig) :
   | producer {α β : Type} {caller : ExitInvocation α} {child : ExitInvocation β}
       {initial prepared : ExecutionState}
       (site : ProducerInvocationChild config caller initial child prepared) :
+      ExitCallSite config caller initial child prepared
+  | statements {α β : Type} {caller : ExitInvocation α} {child : ExitInvocation β}
+      {initial prepared : ExecutionState}
+      (site : StatementInvocationEdge config caller initial child prepared) :
       ExitCallSite config caller initial child prepared
   | moduleGlobals (fuel : Nat) (initial : ExecutionState) :
       ExitCallSite config (.module fuel) initial
@@ -303,6 +308,8 @@ def ExitInvocation.frames (config : EvalConfig) (caller : ExitInvocation α)
         inner = (match expression with
           | .blockE _ _ => [.breakTarget ⟨prepared.nextScope, environment.act, .block, [.construct destination]⟩]
           | _ => []) ++ .receivingDestination (expressionOrigin expression) destination :: outer
+  | .loop _ environment _ _ =>
+      inner = .breakTarget ⟨initial.nextScope, environment.act, .loop, []⟩ :: outer
   | .completionTail _ _ channels expression =>
       ∃ planned, CompletionPreparation channels (expressionOrigin expression) initial planned middle ∧
         inner = .exitChannels (expressionOrigin expression) [] (planned.filterMap Prod.snd) :: outer
@@ -344,6 +351,7 @@ theorem ExitCallSite.has_frames {config : EvalConfig} {α β : Type}
   cases site
   all_goals first | exact ⟨_, rfl⟩ | skip
   case values site => cases site <;> exact ⟨_, rfl⟩
+  case statements site => cases site <;> exact ⟨_, rfl⟩
   case producer site =>
     cases site
     all_goals first | exact ⟨_, rfl⟩ | skip
