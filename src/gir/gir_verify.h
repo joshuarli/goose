@@ -64,6 +64,12 @@ private:
     vector<bool> lowReturnedOwnerPairs;
     vector<set<int>> constructionNeeds, constructionEscapes;
     set<pair<int, int>> checkedTargetUnreachable;
+    struct LowReturnFlagEffect {
+        set<int64_t> values;
+        bool preservesInput = false;
+        bool operator==(const LowReturnFlagEffect &) const = default;
+    };
+    vector<LowReturnFlagEffect> lowReturnFlagEffects;
 
     [[noreturn]] static void Fail(const char *code, string msg) { throw GirViolation { code, std::move(msg) }; }
 
@@ -488,6 +494,85 @@ private:
         }
     }
 
+    template<class Integer>
+    vector<LowReturnFlagEffect> ComputeLowReturnFlagEffects(Integer integer) const {
+        struct Flow {
+            set<int64_t> values;
+            bool preservesInput = false;
+            bool reachable = false;
+            bool operator==(const Flow &) const = default;
+        };
+        vector<LowReturnFlagEffect> effects(m.funcs.size());
+        bool changed = true;
+        while (changed) {
+            auto nextEffects = effects;
+            for (size_t function = 0; function < m.funcs.size(); function++) {
+                auto &f = m.funcs[function];
+                vector<optional<Flow>> incoming(f.blocks.size());
+                if (f.blocks.empty()) continue;
+                incoming[0] = Flow { {}, true, true };
+                vector<int> work { 0 };
+                auto merge = [&](int block, Flow state) {
+                    if (!state.reachable) return;
+                    if (!incoming[block]) {
+                        incoming[block] = std::move(state);
+                        work.push_back(block);
+                        return;
+                    }
+                    auto merged = *incoming[block];
+                    merged.reachable = true;
+                    merged.preservesInput |= state.preservesInput;
+                    merged.values.insert(state.values.begin(), state.values.end());
+                    if (!(merged == *incoming[block])) {
+                        incoming[block] = std::move(merged);
+                        work.push_back(block);
+                    }
+                };
+                while (!work.empty()) {
+                    auto block = work.back();
+                    work.pop_back();
+                    auto state = *incoming[block];
+                    for (auto &inst : f.blocks[block].insts) {
+                        if (inst.op == GirOp::ReturnFlagSet) {
+                            state.values = { integer(f, inst.a) };
+                            state.preservesInput = false;
+                        } else if (inst.op == GirOp::Call) {
+                            auto &callee = effects[inst.idx];
+                            if (callee.values.empty() && !callee.preservesInput) {
+                                state.reachable = false;
+                            } else {
+                                auto values = callee.values;
+                                if (callee.preservesInput)
+                                    values.insert(state.values.begin(), state.values.end());
+                                state.values = std::move(values);
+                                state.preservesInput &= callee.preservesInput;
+                                state.reachable = !state.values.empty() || state.preservesInput;
+                            }
+                        } else if (inst.op == GirOp::Ret) {
+                            nextEffects[function].values.insert(state.values.begin(), state.values.end());
+                            nextEffects[function].preservesInput |= state.preservesInput;
+                            break;
+                        } else if (inst.op == GirOp::Abort || inst.op == GirOp::Exit || inst.op == GirOp::Unreachable) {
+                            state.reachable = false;
+                        }
+                        if (!state.reachable) break;
+                    }
+                    if (!state.reachable) continue;
+                    auto *term = LastTerm(f.blocks[block]);
+                    if (!term) continue;
+                    if (term->op == GirOp::Br) merge(term->idx, state);
+                    if (term->op == GirOp::CondBr) {
+                        merge(term->idx, state);
+                        merge(term->idx2, state);
+                    }
+                }
+            }
+            changed = nextEffects != effects;
+            effects = std::move(nextEffects);
+        }
+        return effects;
+    }
+
     void CheckLowTargetProtocols() {
         auto bad = [&](const string &message) { Fail("GIR-V090", message); };
         vector<set<int>> needs(m.funcs.size()), escapes(m.funcs.size());
@@ -513,10 +598,15 @@ private:
                 if (inst.op == GirOp::ReturnFlagSet) {
                     auto flag = integer(m.funcs[function], inst.a);
                     if (flag < 0 || flag > (int64_t)m.lowtargets.size()) bad("return flag does not name a checked target");
-                    returnFlags[function].insert(flag);
-                    if (flag) escapes[function].insert((int)flag - 1);
                 }
             }
+        lowReturnFlagEffects = ComputeLowReturnFlagEffects(integer);
+        for (size_t function = 0; function < m.funcs.size(); function++) {
+            returnFlags[function] = lowReturnFlagEffects[function].values;
+            for (auto flag : returnFlags[function]) if (flag) escapes[function].insert((int)flag - 1);
+            if (lowReturnFlagEffects[function].preservesInput)
+                for (size_t target = 0; target < m.lowtargets.size(); target++) escapes[function].insert((int)target);
+        }
         for (bool changed = true; changed;) {
             changed = false;
             for (size_t function = 0; function < m.funcs.size(); function++)
@@ -592,6 +682,39 @@ private:
                             readsTarget |= (inst.op == GirOp::TargetLoad || inst.op == GirOp::TargetStore ||
                                             inst.op == GirOp::SourceTargetGet || inst.op == GirOp::SourceTargetResult) && inst.idx == target;
                         if (!readsTarget) bad("escaping low call has a target case without a receiving handler");
+                        for (auto &channel : m.lowtargets[target].channels) {
+                            vector<int> required = channel.escaped;
+                            if (channel.incoming.size() == 3) required = { channel.escaped[0], channel.escaped[2] };
+                            for (auto cell : required) {
+                                const GirInst *load = nullptr;
+                                for (auto &inst : handler.insts)
+                                    if (inst.op == GirOp::TargetLoad && inst.idx == target && inst.idx2 == cell) load = &inst;
+                                if (!load) bad("target case omits an escaped result cell");
+                                bool consumed = false;
+                                for (auto &inst : handler.insts) {
+                                    if (inst.res == load->res) continue;
+                                    vector<int> uses;
+                                    Uses(inst, uses);
+                                    consumed |= find(uses.begin(), uses.end(), load->res) != uses.end();
+                                }
+                                if (!consumed) bad("target case loads an escaped result cell without consuming it");
+                            }
+                            if (member(functionIndex, target)) {
+                                bool reference = false;
+                                for (auto targetMember : m.lowtargets[target].members)
+                                    for (auto &entryBlock : m.funcs[targetMember].blocks)
+                                        for (auto &inst : entryBlock.insts)
+                                            if (inst.op == GirOp::SourceTargetEnter && inst.idx == target &&
+                                                channel.position < (int)inst.vals.size() && inst.vals[channel.position] >= 0)
+                                                reference = true;
+                                if (reference) {
+                                    bool source = false;
+                                    for (auto &inst : handler.insts)
+                                        source |= inst.op == GirOp::SourceTargetGet && inst.idx == channel.position;
+                                    if (!source) bad("target case omits its reference result source");
+                                }
+                            }
+                        }
                         sentinelPredecessor = next;
                         next = term->idx2;
                     }
@@ -602,7 +725,7 @@ private:
                         predecessors[next].size() != 1 || predecessors[next][0] != sentinelPredecessor)
                         bad("escaping low call has no closed invalid-discriminant sentinel");
                     checkedTargetUnreachable.emplace((int)functionIndex, next);
-                    if (!returnFlags[call.idx].count(0)) {
+                    if (!returnFlags[call.idx].count(0) && !lowReturnFlagEffects[call.idx].preservesInput) {
                         auto normalSentinel = singleBranchSentinel(normal, (int)block);
                         if (normalSentinel >= 0) checkedTargetUnreachable.emplace((int)functionIndex, normalSentinel);
                     }
@@ -662,6 +785,12 @@ private:
                             state.restored.erase(key);
                             if (!incomingCell) state.payload.insert(key);
                         }
+                    }
+                    if (inst.op == GirOp::Call) {
+                        auto &effect = lowReturnFlagEffects[inst.idx];
+                        if (effect.preservesInput && effect.values.empty()) continue;
+                        if (!effect.preservesInput && effect.values.size() == 1) state.flag = (int)*effect.values.begin();
+                        else state.flag = -1;
                     }
                     if (inst.op == GirOp::ReturnFlagSet) state.flag = (int)integer(function, inst.a);
                     if (inst.op == GirOp::Ret && !m.lowtargets.empty()) {
@@ -1586,6 +1715,11 @@ private:
                         state.calls.push_back({ inst.res, state.scopes.back(), -1 });
                         break;
                     case GirOp::Call: {
+                        auto &effect = lowReturnFlagEffects[inst.idx];
+                        if (!(effect.preservesInput && effect.values.empty())) {
+                            if (!effect.preservesInput && effect.values.size() == 1) state.flag = (int)*effect.values.begin();
+                            else state.flag = -1;
+                        }
                         bool hasTraceParam = false;
                         for (auto &calleeBlock : m.funcs[inst.idx].blocks) for (auto &candidate : calleeBlock.insts)
                             hasTraceParam |= candidate.op == GirOp::SourceParam || candidate.op == GirOp::SourceResult;
@@ -1696,7 +1830,7 @@ private:
                         break;
                     case GirOp::Ret:
                         if (!state.scopes.empty() || !state.calls.empty() || !state.targets.empty()) bad("return omits trace scope, target, or call cleanup");
-                        if (state.flag == 0) for (auto position : sourceResults((int)(&function - m.funcs.data())))
+                        if (state.flag <= 0) for (auto position : sourceResults((int)(&function - m.funcs.data())))
                             if (!state.outputs.count(position)) bad("normal return omits a source output channel");
                         break;
                     default: break;

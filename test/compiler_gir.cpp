@@ -5588,6 +5588,25 @@ void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
         assert(Code(low) == "");
         assert(GirWriter(low).WriteLow().find("[\"lchannel\",0,") != string::npos);
 
+        auto unusedPayload = low;
+        auto targetFunction = low.lowtargets[0].members[0];
+        auto &targetBody = unusedPayload.funcs[targetFunction];
+        auto normalDispatch = find_if(targetBody.blocks[0].insts.begin(), targetBody.blocks[0].insts.end(),
+            [](const GirInst &inst) { return inst.op == GirOp::CondBr; });
+        assert(normalDispatch != targetBody.blocks[0].insts.end());
+        auto targetDispatch = normalDispatch->idx2;
+        auto hit = unusedPayload.funcs[targetFunction].blocks[targetDispatch].insts.back().idx;
+        auto &handler = unusedPayload.funcs[targetFunction].blocks[hit];
+        auto payloadUse = find_if(handler.insts.begin(), handler.insts.end(), [](const GirInst &inst) {
+            return inst.op == GirOp::Br;
+        });
+        assert(payloadUse != handler.insts.end() && payloadUse->vals.size() >= 2);
+        auto savedStart = find_if(targetBody.blocks[0].insts.begin(), targetBody.blocks[0].insts.end(),
+            [](const GirInst &inst) { return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == 4; });
+        assert(savedStart != targetBody.blocks[0].insts.end());
+        payloadUse->vals[1] = savedStart->res;
+        assert(Code(unusedPayload) == "GIR-V090");
+
         auto missingPosition = low;
         missingPosition.lowtargets[0].channels[0].position = -1;
         assert(Code(missingPosition) == "GIR-V090");
@@ -5596,7 +5615,6 @@ void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
         duplicatePosition.lowtargets[0].channels.push_back(duplicatePosition.lowtargets[0].channels[0]);
         assert(Code(duplicatePosition) == "GIR-V090");
 
-        auto targetFunction = low.lowtargets[0].members[0];
         auto missingActivation = low;
         auto &missingEntry = missingActivation.funcs[targetFunction].blocks[0].insts;
         auto active = find_if(missingEntry.begin(), missingEntry.end(), [](const GirInst &inst) {
@@ -5676,6 +5694,36 @@ missing_handler_changed:
     for (auto &block : differentEdge.funcs[1].blocks) for (auto &inst : block.insts)
         if (inst.op == GirOp::Invoke) inst.escapes[0].block = inst.a;
     assert(Code(differentEdge) == "GIR-V020");
+}
+
+void ConstructionReturnFlagsFollowCalls() {
+    auto core = ConstructionSourceTargetModule();
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    auto low = GirToLow(high).Lower();
+    assert(Code(low) == "");
+    auto i64 = low.IntType(CoreIntTy::I64);
+    GirFunc ordinary;
+    ordinary.name = "ordinary";
+    ordinary.params = { i64 };
+    ordinary.scopes = { -1 };
+    GirInst setNormal;
+    setNormal.op = GirOp::ReturnFlagSet;
+    setNormal.a = 1;
+    ordinary.blocks = { GirBlock { { { 0, i64 } }, { Int(low, 1, "0"), setNormal, Ret() } } };
+    low.funcs.push_back(ordinary);
+    GirInst call;
+    call.op = GirOp::Call;
+    call.idx = 3;
+    call.vals = { 0 };
+    call.org = 0;
+    auto &escape = low.funcs[2].blocks[0].insts;
+    auto flag = find_if(escape.begin(), escape.end(), [](const GirInst &inst) {
+        return inst.op == GirOp::ReturnFlagSet;
+    });
+    assert(flag != escape.end());
+    escape.insert(flag + 1, call);
+    assert(!Code(low).empty());
 }
 
 void ConstructionPointerEqualityRejectsTraceMetadata() {
@@ -5961,6 +6009,7 @@ int main() {
     ConstructionPrintSnapshotsHaveOneResumedConsumer();
     ConstructionNamedGrowAliasesReserveTheReceivingPrefix();
     ConstructionSourceTargetsLowerToCheckedReceivingEdges();
+    ConstructionReturnFlagsFollowCalls();
     ConstructionPointerEqualityRejectsTraceMetadata();
     ConstructionReferenceProvenanceUsesEachResultPosition();
     ConstructionPushPublishesOneMutableElementReference();
