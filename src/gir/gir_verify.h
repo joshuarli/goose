@@ -95,7 +95,7 @@ private:
         auto add = [&](int v) { out.push_back(v); };
         switch (i.op) {
             case GirOp::ControlEnter: case GirOp::ControlCallPush: case GirOp::ControlCallParam: case GirOp::ControlCallGet:
-            case GirOp::ControlOwnerNone: case GirOp::ControlNamedBind: case GirOp::ControlOwnerBind: case GirOp::ControlOwnerParam: case GirOp::ControlOwnerGet:
+            case GirOp::ControlOwnerNone: case GirOp::ControlOwnerIsNamed: case GirOp::ControlNamedBase: case GirOp::ControlNamedCount: case GirOp::ControlNamedBind: case GirOp::ControlOwnerBind: case GirOp::ControlOwnerParam: case GirOp::ControlOwnerGet:
             case GirOp::ControlOwnerTargetEnter: case GirOp::ControlOwnerTargetGet: case GirOp::ControlOwnerTargetResult: case GirOp::ControlOwnerTargetLeave:
             case GirOp::ControlOwnerCheck: case GirOp::ControlOwnerExtend: case GirOp::ControlOwnerUpdate: case GirOp::ControlOwnerResult:
             case GirOp::ControlReceivingNew: case GirOp::ControlReceivingOpen: case GirOp::ControlReceivingCurrent:
@@ -1890,7 +1890,7 @@ private:
             if (auto reference = get_if<GirLowResizableReferenceResult>(&layout)) return reference->header;
             return nullopt;
         };
-        enum class Kind { Unknown, Scope, Receiving, Attempt, Record, Ticket, Call, Stack, Start, Progress, Mode, Prefix, Prepared, Flag, Comparison, TicketRole, Owner, NamedBinding, OwnerTarget, Header };
+        enum class Kind { Unknown, Scope, Receiving, Attempt, Record, Ticket, Call, Stack, Start, Progress, Mode, Prefix, Prepared, Flag, Comparison, TicketRole, Owner, Binding, BindingRole, NamedBinding, OwnerTarget, Header, Whole };
         enum class Role { Waiting, Fresh, UnknownAlias, Named, Received };
         enum class RawState { Writing, Built, Cancelled };
         struct Fact {
@@ -1948,13 +1948,26 @@ private:
                         iterator = left.erase(iterator);
                     else ++iterator;
             };
-            intersect(combined.values, next.values);
-            intersect(combined.locals, next.locals);
-            intersect(combined.targets, next.targets);
+            auto mergeBindings = [&](map<int, Fact> &left, const map<int, Fact> &right) {
+                auto role = [](Kind kind) { return kind == Kind::Owner || kind == Kind::Binding || kind == Kind::NamedBinding; };
+                for (auto iterator = left.begin(); iterator != left.end();) {
+                    auto other = right.find(iterator->first);
+                    if (other != right.end() && iterator->second == other->second) { ++iterator; continue; }
+                    if (other != right.end() && role(iterator->second.kind) && role(other->second.kind)) {
+                        auto first = iterator->second, second = other->second;
+                        first.kind = second.kind = Kind::Binding;
+                        if (first == second) { iterator->second = first; ++iterator; continue; }
+                    }
+                    iterator = left.erase(iterator);
+                }
+            };
+            mergeBindings(combined.values, next.values);
+            mergeBindings(combined.locals, next.locals);
+            mergeBindings(combined.targets, next.targets);
             combined.writtenAttempts.insert(next.writtenAttempts.begin(), next.writtenAttempts.end());
             combined.namedPreparations.insert(next.namedPreparations.begin(), next.namedPreparations.end());
             intersect(combined.localSources, next.localSources);
-            intersect(combined.returnedHeaders, next.returnedHeaders);
+            mergeBindings(combined.returnedHeaders, next.returnedHeaders);
             set<int> checked;
             set_intersection(combined.ownerChecked.begin(), combined.ownerChecked.end(), next.ownerChecked.begin(), next.ownerChecked.end(), inserter(checked, checked.end()));
             combined.ownerChecked = std::move(checked);
@@ -1973,6 +1986,22 @@ private:
                     kind == Kind::Call ? state.calls.count(result.root) : kind == Kind::Scope ? state.scopes.count(result.root) : true;
                 if (!live) bad(cat("construction control helper reuses transferred or consumed authority at %", value, " (root %", result.root, ")"));
                 return result;
+            };
+            auto binding = [&](int value) {
+                auto result = fact(value);
+                if (result.kind != Kind::Owner && result.kind != Kind::Binding && result.kind != Kind::NamedBinding)
+                    bad("reference binding is not a closed optional owner or named authority");
+                return result;
+            };
+            auto matchesBinding = [&](const Fact &authority, const Fact &reference) {
+                return ((reference.kind == Kind::Header || reference.kind == Kind::Whole) && reference.owner == authority.root) ||
+                    (authority.kind == Kind::NamedBinding && reference.kind == Kind::Start && reference.root == authority.owner);
+            };
+            auto boundReference = [&](const Fact &reference) {
+                if (reference.kind == Kind::Header || reference.kind == Kind::Whole) return true;
+                return reference.kind == Kind::Start && any_of(state.values.begin(), state.values.end(), [&](const auto &entry) {
+                    return entry.second.kind == Kind::NamedBinding && entry.second.owner == reference.root;
+                });
             };
             auto recordAddress = [&](int value) {
                 auto address = fact(value);
@@ -2017,6 +2046,18 @@ private:
                         for (auto &[id, entry] : next.values) if (entry.kind == Kind::Ticket && entry.root == found->second.root) {
                             entry.role = role;
 
+                        }
+                    }
+                    if (comparison.kind == Kind::BindingRole) {
+                        auto authority = binding(comparison.root);
+                        if ((authority.kind == Kind::NamedBinding && !condition->second) ||
+                            (authority.kind == Kind::Owner && condition->second)) return;
+                        if (authority.kind == Kind::Binding) {
+                            auto role = condition->second ? Kind::NamedBinding : Kind::Owner;
+                            for (auto &[value, entry] : next.values)
+                                if (entry.kind == Kind::Binding && entry.root == authority.root) entry.kind = role;
+                            for (auto &[member, entry] : next.locals)
+                                if (entry.kind == Kind::Binding && entry.root == authority.root) entry.kind = role;
                         }
                     }
                     if (comparison.kind == Kind::Comparison) {
@@ -2365,6 +2406,18 @@ private:
                         break;
                     case GirOp::ControlOwnerNone:
                         state.values[inst.res] = Fact { Kind::Owner, -1 }; break;
+                    case GirOp::ControlOwnerIsNamed: {
+                        auto authority = binding(inst.a);
+                        Fact role { Kind::BindingRole, inst.a }; role.owner = authority.root;
+                        state.values[inst.res] = role;
+                        break;
+                    }
+                    case GirOp::ControlNamedBase: case GirOp::ControlNamedCount: {
+                        auto authority = require(inst.a, Kind::NamedBinding);
+                        if (!matchesBinding(authority, fact(inst.b)))
+                            bad("named sample does not use its exact whole reference");
+                        break;
+                    }
                     case GirOp::ControlNamedBind: {
                         auto raw = require(inst.a, Kind::Attempt);
                         if (raw.raw != RawState::Built) bad("named source binding captures an unfinished attempt");
@@ -2391,13 +2444,11 @@ private:
                             m.Type(function.params[inst.idx]).kind != CoreType::Ptr)
                             bad("owner parameter is not an exact primitive reference input");
                         auto mutableOwner = find(passed.begin(), passed.end(), inst.idx) != passed.end();
-                        Fact binding { Kind::Owner, mutableOwner ? inst.res : -1 }; binding.result = inst.idx;
-                        state.values[inst.res] = binding;
-                        if (mutableOwner) {
-                            auto headerValue = function.blocks[0].params[inst.idx].first;
-                            Fact header { Kind::Header, headerValue }; header.owner = inst.res;
-                            state.values[headerValue] = header;
-                        }
+                        Fact authority { mutableOwner ? Kind::Owner : Kind::Binding, inst.res }; authority.result = inst.idx;
+                        state.values[inst.res] = authority;
+                        auto headerValue = function.blocks[0].params[inst.idx].first;
+                        Fact reference { mutableOwner ? Kind::Header : Kind::Whole, headerValue }; reference.owner = inst.res;
+                        state.values[headerValue] = reference;
                         break;
                     }
                     case GirOp::ControlOwnerCheck: {
@@ -2447,16 +2498,20 @@ private:
                             if (auto layout = get_if<GirLowResizableReferenceResult>(&result.layout)) reference |= layout->header == inst.idx;
                         }
                         if (!reference) bad("owner result does not name an exact reference output position");
-                        Fact binding { Kind::Owner, inst.res }; binding.callee = call.callee; binding.result = inst.idx;
-                        state.values[inst.res] = binding;
+                        bool resizable = false;
+                        for (auto &result : *m.funcs[call.callee].lowResults)
+                            if (auto layout = get_if<GirLowResizableReferenceResult>(&result.layout)) resizable |= layout->header == inst.idx;
+                        Fact authority { resizable ? Kind::Owner : Kind::Binding, inst.res }; authority.callee = call.callee; authority.result = inst.idx;
+                        state.values[inst.res] = authority;
                         state.ownerOutputCells[state.arguments[call.root][inst.idx]] = inst.res;
                         break;
                     }
                     case GirOp::ControlOwnerResult: {
-                        auto binding = require(inst.a, Kind::Owner);
+                        auto authority = binding(inst.a);
                         auto stored = state.returnedHeaders.find(inst.idx);
                         if (stored == state.returnedHeaders.end() ||
-                            (binding.root >= 0 ? stored->second.kind != Kind::Header || stored->second.owner != binding.root : stored->second.kind == Kind::Header))
+                            (authority.root >= 0 ? !matchesBinding(authority, stored->second) :
+                             boundReference(stored->second)))
                             bad("owner return binding does not match its exact stored reference header");
                         bool reference = false;
                         if (function.lowResults) for (auto &result : *function.lowResults) {
@@ -2483,26 +2538,29 @@ private:
                             inst.idx >= (int)m.lowtargets[target.target].channels.size() ||
                             !referenceOutput(function, inst.idx))
                             bad("owner target result is not this activation's in-flight payload");
-                        Fact binding { Kind::Owner, inst.res }; binding.target = target.target; binding.result = inst.idx;
-                        state.values[inst.res] = binding;
+                        auto &layout = (*function.lowResults)[inst.idx].layout;
+                        bool resizable = holds_alternative<GirLowResizableReferenceResult>(layout);
+                        Fact authority { resizable ? Kind::Owner : Kind::Binding, inst.res }; authority.target = target.target; authority.result = inst.idx;
+                        state.values[inst.res] = authority;
                         auto &channel = m.lowtargets[target.target].channels[inst.idx];
                         for (auto &prior : function.blocks[block].insts) {
                             if (&prior == &inst) break;
                             if (prior.op == GirOp::TargetLoad && prior.idx == target.target && prior.idx2 == channel.escaped[0]) {
-                                Fact header { Kind::Header, prior.res }; header.owner = inst.res;
+                                Fact header { resizable ? Kind::Header : Kind::Whole, prior.res }; header.owner = inst.res;
                                 state.values[prior.res] = header;
                             }
                         }
                         break;
                     }
                     case GirOp::ControlOwnerTargetResult: {
-                        auto binding = require(inst.a, Kind::Owner);
+                        auto authority = binding(inst.a);
                         if (!referenceOutput(m.funcs[m.lowtargets[inst.idx].members[0]], inst.idx2))
                             bad("owner target transport names a nonreference logical result");
                         auto &channel = m.lowtargets[inst.idx].channels[inst.idx2];
                         auto stored = state.targets.find(inst.idx * 65536 + channel.escaped[0]);
                         if (stored == state.targets.end() ||
-                            (binding.root >= 0 ? stored->second.kind != Kind::Header || stored->second.owner != binding.root : stored->second.kind == Kind::Header))
+                            (authority.root >= 0 ? !matchesBinding(authority, stored->second) :
+                             boundReference(stored->second)))
                             bad("owner target binding does not match its exact escaped reference header");
                         break;
                     }
@@ -2533,7 +2591,9 @@ private:
                     case GirOp::PLoad:
                         recordAddress(inst.a);
                         if (auto owner = state.ownerOutputCells.find(inst.a); owner != state.ownerOutputCells.end()) {
-                            Fact header { Kind::Header, inst.res }; header.owner = owner->second; state.values[inst.res] = header;
+                            auto authority = fact(owner->second);
+                            Fact header { authority.kind == Kind::Owner ? Kind::Header : Kind::Whole, inst.res };
+                            header.owner = owner->second; state.values[inst.res] = header;
                         }
                         break;
                     case GirOp::BytesCopy: case GirOp::BytesMove:
@@ -2560,7 +2620,12 @@ private:
                         if (inputs.size() != expected) bad("construction call shadow omits or adds a nonfixed result");
                         vector<optional<Fact>> bindings;
                         for (auto binding : inst.ownerBindings)
-                            bindings.push_back(binding ? optional<Fact>(require(*binding, Kind::Owner)) : nullopt);
+                            bindings.push_back(binding ? optional<Fact>([&] {
+                                auto authority = fact(*binding);
+                                if (authority.kind != Kind::Owner && authority.kind != Kind::Binding && authority.kind != Kind::NamedBinding)
+                                    bad("call shadow has no closed reference binding authority");
+                                return authority;
+                            }()) : nullopt);
                         state.bindingInputs[inst.res] = std::move(bindings);
                         state.inputs[inst.res] = std::move(inputs); break;
                     }
@@ -2607,9 +2672,10 @@ private:
                             for (size_t position = 0; position < bindings.size(); position++) {
                                 auto header = fact(inst.vals[position + 1]);
                                 if (bindings[position] && bindings[position]->root >= 0) {
-                                    if (header.kind != Kind::Header || header.owner != bindings[position]->root)
-                                        bad("owner call binding differs from its actual primitive reference header");
-                                } else if (header.kind == Kind::Header) bad("owner call drops the binding for its exact reference header");
+                                    if (!matchesBinding(*bindings[position], header))
+                                        bad("owner call binding differs from its exact whole reference");
+                                } else if (boundReference(header))
+                                    bad("owner call drops the binding for its exact whole reference");
                             }
                             state.called.insert(token); state.arguments[token] = inst.vals;
                         }
@@ -3062,11 +3128,22 @@ private:
                     state.values[inst.res] = value(state, inst.a);
                     state.values[inst.res].address = address;
                 }
-                if (inst.op == GirOp::ControlReceivingCurrent || inst.op == GirOp::ControlReceivingRenew ||
+                if (inst.op == GirOp::ControlReceivingCurrent || inst.op == GirOp::ControlReceivingRenew || inst.op == GirOp::ControlCallGet ||
                     inst.op == GirOp::ControlReceivingRefresh || inst.op == GirOp::ControlExitSelected ||
                     inst.op == GirOp::ControlReceivingCancel || inst.op == GirOp::ControlAttemptAbandon ||
                     inst.op == GirOp::ControlExitCommit) {
                     auto source = value(state, inst.op == GirOp::ControlReceivingRefresh || inst.op == GirOp::ControlExitCommit ? inst.b : inst.a);
+                    if (inst.op == GirOp::ControlCallGet) {
+                        source = Value {};
+                        auto call = definitions[inst.a];
+                        if (call && call->op == GirOp::ControlCallPush && call->idx >= 0 && call->idx < (int)m.funcs.size()) {
+                            auto &results = *m.funcs[call->idx].lowResults;
+                            size_t dense = 0;
+                            for (int result = 0; result < inst.idx; result++)
+                                dense += holds_alternative<GirLowNonfixedResult>(results[result].layout);
+                            if (dense < call->vals.size()) source = value(state, call->vals[dense]);
+                        }
+                    }
                     auto &created = state.values[inst.res];
                     created = source;
                     created.graph = source.graph >= 0 && inst.op == GirOp::ControlExitCommit ? source.graph : inst.res;
@@ -3184,6 +3261,10 @@ private:
                     auto &address = state.values[inst.res].address;
                     address.kind = Address::Kind::Global;
                     address.root = inst.idx;
+                }
+                if (inst.op == GirOp::ControlNamedBase) {
+                    state.values[inst.res] = value(state, inst.b);
+                    state.values[inst.res].address.offset = INT64_MAX;
                 }
                 if (inst.op == GirOp::FrameAddr) state.values[inst.res].address = { -inst.idx - 1, 0 };
                 if (inst.op == GirOp::LocalSet) {

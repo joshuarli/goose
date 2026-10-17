@@ -25,7 +25,7 @@ enum class GirOp : uint8_t {
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
     HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId, PtrEq, SourceNew, SourceChild, SourceParam, SourceEnter, SourceCallPush, SourceCallGet, SourceGlobal, SourceTargetEnter, SourceTargetGet,
-    ControlEnter, ControlCallPush, ControlCallParam, ControlCallGet, ControlOwnerNone, ControlNamedBind, ControlOwnerBind, ControlOwnerParam, ControlOwnerGet, ControlOwnerTargetEnter, ControlOwnerTargetGet, ControlReceivingNew, ControlReceivingOpen, ControlReceivingCurrent,
+    ControlEnter, ControlCallPush, ControlCallParam, ControlCallGet, ControlOwnerNone, ControlOwnerIsNamed, ControlNamedBase, ControlNamedCount, ControlNamedBind, ControlOwnerBind, ControlOwnerParam, ControlOwnerGet, ControlOwnerTargetEnter, ControlOwnerTargetGet, ControlReceivingNew, ControlReceivingOpen, ControlReceivingCurrent,
     ControlReceivingRenew, ControlReceivingRefresh, ControlAttemptStack, ControlAttemptStart,
     ControlAttemptProgress, ControlAttemptPrefix, ControlAttemptMode, ControlAttemptReceiving,
     ControlExitWait, ControlExitReserve, ControlExitIsNamed, ControlExitAdopt, ControlExitSelected, ControlExitPrepare, ControlExitCommit,
@@ -235,6 +235,9 @@ inline optional<GirControlContract> GirControlOf(GirOp op) {
         case GirOp::ControlCallPush: return GirControlContract { "l_control_call_push", Form::Call, Kind::Ptr, {}, Kind::Ptr };
         case GirOp::ControlCallParam: return GirControlContract { "l_control_call_param", Form::Parameter, Kind::Ptr, {}, nullopt };
         case GirOp::ControlCallGet: return GirControlContract { "l_control_call_get", Form::OperandParameter, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlOwnerIsNamed: return GirControlContract { "l_control_owner_is_named", Form::Operand, Kind::Bool, { Kind::Ptr }, nullopt };
+        case GirOp::ControlNamedBase: return GirControlContract { "l_control_named_base", Form::Pair, Kind::Ptr, { Kind::Ptr, Kind::Ptr }, nullopt };
+        case GirOp::ControlNamedCount: return GirControlContract { "l_control_named_count", Form::Pair, Kind::Int, { Kind::Ptr, Kind::Ptr }, nullopt };
         case GirOp::ControlNamedBind: return GirControlContract { "l_control_named_bind", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
         case GirOp::ControlOwnerNone: return GirControlContract { "l_control_owner_none", Form::None, Kind::Ptr, {}, nullopt };
         case GirOp::ControlOwnerTargetEnter: return GirControlContract { "l_control_owner_target_enter", Form::TargetPositions, Kind::Ptr, {}, nullopt };

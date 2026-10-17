@@ -7485,6 +7485,149 @@ void ConstructionPhysicalPrefixHelpersRequireExactLiveAuthority() {
 
 }
 
+CoreModule ConstructionNamedHelperInitializerModule(bool throughReference) {
+    auto core = ConstructionNamedOwnerWithScalarResultModule();
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto byte = core.IntType(CoreIntTy::U8);
+    auto packed = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = byte });
+    auto &producer = core.impls[1];
+    producer.vars[2].type = packed;
+    producer.results[0].type = packed;
+    producer.body.stmts[1].values[0]->type = packed;
+    core.impls[0].body.stmts[0].expr->type = packed;
+    producer.body.stmts[0].expr = make_unique<CoreExpr>();
+    producer.body.stmts[0].expr->kind = CoreExprKind::Call;
+    producer.body.stmts[0].expr->type = packed;
+    producer.body.stmts[0].expr->ctx = 2;
+    producer.body.stmts[0].expr->org = origin;
+    CoreStmt printed;
+    printed.kind = CoreStmtKind::Print; printed.org = origin;
+    CorePrintArg shown; shown.kind = CorePrintArg::View; shown.view = make_unique<CoreView>();
+    shown.view->place = CoreLocal(2); printed.print.push_back(std::move(shown));
+    producer.body.stmts.insert(producer.body.stmts.begin() + 1, std::move(printed));
+    producer.summary.outputs = true;
+    core.impls[0].summary.outputs = true;
+    for (auto &function : core.impls) function.summary.aborts = true;
+    CoreImpl initializer;
+    initializer.name = "initialize_named"; initializer.body.scope = 0;
+    initializer.results = { { packed, CoreRequest::Value, nullopt } };
+    initializer.summary.constructs = { 0 }; initializer.summary.aborts = true;
+    initializer.body.value = make_unique<CoreExpr>(); initializer.body.value->kind = CoreExprKind::Bytes;
+    initializer.body.value->type = packed; initializer.body.value->bytes = { 65 }; initializer.body.value->org = origin;
+    core.impls.push_back(std::move(initializer));
+    core.contexts.push_back(CoreContext { .impl = 2, .resultroots = { {} } });
+    if (throughReference) {
+        auto reference = core.Intern(CoreType { .kind = CoreType::Ref, .mut = CoreMut::Const, .elem = packed });
+        auto unit = core.Intern(CoreType { .kind = CoreType::Unit });
+        CoreImpl reader;
+        reader.name = "read_named"; reader.body.scope = 0;
+        reader.vars = { { "value", reference, CoreVarKind::Let, 0, origin } };
+        reader.params = { { 0, true } }; reader.summary.outputs = true; reader.summary.reads = { { false, 0 } };
+        CoreStmt output;
+        output.kind = CoreStmtKind::Print; output.org = origin;
+        CorePrintArg item; item.kind = CorePrintArg::View; item.view = make_unique<CoreView>();
+        item.view->place = make_unique<CorePlace>(); item.view->place->kind = CorePlace::Deref;
+        item.view->place->expr = make_unique<CoreExpr>(); item.view->place->expr->kind = CoreExprKind::Read;
+        item.view->place->expr->type = reference; item.view->place->expr->place = CoreLocal(0);
+        output.print.push_back(std::move(item)); reader.body.stmts.push_back(std::move(output));
+        CoreStmt repeated;
+        repeated.kind = CoreStmtKind::Print; repeated.org = origin;
+        CorePrintArg second; second.kind = CorePrintArg::View; second.view = make_unique<CoreView>();
+        second.view->place = make_unique<CorePlace>(); second.view->place->kind = CorePlace::Deref;
+        second.view->place->expr = make_unique<CoreExpr>(); second.view->place->expr->kind = CoreExprKind::Read;
+        second.view->place->expr->type = reference; second.view->place->expr->place = CoreLocal(0);
+        repeated.print.push_back(std::move(second)); reader.body.stmts.push_back(std::move(repeated));
+        core.impls.push_back(std::move(reader));
+        core.contexts.push_back(CoreContext { .impl = 3, .varroots = { { 0, { { CoreRootRef::Param, 0 } } } } });
+        auto &call = core.impls[1].body.stmts[1]; call = CoreStmt {};
+        call.kind = CoreStmtKind::Expr; call.org = origin;
+        call.expr = make_unique<CoreExpr>(); call.expr->kind = CoreExprKind::Call;
+        call.expr->type = unit; call.expr->ctx = 3; call.expr->org = origin;
+        call.expr->args.push_back(CoreArgReference { CoreMut::Const, CoreLocal(2) });
+    }
+    return core;
+}
+
+void ConstructionNamedSamplesRequireTheirExactWholeReference() {
+    for (bool throughReference : { false, true }) {
+        auto core = ConstructionNamedHelperInitializerModule(throughReference);
+        CoreWriter writer(core); writer.Write();
+        auto high = GirLowerer(core, writer.FileTable(), writer.OriginTable(),
+            [&](const CoreOrigin &origin) { return writer.OriginId(origin); }).Lower();
+        assert(Code(high) == "");
+        auto low = GirToLow(high).Lower();
+        assert(Code(low) == "");
+        int queries = 0;
+        for (auto &function : low.funcs) for (auto &block : function.blocks) for (auto &inst : block.insts)
+            queries += inst.op == GirOp::ControlNamedBase || inst.op == GirOp::ControlNamedCount;
+        assert(queries >= 2);
+        auto foreign = low;
+        bool changed = false;
+        auto &foreignFunction = foreign.funcs[throughReference ? 3 : 1];
+        int foreignValue = 0;
+        for (auto &block : foreignFunction.blocks) {
+            foreignValue += (int)block.params.size();
+            for (auto &inst : block.insts) foreignValue += GirDefinesValue(inst);
+        }
+        GirMember unrelated; unrelated.kind = GirMember::Bytes; unrelated.size = 1;
+        auto unrelatedMember = (int)foreignFunction.members.size();
+        foreignFunction.members.push_back(unrelated);
+        for (auto &block : foreignFunction.blocks) {
+            auto query = find_if(block.insts.begin(), block.insts.end(), [](const auto &inst) { return inst.op == GirOp::ControlNamedBase; });
+            if (query == block.insts.end()) continue;
+            auto address = Def(GirOp::FrameAddr, foreignValue); address.idx = unrelatedMember;
+            query->b = foreignValue;
+            block.insts.insert(query, address);
+            changed = true; break;
+        }
+        assert(changed && Code(foreign) == "GIR-V090");
+        auto child = low;
+        auto &function = child.funcs[throughReference ? 3 : 1];
+        int next = 0;
+        for (auto &block : function.blocks) {
+            next += (int)block.params.size();
+            for (auto &inst : block.insts) next += GirDefinesValue(inst);
+        }
+        changed = false;
+        for (auto &block : function.blocks) {
+            auto query = find_if(block.insts.begin(), block.insts.end(), [](const auto &inst) { return inst.op == GirOp::ControlNamedBase; });
+            if (query == block.insts.end()) continue;
+            auto position = query - block.insts.begin();
+            auto offset = Int(child, next, "0");
+            auto pointer = Def(GirOp::PtrOffset, next + 1); pointer.a = query->b; pointer.b = next; pointer.idx = 1;
+            query->b = next + 1;
+            block.insts.insert(block.insts.begin() + position, { offset, pointer });
+            changed = true; break;
+        }
+        assert(changed && Code(child) == "GIR-V090");
+        auto wrongRole = low;
+        auto &wrongFunction = wrongRole.funcs[throughReference ? 3 : 1];
+        int none = 0;
+        for (auto &block : wrongFunction.blocks) {
+            none += (int)block.params.size();
+            for (auto &inst : block.insts) none += GirDefinesValue(inst);
+        }
+        changed = false;
+        for (auto &block : wrongFunction.blocks) {
+            auto query = find_if(block.insts.begin(), block.insts.end(), [](const auto &inst) { return inst.op == GirOp::ControlNamedBase; });
+            if (query == block.insts.end()) continue;
+            query->a = none;
+            block.insts.insert(query, Def(GirOp::ControlOwnerNone, none));
+            changed = true; break;
+        }
+        assert(changed && Code(wrongRole) == "GIR-V090");
+        if (throughReference) {
+            auto unknown = low;
+            changed = false;
+            for (auto &block : unknown.funcs[3].blocks) for (auto &inst : block.insts)
+                if (inst.op == GirOp::ControlOwnerIsNamed) {
+                    inst.op = GirOp::Bool; inst.flag = true; inst.a = -1; changed = true;
+                }
+            assert(changed && Code(unknown) == "GIR-V090");
+        }
+    }
+}
+
 void ConstructionNamedCopiesKeepTheirHeaderStorageSeparateFromScalarOutputs() {
     auto core = ConstructionNamedOwnerWithScalarResultModule();
     auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } }, [](const CoreOrigin &) { return 0; }).Lower();
@@ -8377,6 +8520,7 @@ int main() {
     ConstructionReceivingWritersRejectDuplicationAndStaleUse();
     ConstructionNamedPreparationUsesTheDeclaredLocalType();
     ConstructionPhysicalPrefixHelpersRequireExactLiveAuthority();
+    ConstructionNamedSamplesRequireTheirExactWholeReference();
     ConstructionNamedCopiesKeepTheirHeaderStorageSeparateFromScalarOutputs();
     ConstructionReceivingCompletionCountsJoinWithoutChangingOwnership();
     ConstructionProtocolHandlesStayImplicitOnEdges();
