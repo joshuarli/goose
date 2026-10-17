@@ -1,0 +1,118 @@
+import Goose.Construct.Roots
+
+namespace Goose.Construct.RootChecks
+open Goose.Core (Rule)
+
+private def slice : Ty := .slice .readOnly (.int .u8)
+private def array : Ty := .varr (.int .u8)
+private def known (reads : List Target := []) : SummaryAnn :=
+  .known ⟨reads, [], [], [], [], [1], [], [], false, false⟩
+
+private def implementation : Impl :=
+  ⟨"bytes", #[], #[⟨slice, .register, none⟩, ⟨array, .value, none⟩], #[],
+    .mk 0 [] (some (.values [.bytes slice [0, 255] 0, .bytes array [128] 0])), known⟩
+
+private def context : Context := ⟨0, "bytes", [], [[.static], []], []⟩
+private def module : Module :=
+  ⟨#[], #[], #[], #[implementation], #[context], 0, #[], #[], #[]⟩
+
+private def accepts (module : Module) (context : Context) : Bool :=
+  match checkContext module context with | .ok _ => true | .error _ => false
+
+#guard accepts module context
+#guard !accepts module { context with resultRoots := [[], []] }
+#guard !accepts module { context with resultRoots := [[.static], [.static]] }
+
+private def receiver : Impl := { implementation with
+  summary := .known ⟨[],[],[],[],[],[],[],[],false,false⟩
+  results := #[⟨slice, .register, none⟩]
+  vars := #[⟨"view", slice, .immutable, 0, 0⟩, ⟨"scalar", .int .i64, .immutable, 0, 0⟩]
+  body := .mk 0 [.receive [0, 1] (.values [.bytes slice [0, 255] 0, .lit .i64 7]) 0,
+    .retValues [.read (.var 0)] 0] none }
+
+private def receiveContext : Context := ⟨0, "receive", [(0,[.static])], [[.static]], []⟩
+#guard accepts { module with impls := #[receiver], contexts := #[receiveContext] } receiveContext
+#guard !accepts { module with impls := #[receiver], contexts := #[receiveContext] }
+  { receiveContext with varRoots := [(0,[])] }
+
+private def copiesGlobal : Impl := { implementation with
+  results := #[⟨array, .value, none⟩]
+  body := .mk 0 [.retValues [.copy array (.global 0) 0] 0] none
+  summary := .known ⟨[],[],[],[],[],[0],[],[],true,false⟩ }
+private def copyContext : Context := ⟨0, "copy", [], [[]], []⟩
+private def copyModule : Module := { module with
+  globals := #[⟨"global", .grow (.int .u8), .mutable, .arrLit (.grow (.int .u8)) [] 0, 0⟩]
+  impls := #[copiesGlobal], contexts := #[copyContext] }
+#guard !accepts copyModule copyContext
+#guard accepts { copyModule with
+  impls := #[{ copiesGlobal with summary := .known ⟨[.global 0],[],[],[],[],[0],[],[],true,false⟩ }] } copyContext
+
+private def copiesSliceParameter : Impl :=
+  ⟨"copy-slice", #[⟨0,.byValue⟩], #[⟨array,.value,none⟩],
+    #[⟨"source",slice,.immutable,0,0⟩],
+    .mk 0 [.retValues [.copy array (.var 0) 0] 0] none,
+    .known ⟨[],[],[],[],[],[0],[],[],false,false⟩⟩
+private def sliceParameterContext : Context := ⟨0,"copy-slice",[(0,[.param 0])],[[]],[]⟩
+private def sliceParameterModule : Module := { module with
+  impls := #[copiesSliceParameter], contexts := #[sliceParameterContext] }
+#guard !accepts sliceParameterModule sliceParameterContext
+
+private def limitedLiteral (expression : Expr) : Impl :=
+  ⟨"limited",#[],#[⟨.limited (.int .u8) 1,.value,none⟩],#[],
+    .mk 0 [.retValues [expression] 0] none,
+    .known ⟨[],[],[],[],[],[0],[],[],false,false⟩⟩
+#guard !accepts { module with impls := #[limitedLiteral (.bytes (.limited (.int .u8) 1) [1,2] 0)], contexts := #[copyContext] } copyContext
+#guard !accepts { module with impls := #[limitedLiteral
+  (.arrLit (.limited (.int .u8) 1) [.lit .u8 1, .lit .u8 2] 0)], contexts := #[copyContext] } copyContext
+
+#guard accepts { sliceParameterModule with impls := #[{ copiesSliceParameter with
+  summary := .known ⟨[.param 0],[],[],[],[],[0],[],[],true,false⟩ }] } sliceParameterContext
+private def limitedWithAbort : Impl := { limitedLiteral (.bytes (.limited (.int .u8) 1) [1,2] 0) with
+  summary := .known ⟨[],[],[],[],[],[0],[],[],true,false⟩ }
+#guard accepts { module with impls := #[limitedWithAbort], contexts := #[copyContext] } copyContext
+#guard accepts { module with impls := #[limitedLiteral (.bytes (.limited (.int .u8) 1) [1] 0)], contexts := #[copyContext] } copyContext
+
+#guard !accepts { module with impls := #[limitedLiteral (.bytes (.limited (.int .u8) 2) [1,2] 0)], contexts := #[copyContext] } copyContext
+
+
+#guard !accepts { module with impls := #[{ implementation with
+  summary := .known ⟨[],[],[],[],[],[],[],[],false,false⟩ }] } context
+#guard !accepts { module with impls := #[{ implementation with
+  summary := .known ⟨[],[],[],[],[],[0,1],[],[],false,false⟩ }] } context
+
+
+private def conservativeAbortHelper : Impl :=
+  ⟨"abort-helper",#[],#[],#[],.mk 0 [.abort "abort" 0] none,
+    .known ⟨[],[],[],[],[],[],[0],[0],true,false⟩⟩
+private def conservativeAbortCaller : Impl :=
+  ⟨"abort-caller",#[],#[⟨array,.value,none⟩],#[],
+    .mk 0 [.expr (.call 1 [] 0) 0,.abort "abort" 0] none,
+    .known ⟨[],[],[],[],[],[],[],[],true,false⟩⟩
+private def conservativeAbortContext : Context := ⟨0,"abort-caller",[],[[]],[]⟩
+#guard accepts { module with
+  impls := #[conservativeAbortCaller,conservativeAbortHelper]
+  contexts := #[conservativeAbortContext,⟨1,"abort-helper",[],[],[]⟩]
+  targets := #[⟨0,[]⟩] } conservativeAbortContext
+
+private def breakLocalReference : Impl :=
+  ⟨"break-local",#[],#[⟨.ref .readOnly (.int .u8),.register,none⟩],
+    #[⟨"local",.int .u8,.immutable,1,0⟩],
+    .mk 0 [] (some (.blockE (.mk 1
+      [.letS 0 (.lit .u8 7) 0,.breakValue (.ref .readOnly (.var 0)) 0] (some (.ref .readOnly (.global 0)))) 0)),
+    .known ⟨[],[],[],[],[],[],[],[],false,false⟩⟩
+private def breakLocalContext : Context := ⟨0,"break-local",[],[[.global 0]],[]⟩
+#guard !accepts { module with
+  globals := #[⟨"outside",.int .u8,.immutable,.lit .u8 1,0⟩]
+  impls := #[breakLocalReference],contexts := #[breakLocalContext] } breakLocalContext
+
+private def breakGlobalReference : Impl := { breakLocalReference with
+  vars := #[]
+  body := .mk 0 [] (some (.blockE (.mk 1
+    [.breakValue (.ref .readOnly (.global 0)) 0] none) 0)) }
+private def breakGlobalModule : Module := { module with
+  globals := #[⟨"outside",.int .u8,.immutable,.lit .u8 1,0⟩]
+  impls := #[breakGlobalReference],contexts := #[breakLocalContext] }
+#guard accepts breakGlobalModule breakLocalContext
+#guard !accepts breakGlobalModule { breakLocalContext with resultRoots := [[]] }
+
+end Goose.Construct.RootChecks

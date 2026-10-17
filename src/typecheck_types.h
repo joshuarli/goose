@@ -353,6 +353,30 @@ inline bool TypeCheck::IsFlat(TypeExpr *t) {
     }
 }
 
+// Whether a value of type t holds an index or bound type at any depth,
+// through references and slices too: what may not reach code that neither
+// keeps the array's length nor is checked against it (§3.11).
+inline bool TypeCheck::HoldsIndexT(TypeExpr *t) {
+    set<void *> seen;
+    function<bool(TypeExpr *)> walk = [&](TypeExpr *t) -> bool {
+        switch (t->kind) {
+            case TY_INT: return t->ix != nullptr;
+            case TY_REF: return walk(t->ref->sub);
+            case TY_SLICE: return walk(t->sub);
+            case TY_ARRAY: return walk(t->arr->sub);
+            case TY_STRUCT: case TY_ENUM: case TY_VARIANT: {
+                // An instance once: a recursive type reaches itself again.
+                auto key = t->kind == TY_STRUCT ? (void *)GetStructInst(t)
+                           : (void *)GetEnumInst(t->kind == TY_ENUM ? t : t->var->adt);
+                if (!seen.insert(key).second) return false;
+                return AnyField(t, walk);
+            }
+            default: return false;
+        }
+    };
+    return walk(t);
+}
+
 // Whether a value of type t can hold a plain reference or a slice at any
 // depth -- the only kinds that can point into an arbitrary array. A
 // self-relative reference points within its own root array and an
@@ -428,7 +452,15 @@ inline bool TypeCheck::VerifiableElem(TypeExpr *t, TypeExpr *elem, string &why) 
 // for a fixed-size T only; DefaultValue builds it for any.
 inline bool TypeCheck::HasDefault(TypeExpr *t, string &why) {
     switch (t->kind) {
-        case TY_INT: case TY_FLT: case TY_BOOL: case TY_SLICE: return true;
+        case TY_INT:
+            // The array may be empty, so not even 0 is an index of it (§3.11).
+            if (t->ix) {
+                why = cat(TypeStr(t), " has no value every state of ", t->ix->arr->name,
+                          " allows");
+                return false;
+            }
+            return true;
+        case TY_FLT: case TY_BOOL: case TY_SLICE: return true;
         case TY_REF:
             if (t->ref->optional) return true;
             why = cat(TypeStr(t), " is a non-optional reference");
@@ -939,6 +971,37 @@ inline void TypeCheck::ResolvePools() {
         t->ref->pool = g->defs[0];
         poolglobals.insert(t->ref->pool);
     }
+}
+
+// Index and bound types name a global array the same way (§3.11), resolved
+// once so that the array is part of the type's identity from the first
+// comparison on. Copies of a type share the detail, so each resolves once.
+inline void TypeCheck::ResolveIndexTypes() {
+    for (auto t : ast.alltypes) {
+        if (t->kind != TY_INT || !t->ix || t->ix->arr) continue;
+        auto g = ast.LookupGlobal(t->ix->name, t->ix->ns);
+        if (!g || g->defs.empty())
+            Error(t->line, cat("in ", t->ix->name, ": the array of an index type must be a "
+                               "global variable; a local or parameter has no name where a "
+                               "type is declared (§3.11)"));
+        t->ix->arr = g->defs[0];
+        indexarrays.insert(t->ix->arr);
+    }
+}
+
+// The array must never shrink, which only a grow-only one can promise
+// (§5.1), and must be indexable: fixed-size elements.
+inline void TypeCheck::ValidateIndexType(TypeExpr *t) {
+    auto a = t->ix->arr;
+    auto at = a->type;
+    if (!at || !IsArrayKind(at, A_GROW) || !a->isvar)
+        Error(t->line, cat("in ", a->name, ": the array of an index type must be a grow-only "
+                           "resizable global var (", a->name, ": T[>..]), not ",
+                           at ? TypeStr(at) : string("an unresolved type"),
+                           ", since the type relies on its length never going down (§3.11)"));
+    if (ClassOf(at->arr->sub) != SC_FIXED)
+        Error(t->line, cat("in ", a->name, ": ", TypeStr(at), " holds variable-size elements, "
+                           "which cannot be indexed, so nothing can be an index of it (§3.11)"));
 }
 
 // The pool a reference rooted at `r` points into, or null. A global names

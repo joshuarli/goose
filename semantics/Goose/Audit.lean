@@ -13,6 +13,15 @@ import Goose.Proofs.Bounds
 import Goose.Proofs.Memory
 import Goose.Proofs.Core
 import Goose.Proofs.Safety
+import Goose.Lower.Bindings
+import Goose.Lower.Lifetime
+import Goose.Lower.Unwind
+import Goose.Evidence.Provenance
+import Goose.Evidence.SSA
+import Goose.Evidence.Simulation
+import Goose.Evidence.SimulationChecks
+import Goose.Proofs.Construct
+import Goose.Proofs.Exit
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -211,5 +220,49 @@ end Goose.Audit
 #audit Goose.Core.Sound.noReturn_sound
 #audit Goose.Proofs.Safety.validated_never_faults
 #audit Goose.Proofs.Safety.validated_faultFree
+
+#audit Goose.Lower.stmt_range_sim
+#audit Goose.Lower.tyStmt_range_scope
+#audit Goose.Lower.tyStmt_range_children
+#audit Goose.Lower.stmt_range_sim_of_typed
+#audit Goose.Lower.RetainedOperandsAt.retained
+#audit Goose.Lower.Rel.demanded_slot_read
+#audit Goose.Lower.RunAliasAt.read_safe
+#audit Goose.Lower.leaveAll_sim
+#audit Goose.Lower.leaveTo_sim
+#audit Goose.Lower.releaseScopes_repeat_subset
+#audit Goose.Evidence.RuntimePoint.cell_source
+#audit Goose.Evidence.RuntimePoint.def_cell_sample
+#audit Goose.Evidence.RuntimeStepsAvoid.protect
+#audit Goose.Evidence.validated_cmp_operand_types
+#audit Goose.Evidence.validated_cmp_distinct
+#audit Goose.GIR.validated_definitions_nodup
+#audit Goose.GIR.validated_defOp_not_param
+#audit Goose.GIR.validated_instAt_defOp_eq
+#audit Goose.Proofs.Bounds.transfer_def_sound
+#audit Goose.Proofs.Bounds.transfer_effect_sound
+#audit Goose.Proofs.Bounds.cmp_true_facts
+#audit Goose.Proofs.Bounds.reachable_facts
+#audit Goose.Proofs.Bounds.reachable_index
+#audit Goose.Proofs.Bounds.checked_runModule
+#audit Goose.Proofs.Bounds.checked_run
+
+#audit Goose.Proofs.Exit.plan_nearest
+#audit Goose.Proofs.Exit.unwind_frame
+#audit Goose.Proofs.Exit.unwind_removes
+#audit Goose.Proofs.Exit.unwind_preserves_output
+#audit Goose.Proofs.Construct.landing_preserves_prefix
+#audit Goose.Proofs.Construct.landing_preserves_payload
+#audit Goose.Proofs.Construct.landing_top
+#audit Goose.Proofs.Construct.terminal_keeps_prefix
+#audit Goose.Proofs.Construct.terminal_skips_remaining
+#audit Goose.Evidence.validated_cell_definition
+
+#audit Goose.Evidence.RuntimePoint.typed
+#audit Goose.Evidence.validated_true_cmp_fact
+#audit Goose.Proofs.Bounds.validated_trueComparisonFacts
+#audit Goose.Proofs.Bounds.checked_fuel
+#audit Goose.Proofs.Bounds.checked_initGlobals
+#audit Goose.Proofs.Bounds.SimulationChecks.fixture_run_replacement
 
 #audit_registry

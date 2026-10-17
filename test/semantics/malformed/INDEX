@@ -62,3 +62,6 @@ struct_forward_type.core.json	["malformed","type 3: struct field type component:
 struct_missing_type.core.json	["malformed","a struct descriptor has no type entry"]
 struct_pilot_shape.core.json	["malformed","module: expected 9 fields, found 10"]
 struct_zero_size.core.json	["malformed","struct byte size must be positive"]
+finish_shrink_core_push_missing_origin.json	["malformed","impl 0: e_push: expected 3 fields, found 2"]
+finish_shrink_core_resize_fill_arity.json	["malformed","impl 0: s_resize: at most one fill"]
+finish_shrink_core_six_field_summary.json	["malformed","impl 2: summary: expected 7 fields, found 6"]

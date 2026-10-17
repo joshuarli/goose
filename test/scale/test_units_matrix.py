@@ -52,22 +52,53 @@ class UnitsMatrixTests(unittest.TestCase):
 
         self.assertEqual(matrix.failures, [])
 
-    def test_warm_contract_store_allows_verified_frontend_recheck(self):
+    def test_contract_store_reuses_all_objects_even_when_it_relinks(self):
         native = {"no_op": False, "frontend_phases": ["parse"],
                   "native_compiler_invocations": [], "objects_missed": 0,
-                  "link": {"ran": False}}
+                  "link": {"ran": True}}
 
-        self.assertTrue(units_matrix.Matrix.is_warm(native))
+        self.assertTrue(units_matrix.Matrix.reuses_all_objects(native))
 
-    def test_unavailable_contract_dimensions_make_matrix_incomplete(self):
+    def test_runtime_version_is_read_from_the_build_report(self):
+        build = units_matrix.Build.__new__(units_matrix.Build)
+        build.report = {"runtime_version": "runtime-a",
+                        "extensions": {"native_compile": {}}}
+
+        self.assertEqual(build.runtime_version, "runtime-a")
+
+    def test_failed_or_missing_builder_boundary_probe_is_nonpass(self):
+        cases = (
+            (1, "\n".join(units_matrix.BUILDER_PROBE_CHECKS), "fail", 1),
+            (0, "ok   compiler compiler_units_builder\n", "incomplete", 2),
+        )
+        for exit_code, output, expected_status, expected_exit in cases:
+            with self.subTest(exit_code=exit_code, output=output):
+                matrix = units_matrix.Matrix("unused", self.scratch)
+                matrix.e10_started = True
+                with contextlib.redirect_stdout(io.StringIO()):
+                    matrix.record_builder_boundary_result(exit_code, output)
+
+                if expected_status == "fail":
+                    self.assertEqual(matrix.records, [])
+                    self.assertEqual(len(matrix.failures), 1)
+                else:
+                    self.assertEqual(matrix.records[0]["status"], "unavailable")
+                    self.assertIn("units-last-record", matrix.records[0]["dimensions"]["required_tests"])
+                self.assertEqual(matrix.completion(), (expected_status, expected_exit))
+
+    def test_builder_boundary_and_cli_probes_allow_matrix_completion(self):
         matrix = units_matrix.Matrix("unused", self.scratch)
+        matrix.e10_started = True
+        output = "\n".join(units_matrix.BUILDER_PROBE_CHECKS)
         with contextlib.redirect_stdout(io.StringIO()):
-            matrix.record_unavailable("E10", {"target": "no target option"})
+            matrix.record_builder_boundary_result(0, output)
 
-        record = matrix.records[0]
-        self.assertEqual(record["status"], "unavailable")
-        self.assertNotIn("ok", record)
+        self.assertTrue(matrix.e10_builder_boundary_passed)
+        self.assertEqual(matrix.records[0]["status"], "builder-boundary")
+        self.assertEqual(set(matrix.records[0]["dimensions"]), set(units_matrix.E10_BUILDER_BOUNDARY))
         self.assertEqual(matrix.completion(), ("incomplete", 2))
+        matrix.e10_cli_dimensions_passed = True
+        self.assertEqual(matrix.completion(), ("ok", 0))
 
     def test_random_non_error_build_failure_is_reported_for_edits_and_warning(self):
         class SequenceRng:

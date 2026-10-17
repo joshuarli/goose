@@ -74,7 +74,7 @@ GIR design and wire contracts are in
 | Parse | `lexer.h`, `parser.h`, `ParseProgram` in `main.cpp` | source files, following `import` | the `Ast`: nodes, type expressions, symbols per namespace, globals in initialization order |
 | Resolve | `resolve.h` (`ResolveTypeNames`) | type names as written | struct/enum/generic kinds, aliases substituted away |
 | Typecheck | `typecheck*.h` (`TypeCheckProgram`) | the `Ast` | one `FnSpec` per specialization with a cloned, annotated body; `StructInst`/`EnumInst`; `VarDef`s; the store record; every diagnostic of §3--§11; the shader blobs `embed_shader` compiles (`gfx.h`, `shaderc.c`) |
-| Optimize | `optimize.h`, `optimize_basecase.h`, `optimize_tre.h`, `optimize_loops.h` (`Optimizer`) | live specializations | bodies rewritten in place (inlined, folded, loops), liveness and use counts, loop shapes (`ForLoop::stripk`, `sumred`, `While::countdown`) |
+| Optimize | `optimize.h`, `optimize_basecase.h`, `optimize_tre.h`, `optimize_loops.h`, `optimize_reassoc.h` (`Optimizer`) | live specializations | bodies rewritten in place (inlined, folded, loops), liveness and use counts, loop shapes (`ForLoop::stripk`, `sumred`, `While::countdown`) |
 | BCE | `bce.h` (`BCE::RunAll`) | live specializations | `Index::nobc`, `SliceExpr::nobc`, `ForLoop::fixedlen` and `lenbound`, per-loop `hoistrefs` and `hoistfields` |
 | Codegen | `codegen*.h` (`CodeGen`) | live specializations, globals | one C file by default, with `src/runtime/` (or its part a program's unit holds) around it |
 | JIT | `jit.h` | the C text | the program run in-process through libtcc, when no `-o` was given |
@@ -155,7 +155,7 @@ the slow steps (a line each, and on a terminal a live line below).
 | `--roundtrip` | after resolution, parse the dump as a program of its own and require it to dump to the same text (`CheckRoundtrip`), then go on to whatever else was asked for |
 | `--dump-file f.goose` | also write the dump to a file, and go on |
 | `--check` | stop before C output; the legacy backend runs typechecking, optimization and BCE, while the GIR backend validates through Core/GIR lowering |
-| `-O0`, `-O1` (default), `-O2` | inlining thresholds (§4); folding and propagation run at every level; base-case inlining and tail-recursion elimination need `-O1` or above |
+| `-O0`, `-O1` (default), `-O2` | inlining thresholds (§4); folding and propagation run at every level; base-case inlining, tail-recursion elimination and min/max regrouping need `-O1` or above |
 | `--specs` | print every live specialization's optimized body |
 | `--stacks` | print the data stack count of the main program and of each worker, the regions they come to, the thread cap that gives `hardware_threads()`, and every function's share (`codegen_stacks.h`); with `--check` it runs the backend for the counts and writes nothing |
 | `--stack-reserve size` | the address space reserved per data stack, written as `-DGS_STACK_RESERVE` (K/M/G/T suffixes; at most 2^48) |
@@ -2695,6 +2695,49 @@ links hold the plain reference, bound and checked as one, and a store of it
 back into an element meets the element's relative slot in `FitsAt` like any
 other plain reference. A field or element of type `T` stays relative.
 
+**Index and bound types** (spec §3.11) name a global the same way: a
+`TY_INT` carries a `TypeIndex` detail outside the union (`TypeExpr::ix`),
+which copies of the type share, and `ResolveIndexTypes` binds it to its
+global before any comparison, collecting those globals in `indexarrays`;
+`ValidateIndexType` then requires a grow-only `var` with fixed-size
+elements. `TypeEq` and `SameNum` compare the array and the kind (`SameIndex`),
+so the type is fail-closed wherever a type is compared, and the places that
+pick an integer result by its storage are where it could leak:
+* `Operand` strips it (`Ast::NoIndex`) from the value an operator computes
+  with, while the operand's `exprtype` keeps it for the bounds-check pass, so
+  no arithmetic result has one;
+* `FitsAt` takes only a value of the same array, at most as wide (an index
+  where a bound is wanted), never a constant, a flexible literal or a literal
+  parameter, and `Converts` agrees for the cast judgements;
+* `UnifyBranch` joins two of one array at the wider width (a bound if either
+  is one) and anything else as plain integers, and `MergeVals` adapts a
+  constant branch to the plain type;
+* `CompoundAssign` and `CheckIncDec` reject an index-typed target
+  (`NoIndexUpdate`), and `HasDefault` gives one no default;
+* `AsCast::Check` makes a conversion into one never redundant and rejects
+  `as!`; `CheckFor` gives a binder the index type when both range bounds, or
+  the count, are index or bound types of one array;
+* `GrowOnlyShrinkAt` rejects any shrink of a named array, which covers whole
+  assignments and callees' shrinks applied at the call;
+* `HoldsIndexT` keeps the type out of queues, thread arguments and C
+  signatures (`ExternValueOk`), and `IsU8` is false for one, so no text
+  sink writes into an array of them.
+
+Codegen erases the type: the C type is the storage's, `Mangle` numbers the
+array into the name so per-type artifacts such as a `from_bytes` verifier
+stay apart, the verifier checks each value against the array's current
+length, and a conversion wraps its operand in `IndexTypeCheck` (`GS_IDX`, or
+`<= len` for a bound) unless the bounds-check pass set `AsCast::nobc`. The
+optimizer folds no such conversion, and `DivisorKey` and `Speculatable` treat
+one as the check it is.
+
+`checkfree` (spec §7.14) is a parse-time flag on `SFunction`, inherited by
+nested functions. The typechecker's half is the call rule: `CheckfreeCallee`
+at a direct call, each case of a dispatch and each `format` overload a print
+reaches, and at a block call the function the block was written in, all
+judged against the function whose text the call is in (`TextFn`: a block's
+frame names its writer). The bounds-check pass does the rest (§5.11).
+
 ### 3.14 Arithmetic, constants, and the rest
 
 `UnifyNumeric` (§6.1) unifies operands: equal types stand, a constant adapts
@@ -2943,13 +2986,17 @@ presence of aliases (`Snapshot`, `IndexLoc`, `GenSlice`, `Assign::CgStmt`,
 * Assignment resolves its destination before evaluating its right-hand
   side. Compound assignment also samples the old value first. A
   destination the right side cannot move -- a variable, or a field of a
-  fixed-size value down from one with no index on the way and no reference
-  that can be rebound (`StableDest`) -- is stored to as it is spelled after
-  the right side has run, rather than through a pointer taken first: a
-  member store, which the C compiler's type-based alias analysis keeps
-  apart from other structs' fields of the same type (a loop updating
-  `s.w` keeps `n.e` in a register), where a store through a `double *`
-  may be to any double. Whole
+  fixed-size value or an element of a fixed-size array down from one, at
+  an index that takes no check, with no reference that can be rebound
+  (`StableDest`) -- is stored to as it is spelled after the right side has
+  run, rather than through a pointer taken first: a member store, which
+  the C compiler's type-based alias analysis keeps apart from other
+  structs' fields of the same type (a loop updating `s.w` keeps `n.e` in a
+  register), where a store through a `double *` may be to any double.
+  Spelled like the loads of the same element, the store is also one
+  location to gcc's loop invariant motion, which only then keeps an
+  element a loop reads and writes (`a[i] = a[i] + x` in a loop over `j`)
+  in a register, and so lets the loop vectorize. Whole
   resizable assignment has the clear-before-construction semantics of
   spec §4.4; overlapping permitted copies have memmove semantics.
 * A range/count `for` samples its bounds once, before iteration, and runs
@@ -3209,6 +3256,24 @@ are skipped, and a callee that can `return ... from` the function disables
 the transform. The `var t = ...; if c { t op= self(x) } t` spelling is
 restated as a return first (`AccVarForm`).
 
+**Min/max regrouping** (`Reassociator`, `optimize_reassoc.h`, `-O1` and
+above): a chain of nested calls of one specialization shaped like std's
+`min` or `max` (`if x < y { return x; } return y;`, or returning `y` first)
+over an integer type, inside a loop, where an operand reads a variable the
+innermost loop writes (assigns, writes an element or field of, or takes `&`
+of) and declares outside itself. Such an operand usually carries the
+previous iteration's result, as the insertion cost of an edit distance
+does, and the C compiler keeps the chain grouped as written, every
+comparison it passes through a compare and a conditional move on the loop's
+critical path. `Call::Opt` offers each call to the pass before its
+arguments, while the chain is still calls; where the carried operands are
+not already combined last, the chain becomes a block that binds every
+non-literal operand to an `operandN` local in written order, so each is
+evaluated once and in order, then combines the others first and the carried
+ones last, reusing the chain's own calls. Integer min and max are
+associative and commutative, so the value is the same; a wrong guess about
+which operand carries the dependence costs nothing but the regrouping.
+
 **Loop shaping** (`LoopShaper`, `optimize_loops.h`, every level). Some
 loops compile to C that clang cannot make fast, while an equivalent
 restatement of the same loop it can. Once the final bodies are known, this
@@ -3320,7 +3385,9 @@ carries its operand's term; `a * b` and `a ± b` with two moving operands,
 handled by *intervals*: where both operands have finite constant bounds the
 result gets a fresh base bounded by the four corner products or the summed
 ranges, stated only when it fits the operation's own width (release-mode
-wrapping, §6.2); and the value of a bare block or of an `InlineBlock`, its
+wrapping, §6.2), a sum also related to an operand whose partner varies
+within a small range (`i * 4 + b` for `b` in `0..4` lies in `[i * 4, i * 4 +
+3]`); and the value of a bare block or of an `InlineBlock`, its
 tail or final return, where no other return leaves the inlined body with a
 value of its own (`BlockValueTerm`). An operation's width is its operands'
 type (`OpType`), not its `exprtype`, which is the possibly wider slot the
@@ -3336,6 +3403,25 @@ and `a >> c` maps its operand's constant bounds through the shift
 (`QuotTerm`: the byte shifted right by two indexes a 64-entry one). Such
 constant bounds of a one-shot base are axioms of that base (`tmpival`),
 not facts, so they never compete for the fact cap.
+
+**Multiples and quotients.** A product by a constant `m >= 1` (`x * m`,
+`x << k`) whose operand's bounds show it fits its type, and a floor
+quotient (`x >> k` whatever the sign, a non-negative `x / m`), is a *Lin*
+base that remembers its operand term and `m` (`Flow::lins`, kept per path
+because `ShiftCore` renames an operand in place). Two Lin bases with the
+same `m` relate as their operands do (`LinRelate`): `x <= y + c` gives
+`x * m <= y * m + c * m`, and `x / m <= y / m + ceil(c / m)` for quotients,
+which is what bounds `r[2 * i + 1]` by `r.len == 2 * n` and `flags[j >> 5]`
+by `flags.len == (n + 31) >> 5` where `i < n` and `j < n`. A multiple or
+quotient of an operand base that already has one is that base, offset
+(`ScaledTerm`, `QuotTerm`), so `buf[4 * i..4 * i + 4]` is four long and
+`(y - 1) * W..y * W` ordered. A quotient is only related once its operand is
+known to be the value the machine shifted: one that cannot have wrapped, or a
+sum with a positive offset whose quotient is non-negative, since a wrapped
+`i64` sum lies near `-2^63`. A completed check or a length that bounds a
+quotient bounds its operand in turn (`QuotBack`): `resize((n + 31) >> 5)`
+puts `n` below `2^53`, which is what keeps a sieve's `i << 1` and `j += i`
+from wrapping.
 
 A term is admissible as a comparison side (`CmpAdmissible`) only if the
 machine comparison equals the mathematical one: any constant, a bare base,
@@ -3392,7 +3478,9 @@ a slice variable or through a reference to a slice (`SlotWriteKill`: every
 slice place that slot may be -- the variable, each reference to it, any
 reachable slot when the slot is unknown -- while the arrays the slices view
 keep their lengths); any other pointee write through a reference
-(`PointeeWriteKill`); a store of a value holding a length (`HoldsLen`) into
+(`PointeeWriteKill`) or store into a field, unless the value holds no length
+and no reference (a struct of scalars changes no length wherever it lands);
+a store of a value holding a length (`HoldsLen`) into
 or inside an array element, or a grow or shrink of an array inside one
 (`ElementLvalKill`: no place lies in an element, but a reference to or into
 one measures what it holds, so every such place over the storage the
@@ -3405,6 +3493,14 @@ writes shift facts in place when the pre-state provably cannot wrap
 (`ShiftCore`: `i++` moves every fact about `i` by one) and kill the variable
 otherwise; a set `v = e` re-pins `v` and records `v == e` when `e` has a term
 that cannot have wrapped.
+
+An array is of one type and a reference reaches only an array of its own
+type (array kinds do not convert at a reference), so a grow or shrink kills
+no place whose array type is surely another (`DistinctTypes` in
+`GrowShrinkKill`), and a callee's write through an argument that is an
+array of scalars, which holds no other array, kills only places of that
+array's type (`OtherArray` in `KillArgStorage`). A shrink of a reference
+parameter's array thus leaves a global of another type alone.
 
 A directional bump records that the new length is at least (or at most) the
 old one only where a fact names the old length (`BumpPlace`): a growth
@@ -3419,7 +3515,9 @@ short-circuit operand (both senses, through `!`, `&&` and `||`), an integer
 `match` arm's range (the hull of a listed arm's values and ranges), and a
 `for` header's bounds (`0 <= i < n` against the snapshots taken at loop
 entry for ranges and counts, against the re-read length for arrays and
-slices). A condition that itself changed tracked state
+slices). A `!=` alone bounds nothing, but against a side the facts already
+order it is strict: past `if xs.len == 0 { return; }` the length is at least
+one. A condition that itself changed tracked state
 -- a mutating call inside it -- adds nothing (`HasKillEffects`), since the
 comparison ran against pre-kill values; the locals the condition declares
 itself, such as the parameter of a predicate inlined into it, do not count,
@@ -3463,9 +3561,13 @@ bumped places and rebound variables; a **recording** walk that, for every
 eligible local integer variable (single-name declaration, not captured, not
 address-taken, no compound write other than `±constant`), checks that every
 write preserves `v >= 0`, that no write can wrap at the variable's width,
-and that `v <= len(P)` survives for each place `P` the variable indexes or
-bounds and that is never shrunk or re-bound in the body (growth alone never
-breaks it); and the **judging** walk, which is granted the survivors as
+and that `v <= len(P) + c` survives for each place `P` the variable indexes
+or bounds and that is never shrunk or re-bound in the body (growth alone never
+breaks it), where the declaration decides `c`: what its value needs, at least
+0 (`var j = 1` before `while j + 4 <= a.len { ...; j += 4; }` stays within
+`len + 1`, which keeps `j + 4` from wrapping), and also -1 where the value
+starts below the length, as a probe index `i = (i + 1) & mask` with
+`mask == len - 1` stays; and the **judging** walk, which is granted the survivors as
 axioms (`ge0`, `lelen`) and the wrap-free, single-direction variables as
 monotone (`mono`): each `+= c`/`-= c`/`++`/`--` moves its variable by its
 sign, and a plain assignment `v = e` (not the declaration, which starts the
@@ -3522,7 +3624,8 @@ bounds just stated, a literal's its count), and how they relate pairwise
 `SeedEntryFacts` grants a specialization the meet of its sites on entry once
 every site has been analyzed -- callers are analyzed before callees for
 this -- and only if nothing reaches it another way: a thread spawn, a
-`format` overload called by `print`, or any use the optimizer counted that
+`format` overload called by `print`, an `export fn`'s C wrapper (which
+passes whatever its C caller does), or any use the optimizer counted that
 the call scan did not see makes it opaque. A site inside a recursive cycle
 is walked after its callee and contributes nothing. This is what carries
 `src.len == W * W` from `main` into `blur(src: u8[>..]&, ...)`.
@@ -3609,10 +3712,34 @@ two runs differ (it finds the pass's former misreading of an inlined body
 with several returns as the value of its last one within a few hundred
 programs).
 
+**Index and bound types.** Every array an index type names gets a place in
+each body from the prescan on (`IndexPlaces`), so every kill of its length
+reaches it. A variable of an index type, and a one-shot base standing for a
+value of one read out of storage, a call, a branch or a conversion
+(`IndexTypeTerm`, `tmplen`), get the axioms `0 <= v` and
+`v <= len(a) - 1` (`<= len(a)` for a bound) against the length's *current*
+generation (`IndexBoundOf` in `DistsFrom`): the array never shrinks, so a
+value below any earlier length is below the current one, and no bridge
+facts are involved. A `u64` of an index type is a base, being below a
+length. `JudgeIndexCast` judges a conversion into one as `a[x]` would be
+judged, sets `AsCast::nobc`, and states the completed check's facts.
+
+**checkfree.** A kept check belongs to the text it is written in, as for
+`--bce-test`: the source lines each `checkfree` function spans
+(`CheckfreeSpans`) cover every specialization, every inlined copy and
+whatever the optimizer restated the check as, while a caller's argument
+inlined into the callee's block stays the caller's. Each kept check on such
+a line is recorded once with why (`KeptInCheckfree`, `KeptWhy`: a value read
+out of storage, a `u64` variable, a term the domain cannot relate, the lower
+or the upper bound, and for an index of another array the length relation
+an `assert` would state), and the driver reports them all as errors
+(`CheckfreeReport`). Under `--no-bce` nothing is judged, which it warns
+about.
+
 ### 5.12 Known gaps
 
 Indices loaded from array contents (`dist[q[i]]`) have no known range and
-keep their check. An analysis of array-content invariants was implemented
+keep their check, unless what is stored has an index type (§3.13). An analysis of array-content invariants was implemented
 and measured, then dropped because it produced no measurable speedup
 (`bench/adoption.md`). A `u64` variable is never a
 base, so a `u64` local loses the range its initializer had (TODO 0a). Loop
@@ -3715,7 +3842,12 @@ Layout details needed for byte/C compatibility (`FixedSize`, `LayoutFields`,
   (`FoBytes`): a literal builds it so, anything else as a C frame object
   whose elements land behind room left for the fixed fields
   (`GenFoAsBytes`), and a whole read loads it into one that views the
-  elements in place (`FoView`).
+  elements in place (`FoView`). The base is a `uint8_t *`, so an element
+  is generally reached at a byte offset, `*(T *)(base + i * size)`; a
+  number of 2, 4 or 8 bytes is indexed through a pointer to its type,
+  `((T *)base)[i]` (`IndexLoc`), which keeps the scale in the address: as a
+  byte offset clang folds `(j >> 5) * 4` into `(j >> 3) & -4` and loses the
+  scaled addressing mode (nsieve's bit array, 150 against 138 ms).
 * **Fat references** (`gs_rref { hdr, stk }`) are references to
   resizable-class values: the header address plus the stack, so a callee can
   push through them. A reference with `reusable`-pool provenance is a
@@ -4236,9 +4368,8 @@ the rendered type. This is narrower than ordinary generic overload
 resolution. Reference rendering follows pointees and has no cycle
 detection: a cyclic value recurses through its render functions until the
 native stack runs out (§7, **Native stacks**). An integer's text is the
-runtime's digit loop (`gs_fmt_i64`, `gs_fmt_u64`, and `gs_out_int` for
-print): the digit count, then the digits from the right, two per division
-by 100, where printf's format parsing and locale handling cost several
+runtime's digit loop (`gs_fmt_i64`, `gs_fmt_u64`): the digit count, then
+the digits from the right, two per division by 100, where printf's format parsing and locale handling cost several
 times the conversion. Finite float formatting
 (`gs_fmt_f64`, `gs_fmt_f32`) writes the fewest significant decimal digits
 that read back as the same value of the float's own type and, of those,
@@ -4262,6 +4393,14 @@ float literals and dumps use, is the same text, its digits from
 `-inf`, `nan`) rather than by the C library, which differs between
 backends: msvcrt writes `1.#INF` and `-1.#IND`, and others print a NaN's
 sign.
+
+**Output.** `print` renders its whole line, newline included, into a
+statement-stack builder and hands it to one `fwrite` (`gs_out_bytes`) on an
+unbuffered stdout, so nothing printed is lost to an abort and no other
+thread's line lands inside it. On Windows the runtime puts stdout and
+stderr in binary mode as it starts (`gs_rt_start`): a newline goes out as
+the one byte it is everywhere else, not as the `\r\n` the CRT's text mode
+writes a byte at a time.
 
 ### 6.10 Loop-invariant views and stack-top caching
 
@@ -4398,27 +4537,80 @@ Ahead of the outermost loop the divisor is fixed for, `gs_divu_gen` computes
 libdivide's magic number and shift for it once (one 128-by-64-bit division),
 and each division is the high half of a product, adjusted and shifted
 (`gs_divu_q`); a remainder is the dividend less the quotient times the
-divisor. A zero divisor gets `GS_DIVU_NONE`, under which every division takes
-the plain operator and its zero check, so the abort happens where and when a
-division by zero runs; so does a divisor whose conversion would fail, which
-is computed ahead of the loop without its check (`DivisorValue`), and a C
-compiler without 128-bit products (TinyCC). The magic costs about one
-division, so a loop pays it back from its second division on.
+divisor. Operands of 32 bits or fewer (`NarrowDivision`) take a 32-bit magic
+number instead (`gs_divu32_gen`, one 64-by-32-bit division, and
+`gs_divu32_q`), of their own even where a 64-bit division by the same
+divisor shares the loop (`DivisionKey`): each division is then the high half
+of a 32-by-32-bit product, which a C compiler vectorizes, where x86-64 has
+the 64-by-64-bit one only as a scalar instruction. A loop summing `u32`
+remainders runs about seven times as fast with AVX-512. A zero divisor gets
+`GS_DIVU_NONE`, under which every division takes the plain operator and its
+zero check, so the abort happens where and when a division by zero runs; so
+does a divisor whose conversion would fail, which is computed ahead of the
+loop without its check (`DivisorValue`), and a 64-bit magic number under a C
+compiler without 128-bit products (TinyCC). Where only a zero divisor can
+go without a 32-bit magic (`DivMagic::zeronone`: no conversion is checked),
+the division fails outright under `GS_DIVU_NONE` instead: gcc copies that
+test of a loop-invariant value out of the loop, where the plain division's
+own zero test would leave a loop exit after which the loop's stores might
+not run, and gcc holds such stores in registers, as vectorizing needs, only
+where they always run. The magic costs about one division, so a loop pays
+it back from its second division on.
 
 ### 6.11 `&&` and `||`
 
-The left operand lands in a `uint8_t` temporary. The right one is emitted
-inside an `if` on it, short-circuit style, unless the operator sits in the
-body of a loop that can be straight-line code and evaluating the operand can
-neither fail nor have an effect, whatever the left operand gave
-(`CodeGen::Speculatable`): then it is evaluated unconditionally and combined
-with the left's 0 or 1 by `&` or `|`. A C compiler keeps the branch of a
-short circuit, which in a loop blocks if-conversion and vectorization (a
-loop counting the positions of a block where `p1[j] == a && p2[j] == b`
-stays scalar), but if-converts and vectorizes the unconditional form. The
-operator's value is the same either way, and the short circuit the
-specification promises (§6.1) skips nothing observable in such an operand:
-it has no effect to skip and no failure to avoid.
+A `&&` or `||` whose value only decides a branch -- the condition of an
+`if`, a `guard`, a `while` or an `assert` -- compiles to a chain of
+conditional branches on its operands (`CodeGen::GenBranch`), the shape a C
+compiler gives its own: `while i < n && y & (1 << i) != 0 { i++; }` is `if
+(!(i < n)) goto brk;`, then the right operand's statements, then `if
+(!(<right>)) goto brk;`. A `&&` branches to the target for false as soon as
+an operand is false and a `||` to the one for true as soon as an operand is
+true; one nested in an operator of the other kind branches past its own
+right operand to a label of its own, and a `!` swaps the targets. An
+inlined call of a `bool` function there branches too (`CodeGen::BranchCall`):
+its `return`s and the end of its body branch on the value they give, a
+constant one jumping or doing nothing, as a C compiler finds C once it has
+inlined it -- `if plain(key)`, over a body that returns false from inside a
+loop, jumps from that loop to the else-arm. An `if` with an `else` branches
+to the else-arm, which the then-arm jumps over; a guard, whose else cannot
+complete normally, branches past it to the then-contents that follow. Each
+operand at a leaf of the chain is evaluated in a scope of its own: where it
+builds temporaries on data stacks, its truth value is taken into a
+`uint8_t` and their restores follow at once, ahead of its branch, so
+neither path skips them; a branch out of an inlined call restores what its
+scopes and its arguments hold on the way, as its `return` does.
+
+As a value -- stored, passed, returned -- the left operand lands in a
+`uint8_t` temporary and the right one is emitted inside an `if` on it,
+short-circuit style, setting the temporary. In a condition that flag, or an
+inlined call's result held for the branch, is a value the C compiler may or
+may not see through, and clang's choices went both ways on it. plb2's
+nqueen, whose inner loop is the `while` above, ran 4-8% slower under clang
+20 and 22 with the flag than with the chain, which is as fast as the loop
+written with a `break`. Over the LangArena port (`bench/kostya`), chains
+for `&&` and `||` alone left the suite level: a CSV parser 11-15% and a
+Huffman encoder 12-17% faster, but a JSON writer 7% and a word counter
+9-14% slower, both where a small `bool` function's result decided the
+branch. With those calls branching as well the suite ran 1.5% faster in
+geomean, the JSON writer level and the word counter 5% slower, where clang
+now reloads a 64-bit constant inside the loop it tests whitespace in; the
+`bench/run_bench.py` programs whose C changed ran 1.5% faster in geomean
+under v145 and clang, `lru` and `calc` 7% under v145, none slower.
+
+Either way, where the operator sits in the body of a loop that can be
+straight-line code and evaluating its right operand can neither fail nor
+have an effect, whatever the left operand gave (`CodeGen::Speculatable`),
+the operand is evaluated unconditionally and combined with the left's 0 or
+1 by `&` or `|`, and a condition branches on that one value. A C compiler
+keeps the branch of a short circuit, flag or chain, which in a loop blocks
+if-conversion and vectorization, but if-converts and vectorizes the
+unconditional form: a loop counting the positions of a 32-byte block where
+`p1[j] == a && p2[j] == b` ran 5.4 times as fast in it as in the chain,
+which clang 22 leaves scalar. The operator's value is the same either way,
+and the short circuit the specification promises (§6.1) skips nothing
+observable in such an operand: it has no effect to skip and no failure to
+avoid.
 
 The loop is the innermost one around the operator in its function, and it
 qualifies when neither its body nor a `while` condition holds a loop, a
@@ -4818,6 +5010,15 @@ call sites*. In practice:
   `var i = a.len - 1; while i > 0 { let p = (i - 1) / 2; ...; a[i] = a[p];
   i = p; }`, whose index only ever moves down from a proven start (std's
   `heap_push`; `test/optimizer/bce_halving_index.goose`);
+* multiples and quotients of the index against those of the length:
+  `r[2 * i + 1]` for `i < n` and `r.len == 2 * n`, `out[i * 4 + b]` for
+  `b` in `0..4` and `out.len == xs.len * 4`, a bit array's `flags[j >> 5]`
+  for `j < n` and `flags.len == (n + 31) >> 5`, and the chunk
+  `let d = buf[4 * i..4 * i + 4]`, four long, so `d[3]` needs no check
+  (`test/optimizer/bce_scaled_indices.goose`);
+* a stride loop starting above zero, `var j = 1; while j + 4 <= a.len`, and
+  an open-addressing probe `i = (i + 1) & mask` with `mask == a.len - 1`
+  once `a.len != 0` is known (`test/optimizer/bce_invariant_offsets.goose`);
 * row-major indexing with bounded counters: `src[y * W + x]` for `y < H`,
   `x < W` and `src.len == W * H` (products and two-term sums of counters with
   constant bounds), and the row-slice form `let row = src[lo..lo + W]` whose
@@ -4841,10 +5042,20 @@ call sites*. In practice:
   passed: `xs[k]` after `xs[k]`, `xs[i]` for `i in lo..hi` after
   `xs[lo..hi]`.
 
+* an index of an index type into its array (`nodes[w]` for `w: u32 in
+  nodes`, spec §3.11), and into another array once their lengths are
+  related (`dist[w]` after `assert(dist.len >= nodes.len)`, with nothing
+  growing `nodes` since): `test/optimizer/bce_index_types.goose`;
+* a growth or shrink through a reference to an array of one type, next to
+  facts about arrays of other types: they survive it
+  (`test/optimizer/bce_typed_kills.goose`).
+
 **Kept** (the check stays, and is usually a well-predicted branch):
 
 * an index loaded from a data structure -- `dist[q[i]]`, `pool[slots[k].node]`,
-  `out[cursor[s]]`: the analysis tracks no array contents;
+  `out[cursor[s]]`: the analysis tracks no array contents. Storing an index
+  type there moves the check to where the value is converted, and a
+  `checkfree` function (spec §7.14) proves none is left in a loop;
 * a `u64`-typed index variable (a `u64` is never a base), an index read out
   of a field or element (`n.count`, only variables and lengths are bases,
   though a narrow type's range still counts), and any value that reaches the

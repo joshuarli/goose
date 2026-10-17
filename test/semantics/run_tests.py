@@ -7,6 +7,10 @@ reference tool runs the export (`TOOL run FILE --numeric MODE`), and the
 tool's outcome and standard output are compared with the fixture's expectation.
 With `--pipeline gir` the compiler also builds and runs the fixture through
 that pipeline, and the native result is compared with the same expectation.
+`--profile core-construction --pipeline gir` selects construction fixtures and
+checks Core, high GIR, their agreement, and the native GIR pipeline. Standard
+output is compared as bytes: legacy JSON strings are UTF-8 encoded, while
+construction JSON byte arrays are used directly.
 
 A case ends in one of five classes: agree, mismatch, unsupported (the exporter
 named a feature outside the profile), harness-failure (a tool broke its
@@ -16,10 +20,10 @@ the harness was misused.
 
 The tool prints exactly one JSON line and exits:
 
-    ["done",["returned"],STDOUT]            exit 0
-    ["done",["aborted",KIND,LINE],STDOUT]   exit 0
-    ["done",["exited",CODE],STDOUT]         exit 0
+    ["done",OUTCOME,STDOUT]                  exit 0
+    ["done",OUTCOME,STDOUT,TRACE]            exit 0 (construction)
     ["timeout",STDOUT]                      exit 3
+    ["timeout",STDOUT,TRACE]                exit 3 (construction)
     ["fault",KIND]                          exit 4
     ["malformed",MESSAGE]                   exit 2
     ["rejected",RULE,MESSAGE]               exit 5
@@ -144,6 +148,7 @@ class Fixture:
     args: tuple[str, ...] = ()
     defines: tuple[str, ...] = ()
     corpus: bool = False
+    construction: bool = False
 
     @property
     def label(self) -> str:
@@ -158,9 +163,21 @@ class Verdict:
     features: tuple[str, ...] = ()
 
 
-def joined(text: str) -> str:
-    """Output as the main runner compares it: no trailing blank line."""
-    return text.rstrip("\n")
+def joined(data: bytes) -> bytes:
+    return data.rstrip(b"\n")
+
+
+def stdout_bytes(value, construction: bool) -> bytes:
+    if not construction and isinstance(value, str):
+        try:
+            return value.encode("utf-8")
+        except UnicodeEncodeError as error:
+            raise HarnessFailure("tool stdout contains invalid Unicode text") from error
+    if construction and isinstance(value, list) and all(
+            type(byte) is int and 0 <= byte <= 255 for byte in value):
+        return bytes(value)
+    expected = "a byte array" if construction else "text"
+    raise HarnessFailure(f"tool stdout is not {expected}: {value!r}")
 
 
 def modes_for(source: Path) -> tuple[str, ...]:
@@ -179,28 +196,36 @@ def modes_for(source: Path) -> tuple[str, ...]:
     return (RELEASE,)
 
 
-def discover(root: Path) -> list[Fixture]:
-    """Runnable core-pilot fixtures and goldens, excluding explicit legacy-only cases."""
+def discover(root: Path, profile: str = "core-pilot") -> list[Fixture]:
+    """Runnable fixtures for one construction profile and its golden expectations."""
     fixtures = []
     expected = root.parent / "expected"
     for source in sorted(root.glob("*.goose")):
         with open(source, encoding="utf-8") as handle:
-            if handle.readline().strip() == "// core-pilot: legacy-only":
-                continue
+            first = handle.readline().strip()
+        construction = first == "// core-construction: fixture"
+        if profile == "core-pilot" and (construction or first == "// core-pilot: legacy-only"):
+            continue
+        if profile == "core-construction" and not construction:
+            continue
         name = source.stem
         stderr = expected / f"{name}.stderr"
         fixtures.append(Fixture(
             name, source, expected / f"{name}.out", stderr if stderr.exists() else None,
-            (expected / f"{name}.aborts").exists(), None, modes_for(source)))
+            (expected / f"{name}.aborts").exists(), None, modes_for(source), construction=construction))
     for source in sorted((root / "golden").glob("*.goose")):
         with open(source, encoding="utf-8") as handle:
-            if handle.readline().strip() == "// core-pilot: legacy-only":
-                continue
+            first = handle.readline().strip()
+        construction = first == "// core-construction: fixture"
+        if profile == "core-pilot" and (construction or first == "// core-pilot: legacy-only"):
+            continue
+        if profile == "core-construction" and not construction:
+            continue
         name = source.stem
         expect = source.with_suffix(".expect.json")
         fixtures.append(Fixture(
             name, source, source.with_suffix(".out"), None, False,
-            expect if expect.exists() else None, modes_for(source)))
+            expect if expect.exists() else None, modes_for(source), construction=construction))
     names = [fixture.name for fixture in fixtures]
     duplicates = sorted({name for name in names if names.count(name) > 1})
     if duplicates:
@@ -330,20 +355,25 @@ def text(data: bytes) -> str:
     return data.decode("utf-8", errors="replace")
 
 
-def export(goose: Path, fixture: Fixture, work: Path, timeout: float) -> tuple[Path | None, str | None]:
-    """Export one program. Returns (core file, None) or (None, unsupported feature id)."""
+def export(goose: Path, fixture: Fixture, work: Path, timeout: float) -> tuple[Path | None, Path | None, str | None]:
+    """Export one program to the selected semantic artifacts."""
     core = work / "program.core"
+    gir = work / "program.gir"
     source = fixture.source
-    done = run([goose, *fixture.args, *map("-D{}".format, fixture.defines), "--emit-core", core,
-                "--check", source], timeout)
+    args = [goose, *fixture.args, *map("-D{}".format, fixture.defines), "--emit-core", core]
+    if fixture.construction:
+        args += ["--emit-gir-high", gir]
+    done = run([*args, "--check", source], timeout)
     diagnostic = text(done.stderr)
     if done.returncode == 1 and (match := UNSUPPORTED_PATTERN.search(diagnostic)):
-        return None, match[1]
+        return None, None, match[1]
     if done.returncode != 0:
         raise HarnessFailure(f"export failed (exit {done.returncode}): {diagnostic.strip()[:300]}")
     if not core.is_file():
         raise HarnessFailure("export succeeded but wrote no file")
-    return core, None
+    if fixture.construction and not gir.is_file():
+        raise HarnessFailure("export succeeded but wrote no high GIR file")
+    return core, gir if fixture.construction else None, None
 
 
 def feature_report(goose: Path, fixture: Fixture, timeout: float) -> tuple[str, ...]:
@@ -364,10 +394,10 @@ def feature_report(goose: Path, fixture: Fixture, timeout: float) -> tuple[str, 
     return tuple(features)
 
 
-def tool_result(tool: Path, core: Path, mode: str, timeout: float) -> tuple:
+def tool_result(tool: Path, core: Path, mode: str, timeout: float, construction: bool = False) -> tuple:
     """Run the reference tool and validate its one-line answer against the contract."""
     done = run([tool, "run", core, "--numeric", mode], timeout)
-    return parse_tool_answer(done.returncode, text(done.stdout), text(done.stderr))
+    return parse_tool_answer(done.returncode, text(done.stdout), text(done.stderr), construction)
 
 
 def validate_result(tool: Path, core: Path, timeout: float) -> tuple:
@@ -379,7 +409,56 @@ def validate_result(tool: Path, core: Path, timeout: float) -> tuple:
     return parse_tool_answer(done.returncode, out, text(done.stderr))
 
 
-def parse_tool_answer(returncode: int, stdout: str, stderr: str = "") -> tuple:
+def validate_gir_result(tool: Path, gir: Path, timeout: float) -> tuple:
+    done = run([tool, "gir-validate", gir], timeout)
+    out = text(done.stdout)
+    if done.returncode == 0 and out.strip() == '["ok"]':
+        return ("valid",)
+    return parse_tool_answer(done.returncode, out, text(done.stderr))
+
+
+def gir_tool_result(tool: Path, gir: Path, mode: str, timeout: float, construction: bool) -> tuple:
+    done = run([tool, "gir-run", gir, "--numeric", mode], timeout)
+    return parse_tool_answer(done.returncode, text(done.stdout), text(done.stderr), construction)
+
+
+def check_gir_reencode(tool: Path, gir: Path, timeout: float) -> Verdict:
+    done = run([tool, "gir-reencode", gir], timeout)
+    lines = text(done.stdout).splitlines()
+    if done.returncode != 0 or len(lines) != 1:
+        raise HarnessFailure(f"GIR re-encode failed (exit {done.returncode}): "
+                             f"{text(done.stderr).strip()[:300]}")
+    try:
+        original = json.loads(gir.read_text(encoding="utf-8"))
+        reencoded = json.loads(lines[0])
+    except (OSError, ValueError) as error:
+        raise HarnessFailure(f"GIR re-encode output is not valid JSON: {error}") from error
+    if original != reencoded:
+        return Verdict(MISMATCH, "GIR re-encode changed the module")
+    return Verdict(AGREE)
+
+
+def agree_result(tool: Path, core: Path, gir: Path, fixture: Fixture, mode: str,
+                 outcome: Outcome, stdout: bytes, timeout: float) -> Verdict:
+    done = run([tool, "agree", core, gir, "--numeric", mode], timeout)
+    lines = text(done.stdout).splitlines()
+    if len(lines) != 1:
+        raise HarnessFailure(f"agree printed {len(lines)} lines (exit {done.returncode})")
+    try:
+        answer = json.loads(lines[0])
+    except ValueError as error:
+        raise HarnessFailure(f"agree output is not JSON: {lines[0][:200]}") from error
+    if answer == ["inconclusive"] and done.returncode == 3:
+        return Verdict(INCONCLUSIVE, f"[{mode}] Core/GIR comparison ran out of fuel")
+    if isinstance(answer, list) and len(answer) == 2 and answer[0] == "agree" and done.returncode == 0:
+        inner = parse_tool_answer(0, json.dumps(answer[1]), construction=True)
+        return judge_tool(fixture, mode, inner, outcome, stdout)
+    if isinstance(answer, list) and len(answer) == 3 and answer[0] == "disagree" and done.returncode == 6:
+        return Verdict(MISMATCH, f"[{mode}] Core/GIR disagree")
+    raise HarnessFailure(f"agree answered {answer!r} and exited {done.returncode}")
+
+
+def parse_tool_answer(returncode: int, stdout: str, stderr: str = "", construction: bool = False) -> tuple:
     """Validate what the tool printed and its exit status against the contract.
 
     Returns ("done", outcome, stdout), ("timeout", stdout), ("fault", kind),
@@ -399,17 +478,17 @@ def parse_tool_answer(returncode: int, stdout: str, stderr: str = "") -> tuple:
     if returncode != TOOL_EXIT[tag]:
         raise HarnessFailure(f"tool answered {tag!r} but exited {returncode}, "
                              f"not {TOOL_EXIT[tag]}")
-    shape = {"done": 3, "timeout": 2, "fault": 2, "malformed": 2, "rejected": 3}[tag]
-    if len(answer) != shape:
-        raise HarnessFailure(f"tool answer {tag!r} has {len(answer)} elements, not {shape}")
+    shapes = {"done": (3, 4), "timeout": (2, 3), "fault": (2,), "malformed": (2,), "rejected": (3,)}
+    if len(answer) not in shapes[tag]:
+        raise HarnessFailure(f"tool answer {tag!r} has {len(answer)} elements, not {shapes[tag]}")
     if tag == "done":
-        if not isinstance(answer[2], str):
-            raise HarnessFailure("tool stdout is not a string")
-        return ("done", parse_outcome(answer[1]), answer[2])
+        if len(answer) == 4 and not isinstance(answer[3], list):
+            raise HarnessFailure("tool construction trace is not an array")
+        return ("done", parse_outcome(answer[1]), stdout_bytes(answer[2], construction))
     if tag == "timeout":
-        if not isinstance(answer[1], str):
-            raise HarnessFailure("tool stdout is not a string")
-        return ("timeout", answer[1])
+        if len(answer) == 3 and not isinstance(answer[2], list):
+            raise HarnessFailure("tool construction trace is not an array")
+        return ("timeout", stdout_bytes(answer[1], construction))
     return tuple(answer)
 
 
@@ -427,7 +506,7 @@ def describe(outcome: Outcome) -> str:
     return json.dumps(list(outcome))
 
 
-def judge_tool(fixture: Fixture, mode: str, answer: tuple, outcome: Outcome, stdout: str) -> Verdict:
+def judge_tool(fixture: Fixture, mode: str, answer: tuple, outcome: Outcome, stdout: bytes) -> Verdict:
     """Classify the tool's answer for one numeric profile."""
     tag = answer[0]
     if tag == "timeout":
@@ -446,7 +525,7 @@ def judge_tool(fixture: Fixture, mode: str, answer: tuple, outcome: Outcome, std
 
 
 def build_and_run_pipeline(goose: Path, cc: str, pipeline: str, fixture: Fixture, mode: str,
-                           work: Path, timeout: float) -> list[tuple[str, int, str, str]]:
+                           work: Path, timeout: float) -> list[tuple[str, int, bytes, str]]:
     """Build the fixture through the named compiler pipeline and run it: natively
     at -O0 and -O2 of the C compiler, and in process through --jit. Returns each
     run's label, exit status, standard output and standard error."""
@@ -470,9 +549,9 @@ def build_and_run_pipeline(goose: Path, cc: str, pipeline: str, fixture: Fixture
             raise HarnessFailure(f"C compiler rejected the {pipeline} output at {opt}: "
                                  f"{text(compiled.stderr).strip()[:300]}")
         ran = run([program], timeout, cwd=work)
-        runs.append((opt, ran.returncode, text(ran.stdout), text(ran.stderr)))
+        runs.append((opt, ran.returncode, ran.stdout, text(ran.stderr)))
     ran = run([goose, "--pipeline", pipeline, *extra, *defines, "--jit", fixture.source], timeout, cwd=work)
-    runs.append(("jit", ran.returncode, text(ran.stdout), text(ran.stderr)))
+    runs.append(("jit", ran.returncode, ran.stdout, text(ran.stderr)))
     return runs
 
 
@@ -488,8 +567,8 @@ ABORT_TEXT = {
 }
 
 
-def judge_pipeline(pipeline: str, fixture: Fixture, mode: str, outcome: Outcome, stdout: str,
-                   code: int, out: str, err: str) -> Verdict:
+def judge_pipeline(pipeline: str, fixture: Fixture, mode: str, outcome: Outcome, stdout: bytes,
+                   code: int, out: bytes, err: str) -> Verdict:
     """Compare a natively run program with the fixture's expectation."""
     problems = []
     if (outcome[0] == "returned") != (code == 0):
@@ -544,7 +623,7 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
     def prepare():
         if not fixture.out.is_file():
             raise HarnessFailure(f"missing expected output {fixture.out.name}")
-        return expected_outcome(fixture), joined(fixture.out.read_text(encoding="utf-8"))
+        return expected_outcome(fixture), joined(fixture.out.read_bytes())
 
     expectation = guarded(prepare)
     if expectation is None:
@@ -562,7 +641,7 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
     core = guarded(lambda: export(goose, fixture, work, timeout))
     if core is None:
         return verdicts[0]
-    core_file, feature = core
+    core_file, gir_file, feature = core
     if feature is not None:
         if reported is not None and feature not in reported:
             return Verdict(HARNESS_FAILURE,
@@ -580,11 +659,24 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
             guarded(check_validation)
 
         def check_tool():
-            answer = tool_result(tool, core_file, mode, timeout)
+            answer = tool_result(tool, core_file, mode, timeout, fixture.construction)
             verdicts.append(judge_tool(fixture, mode, answer, outcome, stdout))
         guarded(check_tool)
         if pipeline is not None:
             def check_pipeline():
+                if fixture.construction:
+                    if gir_file is None:
+                        raise HarnessFailure("construction fixture has no high GIR artifact")
+                    if mode == fixture.modes[0]:
+                        answer = validate_gir_result(tool, gir_file, timeout)
+                        if answer[0] != "valid":
+                            verdicts.append(Verdict(MISMATCH,
+                                f"[{mode}] GIR validation answered {json.dumps(list(answer))}"))
+                        verdicts.append(check_gir_reencode(tool, gir_file, timeout))
+                    answer = gir_tool_result(tool, gir_file, mode, timeout, fixture.construction)
+                    verdicts.append(judge_tool(fixture, mode, answer, outcome, stdout))
+                    verdicts.append(agree_result(tool, core_file, gir_file, fixture, mode,
+                                                 outcome, stdout, timeout))
                 for label, code, out, err in build_and_run_pipeline(goose, cc, pipeline, fixture, mode,
                                                                     work, timeout):
                     verdicts.append(judge_pipeline(f"{pipeline} {label}", fixture, mode, outcome, stdout,
@@ -604,7 +696,7 @@ def run_all(fixtures: list[Fixture], goose: Path, tool: Path, cc: str, pipeline:
     In corpus mode unsupported programs are not listed, and the summary adds the
     number of exported programs and the unsupported feature ids with their counts.
     """
-    scratch_root = ROOT / "build" / "semantics"
+    scratch_root = ROOT / ".work" / "tmp" / "semantics"
     scratch_root.mkdir(parents=True, exist_ok=True)
     counts = dict.fromkeys(CLASSES, 0)
     features: Counter = Counter()
@@ -652,12 +744,18 @@ def self_test() -> int:
         (base / f"{name}.goose").write_text(source)
         if golden:
             if out is not None:
-                (base / f"{name}.out").write_text(out)
+                if isinstance(out, bytes):
+                    (base / f"{name}.out").write_bytes(out)
+                else:
+                    (base / f"{name}.out").write_text(out)
             if expect is not None:
                 (base / f"{name}.expect.json").write_text(json.dumps(expect))
             return
         if out is not None:
-            (tree / "expected" / f"{name}.out").write_text(out)
+            if isinstance(out, bytes):
+                (tree / "expected" / f"{name}.out").write_bytes(out)
+            else:
+                (tree / "expected" / f"{name}.out").write_text(out)
         if stderr is not None:
             (tree / "expected" / f"{name}.stderr").write_text(stderr)
         if aborts:
@@ -674,7 +772,7 @@ def self_test() -> int:
 
     debug_define = "// runtime-define: GS_DEBUG=1\nfn main() {}\n"
     both_modes = "// runtime-debug\nfn main() {}\n"
-    scratch_root = ROOT / "build" / "semantics"
+    scratch_root = ROOT / ".work" / "tmp" / "semantics"
     scratch_root.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="self-test-", dir=scratch_root) as temporary:
         tree = Path(temporary) / "test"
@@ -739,6 +837,9 @@ def self_test() -> int:
         fixture("legacy_only_case", "", source="// core-pilot: legacy-only\nfn main() {}\n")
         fixture("legacy_only_golden", None, golden=True,
                 source="// core-pilot: legacy-only\nfn main() {}\n")
+        fixture("construction_bytes", b"A\x00\xffB\n", golden=True,
+                source="// core-construction: fixture\nfn main() {}\n",
+                expect=["expect", ["exited", 19]])
 
         fake_script = Path(temporary) / "script.json"
 
@@ -757,6 +858,9 @@ def self_test() -> int:
         core_pilot_names = {fixture.name for fixture in discover(tree / "semantics")}
         check("core-pilot discovery skips explicit legacy-only fixtures",
               {"legacy_only_case", "legacy_only_golden"}.isdisjoint(core_pilot_names))
+        construction_names = {fixture.name for fixture in discover(tree / "semantics", "core-construction")}
+        check("core-construction discovery selects only marked fixtures",
+              construction_names == {"construction_bytes"})
 
         fake_goose, fake_tool = FAKE / "goose.py", FAKE / "semantics.py"
         names = sorted(expected_class)
@@ -777,6 +881,34 @@ def self_test() -> int:
                   summary[cls] == sum(1 for name in names if expected_class[name] == cls))
         check("a failing run exits 1", status == 1)
         check("the summary is the last line", list(summary) == list(CLASSES))
+
+        binary = json.dumps(["done", ["exited", 19], [65, 0, 255, 66, 10]])
+        check("tool byte arrays preserve NUL and non-UTF8 bytes",
+              parse_tool_answer(0, binary, construction=True)
+              == ("done", ("exited", 19), b"A\x00\xffB\n"))
+        construction = json.dumps(["done", ["exited", 19], [65, 0, 255, 66, 10], [["write", 0, 0]]])
+        check("construction tool answers retain byte stdout shape",
+              parse_tool_answer(0, construction, construction=True)
+              == ("done", ("exited", 19), b"A\x00\xffB\n"))
+        try:
+            parse_tool_answer(0, json.dumps(["done", ["returned"], [65, True, 256]]),
+                              construction=True)
+            invalid_bytes_rejected = False
+        except HarnessFailure:
+            invalid_bytes_rejected = True
+        check("tool byte arrays reject non-byte values", invalid_bytes_rejected)
+        try:
+            parse_tool_answer(0, json.dumps(["done", ["returned"], [], "bad trace"]))
+            invalid_trace_rejected = False
+        except HarnessFailure:
+            invalid_trace_rejected = True
+        check("construction tool answers reject invalid traces", invalid_trace_rejected)
+        try:
+            parse_tool_answer(0, json.dumps(["done", ["returned"], [65, 66]]))
+            pilot_byte_array_rejected = False
+        except HarnessFailure:
+            pilot_byte_array_rejected = True
+        check("core-pilot tool answers reject construction byte arrays", pilot_byte_array_rejected)
 
         # An all-agreeing selection exits 0, and --case narrows the run.
         stdout = io.StringIO()
@@ -939,7 +1071,7 @@ def main(argv=None, root: Path = HERE, repo: Path = ROOT) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--goose", type=Path)
     parser.add_argument("--semantics", type=Path, help="the reference tool (goose-semantics)")
-    parser.add_argument("--profile", choices=["core-pilot"], default="core-pilot")
+    parser.add_argument("--profile", choices=["core-pilot", "core-construction"], default="core-pilot")
     parser.add_argument("--case", action="append", default=[], metavar="NAME")
     parser.add_argument("--pipeline", choices=["gir"],
                         help="also build and run each fixture through this compiler pipeline")
@@ -959,12 +1091,16 @@ def main(argv=None, root: Path = HERE, repo: Path = ROOT) -> int:
             parser.error(f"not a file: {tool}")
     if args.pipeline and not shutil.which(args.cc):
         parser.error(f"C compiler not found: {args.cc}")
+    if args.profile == "core-construction" and args.pipeline != "gir":
+        parser.error("--profile core-construction requires --pipeline gir")
     goose = args.goose.resolve()
     if args.corpus:
+        if args.profile != "core-pilot":
+            parser.error("--corpus is only available with --profile core-pilot")
         builtin = load_main_runner(repo).tc.builtin_modules(goose)
         fixtures = discover_corpus(repo, builtin)
     else:
-        fixtures = discover(root)
+        fixtures = discover(root, args.profile)
     if args.case:
         known = {fixture.name for fixture in fixtures} | {fixture.name.split("/")[-1] for fixture in fixtures}
         unknown = [name for name in args.case if name not in known]

@@ -236,6 +236,8 @@ GS_API void gs_release_regions(void) {
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <io.h>
+#include <fcntl.h>
 
 static size_t gs_page_size = 0;
 #define GS_COMMIT_CHUNK (1u << 20)
@@ -1213,6 +1215,13 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     // and interleaves correctly with stderr diagnostics. Revisit if print
     // throughput ever matters.
     setvbuf(stdout, NULL, _IONBF, 0);
+    #ifdef _WIN32
+        // The bytes a program writes are the bytes that come out, '\n' one
+        // byte as on every other platform, rather than a "\r\n" the CRT's
+        // text mode makes of it byte by byte.
+        _setmode(_fileno(stdout), _O_BINARY);
+        _setmode(_fileno(stderr), _O_BINARY);
+    #endif
     gs_regions_init();
     gs_regions_begin(mainregions);
     gs_native_stack_init(1);
@@ -1524,4 +1533,3 @@ GS_API void gs_out_f32(float v) {
 }
 GS_API void gs_out_bool(int64_t v) { fputs(v ? "true" : "false", stdout); }
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { fwrite(p, 1, (size_t)len, stdout); }
-GS_API void gs_out_nl(void) { fputc('\n', stdout); }

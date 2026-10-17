@@ -44,29 +44,33 @@ def OriginsPresent (profile : ArtifactProfile) (f : Func) : Prop :=
   ∀ b ∈ f.blocks, ∀ i ∈ b.insts, i.needsOriginIn profile = true → i.origin.isSome = true
 
 /-- The effects are within what the summary declares. -/
-def EffectsWithin (e : Core.Eff) (s : SummaryAnn) : Prop :=
-  match s with
+def EffectsWithin (f : Func) (e : Core.Eff) : Prop :=
+  match f.summary with
   | .unknown => True
   | .known sm =>
     e.unknown = false ∧
-    (∀ t ∈ e.reads, t ∈ sm.reads) ∧ (∀ t ∈ e.writes, t ∈ sm.writes) ∧
-    (∀ t ∈ e.grows, t ∈ sm.grows) ∧ (∀ t ∈ e.shrinks, t ∈ sm.shrinks) ∧
+    (∀ t ∈ f.storageTargets e.reads, t ∈ f.storageTargets sm.reads) ∧
+    (∀ t ∈ f.storageTargets e.writes, t ∈ f.storageTargets sm.writes) ∧
+    (∀ t ∈ f.storageTargets e.grows, t ∈ f.storageTargets sm.grows) ∧
+    (∀ t ∈ f.storageTargets e.shrinks, t ∈ f.storageTargets sm.shrinks) ∧
     (∀ t ∈ e.rebinds, t ∈ sm.rebinds) ∧
     (e.aborts = true → sm.aborts = true) ∧ (e.outputs = true → sm.outputs = true)
 
-theorem omittedShrink_not_within {e : Core.Eff} {s : Summary} {t : Target}
-    (ht : t ∈ e.shrinks) (hnot : t ∉ s.shrinks) :
-    ¬ EffectsWithin e (.known s) := by
-  intro h
-  simp only [EffectsWithin] at h
-  rcases h with ⟨_, _, _, _, hshrinks, _, _, _⟩
-  exact hnot (hshrinks t ht)
+theorem omittedShrink_not_within {f : Func} {e : Core.Eff} {s : Summary} {t : Target}
+    (known : f.summary = .known s)
+    (found : t ∈ f.storageTargets e.shrinks) (omitted : t ∉ f.storageTargets s.shrinks) :
+    ¬ EffectsWithin f e := by
+  intro within
+  simp only [EffectsWithin, known] at within
+  rcases within with ⟨_, _, _, _, shrinks, _, _, _⟩
+  exact omitted (shrinks t found)
 
-example : ¬ EffectsWithin ({ shrinks := [.param 0] } : Core.Eff)
-    (.known ⟨[], [], [], [], [], false, false⟩) := by
-  apply omittedShrink_not_within (t := Target.param 0)
-  · simp
-  · simp
+example (f : Func) (known : f.summary = .known ⟨[], [], [], [], [], false, false⟩)
+    (parameter : f.parameterRoots 0 = [.param 0]) :
+    ¬ EffectsWithin f ({ shrinks := [.param 0] } : Core.Eff) := by
+  apply omittedShrink_not_within known (t := Target.param 0)
+  · simp [Func.storageTargets, parameter, rootsTargets, rootTarget]
+  · simp [Func.storageTargets]
 
 theorem bind_ok {ε α β : Type} {x : Except ε α} {f : α → Except ε β} {b : β}
     (h : (x >>= f) = .ok b) : ∃ a, x = .ok a ∧ f a = .ok b := by
@@ -189,7 +193,7 @@ theorem flag_of {msg : String} {found declared : Bool}
   · simp [Func.flagWithin, hf, hd, throw, throwThe, MonadExceptOf.throw] at h
 
 theorem within_of_closed {f : Func} {e : Core.Eff} (h : f.summaryClosed e = .ok ()) :
-    EffectsWithin e f.summary := by
+    EffectsWithin f e := by
   unfold Func.summaryClosed at h
   unfold EffectsWithin
   cases hs : f.summary with
@@ -213,7 +217,7 @@ theorem within_of_closed {f : Func} {e : Core.Eff} (h : f.summaryClosed e = .ok 
 theorem summary_of {m : Module} {res : Array (List RootRef)} {k : Nat} {f : Func}
     (hf : m.funcs[k]? = some f)
     (h : checkSummaryOf m m.implTypes res m.rootCount k = .ok ()) :
-    EffectsWithin (f.effects m (f.provenance res (m.implTypes[k]?.getD #[]) m.rootCount)) f.summary := by
+    EffectsWithin f (f.effects m (f.provenance res (m.implTypes[k]?.getD #[]) m.rootCount)) := by
   unfold checkSummaryOf at h
   rw [hf] at h
   obtain ⟨_, _, h⟩ := bind_ok h
@@ -227,8 +231,8 @@ Dominance, scope balance and reference lifetime are not consequences proved here
 theorem validate_sound (m : Module) (h : validate m = .ok ()) :
     (∀ f ∈ m.allFuncs, TerminatedBlocks f ∧ TypedDefs m f ∧ OriginsPresent m.profile f) ∧
     (∀ (k : Nat) (f : Func), m.funcs[k]? = some f →
-      EffectsWithin (f.effects m (f.provenance (resultRoots m m.implTypes) (m.implTypes[k]?.getD #[])
-        m.rootCount)) f.summary) := by
+      EffectsWithin f (f.effects m (f.provenance (resultRoots m m.implTypes) (m.implTypes[k]?.getD #[])
+        m.rootCount))) := by
   obtain ⟨ht, hc, hs, ho⟩ := validate_stages h
   refine ⟨fun f hf => ?_, fun k f hk => ?_⟩
   · obtain ⟨i, hi, rfl, hvt⟩ := mem_infos hf

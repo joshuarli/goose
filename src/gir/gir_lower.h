@@ -37,17 +37,24 @@ public:
         mod.types = core.types;
         mod.profile = core.profile;
         mod.structs = core.structs;
+        mod.targets = core.targets;
         mod.files = files;
         mod.origins = origins;
         for (auto &im : core.impls) {
             pair<vector<GirTypeId>, vector<GirTypeId>> sig;
             for (auto &p : im.params) sig.first.push_back(im.vars[p.var].type);
-            sig.second = im.results;
+            for (auto &result : im.results) sig.second.push_back(result.type);
+            GirFunc signature;
+            signature.params = sig.first;
+            signature.results = sig.second;
+            signature.summary = im.summary;
+            for (auto &result : im.results) signature.resultProtocols.push_back({ result.request, result.namedLocal });
+            mod.funcs.push_back(std::move(signature));
             sigs.push_back(std::move(sig));
         }
         for (auto &g : core.globals) globaltypes.push_back({ g.type, g.kind });
         for (auto &g : core.globals) mod.globals.push_back(LowerGlobal(g));
-        for (size_t i = 0; i < core.impls.size(); i++) mod.funcs.push_back(LowerImpl(core.impls[i], (int)i));
+        for (size_t i = 0; i < core.impls.size(); i++) mod.funcs[i] = LowerImpl(core.impls[i], (int)i);
         mod.entry = core.contexts[core.entry].impl;
         return std::move(mod);
     }
@@ -117,6 +124,11 @@ private:
     vector<int> stack;      // Scopes entered, outermost first.
     vector<GirSlot> slots;
     const vector<CoreVar> *vars = nullptr;
+    const vector<CoreResultDescriptor> *currentResults = nullptr;
+    const CoreBlock *functionBody = nullptr;
+    int functionOrigin = -1;
+    vector<int> resultDestinations, activeDestinations;
+    set<int> boundNamedSlots;
 
     int Org(const CoreOrigin &o) { return originof(o); }
 
@@ -140,7 +152,8 @@ private:
         if (cur < 0) return 0;
         GirTyEnv env { mod, slots, sigs, vals };
         auto r = GirTyper(env).Of(i);
-        auto ty = r.ok() ? r.ty : mod.UnitType();
+        if (!r.ok()) throw CompileError { cat("internal compiler error: GIR lowering type: ", r.error) };
+        auto ty = r.ty;
         auto v = (int)vals.size();
         vals.push_back(ty);
         i.res = v;
@@ -357,7 +370,7 @@ private:
                 return EmitDef(std::move(i));
             }
             case CoreExprKind::Call: {
-                auto vs = LowerArgs(e.args);
+                auto vs = LowerArgs(e.args, core.contexts[e.ctx].impl, Org(e.org));
                 GirInst i;
                 i.op = GirOp::Call;
                 i.idx = core.contexts[e.ctx].impl;
@@ -369,6 +382,14 @@ private:
                     end.op = GirOp::Unreachable;
                     EmitTerm(std::move(end));
                 }
+                if (cur >= 0 && mod.Type(ValTy(v)).kind == CoreType::Tuple &&
+                    mod.Type(e.type).kind != CoreType::Tuple) {
+                    GirInst result;
+                    result.op = GirOp::Result;
+                    result.a = v;
+                    result.idx = 0;
+                    return EmitDef(std::move(result));
+                }
                 return v;
             }
             case CoreExprKind::Push: {
@@ -378,7 +399,7 @@ private:
                 i.op = GirOp::Push;
                 i.a = r;
                 i.b = v;
-                if (core.profile == CoreProfile::Shrink) i.org = Org(e.org);
+                if (CoreHasShrink(core.profile)) i.org = Org(e.org);
                 return EmitDef(std::move(i));
             }
             case CoreExprKind::Pop: {
@@ -405,6 +426,8 @@ private:
                 return JoinValue(endT, vt, endF, vf);
             }
             case CoreExprKind::Block: return LowerBlock(nullptr, {}, true, *e.then);
+            case CoreExprKind::Bytes:
+                throw CompileError { "internal compiler error: byte construction has no receiving destination" };
             case CoreExprKind::Arr: {
                 auto vs = LowerExprs(e.elems);
                 GirInst i;
@@ -428,8 +451,11 @@ private:
                 i.vals = LowerExprs(e.elems);
                 return EmitDef(std::move(i));
             }
+            case CoreExprKind::String: case CoreExprKind::Copy: case CoreExprKind::ResultLocal:
+            case CoreExprKind::Values:
+                throw CompileError { "construction expression requires explicit receiving channels" };
         }
-        return 0;
+        throw CompileError { "internal compiler error: unknown Core expression" };
     }
 
     // The right operand of `and`/`or`, whose left value is `x`.
@@ -453,13 +479,26 @@ private:
         return out;
     }
 
-    vector<int> LowerArgs(const vector<CoreArg> &args) {
+    vector<int> LowerArgs(const vector<CoreArg> &args, int callee = -1, int org = -1) {
         vector<int> out;
         for (auto &a : args) {
-            if (a.kind == CoreArg::Val) out.push_back(LowerExpr(*a.expr));
+            if (auto value = get_if<CoreArgValue>(&a)) out.push_back(LowerExpr(*value->expr));
+            else if (auto construct = get_if<CoreArgConstruct>(&a)) {
+                if (callee < 0) throw CompileError { "construction argument has no receiving call" };
+                auto destination = OpenDestination(*construct->expr,
+                                                  GirDestArgReceiver { callee, (int)out.size() },
+                                                  CoreRequest::Value, org);
+                auto completed = LowerConstruct(*construct->expr, destination, org);
+                GirInst argument;
+                argument.op = GirOp::DestArg;
+                argument.a = completed;
+                argument.org = org;
+                out.push_back(EmitDef(std::move(argument)));
+            }
             else {
-                auto r = LowerPlace(*a.place);
-                out.push_back(FreezeTo(a.mut, r));
+                auto &reference = get<CoreArgReference>(a);
+                auto r = LowerPlace(*reference.place);
+                out.push_back(FreezeTo(reference.mut, r));
             }
         }
         return out;
@@ -552,7 +591,13 @@ private:
             LowerStmt(lc, s);
         }
         int r = 0;
-        if (b.value) r = LowerExpr(*b.value);
+        if (cur >= 0 && &b == functionBody && CoreHasConstruction(core.profile)) {
+            vector<const CoreExpr *> operands;
+            if (b.value && b.value->kind == CoreExprKind::Values)
+                for (auto &value : b.value->values) operands.push_back(value.get());
+            else if (b.value) operands.push_back(b.value.get());
+            LowerFunctionReturn(operands, functionOrigin);
+        } else if (b.value) r = LowerExpr(*b.value);
         else if (want) {
             GirInst i;
             i.op = GirOp::Unit;
@@ -577,10 +622,350 @@ private:
         return i;
     }
 
+    bool IsConstructionValue(const CoreExpr &expression) const {
+        return expression.type >= 0 && GirNonfixed(mod, expression.type);
+    }
+
+    int OpenDestination(const CoreExpr &expression, GirDestReceiver receiver, CoreRequest request, int org) {
+        GirInst open;
+        open.op = GirOp::DestOpen;
+        open.destReceiver = std::move(receiver);
+        open.ty = expression.type;
+        open.request = request;
+        if (expression.kind == CoreExprKind::Bytes)
+            open.knownCount = ConstInt(I64(), to_string(expression.bytes.size()));
+        if (expression.kind == CoreExprKind::Arr)
+            open.knownCount = ConstInt(I64(), to_string(expression.elems.size()));
+        open.org = org;
+        return EmitDef(std::move(open));
+    }
+
+    int FinishDestination(int destination, int org) {
+        GirInst finish;
+        finish.op = GirOp::DestFinish;
+        finish.a = destination;
+        finish.org = org;
+        return EmitDef(std::move(finish));
+    }
+
+    void PublishDestination(int completed, int org) {
+        GirInst publish;
+        publish.op = GirOp::DestPublish;
+        publish.a = completed;
+        publish.org = org;
+        EmitEffect(std::move(publish));
+    }
+
+    int LowerConstructBlock(const CoreBlock &block, int destination, int org) {
+        if (!block.value) throw CompileError { "construction block has no result" };
+        GirInst enter;
+        enter.op = GirOp::Enter;
+        enter.idx = block.scope;
+        EmitEffect(std::move(enter));
+        stack.push_back(block.scope);
+        for (auto &statement : block.stmts) {
+            if (cur < 0) break;
+            LowerStmt(nullptr, statement);
+        }
+        auto completed = cur < 0 ? 0 : LowerConstruct(*block.value, destination, org);
+        GirInst leave;
+        leave.op = GirOp::Leave;
+        leave.idx = block.scope;
+        EmitEffect(std::move(leave));
+        stack.pop_back();
+        return completed;
+    }
+
+    int LowerConstruct(const CoreExpr &expression, int destination, int org) {
+        auto inserted = find(activeDestinations.begin(), activeDestinations.end(), destination) == activeDestinations.end();
+        if (inserted) activeDestinations.push_back(destination);
+        auto done = [&](int completed) {
+            if (inserted) {
+                auto found = find(activeDestinations.begin(), activeDestinations.end(), destination);
+                if (found != activeDestinations.end()) activeDestinations.erase(found);
+            }
+            return completed;
+        };
+        if (expression.kind == CoreExprKind::Bytes || expression.kind == CoreExprKind::Copy ||
+            expression.kind == CoreExprKind::String || expression.kind == CoreExprKind::ResultLocal ||
+            expression.kind == CoreExprKind::Call) org = Org(expression.org);
+        switch (expression.kind) {
+            case CoreExprKind::Bytes: {
+                GirInst bytes;
+                bytes.op = GirOp::DestBytes;
+                bytes.a = destination;
+                bytes.bytes = expression.bytes;
+                bytes.org = org;
+                EmitEffect(std::move(bytes));
+                return done(FinishDestination(destination, org));
+            }
+            case CoreExprKind::Arr:
+                for (auto &element : expression.elems) {
+                    if (GirNonfixed(mod, element->type)) {
+                        GirInst child;
+                        child.op = GirOp::DestChild;
+                        child.a = destination;
+                        child.ty = element->type;
+                        child.org = org;
+                        auto childDestination = EmitDef(std::move(child));
+                        auto completed = LowerConstruct(*element, childDestination, org);
+                        if (cur < 0) return done(0);
+                        GirInst attach;
+                        attach.op = GirOp::DestAttach;
+                        attach.a = destination;
+                        attach.b = completed;
+                        attach.org = org;
+                        EmitEffect(std::move(attach));
+                    } else {
+                        auto value = LowerExpr(*element);
+                        if (cur < 0) return done(0);
+                        GirInst write;
+                        write.op = GirOp::DestWrite;
+                        write.a = destination;
+                        write.b = value;
+                        write.org = org;
+                        EmitEffect(std::move(write));
+                    }
+                }
+                return done(FinishDestination(destination, org));
+            case CoreExprKind::Copy: case CoreExprKind::ResultLocal: {
+                auto source = expression.kind == CoreExprKind::Copy ? LowerPlace(*expression.place) :
+                              EmitDef([&] { GirInst slot; slot.op = GirOp::Slot; slot.idx = expression.var; return slot; }());
+                GirInst copy;
+                copy.op = GirOp::DestCopy;
+                copy.a = destination;
+                copy.b = source;
+                copy.org = org;
+                EmitEffect(std::move(copy));
+                return done(FinishDestination(destination, org));
+            }
+            case CoreExprKind::String:
+                for (auto &argument : expression.print) {
+                    if (argument.kind == CorePrintArg::Text) {
+                        GirInst text;
+                        text.op = GirOp::DestBytes;
+                        text.a = destination;
+                        text.bytes.assign(argument.str.begin(), argument.str.end());
+                        text.org = org;
+                        EmitEffect(std::move(text));
+                    } else {
+                        auto value = argument.kind == CorePrintArg::View ? LowerView(*argument.view) : LowerExpr(*argument.expr);
+                        if (cur < 0) return done(0);
+                        GirInst text;
+                        text.op = GirOp::DestText;
+                        text.a = destination;
+                        text.b = value;
+                        text.org = org;
+                        EmitEffect(std::move(text));
+                    }
+                }
+                return done(FinishDestination(destination, org));
+            case CoreExprKind::Block:
+                return done(LowerConstructBlock(*expression.then, destination, org));
+            case CoreExprKind::If: {
+                auto condition = LowerExpr(*expression.a);
+                if (cur < 0) return done(0);
+                auto [thenBlock, thenParams] = NewBlock({});
+                auto [elseBlock, elseParams] = NewBlock({});
+                (void)thenParams;
+                (void)elseParams;
+                EmitTerm(CondBr(condition, thenBlock, {}, elseBlock, {}));
+                auto saved = activeDestinations;
+                cur = thenBlock;
+                auto thenValue = LowerConstructBlock(*expression.then, destination, org);
+                auto thenEnd = cur;
+                activeDestinations = saved;
+                cur = elseBlock;
+                auto elseValue = LowerConstructBlock(*expression.otherwise, destination, org);
+                auto elseEnd = cur;
+                activeDestinations = saved;
+                return done(JoinValue(thenEnd, thenValue, elseEnd, elseValue));
+            }
+            case CoreExprKind::Call: {
+                auto callee = core.contexts[expression.ctx].impl;
+                if (core.impls[callee].results.size() != 1 || !core.impls[callee].summary.escapes.empty() ||
+                    core.impls[callee].summary.unknown)
+                    throw CompileError { "construction call requires explicit multiple-result or escape channels" };
+                auto arguments = LowerArgs(expression.args, callee, org);
+                GirInst call;
+                call.op = GirOp::CallConstruct;
+                call.idx = callee;
+                call.vals = std::move(arguments);
+                call.vals2 = { destination };
+                call.org = org;
+                return done(EmitDef(std::move(call)));
+            }
+            case CoreExprKind::Fill: {
+                auto slot = (int)slots.size();
+                slots.push_back({ expression.a->type, CoreVarKind::Let, stack.empty() ? 0 : stack.back(), slot });
+                auto source = OpenDestination(*expression.a, GirDestSlotReceiver { slot }, CoreRequest::Value, org);
+                auto completed = LowerConstruct(*expression.a, source, org);
+                GirInst repeat;
+                repeat.op = GirOp::DestRepeat;
+                repeat.a = destination;
+                repeat.b = completed;
+                repeat.org = org;
+                EmitEffect(std::move(repeat));
+                return done(FinishDestination(destination, org));
+            }
+            default: throw CompileError { "construction expression is not a single destination producer" };
+        }
+    }
+
+    vector<int> LowerProducer(const CoreExpr &expression, const vector<int> &destinations, int org) {
+        vector<int> values;
+        if (expression.kind == CoreExprKind::Values) {
+            if (expression.values.size() != destinations.size()) throw CompileError { "producer result count differs from its receiving channels" };
+            for (size_t position = 0; position < destinations.size(); position++) {
+                auto &operand = *expression.values[position];
+                values.push_back(destinations[position] >= 0 ? LowerConstruct(operand, destinations[position], org) : LowerExpr(operand));
+                if (cur < 0) return {};
+            }
+            return values;
+        }
+        if (expression.kind != CoreExprKind::Call) throw CompileError { "multiple-result producer is not values or a call" };
+        auto callee = core.contexts[expression.ctx].impl;
+        auto &function = core.impls[callee];
+        if (function.results.size() != destinations.size()) throw CompileError { "call result count differs from its receiving channels" };
+        GirInst call;
+        call.op = GirOp::Call;
+        call.idx = callee;
+        call.vals = LowerArgs(expression.args, callee, org);
+        for (size_t position = 0; position < destinations.size(); position++) {
+            if (!GirNonfixed(mod, function.results[position].type)) continue;
+            if (destinations[position] < 0) throw CompileError { "nonfixed call result has no receiving destination" };
+            call.op = GirOp::CallConstruct;
+            call.vals2.push_back(destinations[position]);
+        }
+        call.org = org;
+        if (!function.summary.escapes.empty() || function.summary.unknown)
+            throw CompileError { "escaping call requires invoke receiving edges" };
+        auto pack = EmitDef(std::move(call));
+        if (destinations.size() == 1) return { pack };
+        for (size_t position = 0; position < destinations.size(); position++) {
+            GirInst result;
+            result.op = GirOp::Result;
+            result.a = pack;
+            result.idx = (int)position;
+            values.push_back(EmitDef(std::move(result)));
+        }
+        return values;
+    }
+
+    void LowerConstructionValue(const CoreExpr &expression, GirDestReceiver receiver, int org) {
+        auto destination = OpenDestination(expression, std::move(receiver), CoreRequest::Value, org);
+        auto completed = LowerConstruct(expression, destination, org);
+        if (cur >= 0) PublishDestination(completed, org);
+    }
+
+    void AbandonActiveDestinations(int org) {
+        for (auto destination = activeDestinations.rbegin(); destination != activeDestinations.rend(); ++destination) {
+            GirInst abandon;
+            abandon.op = GirOp::DestAbandon;
+            abandon.a = *destination;
+            abandon.org = org;
+            auto cancelled = EmitDef(std::move(abandon));
+            GirInst cancel;
+            cancel.op = GirOp::DestCancel;
+            cancel.a = cancelled;
+            cancel.org = org;
+            EmitEffect(std::move(cancel));
+        }
+        activeDestinations.clear();
+    }
+
+    void LowerFunctionReturn(const vector<const CoreExpr *> &operands, int org) {
+        if (!currentResults || operands.size() != currentResults->size())
+            throw CompileError { "return operands do not match the current function result descriptors" };
+        vector<int> values;
+        vector<pair<int, int>> replacements;
+        for (size_t result = 0; result < operands.size(); result++) {
+            auto &descriptor = (*currentResults)[result];
+            auto &expression = *operands[result];
+            if (!GirNonfixed(mod, descriptor.type)) { values.push_back(LowerExpr(expression)); continue; }
+            if (expression.kind == CoreExprKind::ResultLocal && descriptor.namedLocal == expression.var &&
+                boundNamedSlots.count(expression.var)) {
+                GirInst named;
+                named.op = GirOp::DestNamed;
+                named.idx = expression.var;
+                named.org = org;
+                values.push_back(EmitDef(std::move(named)));
+                boundNamedSlots.erase(expression.var);
+                continue;
+            }
+            auto destination = resultDestinations[result];
+            auto replacement = destination < 0 || find(activeDestinations.begin(), activeDestinations.end(), destination) != activeDestinations.end();
+            if (replacement) {
+                GirInst exitDestination;
+                exitDestination.op = GirOp::ResultExitDest;
+                exitDestination.idx = (int)result;
+                exitDestination.ty = descriptor.type;
+                exitDestination.request = descriptor.request;
+                exitDestination.org = org;
+                destination = EmitDef(std::move(exitDestination));
+            }
+            auto completed = LowerConstruct(expression, destination, org);
+            if (cur < 0) return;
+            values.push_back(completed);
+            if (replacement) replacements.push_back({ (int)result, completed });
+        }
+        for (auto &[result, completed] : replacements) {
+            auto named = (*currentResults)[result].namedLocal;
+            if (named && boundNamedSlots.count(*named)) {
+                GirInst abandon;
+                abandon.op = GirOp::DestAbandonNamed;
+                abandon.idx = *named;
+                abandon.a = completed;
+                abandon.org = org;
+                auto cancelled = EmitDef(std::move(abandon));
+                GirInst cancel;
+                cancel.op = GirOp::DestCancel;
+                cancel.a = cancelled;
+                cancel.org = org;
+                EmitEffect(std::move(cancel));
+                boundNamedSlots.erase(*named);
+            }
+        }
+        AbandonActiveDestinations(org);
+        for (auto &[result, completed] : replacements) {
+            GirInst land;
+            land.op = GirOp::DestRelocate;
+            land.a = completed;
+            land.reason = GirEventReason::ExitValue;
+            land.org = org;
+            values[result] = EmitDef(std::move(land));
+        }
+        LeaveTo(0);
+        GirInst ret;
+        ret.op = GirOp::Ret;
+        ret.vals = std::move(values);
+        ret.org = org;
+        EmitTerm(std::move(ret));
+    }
+
     void LowerStmt(const Loop *lc, const CoreStmt &s) {
         auto org = Org(s.org);
         switch (s.kind) {
             case CoreStmtKind::Let: {
+                if (CoreHasConstruction(core.profile) && IsConstructionValue(*s.expr)) {
+                    if (currentResults)
+                        for (size_t result = 0; result < currentResults->size(); result++)
+                            if ((*currentResults)[result].namedLocal == s.var) {
+                                auto completed = LowerConstruct(*s.expr, resultDestinations[result], org);
+                                if (cur < 0) return;
+                                GirInst bind;
+                                bind.op = GirOp::DestBind;
+                                bind.idx = s.var;
+                                bind.a = completed;
+                                bind.org = org;
+                                EmitEffect(std::move(bind));
+                                resultDestinations[result] = -1;
+                                boundNamedSlots.insert(s.var);
+                                return;
+                            }
+                    LowerConstructionValue(*s.expr, GirDestSlotReceiver { s.var }, org);
+                    return;
+                }
                 auto v = LowerExpr(*s.expr);
                 GirInst i;
                 i.op = GirOp::Init;
@@ -666,6 +1051,15 @@ private:
             }
             case CoreStmtKind::AssignWhole: {
                 auto r = LowerPlace(*s.place);
+                if (CoreHasConstruction(core.profile) && IsConstructionValue(*s.expr)) {
+                    GirInst clear;
+                    clear.op = GirOp::Clear;
+                    clear.a = r;
+                    clear.org = org;
+                    EmitEffect(std::move(clear));
+                    LowerConstructionValue(*s.expr, GirDestWholeReceiver { r }, org);
+                    return;
+                }
                 GirInst clear;
                 clear.op = GirOp::Clear;
                 clear.a = r;
@@ -756,6 +1150,12 @@ private:
             }
             case CoreStmtKind::ForEach: return LowerForEach(s, org);
             case CoreStmtKind::Ret: {
+                if (CoreHasConstruction(core.profile)) {
+                    vector<const CoreExpr *> values;
+                    if (s.expr) values.push_back(s.expr.get());
+                    LowerFunctionReturn(values, org);
+                    return;
+                }
                 vector<int> vs;
                 if (s.expr) vs.push_back(LowerExpr(*s.expr));
                 LeaveTo(0);
@@ -783,11 +1183,18 @@ private:
                 vector<GirPart> parts;
                 for (auto &a : s.print) {
                     GirPart p;
-                    if (a.text) {
+                    if (a.kind == CorePrintArg::Text) {
                         p.text = true;
                         p.str = a.str;
                     } else {
-                        p.val = LowerExpr(*a.expr);
+                        p.val = a.kind == CorePrintArg::View ? LowerView(*a.view) : LowerExpr(*a.expr);
+                        if (CoreHasConstruction(core.profile)) {
+                            GirInst render;
+                            render.op = GirOp::Render;
+                            render.a = p.val;
+                            render.org = org;
+                            p.val = EmitDef(std::move(render));
+                        }
                     }
                     parts.push_back(std::move(p));
                 }
@@ -832,6 +1239,69 @@ private:
                 EmitTerm(std::move(i));
                 return;
             }
+            case CoreStmtKind::RetValues: {
+                vector<const CoreExpr *> operands;
+                for (auto &value : s.values) operands.push_back(value.get());
+                LowerFunctionReturn(operands, org);
+                return;
+            }
+            case CoreStmtKind::AppendValue: {
+                auto reference = LowerPlace(*s.place);
+                auto value = LowerExpr(*s.expr);
+                if (cur < 0) return;
+                GirInst append;
+                append.op = GirOp::AppendValue;
+                append.a = reference;
+                append.b = value;
+                append.org = org;
+                EmitEffect(std::move(append));
+                return;
+            }
+            case CoreStmtKind::AppendConstruct: {
+                auto reference = LowerPlace(*s.place);
+                auto destination = OpenDestination(*s.expr, GirDestAppendReceiver { reference }, CoreRequest::ElementRun, org);
+                auto completed = LowerConstruct(*s.expr, destination, org);
+                if (cur >= 0) PublishDestination(completed, org);
+                return;
+            }
+            case CoreStmtKind::Receive: {
+                vector<int> destinations(s.vars.size(), -1);
+                for (size_t position = 0; position < s.vars.size(); position++) {
+                    auto slot = s.vars[position];
+                    auto type = slots.at(slot).ty;
+                    if (!GirNonfixed(mod, type)) continue;
+                    CoreExpr receiver;
+                    receiver.type = type;
+                    destinations[position] = OpenDestination(receiver, GirDestSlotReceiver { slot }, CoreRequest::Value, org);
+                }
+                auto values = LowerProducer(*s.expr, destinations, org);
+                if (cur < 0) return;
+                for (size_t position = 0; position < values.size(); position++) {
+                    if (destinations[position] >= 0) PublishDestination(values[position], org);
+                    else { GirInst init; init.op = GirOp::Init; init.idx = s.vars[position]; init.a = values[position]; init.org = org; EmitEffect(std::move(init)); }
+                }
+                return;
+            }
+            case CoreStmtKind::RetForward: {
+                vector<int> destinations = resultDestinations;
+                for (size_t position = 0; position < destinations.size(); position++) {
+                    auto &descriptor = (*currentResults)[position];
+                    if (!GirNonfixed(mod, descriptor.type)) continue;
+                    if (destinations[position] < 0) throw CompileError { "forward return replaces an already bound named channel" };
+                }
+                auto values = LowerProducer(*s.expr, destinations, org);
+                if (cur < 0) return;
+                AbandonActiveDestinations(org);
+                LeaveTo(0);
+                GirInst ret;
+                ret.op = GirOp::Ret;
+                ret.vals = std::move(values);
+                ret.org = org;
+                EmitTerm(std::move(ret));
+                return;
+            }
+            case CoreStmtKind::ReturnFrom: case CoreStmtKind::ReturnFromForward: case CoreStmtKind::BreakValue:
+                throw CompileError { "construction statement requires explicit target receiving channels" };
         }
     }
 
@@ -922,10 +1392,16 @@ private:
         if (e.a) ExprScopes(parent, *e.a, out);
         if (e.b) ExprScopes(parent, *e.b, out);
         for (auto &a : e.args) {
-            if (a.expr) ExprScopes(parent, *a.expr, out);
-            if (a.place) PlaceScopes(parent, *a.place, out);
+            if (auto value = get_if<CoreArgValue>(&a)) ExprScopes(parent, *value->expr, out);
+            else if (auto construct = get_if<CoreArgConstruct>(&a)) ExprScopes(parent, *construct->expr, out);
+            else PlaceScopes(parent, *get<CoreArgReference>(a).place, out);
         }
         for (auto &el : e.elems) ExprScopes(parent, *el, out);
+        for (auto &el : e.values) ExprScopes(parent, *el, out);
+        for (auto &arg : e.print) {
+            if (arg.kind == CorePrintArg::Expr) ExprScopes(parent, *arg.expr, out);
+            if (arg.kind == CorePrintArg::View) ViewScopes(parent, *arg.view, out);
+        }
         if (e.then) BlockScopes(parent, *e.then, out);
         if (e.otherwise) BlockScopes(parent, *e.otherwise, out);
     }
@@ -956,7 +1432,11 @@ private:
         if (s.view) ViewScopes(parent, *s.view, out);
         if (s.expr) ExprScopes(parent, *s.expr, out);
         if (s.expr2) ExprScopes(parent, *s.expr2, out);
-        for (auto &a : s.print) if (!a.text) ExprScopes(parent, *a.expr, out);
+        for (auto &a : s.print) {
+            if (a.kind == CorePrintArg::Expr) ExprScopes(parent, *a.expr, out);
+            if (a.kind == CorePrintArg::View) ViewScopes(parent, *a.view, out);
+        }
+        for (auto &value : s.values) ExprScopes(parent, *value, out);
         if (s.then) BlockScopes(parent, *s.then, out);
         if (s.otherwise) BlockScopes(parent, *s.otherwise, out);
     }
@@ -979,6 +1459,12 @@ private:
         stack.clear();
         slots.clear();
         vars = vs;
+        currentResults = nullptr;
+        functionBody = nullptr;
+        functionOrigin = -1;
+        resultDestinations.clear();
+        activeDestinations.clear();
+        boundNamedSlots.clear();
         if (vs)
             for (size_t i = 0; i < vs->size(); i++)
                 slots.push_back({ (*vs)[i].type, (*vs)[i].kind, (*vs)[i].scope, (int)i });
@@ -997,6 +1483,7 @@ private:
             if (ctx.impl != implIndex) continue;
             for (size_t i = 0; i < impl.params.size(); i++) {
                 auto var = impl.params[i].var;
+                if (CoreHasConstruction(core.profile) && GirNonfixed(mod, impl.vars[var].type)) continue;
                 for (auto &roots : ctx.varroots)
                     if (roots.first == var) {
                         auto row = find_if(out.params.begin(), out.params.end(), [&](auto &r) { return r.first == (int)i; });
@@ -1017,10 +1504,26 @@ private:
 
     GirFunc LowerImpl(const CoreImpl &impl, int implIndex) {
         Begin(&impl.vars);
+        currentResults = &impl.results;
+        functionBody = &impl.body;
+        functionOrigin = impl.vars.empty() ? -1 : Org(impl.vars[0].org);
         vector<GirTypeId> ptys;
         for (auto &p : impl.params) ptys.push_back(impl.vars[p.var].type);
-        auto [b0, ps] = NewBlock(ptys);
+        vector<GirTypeId> entryTypes;
+        for (auto type : ptys)
+            entryTypes.push_back(CoreHasConstruction(core.profile) && GirNonfixed(mod, type)
+                                     ? mod.RefType(CoreMut::Mut, type) : type);
+        if (CoreHasConstruction(core.profile))
+            for (auto &result : impl.results)
+                if (GirNonfixed(mod, result.type))
+                    entryTypes.push_back(mod.CarrierType(CoreType::Dest, result.type, result.request));
+        auto [b0, ps] = NewBlock(entryTypes);
         cur = b0;
+        resultDestinations.assign(impl.results.size(), -1);
+        size_t channel = ptys.size();
+        if (CoreHasConstruction(core.profile))
+            for (size_t result = 0; result < impl.results.size(); result++)
+                if (GirNonfixed(mod, impl.results[result].type)) resultDestinations[result] = ps[channel++];
         vector<Binding> pre;
         for (size_t k = 0; k < impl.params.size(); k++)
             pre.push_back({ impl.params[k].var, ps[k], Org(impl.vars[impl.params[k].var].org) });
@@ -1034,7 +1537,11 @@ private:
         GirFunc f;
         f.name = impl.name;
         f.params = ptys;
-        f.results = impl.results;
+        for (auto &result : impl.results) {
+            f.results.push_back(result.type);
+            if (CoreHasConstruction(core.profile))
+                f.resultProtocols.push_back({ result.request, result.namedLocal });
+        }
         f.slots = slots;
         ScopePairs pairs;
         BlockScopes(-1, impl.body, pairs);
@@ -1053,10 +1560,10 @@ private:
 
     GirGlobal LowerGlobal(const CoreGlobal &g) {
         Begin(nullptr);
-        auto [b0, ps] = NewBlock({});
-        (void)ps;
+        auto nonfixed = CoreHasConstruction(core.profile) && GirNonfixed(mod, g.type);
+        auto [b0, ps] = NewBlock(nonfixed ? vector<GirTypeId> { mod.CarrierType(CoreType::Dest, g.type, CoreRequest::Value) } : vector<GirTypeId> {});
         cur = b0;
-        auto v = LowerExpr(*g.init);
+        auto v = nonfixed ? LowerConstruct(*g.init, ps[0], Org(g.org)) : LowerExpr(*g.init);
         GirInst r;
         r.op = GirOp::Ret;
         r.vals = { v };
@@ -1072,6 +1579,8 @@ private:
         out.init.key = Sha256::Of(cat(g.module, "::", g.name)).Short();
         out.init.name = g.name;
         out.init.results = { g.type };
+        if (CoreHasConstruction(core.profile)) out.init.resultProtocols = { { nonfixed ? CoreRequest::Value : CoreRequest::Register, nullopt } };
+        out.init.slots = slots;
         ScopePairs pairs;
         ExprScopes(-1, *g.init, pairs);
         out.init.scopes = ScopeTable(pairs);

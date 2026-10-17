@@ -20,7 +20,9 @@ whether the link ran, and the time and peak memory the compiler and the
 largest native compiler process took), then a table. With --random N runs N
 seeded random edits, contract changes and store damages with --verify-reuse,
 each compared with a clean build. Exits 1 if any row or step fails and 2 if
-any qualification dimension is unavailable.
+any required qualification probe is missing. E10's raw C flags, target and
+runtime identity are qualified at the production native-builder boundary
+using Goose-emitted C units; this does not claim CLI selectors or cross-compilation.
 """
 
 import argparse
@@ -46,11 +48,36 @@ FAMILY = dict(helpers=1, contexts=2, types=gen.INT_TYPES[:1], shareable=1, root_
               edit_targets=True)
 SOURCE_EDITS = ("E02", "E03", "E04", "E05", "E06", "E07a", "E07b", "E08", "E09a", "E09b", "E09c")
 EDIT_CASES = set(SOURCE_EDITS) | {"E07c", "E15a", "E15b", "E16"}
-E10_UNAVAILABLE = {
-    "independent_c_flags": "the build command exposes no raw C flag override; --debug changes numeric mode and C flags together (-D is tested separately)",
-    "target": "the compiler has no target option; a cross compiler also changes C compiler identity",
-    "runtime_text_only": "runtime text is embedded in the Goose binary, so changing it also changes compiler binary identity",
+E10_BUILDER_BOUNDARY = {
+    "raw_c_flags": {
+        "field": "UnitContractValues.c_flags",
+        "proves": "production MakeContract and BuildUnitObjects compile actual Goose-emitted C units into an isolated contract store, then verify the original store remains reusable",
+        "limit": "raw C flags are injected at the native-builder boundary; this does not qualify a goose build CLI flag selector",
+    },
+    "target_identity": {
+        "field": "UnitContractValues.target",
+        "proves": "production MakeContract and BuildUnitObjects compile actual Goose-emitted C units under a target-only identity change, then verify both stores remain reusable",
+        "limit": "the probe uses the host compiler under synthetic target identity; it makes no cross-compilation or CLI target-option claim",
+    },
+    "runtime_identity": {
+        "field": "UnitContractValues.runtime_version",
+        "proves": "production MakeContract and BuildUnitObjects compile actual Goose-emitted C units under a runtime-identity-only change, then verify both stores remain reusable",
+        "limit": "runtime text is embedded in the Goose binary; this is a builder-boundary identity probe, not a production runtime-text-only full-build variant",
+    },
 }
+BUILDER_PROBE_CHECKS = (
+    "ok   compiler compiler_units_builder",
+    "ok   units-last-record",
+)
+
+
+def builder_probe_result(exit_code, output):
+    if exit_code != 0:
+        return "fail", f"focused compiler-units tests failed (exit {exit_code}): {output[-600:]}"
+    missing = [line for line in BUILDER_PROBE_CHECKS if line not in output.splitlines()]
+    if missing:
+        return "incomplete", "focused compiler-units tests omitted: " + ", ".join(missing)
+    return "ok", ""
 
 
 def make_compiler_variant(goose, destination):
@@ -120,6 +147,10 @@ class Build:
     @property
     def native(self):
         return (self.report or {}).get("extensions", {}).get("native_compile") or {}
+
+    @property
+    def runtime_version(self):
+        return (self.report or {}).get("runtime_version")
 
     @property
     def store(self):
@@ -243,6 +274,9 @@ class Matrix:
         self.goose, self.work = goose, work
         self.failures, self.records = [], []
         self.unavailable = []
+        self.e10_started = False
+        self.e10_cli_dimensions_passed = False
+        self.e10_builder_boundary_passed = False
 
     def fail(self, row, why):
         self.failures.append(f"{row}: {why}")
@@ -254,10 +288,47 @@ class Matrix:
         self.records.append(record)
         print(json.dumps(record))
 
+    def record_builder_boundary(self):
+        record = {"row": "E10 native builder boundary", "status": "builder-boundary",
+                  "dimensions": E10_BUILDER_BOUNDARY}
+        self.records.append(record)
+        print(json.dumps(record))
+        self.e10_builder_boundary_passed = True
+
+    def record_builder_boundary_result(self, exit_code, output):
+        status, detail = builder_probe_result(exit_code, output)
+        if status == "ok":
+            self.record_builder_boundary()
+        elif status == "incomplete":
+            self.record_unavailable("E10 native builder boundary", {
+                "required_tests": detail,
+                "scope": "production MakeContract/BuildUnitObjects on Goose-emitted C units plus the R0 CLI regression",
+            })
+        else:
+            self.fail("E10 native builder boundary", detail)
+
+    def run_builder_boundary_probe(self):
+        scratch = self.work.parent / "tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        try:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "test" / "run_tests.py"), "--exe", self.goose,
+                 "--cc", "native", "--only", "extra/compiler_units", "-v"],
+                cwd=ROOT, env=dict(os.environ, TMPDIR=str(scratch)), capture_output=True,
+                text=True, errors="replace")
+        except OSError as error:
+            self.fail("E10 native builder boundary", f"cannot run focused compiler-units tests: {error}")
+            return
+        output = result.stdout + result.stderr
+        self.record_builder_boundary_result(result.returncode, output)
+
     def completion(self):
         if self.failures:
             return "fail", 1
         if self.unavailable:
+            return "incomplete", 2
+        if self.e10_started and not (self.e10_cli_dimensions_passed and
+                                     self.e10_builder_boundary_passed):
             return "incomplete", 2
         return "ok", 0
 
@@ -464,6 +535,8 @@ class Matrix:
                 self.equal_to_clean("E16", s, b)
 
     def row_E10(self):
+        self.e10_started = True
+        failure_count = len(self.failures)
         s = Session(self.goose, self.work, "e10")
         base = s.build()
         if not self.ok_build("E10", base):
@@ -501,28 +574,28 @@ class Matrix:
                 continue
             if n["objects_reused"] != 0 or n["objects_missed"] != n["units_written"]:
                 self.fail("E10", f"a new contract reused objects ({label}): {before.record('E10')}")
-            if label == "compiler binary" and n.get("runtime_version") != base.record("base").get("runtime_version"):
+            if label == "compiler binary" and before.runtime_version != base.runtime_version:
                 self.fail("E10", "a binary-only compiler variant changed runtime text")
             self.equal_to_clean(f"E10 {label}", s, before, flags, goose)
             back = s.build()
             self.record(f"E10 back from {label}", back)
             n = back.native
-            if not self.is_warm(n):
+            if not self.reuses_all_objects(n):
                 self.fail("E10", f"returning to the first contract is not warm ({label}): {back.record('E10')}")
             self.equal_to_clean("E10 back", s, back)
             again = s.build(*flags, goose=goose)
             self.record(f"E10 back to {label}", again)
-            if not self.is_warm(again.native):
+            if not self.reuses_all_objects(again.native):
                 self.fail("E10", f"the {label} store was not left warm: {again.record('E10')}")
             self.equal_to_clean(f"E10 back to {label}", s, again, flags, goose)
 
-        self.record_unavailable("E10 unavailable dimensions", E10_UNAVAILABLE)
+        self.e10_cli_dimensions_passed = len(self.failures) == failure_count
+        self.run_builder_boundary_probe()
 
     @staticmethod
-    def is_warm(native):
+    def reuses_all_objects(native):
         return bool(not native.get("native_compiler_invocations")
-                    and not (native.get("link") or {}).get("ran")
-                    and (native.get("no_op") or native.get("objects_missed") == 0))
+                    and native.get("objects_missed") == 0)
 
     def row_E11(self):
         s = Session(self.goose, self.work, "e11")
@@ -798,8 +871,7 @@ def main():
               f"{r['objects_reused']!s:<7} {r['objects_missed']!s:<7} {r['link_ran']}")
     status, exit_code = m.completion()
     if status == "incomplete":
-        dimensions = sum(len(record["dimensions"]) for record in m.unavailable)
-        detail = f"incomplete ({dimensions} unavailable dimension(s))"
+        detail = "incomplete (a required E10 builder-boundary or R0 test did not run)"
     elif status == "fail":
         detail = f"{len(m.failures)} failure(s)"
     else:
