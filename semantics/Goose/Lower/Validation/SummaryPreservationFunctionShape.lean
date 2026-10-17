@@ -49,4 +49,28 @@ theorem instruction_roots_closed_function_shape {res : Array (List RootRef)}
         edge_roots_closed_function_shape blocks closed.2⟩
     | _ => exact closed
 
+
+theorem term_roots_closed_function_shape {res : Array (List RootRef)}
+    {vt : Array (Option VTy)} {before after : Func} {upper : Prov} {term : Term}
+    (parameters : ∀ target ∈ term.successors,
+      (before.blocks[target]?).map Block.params = (after.blocks[target]?).map Block.params)
+    (closed : InstructionRootsClosed res vt before upper (.term term)) :
+    InstructionRootsClosed res vt after upper (.term term) := by
+  have edge : ∀ target args,
+      (before.blocks[target]?).map Block.params = (after.blocks[target]?).map Block.params →
+      EdgeRootsClosed before upper target args → EdgeRootsClosed after upper target args := by
+    intro target args same prior block lookup pair member
+    cases priorLookup : before.blocks[target]? with
+    | none => simp [priorLookup, lookup] at same
+    | some old =>
+      simp only [priorLookup, lookup, Option.map_some, Option.some.injEq] at same
+      rw [← same] at member
+      exact prior old priorLookup pair member
+  cases term with
+  | br target args => exact edge target args (parameters target (by simp [Term.successors])) closed
+  | condbr condition left leftArgs right rightArgs =>
+    exact ⟨edge left leftArgs (parameters left (by simp [Term.successors])) closed.1,
+      edge right rightArgs (parameters right (by simp [Term.successors])) closed.2⟩
+  | _ => exact closed
+
 end Goose.Lower.Validation.SummaryPreservation

@@ -59,4 +59,29 @@ theorem appendInst_block_parameters (func : Func) (ls : LS) (block : BlockId) (i
   simp only [finishBlocks, LS.appendInst, Array.getElem?_map, Array.getElem?_modify]
   split <;> cases ls.blocks[target]? <;> rfl
 
+
+theorem builder_instruction_roots_after_newBlock {res : Array (List RootRef)}
+    {vt : Array (Option VTy)} {func : Func} {upper : Prov} {ls : LS}
+    {le : LEnv} {scopeCount : Nat} (symbols : ls.SymbolWF le scopeCount)
+    (newBlock : BlockB)
+    (closed : ∀ inst ∈ ls.insts,
+      InstructionRootsClosed res vt { func with blocks := finishBlocks ls.blocks } upper inst) :
+    ∀ inst ∈ ls.insts,
+      InstructionRootsClosed res vt { func with blocks := finishBlocks (ls.blocks.push newBlock) }
+        upper inst := by
+  intro inst member
+  have prior := closed inst member
+  cases inst with
+  | «def» result op =>
+    simpa only [InstructionRootsClosed, rootsOfDef_function_shape (before :=
+      { func with blocks := finishBlocks ls.blocks }) (after :=
+      { func with blocks := finishBlocks (ls.blocks.push newBlock) }) rfl rfl op] using prior
+  | eff effect => cases effect <;> exact prior
+  | term term =>
+    apply term_roots_closed_function_shape (closed := prior)
+    intro target targetMember
+    have bound := (symbols.instructions (.term term) member).targets target targetMember
+    simp only [finishBlocks, Array.getElem?_map, Array.getElem?_push]
+    rw [if_neg (Nat.ne_of_lt bound)]
+
 end Goose.Lower.Validation.SummaryPreservation
