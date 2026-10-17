@@ -852,8 +852,8 @@ def replacementParameterContentsStable (m : Module) (f : Func) (vt : Array (Opti
                       | some value => external value
     | _ => false
 
-def replacementEmptyOp (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov)
-    (empty : Array Bool) (result : ValueId) (op : Op) : Bool :=
+def replacementEmptyOp (f : Func) (vt : Array (Option VTy)) (p : Prov)
+    (empty : Array Bool) (parameterContents : Bool) (result : ValueId) (op : Op) : Bool :=
   let known := fun value => empty[value]?.getD false
   if !valRefLike vt result || !(rootsAt p.vals result).isEmpty then false else
     match op with
@@ -866,14 +866,14 @@ def replacementEmptyOp (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Pr
           | .param parameter =>
               (vt[result]?).any (fun | some (.data (.slice ..)) => true | _ => false) &&
                 (f.params[parameter]?).any Ty.isRefSlice &&
-                replacementParameterContentsStable m f vt p empty &&
+                parameterContents &&
                 (f.roots.contents.find? (·.1 == parameter)).any
                   (fun row => (row.2.flatMap (ReplacementQueries.mk f.roots.params #[] #[]).expand).isEmpty)
           | .global _ => false)
     | _ => false
 
-def replacementEmptyRound (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov)
-    (empty : Array Bool) : Array Bool × Bool := Id.run do
+def replacementEmptyRound (f : Func) (vt : Array (Option VTy)) (p : Prov)
+    (empty : Array Bool) (parameterContents : Bool) : Array Bool × Bool := Id.run do
   let mut empty := empty
   let mut changed := false
   for h : index in [0:f.blocks.size] do
@@ -886,21 +886,27 @@ def replacementEmptyRound (m : Module) (f : Func) (vt : Array (Option VTy)) (p :
         changed := true
     for inst in block.insts do
       if let .def value op := inst then
-        if replacementEmptyOp m f vt p empty value op && !empty[value]?.getD false && value < empty.size then
+        if replacementEmptyOp f vt p empty parameterContents value op && !empty[value]?.getD false && value < empty.size then
           empty := empty.set! value true
           changed := true
   return (empty, changed)
 
-def replacementEmptyValues (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) : Array Bool := Id.run do
+def replacementEmptyCandidate (f : Func) (vt : Array (Option VTy)) (p : Prov)
+    (parameterContents : Bool) : Array Bool := Id.run do
   let mut empty := p.vals.map (replacementRootsEmpty f)
   let mut changed := true
   let mut fuel := p.vals.size + 1
   while changed && fuel > 0 do
-    let (next, progress) := replacementEmptyRound m f vt p empty
+    let (next, progress) := replacementEmptyRound f vt p empty parameterContents
     empty := next
     changed := progress
     fuel := fuel - 1
   return empty
+
+def replacementEmptyValues (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) : Array Bool :=
+  let candidate := replacementEmptyCandidate f vt p (parameterContents := true)
+  if replacementParameterContentsStable m f vt p candidate then candidate
+  else replacementEmptyCandidate f vt p (parameterContents := false)
 
 def replacementQueries (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) : ReplacementQueries :=
   ⟨f.roots.params, p.vals, replacementEmptyValues m f vt p⟩
