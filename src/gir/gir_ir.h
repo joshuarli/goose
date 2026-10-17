@@ -17,20 +17,23 @@ enum class GirOp : uint8_t {
     // Instructions that define a value, high stage.
     Int, Bool, Unit, Bin, Un, Cmp, BoolCmp, Not, Conv, Next, Slot, Global, Elem, Freeze, Load,
     Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, IndexProven, Push, Pop, Call, Arr, Fill,
-    Struct, Field,
+    Struct, Field, Bytes, Result, DestOpen, DestChild, DestFinish, DestNamed, ResultExitDest,
+    DestAbandonNamed, DestArg, DestAbandon, DestValue, DestRelocate, DestStage, DestFit,
+    CallConstruct, TargetDest, Render,
     // Instructions that define a value, low stage.
     PtrOffset, PLoad, FrameAddr, LocalGet, StackAt, StackMark, GlobalAddr, GlobalStack, HdrBase,
-    HdrLen,
+    HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId, SourceNew, SourceChild, SourceParam, SourceEnter, SourceCallPush, SourceCallGet, SourceGlobal,
     // Instructions that define none, high stage.
-    Init, Store, Append, PopN, Resize, Clear, Replace, Enter, Leave, Print,
+    Init, Store, Append, AppendValue, PopN, Resize, Clear, Replace, DestWrite, DestAttach,
+    DestBytes, DestText, DestCopy, DestRepeat, DestSnapshot, DestBind, DestPublish, DestCancel, Enter, Leave, Print,
     // Instructions that define none, low stage.
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
-    BytesFill, RtCall,
+    BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event, SourceLeave, SourceCallPop, SourceResult, SourceCopy, SourceGlobalSet,
     // Terminators.
-    Br, CondBr, Ret, Abort, Exit, Unreachable,
+    Br, CondBr, Invoke, Ret, Escape, Abort, Exit, Unreachable,
 };
 
-inline bool GirDefines(GirOp op) { return op <= GirOp::HdrLen; }
+inline bool GirDefines(GirOp op) { return op <= GirOp::SourceGlobal; }
 inline bool GirIsTerminator(GirOp op) { return op >= GirOp::Br; }
 
 // Whether an instruction belongs to the high stage only, the low stage only,
@@ -42,6 +45,15 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::ArrayLen: case GirOp::Index:
         case GirOp::IndexProven:
         case GirOp::Push: case GirOp::Pop: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:
+        case GirOp::DestOpen: case GirOp::DestFinish: case GirOp::DestWrite:
+        case GirOp::DestBytes: case GirOp::DestPublish:
+        case GirOp::Bytes: case GirOp::Result: case GirOp::DestChild: case GirOp::DestNamed:
+        case GirOp::ResultExitDest: case GirOp::DestAbandonNamed: case GirOp::DestArg:
+        case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
+        case GirOp::DestStage: case GirOp::DestFit: case GirOp::CallConstruct:
+        case GirOp::TargetDest: case GirOp::Render: case GirOp::AppendValue: case GirOp::DestAttach:
+        case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot: case GirOp::DestBind:
+        case GirOp::DestCancel: case GirOp::Invoke: case GirOp::Escape:
         case GirOp::Unit: case GirOp::Init:
         case GirOp::Store: case GirOp::Append: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear:
         case GirOp::Replace: case GirOp::Enter: case GirOp::Leave: case GirOp::Print:
@@ -50,8 +62,8 @@ inline bool GirHighOnly(GirOp op) {
     }
 }
 inline bool GirLowOnly(GirOp op) {
-    return (op >= GirOp::PtrOffset && op <= GirOp::HdrLen) ||
-           (op >= GirOp::PStore && op <= GirOp::RtCall);
+    return (op >= GirOp::PtrOffset && op <= GirOp::SourceGlobal) ||
+           (op >= GirOp::PStore && op <= GirOp::SourceGlobalSet);
 }
 
 enum class GirAbortKind : uint8_t {
@@ -63,6 +75,28 @@ enum class GirAbortKind : uint8_t {
 // reference. Direct owners remain writable even when their variable binding is
 // immutable; borrowed views inherit the reference's mutability.
 enum class GirSnapshotMode : uint8_t { Owner, Borrowed };
+
+enum class GirFormatKind : uint8_t { Int, Uint, Bool };
+enum class GirTraceKind : uint8_t { Storage, Destination };
+enum class GirEventKind : uint8_t { Begin, Write, Publish, Copy, Relocate, Stage, Abandon };
+enum class GirEventReason : uint8_t { None, Storage, Repeat, HeaderRemoval, ExitValue, CapacityCheck };
+
+inline const char *GirFormatName(GirFormatKind kind) {
+    static const char *names[] = { "int", "uint", "bool" };
+    return names[(int)kind];
+}
+inline const char *GirTraceName(GirTraceKind kind) {
+    static const char *names[] = { "storage", "destination" };
+    return names[(int)kind];
+}
+inline const char *GirEventName(GirEventKind kind) {
+    static const char *names[] = { "begin", "write", "publish", "copy", "relocate", "stage", "abandon" };
+    return names[(int)kind];
+}
+inline const char *GirEventReasonName(GirEventReason reason) {
+    static const char *names[] = { "", "storage", "repeat", "header-removal", "exit-value", "capacity-check" };
+    return names[(int)reason];
+}
 
 inline const char *GirAbortKindName(GirAbortKind k) {
     static const char *names[] = { "div_zero", "div_overflow", "index_oob", "slice_oob", "assert",
@@ -83,42 +117,46 @@ struct GirPart {
     int val = 0;
 };
 
-// One instruction. `org` is an origin number of the module's origin table, or
-// -1 for none. Which members an instruction reads is fixed by `op`:
-//   Int: res, ty, text            Bool: res, flag             Unit: res
-//   Bin: res, bin, ty, a, b, org  Un: res, un, ty, a, org     Cmp: res, cmp, ty, a, b
-//   BoolCmp: res, cmp, a, b       Not: res, a
-//   Conv: res, conv, ty (source), ty2 (target), a, org        Next: res, ty, a
-//   Slot: res, idx (slot)         Global: res, idx (global)
-//   Elem: res, a (view), b (index)
-//   Freeze/Load/SliceView/ViewLen/ArrayLen: res, a
-//   Snap: res, snapshot mode, a
-//   ViewSlice: res, mut, a (view), lo, hi, org
-//   Index: res, a (view), b (index), org     IndexProven: res, a (view), b (index)
-//   Push: res, a (ref), b (value), org
-//   Pop: res, a (owner reference), org
-//   Call: res, idx (function), vals, org     Arr: res, ty, vals      Fill: res, ty, a
-//   Struct: res, ty, vals                    Field: res, a (reference), idx (real field)
-//   Init: idx (slot), a, org      Store/Append: a (ref), b, org
-//   PopN: a (owner reference), b (count), org   Resize: a, b (size), vals[0]? (fill), org
-//   Clear: a (owner reference), org             Replace: a (owner ref), b (literal run), org
-//   Enter/Leave: idx (scope)      Print: parts, org
-//   Br: idx (block), vals         CondBr: a, idx (true block), vals, idx2, vals2
-//   Ret: vals, org                Abort: abort, org        Exit: a, org
-// The low stage adds, over scalar and address values (flag on Bin/Un/Conv
-// says the operation is the runtime's checked one, off says it wraps):
-//   PtrOffset: res, a (address), b (i64 index), idx (element size in bytes)
-//   PLoad: res, ty, a (address)             PStore: ty, a (address), b (value)
-//   FrameAddr: res, idx (frame member)      LocalGet: res, idx          LocalSet: idx, a
-//   StackAt: res, a (i64 base), idx (offset)  StackMark: res, a (stack)
-//   StackRelease: a (stack), b (mark)       StackBump: a (stack), b (i64 bytes) or -1 and idx (bytes)
-//   GlobalAddr/GlobalStack: res, idx (low global)
-//   HdrBase/HdrLen: res, a (header)         HdrInit: a (header), b (base)   HdrSetLen: a, b
-//   BytesCopy/BytesMove: a (dst), b (src), vals[0] (i64 byte count)
-//   BytesFill: a (dst), b (src), idx (element size), vals[0] (i64 count)
-//   RtCall: idx (runtime entry point), a (argument, or -1), text
-//   Abort in the low stage names its operands in `vals`; its text is a user
-//   abort's message.
+struct GirDestSlotReceiver {
+    int slot = -1;
+};
+
+struct GirDestWholeReceiver {
+    int reference = -1;
+};
+
+struct GirDestGlobalReceiver { int global = -1; };
+struct GirDestPushReceiver { int reference = -1; };
+struct GirDestAppendReceiver { int reference = -1; };
+struct GirDestArgReceiver { int function = -1; int parameter = -1; };
+
+using GirDestReceiver = variant<GirDestSlotReceiver, GirDestWholeReceiver, GirDestGlobalReceiver,
+                                GirDestPushReceiver, GirDestAppendReceiver, GirDestArgReceiver>;
+
+struct GirEscapeEdge {
+    int target = -1;
+    int block = -1;
+    vector<int> forwarded;
+};
+
+struct GirResultProtocol {
+    CoreRequest request = CoreRequest::Register;
+    optional<int> namedSlot;
+    bool operator==(const GirResultProtocol &) const = default;
+};
+
+struct GirLowChannel {
+    int position = -1;
+    vector<int> incoming;
+    vector<int> escaped;
+};
+
+struct GirLowTarget {
+    vector<int> members;
+    vector<GirTypeId> cells;
+    vector<GirLowChannel> channels;
+};
+
 struct GirInst {
     GirOp op = GirOp::Unit;
     int res = -1;
@@ -132,10 +170,19 @@ struct GirInst {
     CoreMut mut = CoreMut::Mut;
     GirSnapshotMode snap = GirSnapshotMode::Borrowed;
     GirAbortKind abort = GirAbortKind::Assert;
+    CoreRequest request = CoreRequest::Value;
+    GirFormatKind format = GirFormatKind::Int;
+    GirTraceKind trace = GirTraceKind::Storage;
+    GirEventKind event = GirEventKind::Begin;
+    GirEventReason reason = GirEventReason::None;
+    optional<int> knownCount;
+    GirDestReceiver destReceiver = GirDestSlotReceiver {};
     int idx = -1, idx2 = -1;
     int a = -1, b = -1;
+    vector<uint8_t> bytes;
     GirBound lo, hi;
-    vector<int> vals, vals2;
+    vector<int> vals, vals2, forwarded;
+    vector<GirEscapeEdge> escapes;
     vector<GirPart> parts;
     int org = -1;
 };
@@ -185,7 +232,7 @@ struct GirRootInfo {
 // header of a resizable. A header's elements are on the data stack
 // `stack` of the function, numbered from its hidden base argument.
 struct GirMember {
-    enum Kind : uint8_t { Scalar, Bytes, Header } kind = Scalar;
+    enum Kind : uint8_t { Scalar, Bytes, Header, Dynamic } kind = Scalar;
     GirTypeId ty = -1;     // Scalar
     int64_t size = 0;      // Bytes
     int scope = 0;         // The scope whose entry and exit bound its life.
@@ -196,6 +243,7 @@ struct GirMember {
 struct GirFunc {
     string name;
     vector<GirTypeId> params, results;
+    vector<GirResultProtocol> resultProtocols;
     vector<GirSlot> slots;
     GirRootInfo roots;
     vector<int> scopes;   // The parent of each scope, or -1.
@@ -226,6 +274,7 @@ struct GirLowGlobal {
     GirMember::Kind kind = GirMember::Scalar;
     GirTypeId ty = -1;     // Scalar
     int64_t size = 0;      // Bytes
+    int stack = -1;
     string module;
 };
 
@@ -236,6 +285,7 @@ struct GirModule {
     vector<CoreType> types;
     CoreProfile profile = CoreProfile::Pilot;
     vector<CoreStruct> structs;
+    vector<CoreTargetSet> targets;
     vector<GirGlobal> globals;
     vector<GirFunc> funcs;
     int entry = 0;
@@ -244,9 +294,11 @@ struct GirModule {
     // order, and the data stacks the program starts with.
     bool low = false;
     vector<GirLowGlobal> lowglobals;
+    vector<GirLowTarget> lowtargets;
     vector<int> initfuncs;
     int mainstacks = 0;
     int globalstacks = 0;
+    int pointerBytes = sizeof(void *);
 
     GirTypeId Intern(const CoreType &t) {
         for (size_t i = 0; i < types.size(); i++)
@@ -267,8 +319,71 @@ struct GirModule {
     GirTypeId ViewType(CoreMut m, GirTypeId e) {
         CoreType c; c.kind = CoreType::View; c.mut = m; c.elem = e; return Intern(c);
     }
+    GirTypeId CarrierType(CoreType::Kind kind, GirTypeId type, CoreRequest request) {
+        CoreType carrier;
+        carrier.kind = kind;
+        carrier.elem = type;
+        carrier.request = request;
+        return Intern(carrier);
+    }
+    GirTypeId TupleType(vector<GirTypeId> parts) {
+        CoreType tuple;
+        tuple.kind = CoreType::Tuple;
+        tuple.parts = std::move(parts);
+        return Intern(tuple);
+    }
     const CoreType &Type(GirTypeId t) const { return types[t]; }
 };
+
+struct GirSourceClassification {
+    vector<int> values, members;
+};
+
+inline GirSourceClassification GirSourceKinds(const GirFunc &function) {
+    int count = 0;
+    for (auto &block : function.blocks) {
+        count += (int)block.params.size();
+        for (auto &instruction : block.insts) count += GirDefinesValue(instruction);
+    }
+    GirSourceClassification kinds { vector<int>(count, 0), vector<int>(function.members.size(), -1) };
+    for (size_t block = 1; block < function.blocks.size(); block++)
+        for (auto &parameter : function.blocks[block].params) kinds.values[parameter.first] = -1;
+    for (auto &block : function.blocks) for (auto &instruction : block.insts) {
+        switch (instruction.op) {
+            case GirOp::SourceNew: case GirOp::SourceChild: case GirOp::SourceParam: case GirOp::SourceCallGet: case GirOp::SourceGlobal:
+                kinds.values[instruction.res] = 1; break;
+            case GirOp::SourceEnter: kinds.values[instruction.res] = 2; break;
+            case GirOp::SourceCallPush: kinds.values[instruction.res] = 3; break;
+            case GirOp::LocalGet: kinds.values[instruction.res] = -1; break;
+            default: break;
+        }
+    }
+    auto merge = [](int current, int value) {
+        if (value < 0) return current;
+        if (current < 0) return value;
+        return current == value ? current : 4;
+    };
+    for (int round = 0; round < count * 4 + 8; round++) {
+        auto previous = kinds;
+        fill(kinds.members.begin(), kinds.members.end(), -1);
+        for (auto &block : function.blocks) for (auto &instruction : block.insts)
+            if (instruction.op == GirOp::LocalSet)
+                kinds.members[instruction.idx] = merge(kinds.members[instruction.idx], kinds.values[instruction.a]);
+        for (auto &block : function.blocks) for (auto &instruction : block.insts) {
+            if (instruction.op == GirOp::LocalGet) kinds.values[instruction.res] = kinds.members[instruction.idx];
+            auto edge = [&](int target, const vector<int> &values) {
+                for (size_t position = 0; position < values.size(); position++) {
+                    auto parameter = function.blocks[target].params[position].first;
+                    kinds.values[parameter] = merge(kinds.values[parameter], kinds.values[values[position]]);
+                }
+            };
+            if (instruction.op == GirOp::Br || instruction.op == GirOp::CondBr) edge(instruction.idx, instruction.vals);
+            if (instruction.op == GirOp::CondBr) edge(instruction.idx2, instruction.vals2);
+        }
+        if (previous.values == kinds.values && previous.members == kinds.members) break;
+    }
+    return kinds;
+}
 
 inline bool GirMutAtLeast(CoreMut have, CoreMut want) {
     return have == CoreMut::Mut || want == CoreMut::Const;

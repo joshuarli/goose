@@ -25,7 +25,7 @@ namespace goose {
 //                   GS_RANGE, GS_RANGE_U
 inline constexpr const char *GIR_C_RUNTIME_ENTRY_POINTS =
     "gs_rt_init gs_stack_init GS gs_memcpy gs_memmove gs_rt_stats gs_out_int gs_out_uint gs_out_bool "
-    "gs_out_bytes gs_out_nl gs_abort gs_abort_msg gs_idxfail gs_exit gs_add gs_sub gs_mul gs_neg "
+    "gs_out_bytes gs_out_nl gs_fmt_i64 gs_fmt_u64 gs_fmt_bool gs_abort gs_abort_msg gs_idxfail gs_exit gs_add gs_sub gs_mul gs_neg "
     "gs_div gs_mod gs_shl gs_shr GS_RANGE GS_RANGE_U";
 
 // One function's text with what it refers to.
@@ -46,18 +46,68 @@ struct GirCProgram {
 
 class GirCEmitter {
 public:
-    explicit GirCEmitter(const GirModule &low) : m(low) {}
+    explicit GirCEmitter(const GirModule &low, optional<string> constructionTrace = nullopt)
+        : m(low), constructionTrace(std::move(constructionTrace)) {}
 
     GirCProgram Emit() {
+        if (constructionTrace && (!CoreHasConstruction(m.profile) || constructionTrace->empty() ||
+                                  constructionTrace->find('\0') != string::npos))
+            throw CompileError { "construction trace requires the construction profile and a valid file path" };
+        if (!m.lowtargets.empty())
+            throw CompileError { "GIR-L target emission requires the complete checked target protocol" };
         Names();
         GirCProgram out;
         for (size_t f = 0; f < m.funcs.size(); f++) out.pieces.push_back(Piece((int)f));
         // The sections, in the conventions the unit assembler splits them by.
         string tdecls = "typedef struct { uint8_t *base; int64_t len; } gir_hdr;\n";
+        if (CoreHasConstruction(m.profile))
+            Append(tdecls, "typedef char gir_pointer_bytes_check[(sizeof(void *) == ", m.pointerBytes,
+                   ") ? 1 : -1];\n");
         for (auto size : blobs) Append(tdecls, "typedef struct { uint64_t w[", (size + 7) / 8, "]; } gir_blob_", size, ";\n");
         string data;
-        for (size_t i = 0; i < m.diagfiles.size(); i++)
-            Append(data, "static const char ", filesym[i], "[] = ", CStr(m.diagfiles[i]), ";\n");
+        if (CoreHasConstruction(m.profile)) {
+            data += "static GS_TLS int64_t gir_return_flag;\n";
+            data += "static GS_TLS gs_stack **gir_stack_cells;\nstatic GS_TLS size_t gir_stack_capacity;\n";
+            data += "static gs_stack *gir_stack_at(int64_t index) { if (index < 0 || (uint64_t)index >= SIZE_MAX / sizeof(gs_stack *)) gs_panic(\"invalid construction stack index\"); size_t needed = (size_t)index + 1; if (needed > gir_stack_capacity) { size_t capacity = gir_stack_capacity ? gir_stack_capacity : 8; while (capacity < needed) { if (capacity > SIZE_MAX / 2) gs_panic(\"construction stack directory overflow\"); capacity *= 2; } gs_stack **cells = (gs_stack **)realloc(gir_stack_cells, capacity * sizeof(gs_stack *)); if (!cells) gs_panic(\"out of memory allocating construction stacks\"); memset(cells + gir_stack_capacity, 0, (capacity - gir_stack_capacity) * sizeof(gs_stack *)); gir_stack_cells = cells; gir_stack_capacity = capacity; } if (!gir_stack_cells[index]) { gir_stack_cells[index] = (gs_stack *)malloc(sizeof(gs_stack)); if (!gir_stack_cells[index]) gs_panic(\"out of memory allocating construction stack cell\"); gs_stack_init(gir_stack_cells[index]); } return gir_stack_cells[index]; }\n";
+            data += "static void gir_stack_cells_close(void) { for (size_t index = 0; index < gir_stack_capacity; index++) free(gir_stack_cells[index]); free(gir_stack_cells); gir_stack_cells = NULL; gir_stack_capacity = 0; }\n";
+            if (constructionTrace) {
+                data += "static FILE *gir_trace_file;\nstatic int gir_trace_comma;\nstatic int64_t gir_trace_storage, gir_trace_destination;\n";
+                data += "static void gir_trace_fail(void) { perror(\"construction trace\"); _Exit(74); }\n";
+                data += "static void gir_source_close(void);\nstatic void gir_trace_close(void) { gir_source_close(); if (fclose(gir_trace_file) != 0) gir_trace_fail(); gir_trace_file = NULL; }\n";
+                Append(data, "static void gir_trace_open(void) { gir_trace_file = fopen(", CStr(*constructionTrace),
+                       ", \"wb\"); if (!gir_trace_file) gir_trace_fail(); if (atexit(gir_trace_close) != 0) gir_trace_fail(); if (fputs(\"[\\\"construction\\\",[]]\\n\", gir_trace_file) < 0 || fflush(gir_trace_file) != 0) gir_trace_fail(); }\n");
+                data += "static void gir_trace_record(const char *kind, const char *reason, size_t n, const int64_t *v) { if (!gir_trace_file) return; if (fseek(gir_trace_file, -3, SEEK_END) != 0) gir_trace_fail(); if (gir_trace_comma && fputc(',', gir_trace_file) == EOF) gir_trace_fail(); gir_trace_comma = 1; if (fprintf(gir_trace_file, \"[\\\"%s\\\"\", kind) < 0) gir_trace_fail(); if (strcmp(kind, \"copy\") == 0) { if (fprintf(gir_trace_file, \",[\\\"%s\\\",%lld\", reason, (long long)v[0]) < 0) gir_trace_fail(); if (strcmp(reason, \"storage\") == 0) { if (fputs(\",[\", gir_trace_file) < 0) gir_trace_fail(); for (size_t k = 1; k + 1 < n; k++) if (fprintf(gir_trace_file, \"%s%lld\", k > 1 ? \",\" : \"\", (long long)v[k]) < 0) gir_trace_fail(); if (fputc(']', gir_trace_file) == EOF) gir_trace_fail(); } if (fprintf(gir_trace_file, \"],%lld\", (long long)v[n - 1]) < 0) gir_trace_fail(); } else { for (size_t k = 0; k < n; k++) if (fprintf(gir_trace_file, \",%lld\", (long long)v[k]) < 0) gir_trace_fail(); if (*reason && fprintf(gir_trace_file, \",\\\"%s\\\"\", reason) < 0) gir_trace_fail(); } if (fputc(']', gir_trace_file) == EOF || fputs(\"]]\\n\", gir_trace_file) < 0 || fflush(gir_trace_file) != 0) gir_trace_fail(); }\n";
+                data += R"(
+typedef struct gir_source { size_t refs, count; int64_t storage; int64_t path[]; } gir_source;
+typedef struct gir_source_slot { uint8_t **value; struct gir_source_slot *next; } gir_source_slot;
+typedef struct gir_source_scope { struct gir_source_scope *previous; gir_source_slot *slots; } gir_source_scope;
+typedef struct gir_source_call { struct gir_source_call *previous; size_t count; gir_source **arguments, **results; } gir_source_call;
+static GS_TLS gir_source_scope *gir_source_scope_top;
+static GS_TLS gir_source_call *gir_source_call_top;
+static gir_source **gir_global_sources;
+static size_t gir_global_sources_count;
+static void *gir_source_alloc(size_t size) { void *value = calloc(1, size); if (!value) gs_panic("out of memory recording construction provenance"); return value; }
+static void gir_source_retain(gir_source *source) { if (source) { if (source->refs == SIZE_MAX) gir_trace_fail(); source->refs++; } }
+static void gir_source_release(gir_source *source) { if (source && --source->refs == 0) free(source); }
+static void gir_source_assign(uint8_t **value, gir_source *source) { if (!gir_source_scope_top) gir_trace_fail(); gir_source_slot *slot = gir_source_scope_top->slots; while (slot && slot->value != value) slot = slot->next; if (!slot) { slot = (gir_source_slot *)gir_source_alloc(sizeof(*slot)); slot->value = value; slot->next = gir_source_scope_top->slots; gir_source_scope_top->slots = slot; } gir_source_retain(source); gir_source_release((gir_source *)*value); *value = (uint8_t *)source; }
+static gir_source *gir_source_new(int64_t storage, size_t count, const int64_t *path) { if (storage < 0 || count > (SIZE_MAX - sizeof(gir_source)) / sizeof(int64_t)) gir_trace_fail(); gir_source *source = (gir_source *)gir_source_alloc(sizeof(*source) + count * sizeof(int64_t)); source->storage = storage; source->count = count; for (size_t index = 0; path && index < count; index++) { if (path[index] < 0) gir_trace_fail(); source->path[index] = path[index]; } return source; }
+static gir_source *gir_source_child(gir_source *parent, int64_t index) { if (!parent || index < 0 || parent->count == SIZE_MAX) gir_trace_fail(); gir_source *source = gir_source_new(parent->storage, parent->count + 1, NULL); if (parent->count) memcpy(source->path, parent->path, parent->count * sizeof(int64_t)); source->path[parent->count] = index; return source; }
+static uint8_t *gir_source_enter(void) { gir_source_scope *scope = (gir_source_scope *)gir_source_alloc(sizeof(*scope)); scope->previous = gir_source_scope_top; gir_source_scope_top = scope; return (uint8_t *)scope; }
+static void gir_source_leave(uint8_t *token) { gir_source_scope *scope = (gir_source_scope *)token; if (scope != gir_source_scope_top) gir_trace_fail(); while (scope->slots) { gir_source_slot *slot = scope->slots; scope->slots = slot->next; gir_source_release((gir_source *)*slot->value); *slot->value = NULL; free(slot); } gir_source_scope_top = scope->previous; free(scope); }
+static uint8_t *gir_source_call_push(size_t count, gir_source *const *arguments) { gir_source_call *call = (gir_source_call *)gir_source_alloc(sizeof(*call)); call->previous = gir_source_call_top; call->count = count; call->arguments = (gir_source **)gir_source_alloc((count + 1) * sizeof(gir_source *)); call->results = (gir_source **)gir_source_alloc((count + 1) * sizeof(gir_source *)); for (size_t position = 1; position <= count; position++) { call->arguments[position] = arguments[position - 1]; gir_source_retain(arguments[position - 1]); } gir_source_call_top = call; return (uint8_t *)call; }
+static gir_source *gir_source_param(size_t position) { gir_source_call *call = gir_source_call_top; if (!call || position == 0 || position > call->count || !call->arguments[position]) gir_trace_fail(); return call->arguments[position]; }
+static void gir_source_result(size_t position, gir_source *source) { gir_source_call *call = gir_source_call_top; if (!call || position == 0 || position > call->count || !source) gir_trace_fail(); gir_source_retain(source); gir_source_release(call->results[position]); call->results[position] = source; }
+static gir_source *gir_source_call_get(uint8_t *token, size_t position) { gir_source_call *call = (gir_source_call *)token; if (call != gir_source_call_top || position == 0 || position > call->count || !call->results[position]) gir_trace_fail(); return call->results[position]; }
+static void gir_source_call_pop(uint8_t *token) { gir_source_call *call = (gir_source_call *)token; if (call != gir_source_call_top) gir_trace_fail(); for (size_t position = 1; position <= call->count; position++) { gir_source_release(call->arguments[position]); gir_source_release(call->results[position]); } gir_source_call_top = call->previous; free(call->arguments); free(call->results); free(call); }
+static void gir_source_close(void) { if (gir_source_scope_top || gir_source_call_top) gir_trace_fail(); for (size_t position = 0; position < gir_global_sources_count; position++) gir_source_release(gir_global_sources[position]); free(gir_global_sources); }
+static void gir_source_global_set(size_t position, gir_source *source) { gir_source_retain(source); gir_source_release(gir_global_sources[position]); gir_global_sources[position] = source; }
+static void gir_source_copy(gir_source *source, int64_t destination) { if (!source || source->count > SIZE_MAX - 2) gir_trace_fail(); int64_t *values = (int64_t *)gir_source_alloc((source->count + 2) * sizeof(int64_t)); values[0] = source->storage; for (size_t index = 0; index < source->count; index++) values[index + 1] = source->path[index]; values[source->count + 1] = destination; gir_trace_record("copy", "storage", source->count + 2, values); free(values); }
+)";
+
+            }
+        }
+        for (size_t i = 0; i < m.files.size(); i++)
+            Append(data, "static const char ", filesym[i], "[] = ", CStr(i < m.diagfiles.size() ? m.diagfiles[i] : m.files[i]), ";\n");
         string gblock;
         for (size_t g = 0; g < m.lowglobals.size(); g++) {
             auto &lg = m.lowglobals[g];
@@ -65,6 +115,7 @@ public:
                 case GirMember::Scalar: Append(gblock, "    ", CT(lg.ty), " ", gsym[g], ";\n"); break;
                 case GirMember::Bytes: Append(gblock, "    gir_blob_", lg.size, " ", gsym[g], ";\n"); break;
                 case GirMember::Header: Append(gblock, "    gir_hdr ", gsym[g], ";\n    gs_stack gs_gstk_", gsym[g], ";\n"); break;
+                case GirMember::Dynamic: Append(gblock, "    uint8_t *", gsym[g], ";\n    gs_stack gs_gstk_", gsym[g], ";\n"); break;
             }
         }
         if (!m.lowglobals.empty())
@@ -89,7 +140,7 @@ public:
             inits.push_back({ module, name });
             Append(initcode, "static void ", name, "(void) {\n");
             for (auto k = g; k < to; k++) {
-                if (m.lowglobals[k].kind == GirMember::Header)
+                if (m.lowglobals[k].kind == GirMember::Header || m.lowglobals[k].kind == GirMember::Dynamic)
                     Append(initcode, "    gs_stack_init(&GS_GL->gs_gstk_", gsym[k], ");\n");
                 Append(initcode, "    ", FName(m.initfuncs[k]), "(0);\n");
             }
@@ -99,7 +150,13 @@ public:
         auto program = [&](bool units) {
             string t = "static void gs_program_init(int argc, char **argv) {\n"
                        "    if (gs_program_initialized) return;\n";
-            Append(t, "    gs_rt_init(argc, argv, ", m.mainstacks, ", ", m.mainstacks + m.globalstacks, ", 0);\n");
+            if (constructionTrace) {
+                t += "    gir_trace_open();\n";
+                Append(t, "    gir_global_sources_count = ", m.lowglobals.size(), ";\n");
+                Append(t, "    gir_global_sources = (gir_source **)gir_source_alloc(", max<size_t>(1, m.lowglobals.size()), " * sizeof(gir_source *));\n");
+            }
+            if (CoreHasConstruction(m.profile)) t += "    if (atexit(gir_stack_cells_close) != 0) gs_panic(\"cannot register construction stack cleanup\");\n";
+            Append(t, "    gs_rt_init(argc, argv, ", (CoreHasConstruction(m.profile) ? 0 : m.mainstacks), ", ", m.mainstacks + m.globalstacks, ", 0);\n");
             if (units) {
                 set<string> modules;
                 for (auto &lg : m.lowglobals) modules.insert(lg.module);
@@ -129,7 +186,8 @@ public:
             UnitGlobalNames n;
             n.module = m.lowglobals[g].module;
             n.texts = { cat("GS_GL->", gsym[g]) };
-            if (m.lowglobals[g].kind == GirMember::Header) n.texts.push_back(cat("GS_GL->gs_gstk_", gsym[g]));
+            if (m.lowglobals[g].kind == GirMember::Header || m.lowglobals[g].kind == GirMember::Dynamic)
+                n.texts.push_back(cat("GS_GL->gs_gstk_", gsym[g]));
             u.globals.push_back(std::move(n));
             modules.insert(m.lowglobals[g].module);
         }
@@ -144,6 +202,7 @@ public:
 
 private:
     const GirModule &m;
+    optional<string> constructionTrace;
 
     // ---------------------------------------------------------------------
     // Names and types.
@@ -179,16 +238,18 @@ private:
                                                    Sha256::Of(cat(lg.module, "::", lg.name)).Short()));
             if (lg.kind == GirMember::Bytes) blobs.insert(lg.size);
         }
-        for (size_t i = 0; i < m.diagfiles.size(); i++)
+        for (size_t i = 0; i < m.files.size(); i++)
             filesym.push_back(i < m.filemodules.size() && !m.filemodules[i].empty()
                                   ? cat("gs_file_", Sha256::Of(m.filemodules[i]).Short())
                                   : cat("gs_file_", i));
         for (auto &f : m.funcs)
             for (auto &b : f.blocks)
                 for (auto &i : b.insts) {
-                    auto text = i.op == GirOp::RtCall && (GirRt)i.idx == GirRt::OutText ? &i.text
+                    string byteText(i.bytes.begin(), i.bytes.end());
+                    auto text = i.op == GirOp::StaticBytes ? &byteText
+                                : i.op == GirOp::RtCall && (GirRt)i.idx == GirRt::OutText ? &i.text
                                 : i.op == GirOp::Abort && i.abort == GirAbortKind::UserAbort ? &i.text : nullptr;
-                    if (text && !text->empty() && !literals.count(*text))
+                    if (text && (i.op == GirOp::StaticBytes || !text->empty()) && !literals.count(*text))
                         literals[*text] = cat("gs_str_", Sha256::Of(*text).Short());
                 }
     }
@@ -270,13 +331,14 @@ private:
         const GirFunc *f;
         vector<GirTypeId> vt;
         vector<int> callees, files;
+        GirSourceClassification sourceKinds;
     };
 
     string V(int v) const { return cat("v", v); }
 
     GirCPiece Piece(int fi) {
         auto &f = m.funcs[fi];
-        Ctx cx { &f, {}, {}, {} };
+        Ctx cx { &f, {}, {}, {}, GirSourceKinds(f) };
         int n = 0;
         for (auto &b : f.blocks) {
             n += (int)b.params.size();
@@ -310,16 +372,20 @@ private:
         for (size_t k = 0; k < f.members.size(); k++) {
             auto &mem = f.members[k];
             switch (mem.kind) {
-                case GirMember::Scalar: Append(t, "    ", CT(mem.ty), " m", k, ";\n"); break;
+                case GirMember::Scalar:
+                    if (constructionTrace || cx.sourceKinds.members[k] <= 0)
+                        Append(t, "    ", CT(mem.ty), " m", k, m.Type(mem.ty).kind == CoreType::Ptr ? " = NULL;\n" : ";\n");
+                    break;
                 case GirMember::Bytes: Append(t, "    uint64_t m", k, "[", (mem.size + 7) / 8, "];\n"); break;
                 case GirMember::Header: Append(t, "    gir_hdr m", k, ";\n"); break;
+                case GirMember::Dynamic: Append(t, "    uint8_t *m", k, ";\n"); break;
             }
         }
         for (size_t b = 0; b < f.blocks.size(); b++) {
             for (size_t k = b == 0 ? entry.params.size() : 0; k < f.blocks[b].params.size(); k++)
-                Append(t, "    ", CT(f.blocks[b].params[k].second), " ", V(f.blocks[b].params[k].first), ";\n");
+                if (constructionTrace || cx.sourceKinds.values[f.blocks[b].params[k].first] <= 0) Append(t, "    ", CT(f.blocks[b].params[k].second), " ", V(f.blocks[b].params[k].first), m.Type(f.blocks[b].params[k].second).kind == CoreType::Ptr ? " = NULL;\n" : ";\n");
             for (auto &i : f.blocks[b].insts)
-                if (GirDefinesValue(i)) Append(t, "    ", CT(cx.vt[i.res]), " ", V(i.res), ";\n");
+                if (GirDefinesValue(i) && (constructionTrace || cx.sourceKinds.values[i.res] <= 0)) Append(t, "    ", CT(cx.vt[i.res]), " ", V(i.res), m.Type(cx.vt[i.res]).kind == CoreType::Ptr ? " = NULL;\n" : ";\n");
         }
         for (size_t b = 0; b < f.blocks.size(); b++) {
             Append(t, "  b", b, ":;\n");
@@ -348,16 +414,28 @@ private:
     }
 
     string Assigns(const Ctx &cx, int block, const vector<int> &args) {
-        auto &ps = cx.f->blocks[block].params;
-        string s;
-        if (ps.size() == 1) return cat(V(ps[0].first), " = ", V(args[0]), "; ");
-        // Several: through temporaries, so that an argument that is another
-        // parameter of the target is read before it is written.
-        for (size_t k = 0; k < ps.size(); k++)
-            Append(s, "{ ", CT(ps[k].second), " t", k, " = ", V(args[k]), "; ");
-        for (size_t k = 0; k < ps.size(); k++) Append(s, V(ps[k].first), " = t", k, "; ");
-        for (size_t k = 0; k < ps.size(); k++) s += "} ";
-        return s;
+        auto &parameters = cx.f->blocks[block].params;
+        vector<size_t> selected;
+        for (size_t position = 0; position < parameters.size(); position++)
+            if (constructionTrace || cx.sourceKinds.values[parameters[position].first] <= 0) selected.push_back(position);
+        string out;
+        for (auto position : selected) {
+            auto [value, type] = parameters[position];
+            Append(out, "{ ", CT(type), " t", position, " = ", V(args[position]), "; ");
+            if (constructionTrace && cx.sourceKinds.values[value] == 1) Append(out, "gir_source_retain((gir_source *)t", position, "); ");
+        }
+        for (auto position : selected) {
+            auto value = parameters[position].first;
+            if (constructionTrace && cx.sourceKinds.values[value] == 1)
+                Append(out, "gir_source_assign(&", V(value), ", (gir_source *)t", position, "); ");
+            else Append(out, V(value), " = t", position, "; ");
+        }
+        for (auto position : selected) {
+            if (constructionTrace && cx.sourceKinds.values[parameters[position].first] == 1)
+                Append(out, "gir_source_release((gir_source *)t", position, "); ");
+        }
+        for (auto position : selected) { (void)position; out += "} "; }
+        return out;
     }
 
     static const char *CmpOp(CoreCmpOp o) {
@@ -409,9 +487,15 @@ private:
                 else L(V(i.res), " = (uint8_t *)&m", i.idx, ";");
                 return;
             }
-            case GirOp::LocalGet: L(V(i.res), " = m", i.idx, ";"); return;
-            case GirOp::LocalSet: L("m", i.idx, " = ", V(i.a), ";"); return;
-            case GirOp::StackAt: L(V(i.res), " = (uint8_t *)GS(", V(i.a), " + ", i.idx, ");"); return;
+            case GirOp::LocalGet:
+                if (!constructionTrace && cx.sourceKinds.values[i.res] > 0) return;
+                if (constructionTrace && cx.sourceKinds.values[i.res] == 1) L("gir_source_assign(&", V(i.res), ", (gir_source *)m", i.idx, ");");
+                else L(V(i.res), " = m", i.idx, ";"); return;
+            case GirOp::LocalSet:
+                if (!constructionTrace && cx.sourceKinds.members[i.idx] > 0) return;
+                if (constructionTrace && cx.sourceKinds.members[i.idx] == 1) L("gir_source_assign(&m", i.idx, ", (gir_source *)", V(i.a), ");");
+                else L("m", i.idx, " = ", V(i.a), ";"); return;
+            case GirOp::StackAt: L(V(i.res), " = (uint8_t *)", CoreHasConstruction(m.profile) ? "gir_stack_at(" : "GS(", V(i.a), " + ", i.idx, ");"); return;
             case GirOp::StackMark: L(V(i.res), " = ((gs_stack *)", V(i.a), ")->top;"); return;
             case GirOp::StackRelease: L("((gs_stack *)", V(i.a), ")->top = ", V(i.b), ";"); return;
             case GirOp::StackBump:
@@ -438,6 +522,72 @@ private:
                   ", ", V(i.b), ", (size_t)", i.idx, ");");
                 return;
             case GirOp::RtCall: return EmitRt(t, cx, i);
+            case GirOp::StaticBytes:
+                L(V(i.res), " = (uint8_t *)", literals.at(string(i.bytes.begin(), i.bytes.end())), ";"); return;
+            case GirOp::ReturnFlagGet: L(V(i.res), " = gir_return_flag;"); return;
+            case GirOp::ReturnFlagSet: L("gir_return_flag = ", V(i.a), ";"); return;
+            case GirOp::Format:
+                L(V(i.res), " = gs_fmt_", i.format == GirFormatKind::Int ? "i64" :
+                  i.format == GirFormatKind::Uint ? "u64" : "bool", "(", V(i.b), ", ", V(i.a), ");");
+                return;
+            case GirOp::OutBytes:
+                Mention(cx, i.org);
+                L("gs_out_bytes(", V(i.a), ", (size_t)", V(i.b), ");"); return;
+            case GirOp::SourceNew:
+                if (constructionTrace) {
+                    string path = "(const int64_t[]){";
+                    for (auto value : i.vals) { if (path.back() != '{') path += ','; path += V(value); }
+                    path += i.vals.empty() ? "0}" : "}";
+                    L("gir_source_assign(&", V(i.res), ", gir_source_new(", V(i.a), ", ", i.vals.size(), ", ", path, "));");
+                } else {}
+                return;
+            case GirOp::SourceChild:
+                if (constructionTrace) L("gir_source_assign(&", V(i.res), ", gir_source_child((gir_source *)", V(i.a), ", ", V(i.b), "));");
+                else {}
+                return;
+            case GirOp::SourceGlobal:
+                if (constructionTrace) L("gir_source_assign(&", V(i.res), ", gir_global_sources[", i.idx, "]);");
+                else {} return;
+            case GirOp::SourceGlobalSet:
+                if (constructionTrace) L("gir_source_global_set(", i.idx, ", (gir_source *)", V(i.a), ");"); return;
+            case GirOp::SourceParam:
+                if (constructionTrace) L("gir_source_assign(&", V(i.res), ", gir_source_param(", i.idx, "));");
+                else {}
+                return;
+            case GirOp::SourceEnter:
+                if (constructionTrace) L(V(i.res), " = gir_source_enter();"); return;
+            case GirOp::SourceCallPush:
+                if (constructionTrace) {
+                    string arguments = "(gir_source *[]){";
+                    for (auto source : i.vals) { if (arguments.back() != '{') arguments += ','; arguments += source >= 0 ? cat("(gir_source *)", V(source)) : string("NULL"); }
+                    arguments += i.vals.empty() ? "NULL}" : "}";
+                    L(V(i.res), " = gir_source_call_push(", i.vals.size(), ", ", arguments, ");");
+                } else {}
+                return;
+            case GirOp::SourceCallGet:
+                if (constructionTrace) L("gir_source_assign(&", V(i.res), ", gir_source_call_get(", V(i.a), ", ", i.idx, "));");
+                else {}
+                return;
+            case GirOp::SourceLeave:
+                if (constructionTrace) L("gir_source_leave(", V(i.a), ");"); return;
+            case GirOp::SourceCallPop:
+                if (constructionTrace) L("gir_source_call_pop(", V(i.a), ");"); return;
+            case GirOp::SourceResult:
+                if (constructionTrace) L("gir_source_result(", i.idx, ", (gir_source *)", V(i.a), ");"); return;
+            case GirOp::SourceCopy:
+                if (constructionTrace) L("gir_source_copy((gir_source *)", V(i.a), ", ", V(i.b), ");"); return;
+            case GirOp::TraceId:
+                if (constructionTrace) L(V(i.res), " = gir_trace_", GirTraceName(i.trace), "++;");
+                else L(V(i.res), " = 0;");
+                return;
+            case GirOp::Event:
+                if (constructionTrace) {
+                    string operands;
+                    for (auto value : i.vals) Append(operands, operands.empty() ? "" : ", ", V(value));
+                    L("gir_trace_record(\"", GirEventName(i.event), "\", \"", GirEventReasonName(i.reason),
+                      "\", ", i.vals.size(), ", (const int64_t[]){ ", operands, " });");
+                }
+                return;
             case GirOp::Br:
                 L(Assigns(cx, i.idx, i.vals), "goto b", i.idx, ";");
                 return;
@@ -476,7 +626,7 @@ private:
             }
             case GirOp::Exit: L("gs_exit(", V(i.a), ");"); return;
             case GirOp::Unreachable: L("for (;;) { }"); return;
-            default: L("/* unsupported operation */"); return;
+            default: throw CompileError { "internal compiler error: unsupported GIR-L emission operation" };
         }
         (void)ty;
     }

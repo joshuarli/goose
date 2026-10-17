@@ -40,6 +40,8 @@ private:
 
     struct Effects {
         set<CoreTarget> reads, writes, grows, shrinks, rebinds;
+        set<CoreResultId> constructs;
+        set<CoreTargetId> needs, escapes;
         bool aborts = false, outputs = false, unknown = false;
     };
 
@@ -66,6 +68,45 @@ private:
 
     CoreImpl &Impl() { return m.impls[ci]; }
 
+    bool Flat(CoreTypeId type) const {
+        auto &t = m.Type(type);
+        if (t.kind == CoreType::Int || t.kind == CoreType::Bool || t.kind == CoreType::Struct) return true;
+        return t.kind == CoreType::Arr && t.count > 0 && Flat(t.elem);
+    }
+
+    bool VariableElement(CoreTypeId type) const {
+        auto &t = m.Type(type);
+        if (t.kind == CoreType::Arr) return VariableElement(t.elem);
+        if (t.kind == CoreType::VarArr) return Flat(t.elem) || VariableElement(t.elem);
+        return false;
+    }
+
+    bool Nonfixed(CoreTypeId type) const {
+        auto &t = m.Type(type);
+        if (t.kind == CoreType::VarArr || t.kind == CoreType::Grow || t.kind == CoreType::GrowShrink)
+            return true;
+        return t.kind == CoreType::Arr && VariableElement(type);
+    }
+
+    bool HandlesTarget(CoreTargetId target, CoreImplId impl) const {
+        return target >= 0 && target < (int)m.targets.size() &&
+               find(m.targets[target].members.begin(), m.targets[target].members.end(), impl) !=
+                   m.targets[target].members.end();
+    }
+
+    void NoteResultConstruction() {
+        for (size_t i = 0; i < Impl().results.size(); i++)
+            if (Nonfixed(Impl().results[i].type)) fx->constructs.insert((CoreResultId)i);
+    }
+
+    void NoteTargetTransfer(CoreTargetId target) {
+        if (HandlesTarget(target, (CoreImplId)ci)) NoteResultConstruction();
+        else {
+            fx->needs.insert(target);
+            fx->escapes.insert(target);
+        }
+    }
+
     bool IsLimitedOwner(const CorePlace &place) const {
         auto type = m.PlaceType((int)ci, place);
         return type && m.Type(*type).kind == CoreType::Limited;
@@ -74,6 +115,7 @@ private:
     static bool Same(const CoreSummary &a, const CoreSummary &b) {
         return a.unknown == b.unknown && a.reads == b.reads && a.writes == b.writes &&
                a.grows == b.grows && a.shrinks == b.shrinks && a.rebinds == b.rebinds &&
+               a.constructs == b.constructs && a.needs == b.needs && a.escapes == b.escapes &&
                a.aborts == b.aborts &&
                a.outputs == b.outputs;
     }
@@ -118,6 +160,7 @@ private:
         flow = false;
         fx = &e;
         Block(Impl().body);
+        if (Impl().body.value) NoteResultConstruction();
         // Again as the lowered form is judged; what that finds is declared as
         // found, and joins what the annotated traversal declares.
         Effects g;
@@ -131,6 +174,7 @@ private:
             flowchanged = false;
             g = Effects {};
             Block(Impl().body);
+            if (Impl().body.value) NoteResultConstruction();
         } while (flowchanged);
         flow = false;
         fx = nullptr;
@@ -183,9 +227,21 @@ private:
         join(s.shrinks, g.shrinks);
         s.rebinds.assign(e.rebinds.begin(), e.rebinds.end());
         join(s.rebinds, g.rebinds);
+        s.constructs.assign(e.constructs.begin(), e.constructs.end());
+        s.constructs.insert(s.constructs.end(), g.constructs.begin(), g.constructs.end());
+        sort(s.constructs.begin(), s.constructs.end());
+        s.constructs.erase(unique(s.constructs.begin(), s.constructs.end()), s.constructs.end());
+        s.needs.assign(e.needs.begin(), e.needs.end());
+        s.needs.insert(s.needs.end(), g.needs.begin(), g.needs.end());
+        sort(s.needs.begin(), s.needs.end());
+        s.needs.erase(unique(s.needs.begin(), s.needs.end()), s.needs.end());
+        s.escapes.assign(e.escapes.begin(), e.escapes.end());
+        s.escapes.insert(s.escapes.end(), g.escapes.begin(), g.escapes.end());
+        sort(s.escapes.begin(), s.escapes.end());
+        s.escapes.erase(unique(s.escapes.begin(), s.escapes.end()), s.escapes.end());
         s.aborts = e.aborts || g.aborts;
         s.outputs = e.outputs || g.outputs;
-        if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, {}, false, false };
+        if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, {}, {}, {}, {}, false, false };
         return s;
     }
 
@@ -231,7 +287,7 @@ private:
             case CoreStmtKind::Append: {
                 auto rho = Pl(*s.place);
                 Vw(*s.view);
-                if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
+                if (CoreHasShrink(m.profile)) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
                 if (IsLimitedOwner(*s.place)) fx->aborts = true;
                 break;
@@ -295,12 +351,53 @@ private:
                 Block(*s.then);
                 break;
             }
+            case CoreStmtKind::Receive: {
+                vector<Roots> results;
+                if (s.expr->kind == CoreExprKind::Call) Call(*s.expr, &results);
+                else if (s.expr->kind == CoreExprKind::Values) {
+                    for (auto &value : s.expr->values) results.push_back(Ex(*value));
+                } else Ex(*s.expr);
+                for (size_t i = 0; i < s.vars.size() && i < results.size(); i++) Bind(s.vars[i], results[i]);
+                break;
+            }
+            case CoreStmtKind::AppendValue:
+            case CoreStmtKind::AppendConstruct: {
+                auto rho = Pl(*s.place);
+                Ex(*s.expr);
+                if (CoreHasShrink(m.profile)) AddTargets(fx->writes, rho);
+                AddTargets(fx->grows, rho);
+                if (IsLimitedOwner(*s.place)) fx->aborts = true;
+                break;
+            }
             case CoreStmtKind::Ret:
                 if (s.expr) Ex(*s.expr);
+                if (s.expr) NoteResultConstruction();
+                break;
+            case CoreStmtKind::RetValues:
+                for (auto &value : s.values) Ex(*value);
+                if (!s.values.empty()) NoteResultConstruction();
+                break;
+            case CoreStmtKind::ReturnFrom:
+                for (auto &value : s.values) Ex(*value);
+                NoteTargetTransfer(s.target);
+                break;
+            case CoreStmtKind::RetForward:
+                Ex(*s.expr);
+                NoteResultConstruction();
+                break;
+            case CoreStmtKind::ReturnFromForward:
+                Ex(*s.expr);
+                NoteTargetTransfer(s.target);
+                break;
+            case CoreStmtKind::BreakValue:
+                Ex(*s.expr);
                 break;
             case CoreStmtKind::Print:
                 fx->outputs = true;
-                for (auto &a : s.print) if (!a.text) Ex(*a.expr);
+                for (auto &a : s.print) {
+                    if (a.kind == CorePrintArg::Expr) Ex(*a.expr);
+                    if (a.kind == CorePrintArg::View) Vw(*a.view);
+                }
                 break;
             case CoreStmtKind::Assert:
             case CoreStmtKind::Exit:
@@ -339,7 +436,8 @@ private:
 
     Roots Ex(const CoreExpr &e) {
         switch (e.kind) {
-            case CoreExprKind::Lit: case CoreExprKind::Bool: return {};
+            case CoreExprKind::Lit: case CoreExprKind::Bool: case CoreExprKind::Bytes:
+            case CoreExprKind::ResultLocal: return {};
             case CoreExprKind::Read: {
                 auto rho = Pl(*e.place);
                 AddTargets(fx->reads, rho);
@@ -383,7 +481,7 @@ private:
             case CoreExprKind::Push: {
                 auto rho = Pl(*e.place);
                 Ex(*e.a);
-                if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
+                if (CoreHasShrink(m.profile)) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
                 if (IsLimitedOwner(*e.place)) fx->aborts = true;
                 return rho;
@@ -406,14 +504,34 @@ private:
                 for (auto &el : e.elems) Ex(*el);
                 return {};
             case CoreExprKind::Fill: Ex(*e.a); return {};
+            case CoreExprKind::String:
+                for (auto &part : e.print) {
+                    if (part.kind == CorePrintArg::Expr) Ex(*part.expr);
+                    if (part.kind == CorePrintArg::View) Vw(*part.view);
+                }
+                return {};
+            case CoreExprKind::Copy: {
+                auto rho = Pl(*e.place);
+                AddTargets(fx->reads, rho);
+                return {};
+            }
+            case CoreExprKind::Values: {
+                Roots roots;
+                for (auto &value : e.values) roots = Union(roots, Ex(*value));
+                return roots;
+            }
         }
         return {};
     }
 
-    Roots Call(const CoreExpr &e) {
+    Roots Call(const CoreExpr &e, vector<Roots> *resultRoots = nullptr) {
         vector<Roots> argroots;
         for (auto &a : e.args)
-            argroots.push_back(a.kind == CoreArg::Val ? Ex(*a.expr) : Pl(*a.place));
+            argroots.push_back(visit([&](const auto &arg) -> Roots {
+                using Arg = decay_t<decltype(arg)>;
+                if constexpr (is_same_v<Arg, CoreArgReference>) return Pl(*arg.place);
+                else return Ex(*arg.expr);
+            }, a));
         auto &ctx = m.contexts[e.ctx];
         auto &callee = m.impls[ctx.impl];
         if (callee.summary.unknown) fx->unknown = true;
@@ -436,16 +554,28 @@ private:
             map(callee.summary.writes, fx->writes);
             map(callee.summary.grows, fx->grows);
             map(callee.summary.shrinks, fx->shrinks);
+            for (auto target : callee.summary.needs)
+                if (!HandlesTarget(target, (CoreImplId)ci)) fx->needs.insert(target);
+            for (auto target : callee.summary.escapes) {
+                if (HandlesTarget(target, (CoreImplId)ci)) NoteResultConstruction();
+                else fx->escapes.insert(target);
+            }
             fx->aborts |= callee.summary.aborts;
             fx->outputs |= callee.summary.outputs;
         }
         Roots out;
-        if (callee.results.size() == 1 && m.IsRefOrSlice(callee.results[0]) && ctx.resultroots.size() == 1)
-            for (auto &r : ctx.resultroots[0]) {
-                if (r.kind == CoreRootRef::Param && r.index < (int)argroots.size())
-                    out = Union(out, argroots[r.index]);
-                else if (r.kind == CoreRootRef::Global) out = Union(out, { r });
-            }
+        for (size_t i = 0; i < callee.results.size() && i < ctx.resultroots.size(); i++) {
+            Roots roots;
+            if (m.IsRefOrSlice(callee.results[i].type))
+                for (auto &r : ctx.resultroots[i]) {
+                    if (r.kind == CoreRootRef::Param && r.index < (int)argroots.size())
+                        roots = Union(roots, argroots[r.index]);
+                    else if (r.kind == CoreRootRef::Global || r.kind == CoreRootRef::Static)
+                        roots = Union(roots, { r });
+                }
+            out = Union(out, roots);
+            if (resultRoots) resultRoots->push_back(std::move(roots));
+        }
         return out;
     }
 };

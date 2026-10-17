@@ -667,11 +667,25 @@ theorem instsAt_cons_inverse {fn : Func} {pt : Pt} {instruction : Inst} {rest : 
     | none => simp [lookup] at suffix
     | some block =>
       simp only [lookup, Option.map_some, Option.getD_some] at suffix
-      simp only [lookup, Option.bind_some]
+      simp only [Option.bind_some]
       rw [← List.head?_drop, suffix]
       rfl
   have fullSuffix := instsAt_cons atPoint
   rw [suffix] at fullSuffix
   exact ⟨atPoint, (List.cons.inj fullSuffix).2⟩
+
+theorem mapList_state {f : α → M β} {xs : List α} {before after : St} {values : List β}
+    (readOnly : ∀ a st st' value, f a st = .ok value st' → st' = st)
+    (success : mapList f xs before = .ok values after) : after = before := by
+  induction xs generalizing before after values with
+  | nil =>
+    simp only [mapList, pure_apply, Res.ok.injEq] at success
+    exact success.2.symm
+  | cons head tail ih =>
+    simp only [mapList] at success
+    obtain ⟨headValue, middle, read, afterRead⟩ := m_bind_ok success
+    obtain ⟨tailValues, tailState, tailRead, finished⟩ := m_bind_ok afterRead
+    simp only [pure_apply, Res.ok.injEq] at finished
+    exact finished.2.symm.trans ((ih tailRead).trans (readOnly head before middle headValue read))
 
 end Goose.Evidence

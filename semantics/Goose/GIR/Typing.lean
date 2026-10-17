@@ -234,7 +234,8 @@ private def Module.baseTyEnv (m : Module) (f : Func) : TyEnv :=
 /-- Binding and contents capabilities are intersected over every incoming CFG
 edge. Starting at the top permits owned references through loops; entry
 parameters and every defining operation constrain the descending fixed point. -/
-def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (Bool × Bool) := Id.run do
+def Func.permissionsFromTables (globalKinds : Array VarKind) (structs : Array StructDef)
+    (f : Func) (vt : Array (Option VTy)) : Array (Bool × Bool) := Id.run do
   let typed (v : ValueId) : Bool × Bool := match vt[v]? with
     | some (some (.data (.ref mu _))) => (mu == .mutable, mu == .mutable)
     | some (some (.view mu _)) => (mu == .mutable, mu == .mutable)
@@ -254,14 +255,14 @@ def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (
             | .slotAddr s => match f.slots[s]? with
               | some sl => (sl.kind == .mutable, true)
               | none => (false, false)
-            | .globalAddr g => match m.globals[g]? with
-              | some gl => (gl.kind == .mutable, true)
+            | .globalAddr g => match globalKinds[g]? with
+              | some kind => (kind == .mutable, true)
               | none => (false, false)
             | .refFreeze _ => (false, false)
             | .fieldAddr owner field =>
               match vt[owner]? with
               | some (some (.data (.ref _ (.structT sid _)))) =>
-                match (m.structs[sid]?).bind (fun d => d.fields[field]?) with
+                match (structs[sid]?).bind (fun d => d.fields[field]?) with
                 | some fd => ((capAt caps owner).2 && fd.binding == .mutable,
                     (capAt caps owner).2 && fd.contents == .mutable)
                 | none => (false, false)
@@ -290,6 +291,9 @@ def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (
       let next := round caps
       if next == caps then caps else fix fuel next
   return fix (2 * f.numValues + 2) start
+
+def Func.permissions (m : Module) (f : Func) (vt : Array (Option VTy)) : Array (Bool × Bool) :=
+  f.permissionsFromTables (m.globals.map (·.kind)) m.structs vt
 
 /-- The type of every value of `f`, found by typing instructions until nothing
 changes, so that a value used before its definition in table order still gets a

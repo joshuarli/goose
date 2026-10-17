@@ -55,6 +55,8 @@ add_executable(goose
     src/clone.h
     src/parser.h
     src/resolve.h
+    src/expansion_bind.h
+    src/typecheck_expansion.h
     src/builtins.h
     src/typecheck.h
     src/type_queries.h
@@ -68,6 +70,7 @@ add_executable(goose
     src/optimize_basecase.h
     src/optimize_tre.h
     src/optimize_loops.h
+    src/optimize_reassoc.h
     src/bce.h
     src/codegen.h
     src/codegen_types.h

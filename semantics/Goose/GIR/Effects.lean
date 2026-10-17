@@ -359,6 +359,14 @@ def Func.targetsWithin (f : Func) (what : String) (found declared : List Target)
   | some t => throw s!"{f.name} {what} {showTarget t}, which its summary omits"
   | none => pure ()
 
+def Func.storageTargets (f : Func) (targets : List Target) : List Target :=
+  targets.flatMap fun
+    | .param index => rootsTargets (f.parameterRoots index)
+    | .global index => [.global index]
+
+private def Func.storageWithin (f : Func) (what : String) (found declared : List Target) : Except String Unit :=
+  f.targetsWithin what (f.storageTargets found) (f.storageTargets declared)
+
 /-- A boolean effect that is found must be declared. -/
 def Func.flagWithin (msg : String) (found declared : Bool) : Except String Unit :=
   if found && !declared then throw msg else pure ()
@@ -376,10 +384,10 @@ def Func.summaryClosed (f : Func) (e : Core.Eff) : Except String Unit :=
   | .unknown => pure ()
   | .known s => do
     f.noUnknownCallee e.unknown
-    f.targetsWithin "reads" e.reads s.reads
-    f.targetsWithin "writes" e.writes s.writes
-    f.targetsWithin "grows" e.grows s.grows
-    f.targetsWithin "shrinks" e.shrinks s.shrinks
+    f.storageWithin "reads" e.reads s.reads
+    f.storageWithin "writes" e.writes s.writes
+    f.storageWithin "grows" e.grows s.grows
+    f.storageWithin "shrinks" e.shrinks s.shrinks
     f.targetsWithin "rebinds" e.rebinds s.rebinds
     Func.flagWithin s!"{f.name} may abort, which its summary omits" e.aborts s.aborts
     Func.flagWithin s!"{f.name} prints, which its summary omits" e.outputs s.outputs

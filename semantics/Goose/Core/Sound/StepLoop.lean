@@ -657,7 +657,7 @@ private theorem aliasPlace_owner_ok_singleton (access : AccessEnv) (path : List 
     refine ⟨⟨.ref .mutable elTy, roots, .operand path⟩, ?_⟩
     exact Except.ok.inj h |>.symm
 
-private def EachAliasQuery (access : AccessEnv) (path : List Nat) (sourceView : View)
+def EachAliasQuery (access : AccessEnv) (path : List Nat) (sourceView : View)
     (alias : RetainedAlias) : Prop :=
   match sourceView with
   | .val _ => access.aliasView (path ++ [0]) sourceView = .ok [alias]
@@ -668,7 +668,7 @@ private def EachAliasQuery (access : AccessEnv) (path : List Nat) (sourceView : 
       if ty.ownerElem?.isSome then access.aliasPlace (path ++ [0]) place = .ok [alias]
       else access.aliasView (path ++ [0]) sourceView = .ok [alias]
 
-private theorem forEach_retained_query_exists {access : AccessEnv} {path : List Nat} {x : VarId}
+theorem forEach_retained_query_exists {access : AccessEnv} {path : List Nat} {x : VarId}
     {idx : Option VarId} {sourceView : View} {byRef : Bool} {body : Block} {origin : OriginId}
     {aliases : List RetainedAlias}
     (hret : (DemandNode.statement (.forEach x idx sourceView byRef body origin)).retainedForChild
@@ -768,7 +768,7 @@ private theorem AliasAt.sliceTy {m : Module} {W : World} {env : Env} {s : Store}
   cases hlen
   exact hslice
 
-private theorem eachViewAfterBody {m : Module} {W : World} {penv : PEnv} {env : Env}
+theorem eachViewAfterBody {m : Module} {W : World} {penv : PEnv} {env : Env}
     {s s' : Store} {source : View} {vw : ViewVal} {el : Ty} {path : List Nat}
     {alias : RetainedAlias}
     (hEach : EachViewOk s vw el)

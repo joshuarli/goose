@@ -49,7 +49,7 @@ theorem checkImpl_ok (m : Module) (impl : Impl) (h : checkImpl m impl = .ok ()) 
   | none =>
     simp only [hscope] at h
     inv at h
-    obtain ⟨_, _, hpar, _, hsc, _, bodyTy, tn, htb, hres⟩ := h
+    obtain ⟨_, _, hpar, _, _, hsc, _, bodyTy, tn, htb, hres⟩ := h
     have parameterShape : ∀ i, i < impl.params.size → checkParam impl i = .ok () :=
       fun i hlt => (forAll_ok _ _).1 hpar i (List.mem_range.2 hlt)
     refine ⟨parameterShape, ?_, hsc, bodyTy, tn, htb, ?_⟩
@@ -176,11 +176,22 @@ theorem checkContext_ok (m : Module) (ctx : Context) (h : checkContext m ctx = .
       · exact h2
       · exact absurd hs h1
 
+theorem checkOrigins_ok (m : Module) (accepted : checkOrigins m = .ok ()) :
+    ∀ origin ∈ m.origins.toList, OriginRecordValid m.files.size origin := by
+  unfold checkOrigins at accepted
+  intro origin member
+  have checked := (forAll_ok _ _).1 accepted origin member
+  cases result : checkOriginRecord m.files.size origin with
+  | error message => simp [result, reject] at checked
+  | ok value =>
+    cases value
+    exact (checkOriginRecord_iff _ _).1 result
+
 /-- `validate` accepting a module gives the per-item facts the proof uses. -/
 theorem validate_modOk (m : Module) (h : validate m = .ok ()) : ModOk m := by
   unfold validate at h
   inv at h
-  obtain ⟨hstruct, hentry, _, hglob, himpl, hctx, hinit, hdemand⟩ := h
+  obtain ⟨hstruct, hentry, _, hglob, himpl, hctx, hinit, hdemand, _⟩ := h
   refine ⟨hstruct, ?_, ?_, ?_, checkEntry_ok m hentry, hdemand,
     deriveModuleDemand_ok_wellFormed m hdemand⟩
   · intro i impl hi

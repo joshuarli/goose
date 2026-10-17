@@ -19,7 +19,7 @@ theorem typed_arms (t f : Bool) : HasTypedExpr env (expr t f) := by
   cases t <;> cases f <;> exact ⟨0, .int .i64, 0, by rfl⟩
 
 private def le : LEnv :=
-  { mod := m, slots := #[], vars := #[], globals := #[], sigs := #[] }
+  { mod := m, slots := #[], vars := #[], globals := #[], sigs := #[], results := [] }
 
 private def start : LS :=
   { blocks := #[⟨[], #[]⟩], vals := #[], cur := some 0, stack := [] }

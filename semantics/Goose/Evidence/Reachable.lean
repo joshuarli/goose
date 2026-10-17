@@ -1,5 +1,5 @@
 import Goose.Evidence.Replay
-import Goose.Evidence.Execution
+import Goose.Evidence.Provenance
 
 namespace Goose.Proofs.Bounds
 
@@ -40,11 +40,11 @@ theorem branch_test_cell {fr : Frame} {condition : ValueId} {state after : St} {
     exact ⟨atCell, rfl⟩
   | _ => simp [expectBool, fault, M.stop] at success
 
-theorem validated_evidence {m : GIR.Module} {fn : Func} (accepted : validate m = .ok ())
+theorem validated_evidence {m : GIR.Module} {fn : Func} (accepted : Goose.GIR.validate m = .ok ())
     (member : fn ∈ m.allFuncs) : FunctionEvidenceValid m fn (fn.valueTypes m) := by
   have evidence : (checkAll m.infos fun info =>
       asCheck .v080 info.label (checkEvidence m info.f info.vt)) = .ok () := by
-    unfold validate at accepted
+    unfold Goose.GIR.validate at accepted
     iterate 10 (obtain ⟨_, _, accepted⟩ := Goose.GIR.bind_ok accepted)
     obtain ⟨ignored, checked, _⟩ := Goose.GIR.bind_ok accepted
     cases ignored
@@ -55,7 +55,7 @@ theorem validated_evidence {m : GIR.Module} {fn : Func} (accepted : validate m =
   exact checkEvidence_sound checked
 
 theorem validated_certificate {m : GIR.Module} {fn : Func} {certificate : FactCertificate}
-    (accepted : validate m = .ok ()) (member : fn ∈ m.allFuncs)
+    (accepted : Goose.GIR.validate m = .ok ()) (member : fn ∈ m.allFuncs)
     (present : fn.certificate = some certificate) :
     CertificateValid m fn (fn.valueTypes m) certificate := by
   have evidence := validated_evidence accepted member
@@ -68,7 +68,7 @@ theorem validated_certificate {m : GIR.Module} {fn : Func} {certificate : FactCe
 
 theorem PointFactsHold.functionEntry {cfg : GCfg} {fn : Func} {depth : Nat} {args : List Val}
     {before after : St} {fr : Frame} {certificate : FactCertificate}
-    (accepted : validate cfg.mod = .ok ()) (member : fn ∈ cfg.mod.allFuncs)
+    (accepted : Goose.GIR.validate cfg.mod = .ok ()) (member : fn ∈ cfg.mod.allFuncs)
     (present : fn.certificate = some certificate)
     (entry : FunctionEntry fn depth args before fr after) :
     PointFactsHold ⟨cfg, fn⟩ certificate (0, 0) fr after := by
@@ -86,8 +86,15 @@ def TrueComparisonFacts (cfg : GCfg) : Prop :=
     fr.vals[condition]? = some (.val (.bool true)) →
     FactHolds fr state (.lt left right)
 
-theorem reachable_facts {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
-    (comparisons : TrueComparisonFacts cfg) {fn : Func} {point : Pt} {fr : Frame} {state : St}
+theorem validated_trueComparisonFacts {cfg : GCfg} (accepted : Goose.GIR.validate cfg.mod = .ok ()) :
+    TrueComparisonFacts cfg := by
+  intro fn point fr state condition yes yesArgs no noArgs left right reachable branch comparison conditionTrue
+  obtain ⟨a, b, leftCell, rightCell, ordered⟩ :=
+    validated_true_cmp_fact accepted reachable branch comparison conditionTrue
+  exact ⟨a, b, ⟨.i64, leftCell⟩, ⟨.i64, rightCell⟩, ordered⟩
+
+theorem reachable_facts {cfg : GCfg} (accepted : Goose.GIR.validate cfg.mod = .ok ())
+    {fn : Func} {point : Pt} {fr : Frame} {state : St}
     (reachable : RuntimePoint cfg fn point fr state) :
     ∀ certificate, fn.certificate = some certificate →
       PointFactsHold ⟨cfg, fn⟩ certificate point fr state := by
@@ -128,7 +135,7 @@ theorem reachable_facts {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
       have sameRead := getCells_state read
       subst_vars
       exact PointFactsHold.condTrue valid terminated holds instruction
-        (fun left right definition => comparisons before instruction definition cell) enter
+        (fun left right definition => validated_trueComparisonFacts accepted before instruction definition cell) enter
 
 theorem hasProvenIndex_at {fn : Func} {point : Pt} {result view index : ValueId}
     (instruction : instAt fn point = some (.def result (.indexProven view index))) :
@@ -142,8 +149,8 @@ theorem hasProvenIndex_at {fn : Func} {point : Pt} {result view index : ValueId}
     refine ⟨block, Array.mem_of_getElem? blockAt, List.any_eq_true.mpr ?_⟩
     exact ⟨.def result (.indexProven view index), List.mem_of_getElem? instruction, rfl⟩
 
-theorem reachable_index {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
-    (comparisons : TrueComparisonFacts cfg) {fn : Func} {point : Pt} {fr : Frame} {state : St}
+theorem reachable_index {cfg : GCfg} (accepted : Goose.GIR.validate cfg.mod = .ok ())
+    {fn : Func} {point : Pt} {fr : Frame} {state : St}
     {result view index : ValueId} (reachable : RuntimePoint cfg fn point fr state)
     (instruction : instAt fn point = some (.def result (.indexProven view index))) :
     execPure ⟨cfg, fn⟩ fr (.indexProven view index) =
@@ -156,6 +163,6 @@ theorem reachable_index {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
     contradiction
   | present certificate present valid =>
     exact PointFactsHold.index valid
-      (reachable_facts accepted comparisons reachable certificate present) instruction
+      (reachable_facts accepted reachable certificate present) instruction
 
 end Goose.Proofs.Bounds

@@ -14,15 +14,15 @@ variable {m : Module} {prof : NumProfile} {n : Nat}
 
 /-- Content roots keep the broad argument interpretation. Owner authority
 flows through caller owner roots only into declared owner-reference slots. -/
-private def callOwnerP (W : World) (callee : Impl) (env : Env) (ars : List (List RootRef))
+def callOwnerP (W : World) (callee : Impl) (env : Env) (ars : List (List RootRef))
     (index : Nat) (root : RootInst) : Prop :=
   OwnerRefParam callee index ∧ Gam env W.ownerP (ars[index]?.getD []) root
 
-private theorem callOwnerP.shape (W : World) (callee : Impl) (env : Env) (ars : List (List RootRef)) :
+theorem callOwnerP.shape (W : World) (callee : Impl) (env : Env) (ars : List (List RootRef)) :
     OwnerParameterShape callee (callOwnerP W callee env ars) :=
   fun _ _ owner => owner.1
 
-private theorem Frame.callOwnerP_subset {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
+theorem Frame.callOwnerP_subset {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
     {s : St} {future : List VarId} (frame : Frame m W tenv penv env s future)
     (callee : Impl) (ars : List (List RootRef)) :
     ∀ index root, callOwnerP W callee env ars index root →
@@ -104,7 +104,7 @@ private theorem initContext_checked (m : Module) : CtxOk m initImpl initContext 
 
 /-- A call selects the callee body from the same checked plan array as its
 caller. Pilot bodies start with parameter activity and require no demand plan. -/
-private noncomputable def EvaluationContext.calleeContext {plans path c args origin}
+noncomputable def EvaluationContext.calleeContext {plans path c args origin}
     (caller : EvaluationContext m plans path (.expression (.call c args origin)) .expression)
     {ctx : Context} (impl : Impl) (contextAt : m.contexts[c]? = some ctx)
     (implementationAt : m.impls[ctx.impl]? = some impl) :
@@ -116,7 +116,7 @@ private noncomputable def EvaluationContext.calleeContext {plans path c args ori
       (by rw [profile]; intro h; cases h) contextAt impl implementationAt
     exact .shrink profile selection.rootContext
 
-private theorem EvaluationContext.calleeContext_owner {plans path c args origin}
+theorem EvaluationContext.calleeContext_owner {plans path c args origin}
     (caller : EvaluationContext m plans path (.expression (.call c args origin)) .expression)
     {ctx : Context} (impl : Impl) (contextAt : m.contexts[c]? = some ctx)
     (implementationAt : m.impls[ctx.impl]? = some impl) :
@@ -213,7 +213,7 @@ private theorem Frame.callBoundary_return {W : World} {tenv : TEnv} {penv : PEnv
 
 /-- Caller permissions cover every initialized global the callee's declared
 summary may touch, including shrink targets. Unknown callees require all globals. -/
-private theorem callPermission {W : World} {env : Env} {callee : Impl} {ctx : Context}
+theorem callPermission {W : World} {env : Env} {callee : Impl} {ctx : Context}
     {ars : List (List RootRef)} {initial : Eff}
     (permission : Perm m W) (contextChecked : CtxOk m callee ctx)
     (effects : EffLe (callEffects callee ctx ars initial) W.E) :
@@ -277,7 +277,7 @@ private theorem callGlobal_initialized {W : World} {observation : Observation} {
 
 /-- The checked context interprets each sampled argument in the broad callee
 parameter relation. Extra declared roots remain available for result typing. -/
-private theorem callValues_ok {W : World} {env : Env} {store : Store} {callee : Impl} {ctx : Context}
+theorem callValues_ok {W : World} {env : Env} {store : Store} {callee : Impl} {ctx : Context}
     {ars : List (List RootRef)} {vals : List Val}
     (implementationChecked : ImplOk m callee) (contextChecked : CtxOk m callee ctx)
     (argumentsChecked : ∀ i, i < callee.params.size → checkArgRoots callee ctx ars i = .ok ())
@@ -325,7 +325,7 @@ private theorem callValues_ok {W : World} {env : Env} {store : Store} {callee : 
 
 /-- Actual owner-reference arguments populate only owner-capable parameter
 slots. Ordinary content annotations continue to use the broad interpretation. -/
-private theorem callValues_ownerRooted {W : World} {env : Env} {callee : Impl}
+theorem callValues_ownerRooted {W : World} {env : Env} {callee : Impl}
     {ars : List (List RootRef)} {vals : List Val}
     (implementationChecked : ImplOk m callee)
     (sampled : ∀ (index : Nat) (value : Val), vals[index]? = some value →
@@ -1436,7 +1436,7 @@ private theorem PlanMayShrink.contextEffect {plans : Array (Array DemandPoint)}
   | param index =>
     exact ⟨.param index, recorded _ (mem_rootsTargets_param referenceMember), denotes⟩
 
-private theorem EvaluationContext.callBody_effect {plans : Array (Array DemandPoint)}
+theorem EvaluationContext.callBody_effect {plans : Array (Array DemandPoint)}
     {impl : Impl} {ctx : Context} {c : ContextId} {effect : Eff}
     (root : EvaluationContext m plans [] (.block impl.body) .block)
     {P : Nat → RootInst → Prop} {observation : Observation} {rootInst : RootInst}
@@ -1458,7 +1458,7 @@ private theorem EvaluationContext.callBody_effect {plans : Array (Array DemandPo
     exact ⟨PlanMayShrink.contextEffect bodyRoot moduleOk bodyAccess contextEffect shrinking.1, shrinking.2⟩
 
 /-- The caller mutation point is selected from its exact source occurrence. -/
-private noncomputable def NodeContext.callMutationContext {plans : Array (Array DemandPoint)}
+noncomputable def NodeContext.callMutationContext {plans : Array (Array DemandPoint)}
     {pc : PlanContext m plans} {path : List Nat} {c : ContextId} {args : List Arg} {origin : OriginId}
     (context : NodeContext pc path (.expression (.call c args origin)) .expression) :
     NodeContext pc path (.expression (.call c args origin)) .mutation :=
@@ -1480,7 +1480,7 @@ private theorem NodeContext.callMutation_retains_argument {plans : Array (Array 
   rw [transition.expectedFrameEq]
   exact retained alias member
 
-private theorem NodeContext.callMutation_retains_parent {plans : Array (Array DemandPoint)}
+theorem NodeContext.callMutation_retains_parent {plans : Array (Array DemandPoint)}
     {pc : PlanContext m plans} {path : List Nat} {c : ContextId} {args : List Arg} {origin : OriginId}
     (context : NodeContext pc path (.expression (.call c args origin)) .expression) :
     ∀ alias, alias ∈ context.expected.frame.retained →
@@ -1534,7 +1534,7 @@ private theorem NodeContext.checkedAccess_eq {plans : Array (Array DemandPoint)}
     rfl
   exact rebuild.trans (by rw [modEq, implEq, ctxEq]; rfl)
 
-private theorem NodeContext.callGlobal_initialized {plans : Array (Array DemandPoint)}
+theorem NodeContext.callGlobal_initialized {plans : Array (Array DemandPoint)}
     {pc : PlanContext m plans} {path : List Nat} {c : ContextId} {args : List Arg} {origin : OriginId}
     (context : NodeContext pc path (.expression (.call c args origin)) .expression)
     {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St} {future : List VarId}
@@ -1570,7 +1570,7 @@ private theorem NodeContext.callGlobal_initialized {plans : Array (Array DemandP
           (fun unknown => Or.inr (effects.2.2.2.2 unknown)), frame.ownerSubset index _ denotes⟩
   exact Goose.Core.Sound.callGlobal_initialized permission capability may
 
-private theorem NodeContext.callBody_coverage {plans : Array (Array DemandPoint)}
+theorem NodeContext.callBody_coverage {plans : Array (Array DemandPoint)}
     {pc : PlanContext m plans} {path : List Nat} {c : ContextId} {args : List Arg} {origin : OriginId}
     (context : NodeContext pc path (.expression (.call c args origin)) .expression)
     {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St} {future : List VarId}
@@ -1661,7 +1661,7 @@ private theorem NodeContext.callBody_forbidden {plans : Array (Array DemandPoint
 
 /-- Argument annotations use either the checked caller context or the empty
 initializer context selected by canonical demand access. -/
-private theorem NodeContext.callerContext_checked {plans : Array (Array DemandPoint)}
+theorem NodeContext.callerContext_checked {plans : Array (Array DemandPoint)}
     {pc : PlanContext m plans} {path : List Nat} {node : DemandNode} {phase : DemandPhase}
     (context : NodeContext pc path node phase) (moduleOk : ModOk m)
     (access : context.AccessMatches tenv penv) : CtxOk m penv.impl penv.ctx := by
@@ -1773,7 +1773,7 @@ private theorem NodeContext.callSliceContent_ne {plans : Array (Array DemandPoin
 
 /-- Inherited slice targets use the caller's whole-plan protection after
 scope age excludes current locals. New local holders use the exact call point. -/
-private theorem NodeContext.callD_shrinkProtected {plans : Array (Array DemandPoint)}
+theorem NodeContext.callD_shrinkProtected {plans : Array (Array DemandPoint)}
     {pc : PlanContext m plans} {path : List Nat} {c : ContextId} {args : List Arg} {origin : OriginId}
     (context : NodeContext pc path (.expression (.call c args origin)) .expression)
     {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St} {future : List VarId}
@@ -2035,7 +2035,7 @@ private theorem NodeContext.callRetained_notShrinking {plans : Array (Array Dema
 
 /-- Broad argument-root interpretations classify initialized local storage
 through the same boundary observation used to preserve caller bindings. -/
-private theorem Frame.callObservation_classified {W : World} {tenv : TEnv} {penv : PEnv}
+theorem Frame.callObservation_classified {W : World} {tenv : TEnv} {penv : PEnv}
     {env : Env} {s : St} {future continuation : List VarId} {args : List Arg}
     {ars : List (List RootRef)} {observation : Observation} {retained : List RetainedAlias}
     (frame : Frame m W tenv penv env s future)
@@ -2051,7 +2051,7 @@ private theorem Frame.callObservation_classified {W : World} {tenv : TEnv} {penv
 
 /-- The boundary combines inherited observations, continuation bindings,
 initialized storage and sampled arguments under the checked mutation owners. -/
-private theorem NodeContext.callObservation_observed {plans : Array (Array DemandPoint)}
+theorem NodeContext.callObservation_observed {plans : Array (Array DemandPoint)}
     {pc : PlanContext m plans} {path : List Nat} {c : ContextId} {args : List Arg} {origin : OriginId}
     (context : NodeContext pc path (.expression (.call c args origin)) .expression)
     {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St} {future : List VarId}
@@ -2099,7 +2099,7 @@ set_option maxHeartbeats 1600000 in
 /-- At a call, each parameter of the callee that refers to a slice variable
 points at a slice variable the callee may rewrite, whose slices are rooted
 exactly within the parameter's content roots as the callee reads them. -/
-private theorem call_pref {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s1 : St}
+theorem call_pref {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s1 : St}
     {future continuation : List VarId}
     (hF1 : Frame m W tenv penv env s1 future) {callee : Impl} {cctx : Context} {args : List Arg}
     {ars : List (List RootRef)} {vals : List Val} (himplOk : ImplOk m callee)
@@ -2326,7 +2326,7 @@ private theorem callBody_spec {plans path c args origin} (ihCall : CallSpec m pr
   exact ⟨callerFrame, callerFootprint, callerRoots, callerValues, callerSafe, callerRetained,
     pilot, typed, roots, callerClassified, ownerRooted, mutation⟩
 
-private theorem callObservation_callD_holderTypes
+theorem callObservation_callD_holderTypes
     {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
     {future continuation : List VarId} {args : List Arg} {retained : List RetainedAlias}
     {observation : Observation} {sourceShrinking observedShrinking : RootInst → Prop}
@@ -2362,7 +2362,7 @@ private theorem callObservation_callD_holderTypes
 
 /-- Pilot calls observe the caller's active bindings. Their callee context
 has no shrink authority, so owner protection and classification are vacuous. -/
-private theorem callBody_pilot_observed {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
+theorem callBody_pilot_observed {W : World} {tenv : TEnv} {penv : PEnv} {env : Env}
     {s : St} {observation : Observation} {active : List VarId} {args : List Arg}
     {ars : List (List RootRef)} {callee : Impl} {E : Eff}
     (frame : Frame m W tenv penv env s active)

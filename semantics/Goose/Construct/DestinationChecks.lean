@@ -621,4 +621,53 @@ private def retainedHeaderReplacement : ConstructionM Unit := do
   [.begin 0,.write 0 0,.begin 1,.write 1 0,.write 1 1,.abandon 0,.relocate 1 .exitValue,.publish 1])
 
 
+
+private def producerCompletion (receiving producer localType : Ty) (layout : ReceivingLayout) : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let receiver := { capability with layout := receiving, logicalType := receiving }
+  let destination ← openDestination storage receiver layout (some 1)
+  adaptConstructionDestination destination producer .value
+  prepareNamedBinding destination localType
+  writeElement destination (bytes [65])
+  finishDestination destination
+  normalizeProducerDestination destination producer
+
+#guard match producerCompletion (.grow (.int .u8)) (.varr (.int .u8)) (.varr (.int .u8)) .elements ConstructionState.initial with
+  | .ok _ state => state.storage[0]?.map (fun storage => storage.bytes.data.toList.map UInt8.toNat) ==
+      some [1,0,0,0,65] && state.destinations[0]?.map (fun destination => destination.adaptation.isSome) == some true
+  | _ => false
+
+#guard match producerCompletion (.grow (.int .u8)) (.varr (.int .u8)) (.grow (.int .u8)) .elements ConstructionState.initial with
+  | .ok _ state => state.storage[0]?.map (fun storage => storage.bytes.data.toList.map UInt8.toNat) ==
+      some [1,0,0,0,65] && state.destinations[0]?.map (fun destination => destination.adaptation.isSome) == some true
+  | _ => false
+
+#guard match producerCompletion (.varr (.int .u8)) (.grow (.int .u8)) (.varr (.int .u8)) .packed ConstructionState.initial with
+  | .ok _ state => state.storage[0]?.map (fun storage => storage.bytes.data.toList.map UInt8.toNat) ==
+      some [0,0,0,0,65] && state.destinations[0]?.map (fun destination =>
+        destination.adaptation.isSome && destination.capability.start == 4 && destination.layout == ReceivingLayout.elements) == some true &&
+      state.events == [.begin 0,.write 0 0,.relocate 0 .headerRemoval]
+  | _ => false
+
+#guard observe (producerCompletion (.grow (.int .u8)) (.grow (.int .u8)) (.varr (.int .u8)) .elements) ==
+  some ([65],0,[.begin 0,.write 0 0,.relocate 0 .headerRemoval])
+
+private def abandonedAdaptation : ConstructionM Unit := do
+  let storage ← reserveStorage
+  let destination ← openDestination storage capability .elements (some 1)
+  adaptConstructionDestination destination (.varr (.int .u8)) .value
+  writeElement destination (bytes [10])
+  abandonTree destination
+  finishConstructionAdaptation destination
+
+#guard match abandonedAdaptation ConstructionState.initial with
+  | .ok _ state => state.events == [.begin 0,.write 0 0,.abandon 0] &&
+      match state.destinations[0]? with
+      | some destination => destination.adaptation.isNone &&
+          destination.capability.logicalType == Ty.grow (.int .u8) &&
+          (match destination.progress with | .abandoned => true | _ => false)
+      | none => false
+  | _ => false
+
+
 end Goose.Construct.DestinationChecks

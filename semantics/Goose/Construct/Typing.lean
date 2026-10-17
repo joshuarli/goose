@@ -1,4 +1,4 @@
-import Goose.Construct.Syntax
+import Goose.Construct.Declarations
 import Goose.Core.Typing
 
 namespace Goose.Construct
@@ -13,8 +13,11 @@ def checkType (module : Module) : Ty → V Unit
   | .arr element count => do
       if count == 0 || !(element.flat || element.variableElement) then reject .type "invalid fixed-array element or count"
       checkType module element
-  | .growshrink element | .limited element _ => do
-      if !element.flat then reject .type "growshrink and limited require flat fixed elements"
+  | .growshrink element => do
+      if !element.flat then reject .type "growshrink requires flat fixed elements"
+      checkType module element
+  | .limited element capacity => do
+      if capacity == 0 || !element.flat then reject .type "limited requires positive capacity and flat fixed elements"
       checkType module element
   | .ref _ target => do
       if !target.storageType then reject .type "reference target is not storage"
@@ -32,46 +35,29 @@ def checkTypes (module : Module) : TyList → V Unit
   | .nil => pure ()
   | .cons ty rest => do checkType module ty; checkTypes module rest
 
-def Ty.storageType : Ty → Bool
-  | .int _ | .bool => true
-  | .arr element _ | .varr element | .grow element => element.flat || element.variableElement
-  | .growshrink element | .limited element _ => element.flat
-  | .structT _ fields => fields.flat
-  | _ => false
+
 end
 
-def Ty.storable (ty : Ty) : Bool :=
+private def Ty.referenceWritable (ty : Ty) (bindingWritable contentsWritable : Bool) : Bool :=
   match ty with
-  | .ref _ target => target.storageType
-  | .slice _ element => element.flat || element.variableElement
-  | _ => ty.storageType
+  | .grow _ | .growshrink _ => contentsWritable
+  | _ => bindingWritable
 
-def Ty.element? : Ty → Option Ty
-  | .arr element _ | .varr element | .grow element | .growshrink element |
-      .limited element _ | .slice _ element => some element
-  | _ => none
-
-def Ty.growing : Ty → Bool
-  | .grow _ | .growshrink _ | .limited _ _ => true
-  | _ => false
-
-def Ty.adaptsTo (source target : Ty) : Bool :=
-  source == target || match source, target with
-    | .arr a countA, .arr b countB => a == b && countA == countB
-    | _, _ => match source.element?, target.element? with
-      | some a, some b => a == b && source.storageType && target.storageType
-      | _, _ => false
-
-def Ty.passesTo (source target : Ty) : Bool :=
-  match source, target with
-  | .ref sourceMut a, .ref targetMut b | .slice sourceMut a, .slice targetMut b =>
-      a == b && (sourceMut == .mutable || targetMut == .readOnly)
-  | _, _ => source.adaptsTo target
+private def referenceRepresentable (place : Place) (ty : Ty) (bindingWritable contentsWritable : Bool) : Bool :=
+  match place, ty with
+  | .field .., .structT .. | .field .., .arr .. => bindingWritable == contentsWritable
+  | _, _ => true
 
 inductive ExpressionUse
   | ordinary
   | result
   deriving DecidableEq
+
+structure ValueBreakTarget where
+  types : List Ty
+  use : ExpressionUse
+  request : Request
+  requests : List Request
 
 structure TypingEnv where
   module : Module
@@ -83,6 +69,7 @@ structure TypingEnv where
   use : ExpressionUse := .ordinary
   request : Request := .value
   resultRequests : List Request := []
+  valueBreakTarget : Option ValueBreakTarget := none
   globalLimit : Nat
 
 abbrev TypingM := StateT Nat V
@@ -90,6 +77,46 @@ abbrev TypingM := StateT Nat V
 private def fail (rule : Rule) (message : String) : TypingM α := throw ⟨rule, message⟩
 
 private def ordinary (env : TypingEnv) : TypingEnv := { env with use := .ordinary, request := .value, resultRequests := [] }
+
+private inductive StatementFlow
+  | next
+  | breakLoop
+  | continueLoop
+  | escape
+  deriving DecidableEq
+
+mutual
+private def statementsFlow : Nat → List Stmt → List StatementFlow
+  | 0, _ => [.next]
+  | _ + 1, [] => [.next]
+  | fuel + 1, statement :: rest =>
+      (statementFlow fuel statement).flatMap fun flow =>
+        if flow == .next then statementsFlow fuel rest else [flow]
+
+private def blockFlow : Nat → Block → List StatementFlow
+  | 0, _ => [.next]
+  | fuel + 1, .mk _ statements _ => statementsFlow fuel statements
+
+private def statementFlow : Nat → Stmt → List StatementFlow
+  | 0, _ => [.next]
+  | _ + 1, .ret .. | _ + 1, .retValues .. | _ + 1, .retForward .. |
+    _ + 1, .returnFrom .. | _ + 1, .returnFromForward .. |
+    _ + 1, .breakValue .. | _ + 1, .abort .. | _ + 1, .exit .. => [.escape]
+  | _ + 1, .brk _ => [.breakLoop]
+  | _ + 1, .cont _ => [.continueLoop]
+  | fuel + 1, .ifS _ left right _ =>
+      blockFlow fuel left ++ (match right with | some block => blockFlow fuel block | none => [.next])
+  | fuel + 1, .while condition body _ =>
+      let bodyFlow := blockFlow fuel body
+      let escapes := bodyFlow.filter (· == .escape)
+      if (match condition with | .bool true => true | _ => false) && !bodyFlow.contains .breakLoop then escapes else .next :: escapes
+  | fuel + 1, .forRange _ _ _ body _ |
+    fuel + 1, .forEach _ _ _ _ body _ => .next :: (blockFlow fuel body).filter (· == .escape)
+  | _, _ => [.next]
+end
+
+private def blockEscapes (fuel : Nat) (block : Block) : Bool :=
+  (blockFlow fuel block).all (· == .escape)
 
 private def lookupVariable (env : TypingEnv) (id : VarId) : TypingM LocalVar := do
   if !env.visible.contains id then fail .type "localVar is not visible"
@@ -121,9 +148,9 @@ private def targetResults (env : TypingEnv) (id : Nat) : TypingM (List ResultDes
   let some implementation := env.module.impls[target.first]? | fail .call "target member outside table"
   pure implementation.results.toList
 
-private def expectBool (ty : Ty) : TypingM Unit := require (ty == .bool) .type "boolean required"
+private def requireBoolType (ty : Ty) : TypingM Unit := require (ty == .bool) .type "boolean required"
 
-private def expectInt (ty : Ty) : TypingM Unit :=
+private def requireIntType (ty : Ty) : TypingM Unit :=
   match ty with | .int _ => pure () | _ => fail .type "integer required"
 
 private def canRender (ty : Ty) : Bool := ty.storable
@@ -139,12 +166,19 @@ def typePlace : Nat → TypingEnv → Place → TypingM (Ty × Bool × Bool)
       let some global := env.module.globals[id]? | fail .type "global outside table"
       pure (global.ty, global.kind == .mutable, true)
   | fuel + 1, env, .deref expression => do
-      match (← one (← typeExpr fuel (ordinary env) expression)) with
+      let ty ← match expression with
+        | .read (.var id) => do
+            let localVar ← lookupVariable env id
+            match localVar.ty with
+            | .ref _ (.slice ..) => pure localVar.ty
+            | _ => one (← typeExpr fuel (ordinary env) expression)
+        | _ => one (← typeExpr fuel (ordinary env) expression)
+      match ty with
       | .ref mutability target => pure (target, mutability == .mutable, mutability == .mutable)
       | _ => fail .type "dereference requires reference"
   | fuel + 1, env, .elem view index _ => do
       let (element, writable) ← typeView fuel env view
-      expectInt (← one (← typeExpr fuel (ordinary env) index))
+      requireIntType (← one (← typeExpr fuel (ordinary env) index))
       pure (element, writable, writable)
   | fuel + 1, env, .field owner index => do
       let (ty, _, writable) ← typePlace fuel env owner
@@ -159,6 +193,7 @@ def typeView : Nat → TypingEnv → View → TypingM (Ty × Bool)
   | 0, _, _ => fail .type "validation nesting limit"
   | fuel + 1, env, .of place => do
       let (ty, _, writable) ← typePlace fuel env place
+      require ty.storageType .type "place-based view requires array storage"
       match ty.element? with
       | some element => pure (element, writable)
       | none => fail .type "view requires array storage"
@@ -170,7 +205,7 @@ def typeView : Nat → TypingEnv → View → TypingM (Ty × Bool)
 def typeBound : Nat → TypingEnv → Bound → TypingM Unit
   | 0, _, _ => fail .type "validation nesting limit"
   | _fuel + 1, _env, .omitted => pure ()
-  | fuel + 1, env, .expr expression | fuel + 1, env, .fromEnd expression => do expectInt (← one (← typeExpr fuel (ordinary env) expression))
+  | fuel + 1, env, .expr expression | fuel + 1, env, .fromEnd expression => do requireIntType (← one (← typeExpr fuel (ordinary env) expression))
 
 def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
   | 0, _, _ => fail .type "validation nesting limit"
@@ -178,12 +213,14 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
   | _fuel + 1, _env, .bool _ => pure [.bool]
   | fuel + 1, env, .read place => do
       let (ty, _, _) ← typePlace fuel env place
-      require (!ty.nonfixed) .type "nonfixed reads require explicit copy or returned-local form"
+      require (ty.storable && !ty.nonfixed) .type "read requires an ordinary storable value"
       pure [ty]
   | fuel + 1, env, .ref mutability place => do
-      let (ty, writable, _) ← typePlace fuel env place
+      let (ty, bindingWritable, contentsWritable) ← typePlace fuel env place
       require ty.storageType .type "reference target is not storage"
-      require (mutability == .readOnly || writable) .mut "mutable reference to read-only place"
+      require (referenceRepresentable place ty bindingWritable contentsWritable) .type "aggregate field capabilities cannot be retained by a reference"
+      require (mutability == .readOnly || ty.referenceWritable bindingWritable contentsWritable)
+        .mut "mutable reference to read-only place"
       pure [.ref mutability ty]
   | fuel + 1, env, .slice mutability view low high _ => do
       let (element, writable) ← typeView fuel env view
@@ -194,7 +231,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
   | fuel + 1, env, .len view => do let _ ← typeView fuel env view; pure [.int .i64]
   | fuel + 1, env, .un op expression _ => do
       let ty ← one (← typeExpr fuel (ordinary env) expression)
-      expectInt ty
+      requireIntType ty
       match op, ty with
       | .neg, .int integer => require integer.signed .type "unsigned integer negation is not allowed"
       | _, _ => pure ()
@@ -202,7 +239,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
   | fuel + 1, env, .bin _ left right _ => do
       let a ← one (← typeExpr fuel (ordinary env) left)
       let b ← one (← typeExpr fuel (ordinary env) right)
-      expectInt a
+      requireIntType a
       require (a == b) .type "binary operand type mismatch"
       pure [a]
   | fuel + 1, env, .cmp op left right => do
@@ -216,14 +253,14 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       | _, _ => fail .type "unsupported comparison operands"
       pure [.bool]
   | fuel + 1, env, .and left right | fuel + 1, env, .or left right => do
-      expectBool (← one (← typeExpr fuel (ordinary env) left))
-      expectBool (← one (← typeExpr fuel (ordinary env) right))
+      requireBoolType (← one (← typeExpr fuel (ordinary env) left))
+      requireBoolType (← one (← typeExpr fuel (ordinary env) right))
       pure [.bool]
-  | fuel + 1, env, .not expression => do expectBool (← one (← typeExpr fuel (ordinary env) expression)); pure [.bool]
+  | fuel + 1, env, .not expression => do requireBoolType (← one (← typeExpr fuel (ordinary env) expression)); pure [.bool]
   | fuel + 1, env, .conv kind target expression _ => do
       let source ← one (← typeExpr fuel (ordinary env) expression)
-      expectInt target
-      expectInt source
+      requireIntType target
+      requireIntType source
       match kind with
       | .widen => match source, target with
         | .int fromType, .int toType =>
@@ -259,14 +296,30 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
         .mut "pop requires writable shrinkable array"
       let some element := ty.element? | fail .type "pop array element missing"
       pure [element]
-  | fuel + 1, env, .ifE condition left right => do
-      expectBool (← one (← typeExpr fuel (ordinary env) condition))
+  | fuel + 1, env, .ifE condition left right _ => do
+      requireBoolType (← one (← typeExpr fuel (ordinary env) condition))
       let a ← typeBlock fuel env left
       let b ← typeBlock fuel env right
-      require (a == b) .type "branch result type mismatch"
-      pure a
-  | fuel + 1, env, .blockE block => typeBlock fuel env block
-  | fuel + 1, env, .arrLit ty elements => do
+      if blockEscapes fuel left && blockEscapes fuel right then pure ((env.valueBreakTarget.map (·.types)).getD a)
+      else if blockEscapes fuel left then pure b
+      else if blockEscapes fuel right then pure a
+      else
+        require (a == b) .type "branch result type mismatch"
+        pure a
+  | fuel + 1, env, .blockE block _ => do
+      let declarations : DeclarationEnv := ⟨env.module, env.variables⟩
+      let some expected := blockResultTypes? fuel declarations block |
+        fail .type "cannot determine block result channels"
+      let actual ← typeBlock fuel { env with
+        valueBreakTarget := some ⟨expected,env.use,env.request,env.resultRequests⟩ } block
+      match block with
+      | .mk _ _ none =>
+          require (expected == [.unit] || blockEscapes fuel block) .block "value block may complete without a value"
+          pure expected
+      | .mk _ _ (some _) =>
+          require (actual == expected) .type "block result channel mismatch"
+          pure actual
+  | fuel + 1, env, .arrLit ty elements _ => do
       require ty.constructible .type "array literal type is not constructible"
       let some element := ty.element? | fail .type "array literal requires array type"
       match ty with
@@ -275,7 +328,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       for expression in elements do
         require ((← one (← typeExpr fuel (ordinary env) expression)).adaptsTo element) .type "array initializer type mismatch"
       pure [ty]
-  | fuel + 1, env, .fill ty expression => do
+  | fuel + 1, env, .fill ty expression _ => do
       match ty with
       | .arr element _ =>
           require ((← one (← typeExpr fuel (ordinary env) expression)).adaptsTo element) .type "fill element type mismatch"
@@ -296,12 +349,22 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
       | _ => fail .type "literal bytes require u8 array or immutable slice"
   | fuel + 1, env, .str ty arguments _ => do
       require (ty.storageType && ty.element? == some (.int .u8)) .type "constructed text requires u8 array"
+      if let .arr _ expected := ty then
+        let mut count := 0
+        for argument in arguments do
+          match argument with
+          | .text text => count := count + text.toUTF8.size
+          | _ => fail .type "fixed constructed text requires a statically known byte count"
+        require (count == expected) .type "fixed constructed text byte count mismatch"
       typePrint fuel env arguments
       pure [ty]
   | fuel + 1, env, .copy ty source _ => do
       let (sourceTy, _, _) ← typePlace fuel env source
-      require (sourceTy.adaptsTo ty || (sourceTy.element? == ty.element? && sourceTy.element?.isSome))
-        .type "copy source and destination layout mismatch"
+      require ty.constructible .type "copy requires a storage receiving type"
+      let viewAdaptation := match ty with
+        | .arr .. => false
+        | _ => sourceTy.element? == ty.element? && sourceTy.element?.isSome
+      require (sourceTy.adaptsTo ty || viewAdaptation) .type "copy source and destination layout mismatch"
       pure [ty]
   | _fuel + 1, env, .resultLocal id _ => do
       require (env.use == .result) .result "returned local outside result position"
@@ -340,8 +403,10 @@ def typeArguments : Nat → TypingEnv → Impl → List Param → List Arg → T
           require localVar.ty.nonfixed .call "a_construct requires nonfixed by-value parameter"
           require ((← one (← typeExpr fuel (ordinary env) expression)).adaptsTo localVar.ty) .call "constructed argument type mismatch"
       | .byRef, .byRef mutability place =>
-          let (ty, writable, _) ← typePlace fuel env place
-          require (mutability == .readOnly || writable) .mut "mutable argument requires writable storage"
+          let (ty, bindingWritable, contentsWritable) ← typePlace fuel env place
+          require (referenceRepresentable place ty bindingWritable contentsWritable) .type "aggregate field capabilities cannot be passed by reference"
+          require (mutability == .readOnly || ty.referenceWritable bindingWritable contentsWritable)
+            .mut "mutable argument requires writable storage"
           require ((Ty.ref mutability ty).passesTo localVar.ty) .call "reference argument type mismatch"
       | _, _ => fail .call "argument mode mismatch"
       typeArguments fuel env callee parameters arguments
@@ -423,7 +488,7 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
       pure env
   | fuel + 1, env, .assignOp _ place expression _ => do
       let (ty, writable, _) ← typePlace fuel env place
-      expectInt ty
+      requireIntType ty
       require (writable && (← one (← typeExpr fuel (ordinary env) expression)) == ty) .mut "compound assignment mismatch"
       pure env
   | fuel + 1, env, .rebind id expression _ => do
@@ -460,13 +525,13 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
       pure env
   | fuel + 1, env, .popN owner count _ | fuel + 1, env, .resize owner count none _ => do
       let (ty, _, writable) ← typePlace fuel env owner
-      expectInt (← one (← typeExpr fuel (ordinary env) count))
+      requireIntType (← one (← typeExpr fuel (ordinary env) count))
       require (writable && match ty with | .growshrink _ | .limited _ _ => true | _ => false)
         .mut "shrinking requires writable shrinkable owner"
       pure env
   | fuel + 1, env, .resize owner count (some fill) _ => do
       let (ty, _, writable) ← typePlace fuel env owner
-      expectInt (← one (← typeExpr fuel (ordinary env) count))
+      requireIntType (← one (← typeExpr fuel (ordinary env) count))
       require (ty.growing && (writable) && ty.element? == some (← one (← typeExpr fuel (ordinary env) fill)))
         .mut "resize type or permission mismatch"
       pure env
@@ -476,18 +541,18 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
         .mut "clear requires writable shrinkable owner"
       pure env
   | fuel + 1, env, .ifS condition left right _ => do
-      expectBool (← one (← typeExpr fuel (ordinary env) condition))
+      requireBoolType (← one (← typeExpr fuel (ordinary env) condition))
       let _ ← typeBlock fuel (ordinary env) left
       if let some block := right then let _ ← typeBlock fuel (ordinary env) block
       pure env
   | fuel + 1, env, .while condition body _ => do
-      expectBool (← one (← typeExpr fuel (ordinary env) condition))
+      requireBoolType (← one (← typeExpr fuel (ordinary env) condition))
       let _ ← typeBlock fuel { (ordinary env) with loops := env.loops + 1 } body
       pure env
   | fuel + 1, env, .forRange id low high body _ => do
       let lo ← one (← typeExpr fuel (ordinary env) low)
       let hi ← one (← typeExpr fuel (ordinary env) high)
-      expectInt lo
+      requireIntType lo
       require (lo == hi) .type "range bound type mismatch"
       let loopEnv := { (ordinary env) with scope := body.scope, loops := env.loops + 1 }
       let localVar ← declare loopEnv id
@@ -530,14 +595,19 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
         .result "target-forwarded result type mismatch"
       pure env
   | fuel + 1, env, .breakValue expression _ => do
-      require (env.loops > 0) .block "value break outside loop"
-      let _ ← typeExpr fuel env expression
+      let some target := env.valueBreakTarget | fail .block "value break outside value-producing block"
+      let actual ← typeExpr fuel { env with
+        use := target.use, request := target.request
+        resultRequests := target.requests } expression
+      require (actual.length == target.types.length &&
+        (actual.zip target.types).all (fun (source,target) => source.passesTo target))
+        .result "value break target channel mismatch"
       pure env
   | _fuel + 1, env, .brk _ | _fuel + 1, env, .cont _ => do require (env.loops > 0) .block "loop control outside loop"; pure env
   | fuel + 1, env, .print arguments _ => do typePrint fuel env arguments; pure env
-  | fuel + 1, env, .assertS expression _ => do expectBool (← one (← typeExpr fuel (ordinary env) expression)); pure env
+  | fuel + 1, env, .assertS expression _ => do requireBoolType (← one (← typeExpr fuel (ordinary env) expression)); pure env
   | _fuel + 1, env, .abort .. => pure env
-  | fuel + 1, env, .exit expression _ => do expectInt (← one (← typeExpr fuel (ordinary env) expression)); pure env
+  | fuel + 1, env, .exit expression _ => do requireIntType (← one (← typeExpr fuel (ordinary env) expression)); pure env
 end
 
 end Goose.Construct

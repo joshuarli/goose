@@ -26,6 +26,7 @@ struct Inliner;
 struct BCE;
 struct CodeGen;
 struct Dst;
+struct ExpansionClone;
 
 struct Line {
     int line = 0;
@@ -245,6 +246,8 @@ struct TypeEnum : TypeDetail {       // TY_ENUM
 };
 
 struct TypeName : TypeDetail {       // TY_UNRESOLVED and TY_GENERIC
+    int expansionbinding = 0;       // Lexical const-for binding, never a name lookup.
+    string_view expansionerror;     // Invalid substitution, diagnosed only when instantiated.
     string_view name;                // As written: `Name`, `ns::Name` or `::Name`.
     string_view ns;                  // Where an unqualified name resolves first: the
                                      // namespace of the declaration it was written in.
@@ -285,6 +288,18 @@ struct TypeVariant : TypeDetail {    // TY_VARIANT
     SVariant *variant = nullptr;     // Resolved declaration; null until its ADT is known.
 };
 
+// `u32 in a` / `u32 upto a` on a TY_INT (docs/design/index_types.md): a
+// value below a.len (at most a.len for `upto`) wherever it can be named. As
+// for a pool, the name is what the parser saw and typecheck resolves it
+// once; the array is part of the type's identity from then on. Copies of a
+// type (an alias's uses, `const`) share the detail.
+struct TypeIndex : TypeDetail {
+    string_view name;
+    string_view ns;                  // The namespace name resolves in (as TypeName::ns).
+    VarDef *arr = nullptr;
+    bool upto = false;
+};
+
 struct TypeExpr {
     TypeKind kind;
     Line line;
@@ -296,6 +311,9 @@ struct TypeExpr {
     // sizes name what they name where the alias is declared, at top level,
     // whatever scope the use is in (TypeCheck::ConstNamesIn).
     bool aliasuse = false;
+    // On a TY_INT: an index or bound type (TypeIndex). Outside the union,
+    // since intstorage is the member a TY_INT uses.
+    TypeIndex *ix = nullptr;
     union {                          // Active member selected by kind:
         IntStorage intstorage;       //   TY_INT
         FltStorage fltstorage;       //   TY_FLT
@@ -337,7 +355,13 @@ inline bool IsIntT(const TypeExpr *t) { return t->kind == TY_INT && t->intstorag
 inline bool IsVarintT(const TypeExpr *t) {
     return t && t->kind == TY_INT && t->intstorage == IS_VARINT;
 }
-inline bool IsU8(const TypeExpr *t) { return t->kind == TY_INT && t->intstorage == IS_U8; }
+// A plain u8: an index type of u8 is not a byte (a string, a byte view or a
+// text sink would write any byte into it).
+inline bool IsU8(const TypeExpr *t) {
+    return t->kind == TY_INT && t->intstorage == IS_U8 && !t->ix;
+}
+// An index or bound type (`u32 in a`, `u32 upto a`).
+inline bool IsIndexT(const TypeExpr *t) { return t && t->kind == TY_INT && t->ix; }
 inline bool IsF32(const TypeExpr *t) { return t && t->kind == TY_FLT && t->fltstorage == FS_F32; }
 
 // The primitive type keyword tokens, in a contiguous range.
@@ -368,6 +392,8 @@ struct FieldInit {
     string_view name;           // Empty for positional.
     Node *val = nullptr;
     bool fromdefault = false;   // Checked in the type declaration's environment.
+    int expansionbinding = 0;
+    TypeExpr *accessorowner = nullptr;
 };
 
 enum PatKind { P_WILDCARD, P_LIST };
@@ -771,6 +797,7 @@ enum NodeKind : uint8_t {
     NK_While,
     NK_LoopExpr,
     NK_ForLoop,
+    NK_ConstFor,
     NK_Return,
     NK_Break,
     NK_Continue,
@@ -796,6 +823,9 @@ struct Node {
     // The node as the source has it, which every clone of it shares; null in
     // that one itself.
     const Node *origin = nullptr;
+    // Specialization-time provenance, retained in clones for diagnostics.
+    string_view expansiontrace;
+    int expansionbinding = 0;   // Ident or Dot: a lexical expansion binding.
     Node(Line _line, NodeKind _nkind) : line(_line), nkind(_nkind) {}
     virtual ~Node() {}
     virtual void Dump(string &s, int ind) const = 0;
@@ -862,6 +892,7 @@ template<typename T> T *Is(Node *n) {
 #define NODE_END };
 
 NODE(IntLit)
+    TypeExpr *fixedtype = nullptr; // Materialized typed constant; not an adaptable literal.
     int64_t val;       // The value's bits; uns says how to read them.
     string_view text;  // Original spelling, so hex/char literals dump readably.
     bool uns;          // Value above i64.max: a u64 constant carried as bits.
@@ -870,6 +901,7 @@ NODE(IntLit)
 NODE_END
 
 NODE(FltLit)
+    TypeExpr *fixedtype = nullptr;
     double val;
     string_view text;  // Original spelling, so hex floats and overflowing exponents dump as written.
     FltLit(Line l, double _val, string_view _text = {}) : Node(l, NKind), val(_val), text(_text) {}
@@ -890,6 +922,7 @@ NODE(StrLit)
 NODE_END
 
 NODE(Ident)
+    string_view expansionerror;
     BCE_MARK
     string_view name;               // As written: `x`, `ns::x` or `::x`. A qualified
                                     // spelling is one interned string, so it can never
@@ -969,6 +1002,7 @@ NODE(Binary)
 NODE_END
 
 NODE(Dot)
+    TypeExpr *accessorowner = nullptr; // The concrete struct declaring a bound selector.
     BCE_MARK
     Node *obj;
     string_view name;
@@ -1095,12 +1129,17 @@ NODE(SliceExpr)
 NODE_END
 
 NODE(AsCast)
+    BCE_WALK
     Node *child;
     TypeExpr *type;
     bool unchecked;             // as! vs as.
     // An integer's conversion to a float the checker inserted, not
     // written by the user: TypeCheck::ToFloat.
     bool implicit = false;
+    // A conversion to an index or bound type checks the operand against
+    // the array as indexing it would, in every build; nobc is that check
+    // proven redundant (bce.h).
+    bool nobc = false;
     // Filled by typecheck: the concrete type the cast converts to. exprtype
     // can be wider: it is the slot the result lands in (an i8 cast stored
     // into an i64), and the cast still wraps and checks at its own type.
@@ -1131,6 +1170,7 @@ NODE(Block)
     BCE_WALK
     vector<Node *> stmts;
     Node *tail = nullptr;
+    bool expansionboundary = false;
     Block(Line l) : Node(l, NKind) {}
 NODE_END
 
@@ -1239,6 +1279,19 @@ NODE(ForLoop)
         : Node(l, NKind), byref(_byref), var(_var), idxvar(_idxvar), iter(_iter), body(_body) {}
 NODE_END
 
+enum ExpansionSource { ES_FIELDS, ES_TYPES, ES_CONSTANTS };
+
+NODE(ConstFor)
+    ExpansionSource source = ES_FIELDS;
+    vector<string_view> names;
+    vector<int> bindings;           // Assigned by BindExpansionNames, stable across clones.
+    vector<TypeExpr *> types;
+    vector<Node *> constants;
+    Block *body = nullptr;          // Statement fragments, or null for initializer fragments.
+    vector<FieldInit> inits;
+    ConstFor(Line l) : Node(l, NKind) {}
+NODE_END
+
 NODE(Return)
     BCE_WALK
     vector<Node *> vals;
@@ -1342,8 +1395,9 @@ struct SFunction {
     vector<TypeExpr *> rets;    // Empty + !has_rets = inferred/none.
     bool has_rets = false;
     bool isrec = false;         // Declared with `recursive`.
-    bool isinline = false;      // Declared with `inline`: inlined whatever its size.
-    bool issimd = false;        // Declared with `simd`: one version per instruction set.
+    bool isinline = false;
+    bool issimd = false;
+    bool checkfree = false;
     bool isthread = false;
     bool isextern = false;      // A C function behind a Goose signature; no body.
     bool isexport = false;      // A Goose function exposed through a C ABI wrapper.
@@ -2163,6 +2217,11 @@ struct Package {
 };
 
 struct Ast {
+    // Non-null only while specializing a const-for fragment. Ordinary clones
+    // retain templates; expansion clones substitute lexically bound uses.
+    ExpansionClone *expansionclone = nullptr;
+    TypeExpr *CloneExpansionType(TypeExpr *t);
+    FieldInit CloneFieldInit(const FieldInit &fi);
     // Source buffers stay alive here; all string_views point into them. The
     // contents are heap-boxed so vector growth never moves an SSO buffer.
     vector<pair<string, unique_ptr<string>>> sources;   // (filename, contents).
@@ -2297,6 +2356,22 @@ struct Ast {
         auto d = new T();
         typedetails.push_back(d);
         return d;
+    }
+
+    // The plain integer an index or bound type's value is as a number:
+    // what arithmetic computes with, and what any other type gets.
+    TypeExpr *NoIndex(TypeExpr *t) {
+        return t && t->kind == TY_INT && t->ix ? inttypes[t->intstorage] : t;
+    }
+    // An index (or, with upto, bound) type of the resolved global array `arr`.
+    TypeExpr *IndexTypeOf(IntStorage s, VarDef *arr, bool upto, Line line) {
+        auto t = NewType(TY_INT, line);
+        t->intstorage = s;
+        t->ix = NewDetail<TypeIndex>();
+        t->ix->name = arr->name;
+        t->ix->arr = arr;
+        t->ix->upto = upto;
+        return t;
     }
 
     // The type constructors every pass builds types with. Each gives a

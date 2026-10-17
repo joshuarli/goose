@@ -2,8 +2,9 @@ import Goose.Lower.Claims
 import Goose.Lower.Range
 import Goose.Lower.Validate
 import Goose.Lower.IfSymbols
-import Goose.Lower.Finish
+import Goose.Lower.FunctionTail
 import Goose.Lower.Normal
+import Goose.Lower.ControlNormal
 import Goose.Core.Validate
 import Goose.GIR.Validate
 
@@ -63,7 +64,8 @@ theorem core_validate_stages (m : Core.Module) (h : Core.validate m = .ok ()) :
   obtain ⟨_, hglobals, hrest⟩ := exceptBind_ok_left hrest
   obtain ⟨_, himpls, hrest⟩ := exceptBind_ok_left hrest
   obtain ⟨_, hcontexts, hrest⟩ := exceptBind_ok_left hrest
-  obtain ⟨_, hroots, hdemand⟩ := exceptBind_ok_left hrest
+  obtain ⟨_, hroots, hrest⟩ := exceptBind_ok_left hrest
+  obtain ⟨_, hdemand, _⟩ := exceptBind_ok_left hrest
   refine ⟨by simpa using hstruct, by simpa using hentry, by simpa using himplcontexts,
     ?_, ?_, ?_, ?_, hdemand⟩
   · intro i gl hgl
@@ -127,6 +129,7 @@ theorem checkImpl_localOrigins {m : Core.Module} {impl : Core.Impl}
   · simp only [if_neg hmany] at h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, horigins, _⟩ := exceptBind_ok_left h
     have hbound := coreForAll_ok impl.vars.toList (fun lv =>
       unless lv.org < m.origins.size do
@@ -144,6 +147,7 @@ theorem checkImpl_localScopes {m : Core.Module} {impl : Core.Impl}
   by_cases hmany : 1 < impl.results.size
   · simp [hmany, Core.reject, bind, Except.bind] at h
   · simp only [if_neg hmany] at h
+    obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
     obtain ⟨_, _, h⟩ := exceptBind_ok_left h
@@ -306,11 +310,6 @@ theorem callFn_nil (cfg : GCfg) (depth k : Nat) (hd : ¬ depth ≥ maxCallDepth)
     callFn (k + 1) cfg depth f [] s = enterFn k cfg (depth + 1) fn [] s := by
   simp [callFn, hd, lookupFn, hf]
 
-theorem extT_finish (ls : LS) : ExtT ls (finishBlocks ls.blocks) := by
-  refine ⟨by simp [finishBlocks], fun i blk hi => ?_⟩
-  refine ⟨⟨blk.params, blk.insts.toList⟩, ?_, rfl, [], by simp⟩
-  simp [finishBlocks, Array.getElem?_map, hi]
-
 /-- The state at the start of a function whose entry block has no parameter. -/
 def startLS : LS := { blocks := #[⟨[], #[]⟩], vals := #[], cur := some 0, stack := [] }
 
@@ -318,12 +317,12 @@ theorem startLS_pp : startLS.pp = some (0, 0) := rfl
 
 theorem lowerGlobal_blocks (m : Core.Module) (g : Core.Global) :
     (lowerGlobal m g).init.blocks = finishBlocks (emitTerm
-      (.ret [(lowerExpr g.init (lowerEnv m #[]) startLS).1] (some g.org)) (lowerEnv m #[])
-      (lowerExpr g.init (lowerEnv m #[]) startLS).2).2.blocks := rfl
+      (.ret [(lowerExpr g.init (lowerEnv m #[] [g.ty]) startLS).1] (some g.org)) (lowerEnv m #[] [g.ty])
+      (lowerExpr g.init (lowerEnv m #[] [g.ty]) startLS).2).2.blocks := rfl
 
 theorem lowerGlobal_blocks_nonempty (m : Core.Module) (g : Core.Global) :
     0 < (lowerGlobal m g).init.blocks.size := by
-  let le := lowerEnv m #[]
+  let le := lowerEnv m #[] [g.ty]
   let run := lowerExpr g.init le startLS
   let v := run.1
   let ls1 := run.2
@@ -344,7 +343,7 @@ theorem global_agree (m : Core.Module) (gl : Core.Global) (hg : exprOk gl.init =
     (n : Nat) (s : St) :
     Agree (freshAct >>= fun act => evalExpr n ⟨p, m⟩ ⟨#[], act, [], 0⟩ gl.init)
       (fun k => enterFn k ⟨p, lower m⟩ 0 (lowerGlobal m gl).init []) s := by
-  let le := lowerEnv m #[]
+  let le := lowerEnv m #[] [gl.ty]
   have hlow : lowerExpr gl.init le startLS =
       ((lowerExpr gl.init le startLS).1, (lowerExpr gl.init le startLS).2) := rfl
   generalize hr : (lowerExpr gl.init le startLS).1 = r at hlow
@@ -398,50 +397,26 @@ theorem enterCall_nil (cfg : Cfg) (n : Nat) (c : ContextId) (ctx : Context) (imp
   have hmaxd : ¬ ((0 : Nat) ≥ maxCallDepth) := by simp [maxCallDepth]
   simp [enterCall, hmaxd, lookupContext, lookupImpl, hctx, himpl, hp]
 
-/-- Finalize the body with a return or close a synthetic divergent frontier. -/
-def bodyTail (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS) : LS :=
-  (finishFunction impl v le ls1).2
-
 theorem lowerImplAt_blocks (m : Core.Module) (implId : ImplId) (impl : Impl)
     (hp : impl.params = #[]) :
-    (lowerImplAt m implId impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars)
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).1
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).2).blocks := by
+    (lowerImplAt m implId impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).1
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).2).blocks := by
   rcases impl with ⟨name, params, results, vars, body, summary⟩
   simp only at hp
   subst hp
   rfl
 
 theorem lowerImpl_blocks (m : Core.Module) (impl : Impl) (hp : impl.params = #[]) :
-    (lowerImpl m impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars)
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).1
-      (lowerBlock none [] false impl.body (lowerEnv m impl.vars) startLS).2).blocks := by
+    (lowerImpl m impl).blocks = finishBlocks (bodyTail impl (lowerEnv m impl.vars impl.results.toList)
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).1
+      (lowerBlock none [] false impl.body (lowerEnv m impl.vars impl.results.toList) startLS).2).blocks := by
   unfold lowerImpl
   exact lowerImplAt_blocks m _ impl hp
 
-theorem bodyTail_cases (impl : Impl) (le : LEnv) (v : ValueId) (ls1 : LS)
-    (hd : impl.body.diverges le.mod.noReturn = false) :
-    (ls1.cur = none ∧ bodyTail impl le v ls1 = ls1) ∨
-    (∃ b, ls1.cur = some b ∧
-      emitTerm (.ret (if impl.body.value.isSome then [v] else []) none) le ls1 =
-        ((), bodyTail impl le v ls1)) := by
-  cases hc : ls1.cur with
-  | none =>
-    left
-    refine ⟨rfl, ?_⟩
-    unfold bodyTail
-    rw [finishFunction_nondivergent impl le ls1 v hd]
-    simp [bind_run, isLive_none hc, pure_run]
-  | some b =>
-    right
-    refine ⟨b, rfl, ?_⟩
-    unfold bodyTail
-    rw [finishFunction_nondivergent impl le ls1 v hd]
-    simp [bind_run, isLive_run hc]
-
 theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     (hctx : m.contexts[m.entry]? = some ctx) (himpl : m.impls[ctx.impl]? = some impl)
-    (hp : impl.params = #[]) (hb : blockOk impl.body = true) (p : NumProfile) (n : Nat) (s : St) :
+    (hp : impl.params = #[]) (hb : flowBlockOk impl.body = true) (p : NumProfile) (n : Nat) (s : St) :
     Agree (enterCall n ⟨p, m⟩ 0 m.entry [])
       (fun k => callFn k ⟨p, lower m⟩ 0 (((m.contexts[m.entry]?).map (·.impl)).getD 0) []) s := by
   cases n with
@@ -458,7 +433,7 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     have hmaxd : ¬ ((0 : Nat) ≥ maxCallDepth) := by simp [maxCallDepth]
     rw [hent]
     rw [enterCall_nil ⟨p, m⟩ n' m.entry ctx impl hctx himpl hp]
-    let le := lowerEnv m impl.vars
+    let le := lowerEnv m impl.vars impl.results.toList
     have hlow : lowerBlock none [] false impl.body le startLS =
         ((lowerBlock none [] false impl.body le startLS).1,
           (lowerBlock none [] false impl.body le startLS).2) := rfl
@@ -479,8 +454,10 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
     have hpar : (lowerImplAt m ctx.impl impl).params = [] := by simp [lowerImplAt, hp]
     have hrel0 : ∀ act, Rel (⟨p, m⟩ : Cfg) (⟨impl.vars, act, [], 0 + 1⟩ : Env) cx
         (⟨act, [], {}, 0 + 1⟩ : Frame) startLS := fun act => ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
-    have hclaim := (claims n').block none false impl.body hb le startLS r ls1 (0, 0) ⟨p, m⟩
-      ⟨impl.vars, s.nextAct, [], 0 + 1⟩ cx ⟨s.nextAct, [], {}, 0 + 1⟩ hlow startLS_pp hext1 (hrel0 s.nextAct)
+    have hclaim := (flowClaims n').block none [] [] false impl.body hb ⟨p, m⟩
+      ⟨impl.vars, s.nextAct, [], 0 + 1⟩ (by simp) le startLS ls1 r (0, 0) cx
+      ⟨s.nextAct, [], {}, 0 + 1⟩ hlow startLS_pp hext1 (hrel0 s.nextAct) trivial
+    rw [prepareReturn_no_scopes _ rfl, bind_pure] at hclaim
     have hclaim' := hclaim { s with nextAct := s.nextAct + 1 }
     have hcall : ∀ k0 : Nat, callFn (k0 + 2) ⟨p, lower m⟩ 0 ctx.impl [] s =
         runAt cx (0, 0) ⟨s.nextAct, [], {}, 0 + 1⟩ k0 { s with nextAct := s.nextAct + 1 } := by
@@ -496,38 +473,51 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
       | stop e s2 => rw [hcb] at hc'; cases hc'
       | ok flow s2 =>
         rw [hcb] at hc'
-        obtain ⟨pt', fr', kk, ⟨v, hf, hU, P⟩, hrun⟩ := hclaim'.1 flow s2 hcb
-        subst hf
-        simp only [expectReturned, pure_apply] at hc'
-        obtain ⟨rfl, rfl⟩ := Res.ok.inj hc'
-        have hdiv := execBlock_success_not_divergent n' ⟨p, m⟩
-          ⟨impl.vars, s.nextAct, [], 0 + 1⟩ impl.body hb
-          { s with nextAct := s.nextAct + 1 } s2 (.normal v) hcb
-        rcases bodyTail_cases impl le r ls1 hdiv with ⟨hnone, -⟩ | ⟨b, hcur, hemit⟩
-        · obtain ⟨blk, hc1, -⟩ := LS.pp_some P.pp
-          rw [hnone] at hc1; cases hc1
-        obtain ⟨-, -, -, hinst⟩ := emitTerm_facts hemit P.pp hextE
-        refine ⟨kk + 3, fun k hk => ?_⟩
-        obtain ⟨k0, rfl⟩ : ∃ k0, k = k0 + 2 := ⟨k - 2, by omega⟩
-        show callFn (k0 + 2) ⟨p, lower m⟩ 0 (ctx.impl) [] s = _
-        rw [hcall k0]
-        obtain ⟨j, rfl⟩ : ∃ j, k0 = (j + 1) + kk := ⟨k0 - kk - 1, by omega⟩
-        rw [hrun (j + 1)]
-        cases hv : impl.body.value.isSome with
-        | true =>
-          have hcell : fr'.vals[r]? = some (.val v) := by
-            refine P.has (r, .val v) ?_
-            simp [blockCells, hv]
-          have hi' : instAt cx.fn pt' = some (.term (.ret [r] none)) := by
-            have := hinst; simp only [hv, ↓reduceIte] at this; exact this
-          rw [runAt_ret1 hi' hcell j]
-          rfl
-        | false =>
-          have hnone : impl.body.value = none := by simpa using hv
-          have hi' : instAt cx.fn pt' = some (.term (.ret [] none)) := by
-            have := hinst; simp only [hv, Bool.false_eq_true, ↓reduceIte] at this; exact this
-          rw [runAt_ret0 hi' j, hU hnone]
-          rfl
+        obtain ⟨pt', fr', kk, hpost, hrun⟩ := hclaim'.1 flow s2 hcb
+        rcases hpost with ⟨v, hf, hU, P⟩ | ⟨v, org, hf, hsite⟩
+        · subst hf
+          simp only [expectReturned, pure_apply] at hc'
+          obtain ⟨rfl, rfl⟩ := Res.ok.inj hc'
+          have hdiv := execBlock_normal_not_divergent n' ⟨p, m⟩
+            ⟨impl.vars, s.nextAct, [], 0 + 1⟩ [] impl.body hb
+            { s with nextAct := s.nextAct + 1 } s2 v hcb
+          rcases bodyTail_cases impl le r ls1 hdiv with ⟨hnone, -⟩ | ⟨b, hcur, hemit⟩
+          · obtain ⟨blk, hc1, -⟩ := LS.pp_some P.pp
+            rw [hnone] at hc1; cases hc1
+          obtain ⟨-, -, -, hinst⟩ := emitTerm_facts hemit P.pp hextE
+          refine ⟨kk + 3, fun k hk => ?_⟩
+          obtain ⟨k0, rfl⟩ : ∃ k0, k = k0 + 2 := ⟨k - 2, by omega⟩
+          show callFn (k0 + 2) ⟨p, lower m⟩ 0 (ctx.impl) [] s = _
+          show callFn (k0 + 2) ⟨p, lower m⟩ 0 ctx.impl [] s = _
+          rw [hcall k0]
+          obtain ⟨j, rfl⟩ : ∃ j, k0 = (j + 1) + kk := ⟨k0 - kk - 1, by omega⟩
+          rw [hrun (j + 1)]
+          cases hv : impl.body.value.isSome with
+          | true =>
+            have hcell : fr'.vals[r]? = some (.val v) := by
+              refine P.has (r, .val v) ?_
+              simp [blockCells, hv]
+            have hi' : instAt cx.fn pt' = some (.term (.ret [r] none)) := by
+              have := hinst; simp only [hv, ↓reduceIte] at this; exact this
+            rw [runAt_ret1 hi' hcell j]
+            rfl
+          | false =>
+            have hnone : impl.body.value = none := by simpa using hv
+            have hi' : instAt cx.fn pt' = some (.term (.ret [] none)) := by
+              have := hinst; simp only [hv, Bool.false_eq_true, ↓reduceIte] at this; exact this
+            rw [runAt_ret0 hi' j, hU hnone]
+            rfl
+        · subst hf
+          simp only [expectReturned, pure_apply] at hc'
+          obtain ⟨rfl, rfl⟩ := Res.ok.inj hc'
+          refine ⟨kk + 3, fun k hk => ?_⟩
+          obtain ⟨k0, rfl⟩ : ∃ k0, k = k0 + 2 := ⟨k - 2, by omega⟩
+          show callFn (k0 + 2) ⟨p, lower m⟩ 0 ctx.impl [] s = _
+          rw [hcall k0]
+          obtain ⟨j, rfl⟩ : ∃ j, k0 = (j + 1) + kk := ⟨k0 - kk - 1, by omega⟩
+          rw [hrun (j + 1)]
+          exact hsite.run s2 j
+
     · have hc' : (execBlock n' ⟨p, m⟩ ⟨impl.vars, s.nextAct, [], 0 + 1⟩ [] impl.body >>= expectReturned)
           { s with nextAct := s.nextAct + 1 } = .stop e s1 := hc
       rw [bind_apply] at hc'
@@ -545,10 +535,14 @@ theorem entry_agree (m : Core.Module) (ctx : Context) (impl : Impl)
         rw [hrun j]
       | ok flow s2 =>
         rw [hcb] at hc'
-        obtain ⟨pt', fr', kk, ⟨v, hf', hU, P⟩, hrun⟩ := hclaim'.1 flow s2 hcb
-        subst hf'
-        simp only [expectReturned, pure_apply] at hc'
-        cases hc'
+        obtain ⟨pt', fr', kk, hpost, hrun⟩ := hclaim'.1 flow s2 hcb
+        rcases hpost with ⟨v, hf', hU, P⟩ | ⟨v, org, hf', hsite⟩
+        · subst hf'
+          simp only [expectReturned, pure_apply] at hc'
+          cases hc'
+        · subst hf'
+          simp only [expectReturned, pure_apply] at hc'
+          cases hc'
 
 theorem initGlobals_agree (m : Core.Module) (p : NumProfile) (n : Nat)
     (hg : ∀ gl ∈ m.globals, exprOk gl.init = true) :
@@ -580,7 +574,7 @@ def moduleOk (m : Core.Module) : Bool :=
   match m.contexts[m.entry]? with
   | some ctx =>
     match m.impls[ctx.impl]? with
-    | some impl => impl.params.isEmpty && blockOk impl.body
+    | some impl => impl.params.isEmpty && flowBlockOk impl.body
     | none => false
   | none => false
 

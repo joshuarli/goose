@@ -39,7 +39,7 @@ private def statementRejects (statement : Stmt) (rule : Rule) : Bool :=
 #guard !statementRejects (.expr (.push (.var 0) (.lit .u8 2)) 0) .mut
 #guard statementRejects (.expr (.bytes (.varr (.int .u8)) [] 0) 0) .type
 #guard statementRejects (.appendValue (.var 0) (.bytes (.varr (.int .u8)) [2] 0) 0) .type
-#guard statementRejects (.appendConstruct (.var 0) (.arrLit (.arr (.int .u8) 1) [.lit .u8 2]) 0) .type
+#guard statementRejects (.appendConstruct (.var 0) (.arrLit (.arr (.int .u8) 1) [.lit .u8 2] 0) 0) .type
 #guard statementRejects (.expr (.call 0 [] 0) 0) .type
 #guard match (typeExpr 256 { env with request := .elementRun } (.call 0 [] 0)).run 2 with
   | .error rejection => rejection.rule == .call
@@ -59,5 +59,91 @@ private def statementRejects (statement : Stmt) (rule : Rule) : Bool :=
 #guard !expressionAccepts (.un .neg (.lit .u8 2) 0) [.int .u8]
 #guard !expressionAccepts (.conv .widen (.int .i8) (.lit .i64 2) 0) [.int .i8]
 #guard expressionAccepts (.conv .widen (.int .i64) (.lit .i8 2) 0) [.int .i64]
+
+
+private def sliceReferenceEnv : TypingEnv := { env with
+  variables := #[⟨"slice-ref",.ref .mutable (.slice .readOnly (.int .u8)),.immutable,0,0⟩]
+  visible := [0] }
+#guard match (typePlace 256 sliceReferenceEnv (.deref (.read (.var 0)))).run 1 with
+  | .ok ((.slice .readOnly (.int .u8), true, true), _) => true
+  | _ => false
+#guard match (typeExpr 256 sliceReferenceEnv (.read (.var 0))).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+
+
+#guard match checkType module (.limited (.int .u8) 0) with
+  | .error rejection => rejection.rule == .type
+  | .ok _ => false
+
+
+private def readonlySliceEnv : TypingEnv := { env with
+  variables := #[⟨"view",.slice .readOnly (.int .u8),.immutable,0,0⟩]
+  visible := [0] }
+#guard match (typeExpr 256 readonlySliceEnv
+    (.ref .mutable (.elem (.val (.read (.var 0))) (.lit .i64 0) 0))).run 1 with
+  | .error rejection => rejection.rule == .mut
+  | _ => false
+
+
+#guard expressionAccepts (.ref .mutable (.var 0)) [.ref .mutable (.grow (.int .u8))]
+private def splitFields : TyList := .cons (.arr (.int .u8) 1) .nil
+private def splitFieldEnv : TypingEnv := { env with
+  module := { module with structs := #[⟨1,#[⟨.arr (.int .u8) 1,.mutable,.readOnly,0⟩],"Box"⟩] }
+  variables := #[⟨"record",.structT 0 splitFields,.mutable,0,0⟩]
+  visible := [0] }
+#guard match (typeExpr 256 splitFieldEnv (.ref .mutable (.field (.var 0) 0))).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+
+
+#guard !(Ty.varr (.int .u8)).adaptsTo (.arr (.int .u8) 2)
+private def fixedCopyEnv : TypingEnv := { env with
+  variables := #[⟨"source",.arr (.int .u8) 2,.immutable,0,0⟩]
+  visible := [0] }
+#guard match (typeExpr 256 fixedCopyEnv (.copy (.arr (.int .u8) 3) (.var 0) 0)).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+#guard match (typeExpr 256 fixedCopyEnv (.copy (.slice .readOnly (.int .u8)) (.var 0) 0)).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+
+
+#guard !expressionAccepts (.str (.arr (.int .u8) 2) [.text "x"] 0) [.arr (.int .u8) 2]
+#guard expressionAccepts (.str (.arr (.int .u8) 3) [.text "箱"] 0) [.arr (.int .u8) 3]
+#guard !expressionAccepts (.str (.arr (.int .u8) 1) [.expr (.lit .u8 1)] 0) [.arr (.int .u8) 1]
+
+
+#guard match (typeView 256 readonlySliceEnv (.of (.var 0))).run 1 with
+  | .error rejection => rejection.rule == .type
+  | _ => false
+
+private def valueBlock (statements : List Stmt) (tail : Option Expr := none) : Expr :=
+  .blockE (.mk 1 statements tail) 0
+#guard expressionAccepts (valueBlock [.breakValue (.lit .u8 7) 0]) [.int .u8]
+#guard expressionAccepts (valueBlock [.breakValue (.lit .u8 7) 0] (some (.lit .u8 9))) [.int .u8]
+#guard !expressionAccepts (valueBlock [.breakValue (.bool true) 0] (some (.lit .u8 9))) [.int .u8]
+#guard !expressionAccepts (valueBlock [.ifS (.bool true)
+  (.mk 2 [.breakValue (.lit .u8 7) 0] none) none 0]) [.int .u8]
+#guard expressionAccepts (valueBlock [.while (.bool true)
+  (.mk 2 [.breakValue (.lit .u8 7) 0] none) 0]) [.int .u8]
+#guard !expressionAccepts (valueBlock [.while (.bool true)
+  (.mk 2 [.brk 0,.breakValue (.lit .u8 7) 0] none) 0]) [.int .u8]
+#guard match (typeStatement 256 env (.while (.bool true)
+  (.mk 1 [.breakValue (.lit .u8 7) 0] none) 0)).run 1 with
+  | .error rejection => rejection.rule == .block
+  | _ => false
+#guard expressionAccepts (.ifE (.bool true)
+  (.mk 1 [.abort "stop" 0] none) (.mk 2 [] (some (.lit .u8 7))) 0) [.int .u8]
+
+#guard expressionAccepts (valueBlock [] (some (.ifE (.bool true)
+  (.mk 2 [.breakValue (.lit .u8 1) 0] none)
+  (.mk 3 [.breakValue (.lit .u8 2) 0] none) 0))) [.int .u8]
+
+#guard !expressionAccepts (valueBlock [.breakValue (.resultLocal 0 0) 0]) [.grow (.int .u8)]
+#guard match (typeExpr 256 { env with use := .result }
+    (valueBlock [.breakValue (.resultLocal 0 0) 0])).run 2 with
+  | .ok (types, _) => types == [.grow (.int .u8)]
+  | _ => false
 
 end Goose.Construct.TypingChecks

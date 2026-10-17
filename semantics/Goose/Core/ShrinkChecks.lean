@@ -59,7 +59,7 @@ def emptyArrayAliasModule : Module :=
       ⟨0, "main()", [], [], []⟩,
       ⟨1, "shrinkWithEmptyAlias", [(0, [.param 0]), (1, [.param 1])], [], []⟩]
     entry := 0
-    origins := #[⟨0, 1, "stmt"⟩]
+    origins := #[⟨0, 1, "expr"⟩]
     profile := .shrink }
 
 def clearRequestMatchesOwner : Bool :=
@@ -99,7 +99,7 @@ def wholeReplacementReferenceAliasModule : Module :=
     impls := #[main]
     contexts := #[⟨0, "main()", [(1, [.local 0])], [], []⟩]
     entry := 0
-    origins := #[⟨0, 1, "stmt"⟩]
+    origins := #[⟨0, 1, "expr"⟩]
     profile := .shrink }
 
 def wholeReplacementReferenceAliasIsLive : Bool :=

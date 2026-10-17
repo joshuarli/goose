@@ -1,4 +1,4 @@
-import Goose.Lower.Claims
+import Goose.Lower.Control
 
 namespace Goose.Lower
 
@@ -31,7 +31,7 @@ theorem execBlock_fragment_normal (n : Nat) (cfg : Cfg) (env : Env) (b : Core.Bl
     (hb : blockOk b = true) (s s' : St) (flow : Flow)
     (h : execBlock n cfg env [] b s = .ok flow s') :
     ∃ v, flow = .normal v := by
-  let le := lowerEnv cfg.mod env.vars
+  let le := lowerEnv cfg.mod env.vars []
   let result := lowerBlock none [] false b le (initialBuilder env)
   have hlow : lowerBlock none [] false b le (initialBuilder env) = (result.1, result.2) := rfl
   have hsim := (claims n).block none false b hb le (initialBuilder env) result.1 result.2
@@ -43,7 +43,7 @@ theorem execBlock_fragment_normal (n : Nat) (cfg : Cfg) (env : Env) (b : Core.Bl
 theorem execStmt_fragment_normal (n : Nat) (cfg : Cfg) (env : Env) (stmt : Stmt)
     (hs : stmtOk stmt = true) (s s' : St) (flow : Flow)
     (h : execStmt n cfg env stmt s = .ok flow s') : flow = .normal .unit := by
-  let le := lowerEnv cfg.mod env.vars
+  let le := lowerEnv cfg.mod env.vars []
   let result := lowerStmt none stmt le (initialBuilder env)
   have hlow : lowerStmt none stmt le (initialBuilder env) = (result.1, result.2) := rfl
   have hsim := (claims n).stmt none stmt hs le (initialBuilder env) result.1 result.2
@@ -51,6 +51,29 @@ theorem execStmt_fragment_normal (n : Nat) (cfg : Cfg) (env : Env) (stmt : Stmt)
     hlow rfl (fragment_ext env result.2) (fragment_rel cfg env result.2)
   obtain ⟨_, _, _, ⟨hf, _⟩, _⟩ := (hsim s).1 flow s' h
   exact hf
+
+theorem execBlock_flow_shape (n : Nat) (cfg : Cfg) (env : Env) (block : Core.Block)
+    (hok : flowBlockOk block = true) (s s' : St) (flow : Flow)
+    (h : execBlock n cfg env [] block s = .ok flow s') :
+    ∃ value, flow = .normal value ∨ flow = .ret value := by
+  cases flow with
+  | normal value => exact ⟨value, Or.inl rfl⟩
+  | ret value => exact ⟨value, Or.inr rfl⟩
+  | brk | cont =>
+    let le := lowerEnv cfg.mod env.vars []
+    let result := lowerBlock none [] false block le (initialBuilder env)
+    have hlow : lowerBlock none [] false block le (initialBuilder env) =
+        (result.1, result.2) := (Prod.eta result).symm
+    have hsim := (flowClaims n).block none [] [] false block hok cfg env (by simp)
+      le (initialBuilder env) result.2 result.1 (0, 0) (fragmentContext cfg env result.2)
+      ⟨env.act, env.scopes, {}, env.depth⟩ hlow rfl (fragment_ext env result.2)
+      (fragment_rel cfg env result.2) trivial
+    have hdone : (execBlock n cfg env [] block >>= prepareReturn env) s =
+        execBlock n cfg env [] block s := by
+      simp [bind_apply, h, prepareReturn, pure_apply]
+    rw [h] at hdone
+    obtain ⟨_, _, _, hpost, _⟩ := (hsim s).1 _ s' hdone
+    rcases hpost with ⟨_, hflow, _, _⟩ | ⟨_, _, hflow, _⟩ <;> cases hflow
 
 private theorem bind_ok {c : M α} {f : α → M β} {s s' : St} {b : β}
     (h : (c >>= f) s = .ok b s') :
@@ -75,6 +98,25 @@ theorem execWhile_true_never_ok (n : Nat) (cfg : Cfg) (env : Env) (body : Core.B
       obtain ⟨v, rfl⟩ := execBlock_fragment_normal (k + 1) cfg env body hb s mid flow1 hbody
       change execWhile (k + 1) cfg env (.bool true) body mid = .ok flow s' at hrest
       exact ih mid s' flow hrest
+
+theorem execWhile_true_never_normal (n : Nat) (cfg : Cfg) (env : Env)
+    (body : Core.Block) (hok : flowBlockOk body = true) (s s' : St) (value : Val)
+    (h : execWhile n cfg env (.bool true) body s = .ok (.normal value) s') : False := by
+  induction n generalizing s s' value with
+  | zero => simp [execWhile, timeout, M.stop] at h
+  | succ n ih =>
+    cases n with
+    | zero => simp [execWhile, evalExpr, timeout, M.stop, bind_apply] at h
+    | succ k =>
+      rw [execWhile, evalExpr] at h
+      simp only [pure_bind, expectBool, ↓reduceIte] at h
+      obtain ⟨flow, middle, hbody, hrest⟩ := bind_ok h
+      obtain ⟨v, hnormal | hreturned⟩ :=
+        execBlock_flow_shape (k + 1) cfg env body hok s middle flow hbody
+      · subst flow
+        exact ih middle s' value hrest
+      · subst flow
+        simp [pure_apply] at hrest
 
 private structure DivergenceClaims (n : Nat) : Prop where
   stmt : ∀ cfg env stmt, stmtOk stmt = true → stmt.diverges cfg.mod.noReturn = true →

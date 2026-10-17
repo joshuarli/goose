@@ -11,8 +11,21 @@
 #include "../src/lexer.h"
 #include "../src/ast.h"
 #include "../src/ident/keys.h"
+#include "../src/ident/deps.h"
 
 using namespace goose;
+
+void ConstFor::Dump(string &, int) const {}
+Node *ConstFor::Clone1(Ast &) const { return nullptr; }
+void ConstFor::Children(const function<void(Node *)> &) const {}
+Val ConstFor::Check(TypeCheck &, TypeExpr *) { return {}; }
+Node *ConstFor::Cp1(Inliner &) const { return nullptr; }
+Node *ConstFor::Opt(Optimizer &) { return nullptr; }
+string ConstFor::CgX(CodeGen &) { return {}; }
+void ConstFor::CgAny(CodeGen &, const Dst &) {}
+void ConstFor::CgStmt(CodeGen &) {}
+bool Node::BceWalk(BCE &) { return true; }
+void Node::BceMark(BCE &) {}
 
 static string Sha(string_view s) { return Sha256::Of(s).Hex(); }
 
@@ -146,6 +159,19 @@ static void TestTypeKey() {
     assert(k.Type(a.Slice(a.I(IS_I64))).digest == k.Type(a.Slice(a.I(IS_I64))).digest);
     assert(k.Type(a.Slice(a.I(IS_I64))).digest != k.Type(a.Slice(a.I(IS_I32))).digest);
     assert(k.Type(a.I(IS_I64)).digest != k.Type(a.I(IS_U64)).digest);
+    auto array_a = a.ast.NewVarDef();
+    array_a->name = "a";
+    array_a->isglobal = true;
+    array_a->line = Line { 1, 0 };
+    auto array_b = a.ast.NewVarDef();
+    array_b->name = "b";
+    array_b->isglobal = true;
+    array_b->line = Line { 2, 0 };
+    auto index_a = a.ast.IndexTypeOf(IS_U32, array_a, false, Line {});
+    auto index_b = a.ast.IndexTypeOf(IS_U32, array_b, false, Line {});
+    auto bound_a = a.ast.IndexTypeOf(IS_U32, array_a, true, Line {});
+    assert(k.Type(index_a).digest != k.Type(index_b).digest);
+    assert(k.Type(index_a).digest != k.Type(bound_a).digest);
     // `const` is part of the identity.
     auto cs = a.Slice(a.I(IS_I64));
     auto cc = a.Slice(a.I(IS_I64));
@@ -172,6 +198,63 @@ static void TestTypeKey() {
     st2->line = Line { 40, 1 };
     KeyMaker kb2(b.ast);
     assert(kb2.Type(b.ast.StructOf(st2, {}, Line {})).digest != k.Type(sub).digest);
+}
+
+static Digest WrittenTypeDigest(Program &p, TypeExpr *type) {
+    KeyMaker keys(p.ast);
+    DepModules modules(keys, p.ast.sources.size());
+    Canon content, positions;
+    DepAst(modules, content, positions).Type(type);
+    return content.Hash();
+}
+
+static Digest WrittenSignatureDigest(Program &p, SFunction *sf) {
+    KeyMaker keys(p.ast);
+    DepModules modules(keys, p.ast.sources.size());
+    Canon content, positions;
+    DepAst(modules, content, positions).Signature(sf);
+    return content.Hash();
+}
+
+static Digest WrittenExpressionDigest(Program &p, Node *node) {
+    KeyMaker keys(p.ast);
+    DepModules modules(keys, p.ast.sources.size());
+    Canon content, positions;
+    DepAst(modules, content, positions).Expr(node);
+    return content.Hash();
+}
+
+static void TestWrittenIdentity() {
+    Program p;
+    auto a = p.ast.NewVarDef();
+    a->name = "a";
+    a->isglobal = true;
+    a->line = Line { 1, 0 };
+    auto b = p.ast.NewVarDef();
+    b->name = "b";
+    b->isglobal = true;
+    b->line = Line { 2, 0 };
+    auto ia = p.ast.IndexTypeOf(IS_U32, a, false, Line {});
+    auto ib = p.ast.IndexTypeOf(IS_U32, b, false, Line {});
+    auto ba = p.ast.IndexTypeOf(IS_U32, a, true, Line {});
+    ia->ix->ns = ib->ix->ns = ba->ix->ns = "";
+    assert(WrittenTypeDigest(p, ia) != WrittenTypeDigest(p, ib));
+    assert(WrittenTypeDigest(p, ia) != WrittenTypeDigest(p, ba));
+
+    auto sf = p.Fn("f", {});
+    auto signature = WrittenSignatureDigest(p, sf);
+    sf->checkfree = true;
+    assert(WrittenSignatureDigest(p, sf) != signature);
+
+    auto expansion = p.ast.New<ConstFor>(Line {});
+    expansion->source = ES_CONSTANTS;
+    expansion->names = { "N" };
+    auto expansion_digest = WrittenExpressionDigest(p, expansion);
+    expansion->names[0] = "M";
+    assert(WrittenExpressionDigest(p, expansion) != expansion_digest);
+    expansion->names[0] = "N";
+    expansion->source = ES_TYPES;
+    assert(WrittenExpressionDigest(p, expansion) != expansion_digest);
 }
 
 // A specialization of `f` taking one slice, with an extra variable of its
@@ -298,6 +381,7 @@ int main() {
     TestCanon();
     TestDeclKey();
     TestTypeKey();
+    TestWrittenIdentity();
     TestContextKey();
     puts("ok");
     return 0;

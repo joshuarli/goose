@@ -10,15 +10,15 @@ def expressionVariables : Expr → List VarId
   | .read place | .ref _ place | .copy _ place _ => placeVariables place
   | .slice _ view low high _ => viewVariables view ++ boundVariables low ++ boundVariables high
   | .len view => viewVariables view
-  | .un _ expression _ | .not expression | .conv _ _ expression _ | .fill _ expression => expressionVariables expression
+  | .un _ expression _ | .not expression | .conv _ _ expression _ | .fill _ expression _ => expressionVariables expression
   | .bin _ left right _ | .cmp _ left right | .and left right | .or left right =>
       expressionVariables left ++ expressionVariables right
   | .call _ arguments _ => argumentVariables arguments
   | .push owner expression _ => placeVariables owner ++ expressionVariables expression
   | .pop owner _ => placeVariables owner
-  | .ifE condition left right => expressionVariables condition ++ blockVariables left ++ blockVariables right
-  | .blockE block => blockVariables block
-  | .arrLit _ elements | .structLit _ elements | .values elements => expressionsVariables elements
+  | .ifE condition left right _ => expressionVariables condition ++ blockVariables left ++ blockVariables right
+  | .blockE block _ => blockVariables block
+  | .arrLit _ elements _ | .structLit _ elements | .values elements => expressionsVariables elements
   | .str _ arguments _ => printVariables arguments
 
 def placeVariables : Place → List VarId
@@ -96,7 +96,7 @@ def nestedExpressionReturns (module : Module) (implementation : ImplId) : Expr �
   | .slice _ view low high _ => nestedViewReturns module implementation view ++
       nestedBoundReturns module implementation low ++ nestedBoundReturns module implementation high
   | .len view => nestedViewReturns module implementation view
-  | .un _ expression _ | .not expression | .conv _ _ expression _ | .fill _ expression =>
+  | .un _ expression _ | .not expression | .conv _ _ expression _ | .fill _ expression _ =>
       nestedExpressionReturns module implementation expression
   | .bin _ left right _ | .cmp _ left right | .and left right | .or left right =>
       nestedExpressionReturns module implementation left ++ nestedExpressionReturns module implementation right
@@ -107,10 +107,10 @@ def nestedExpressionReturns (module : Module) (implementation : ImplId) : Expr �
         | _ => []) ++ nestedArgumentReturns module implementation arguments
   | .push owner expression _ => nestedPlaceReturns module implementation owner ++ nestedExpressionReturns module implementation expression
   | .pop owner _ => nestedPlaceReturns module implementation owner
-  | .ifE condition left right => nestedExpressionReturns module implementation condition ++
+  | .ifE condition left right _ => nestedExpressionReturns module implementation condition ++
       nestedBlockReturns module implementation left ++ nestedBlockReturns module implementation right
-  | .blockE block => nestedBlockReturns module implementation block
-  | .arrLit _ elements | .structLit _ elements | .values elements => nestedExpressionsReturns module implementation elements
+  | .blockE block _ => nestedBlockReturns module implementation block
+  | .arrLit _ elements _ | .structLit _ elements | .values elements => nestedExpressionsReturns module implementation elements
   | .str _ arguments _ => nestedPrintReturns module implementation arguments
 
 def nestedPlaceReturns (module : Module) (implementation : ImplId) : Place → List NamedSite
@@ -212,18 +212,51 @@ private def reachesLocal (module : Module) (id : ImplId) (implementation : Impl)
       if reached.contains alias then reached := (reached ++ sources).eraseDups
   return reached.contains candidate
 
-private def siteCandidate (position : Nat) : NamedSite → Option VarId
-  | .forwarded | .alias .. => none
-  | .operands operands => match operands[position]? with
-    | some (.resultLocal id _) => some id
-    | _ => none
+mutual
+private def completionExpressions (position : Nat) : Expr → List (Option Expr)
+  | .values operands => operandCompletionExpressions position operands
+  | .ifE _ left right _ => blockCompletionExpressions position left ++ blockCompletionExpressions position right
+  | .blockE block _ => blockCompletionExpressions position block
+  | expression => if position == 0 then [some expression] else [none]
 
-private def independentSite (module : Module) (id : ImplId) (implementation : Impl) (position candidate : Nat) : NamedSite → Bool
-  | .forwarded | .alias .. => false
+private def operandCompletionExpressions : Nat → List Expr → List (Option Expr)
+  | _, [] => [none]
+  | 0, operand :: _ => completionExpressions 0 operand
+  | position + 1, _ :: rest => operandCompletionExpressions position rest
+
+private def blockCompletionExpressions (position : Nat) : Block → List (Option Expr)
+  | .mk _ statements tail => statementCompletionExpressions position statements ++
+      (match tail with | none => [] | some expression => completionExpressions position expression)
+
+private def statementCompletionExpressions (position : Nat) : List Stmt → List (Option Expr)
+  | [] => []
+  | statement :: rest =>
+      (match statement with
+        | .breakValue expression _ => completionExpressions position expression
+        | .ifS _ (.mk _ left _) right _ => statementCompletionExpressions position left ++
+            (match right with | none => [] | some (.mk _ statements _) => statementCompletionExpressions position statements)
+        | .while _ (.mk _ statements _) _ |
+          .forRange _ _ _ (.mk _ statements _) _ |
+          .forEach _ _ _ _ (.mk _ statements _) _ => statementCompletionExpressions position statements
+        | _ => []) ++ statementCompletionExpressions position rest
+end
+
+private def siteCompletionExpressions (position : Nat) : NamedSite → List (Option Expr)
+  | .operands [expression] => completionExpressions position expression
   | .operands operands => match operands[position]? with
-    | none => false
-    | some (.resultLocal id _) => id == candidate
-    | some expression => !reachesLocal module id implementation candidate (expressionVariables expression)
+      | some expression => completionExpressions 0 expression
+      | none => [none]
+  | _ => [none]
+
+private def expressionCandidate : Option Expr → Option VarId
+  | some (.resultLocal id _) => some id
+  | _ => none
+
+private def independentExpression (module : Module) (id : ImplId) (implementation : Impl)
+    (candidate : Nat) : Option Expr → Bool
+  | none => false
+  | some (.resultLocal id _) => id == candidate
+  | some expression => !reachesLocal module id implementation candidate (expressionVariables expression)
 
 private def candidatesFor (module : Module) (id : ImplId) (implementation : Impl) (position : Nat) : List VarId :=
   let sites := nestedBlockReturns module id implementation.body ++ (match implementation.body.value with
@@ -233,10 +266,11 @@ private def candidatesFor (module : Module) (id : ImplId) (implementation : Impl
   let sites := sites.filter fun site => match site with
     | .alias .. => false
     | _ => true
-  let candidates := sites.filterMap (siteCandidate position)
+  let completions := sites.flatMap (siteCompletionExpressions position)
+  let candidates := completions.filterMap expressionCandidate
   candidates.eraseDups.filter fun candidate =>
     bodyDeclared implementation.body candidate &&
-      sites.all (independentSite module id implementation position candidate)
+      completions.all (independentExpression module id implementation candidate)
 
 def discoverNamedResults (module : Module) (id : ImplId) (implementation : Impl) : List (Option VarId) := Id.run do
   let mut used : List VarId := []

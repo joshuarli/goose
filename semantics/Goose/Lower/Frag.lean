@@ -428,6 +428,14 @@ theorem advB_freezeTo (m : Mutability) (r : ValueId) : AdvB (freezeTo m r) := by
     | exact AdvB.pure _
     | (rename_i t; cases t <;> first | exact AdvB.pure _ | (rename_i m' _; cases m' <;> first | exact AdvB.pure _ | exact advB_emitDef _))
 
+theorem advB_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : AdvB (coerceTo target r org) := by
+  unfold coerceTo
+  refine AdvB.bind (advB_valTy r) fun source => ?_
+  split
+  · exact advB_emitDef _
+  · exact AdvB.bind (advB_emitDef _) (fun _ => advB_emitDef _)
+  · exact AdvB.pure _
+
 theorem advB_implOfContext (c : ContextId) : AdvB (implOfContext c) := by
   unfold implOfContext
   exact AdvB.bind advB_read fun _ => AdvB.pure _
@@ -625,6 +633,30 @@ theorem intTyOf_eq {v : ValueId} {le : LEnv} {ls : LS} {t : IntTy} {ls' : LS}
     cases a with
     | data t' => cases t' <;> exact (Prod.mk.inj h).2.symm
     | view _ _ => exact (Prod.mk.inj h).2.symm
+
+theorem coerceTo_cases {target : Ty} {r : ValueId} {le : LEnv} {ls : LS}
+    {r' : ValueId} {ls' : LS} {org : OriginId} (h : coerceTo target r org le ls = (r', ls')) :
+    (r' = r ∧ ls' = ls) ∨
+    (∃ elem, target = .ref .readOnly elem ∧ emitDef (.refFreeze r) le ls = (r', ls')) ∨
+    (∃ elem view mid, target = .slice .readOnly elem ∧
+      emitDef (.sliceView r) le ls = (view, mid) ∧
+      emitDef (.viewSlice .readOnly view .omitted .omitted (some org)) le mid = (r', ls')) := by
+  unfold coerceTo at h
+  simp only [bind_run] at h
+  have hs := valTy_run r le ls
+  cases hv : valTy r le ls with
+  | mk source same =>
+    rw [hv] at hs h
+    simp only at hs h
+    subst hs
+    split at h
+    · exact Or.inr (Or.inl ⟨_, rfl, h⟩)
+    · simp only [bind_eq] at h
+      obtain ⟨view, mid, hview, hslice⟩ := h
+      exact Or.inr (Or.inr ⟨_, view, mid, rfl, hview, hslice⟩)
+    · rw [pure_run] at h
+      obtain ⟨hr, hls⟩ := Prod.mk.inj h
+      exact Or.inl ⟨hr.symm, hls.symm⟩
 
 theorem freezeTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS} {r' : ValueId} {ls' : LS}
     (h : freezeTo m r le ls = (r', ls')) :

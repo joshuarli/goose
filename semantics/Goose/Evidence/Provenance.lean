@@ -1,7 +1,7 @@
 import Goose.Evidence.Execution
 import Goose.Evidence.SSA
 import Goose.Evidence.Dominance
-import Goose.Evidence.Typing
+import Goose.Evidence.RuntimeTyping
 
 namespace Goose.Evidence
 
@@ -424,5 +424,18 @@ theorem true_cmp_fact_of_runtime_typing {cfg : GCfg} {fn : Func} {pt : Pt}
   obtain ⟨b, rightCell⟩ := sampledTyped.2.2.int rightMetadata rightPresent
   exact ⟨a, b, sampled_cmp_current_lt evaluated
     (validated_cmp_distinct validated sampledPoint comparison) leftCell rightCell protectedHistory⟩
+
+theorem validated_true_cmp_fact {cfg : GCfg} {fn : Func} {pt : Pt}
+    {fr : Frame} {st : St} {condition left right : ValueId}
+    {yes no : BlockId} {yesArgs noArgs : List ValueId}
+    (validated : validate cfg.mod = .ok ())
+    (point : RuntimePoint cfg fn pt fr st)
+    (branch : instAt fn pt = some (.term (.condbr condition yes yesArgs no noArgs)))
+    (comparison : fn.defOp? condition = some (.cmp .lt .i64 left right))
+    (conditionTrue : fr.vals[condition]? = some (.val (.bool true))) :
+    ∃ a b, fr.vals[left]? = some (.val (.int .i64 a)) ∧
+      fr.vals[right]? = some (.val (.int .i64 b)) ∧ a < b := by
+  exact true_cmp_fact_of_runtime_typing validated
+    (fun reachable => reachable.typed validated) point branch comparison conditionTrue
 
 end Goose.Evidence

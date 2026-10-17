@@ -1351,13 +1351,13 @@ theorem LS.symbolWF_initState (le : LEnv) (scopeCount : Nat) :
 
 theorem lowerImplAt_start_symbols (m : Goose.Core.Module) (impl : Goose.Core.Impl)
     (implId scopeCount : Nat) :
-    let le := lowerEnv m impl.vars
+    let le := lowerEnv m impl.vars impl.results.toList
     let start := Goose.Lower.newBlock (impl.params.toList.map fun p => .data (tyOfVar impl p.var))
       le initState
     LS.SymbolWF le scopeCount
       { start.2 with cur := some start.1.1 } := by
   dsimp
-  exact (LS.symbolWF_initState (lowerEnv m impl.vars) scopeCount).newBlockCur
+  exact (LS.symbolWF_initState (lowerEnv m impl.vars impl.results.toList) scopeCount).newBlockCur
 
 theorem finishBlocks_defs (blocks : Array BlockB) :
     (finishBlocks blocks).toList.flatMap GIR.Block.defs =
@@ -1431,15 +1431,15 @@ theorem Core.tyExpr_bin_success_origin_bound {env : Core.TEnv} {op : Core.BinOp}
     cases h
 
 theorem lowerEnv_slots_size (m : Core.Module) (vars : Array Core.LocalVar) :
-    (lowerEnv m vars).slots.size = vars.size := by
+    (lowerEnv m vars []).slots.size = vars.size := by
   simp [lowerEnv]
 
 theorem lowerEnv_globals_size (m : Core.Module) (vars : Array Core.LocalVar) :
-    (lowerEnv m vars).globals.size = m.globals.size := by
+    (lowerEnv m vars []).globals.size = m.globals.size := by
   simp [lowerEnv]
 
 theorem lowerEnv_sigs_size (m : Core.Module) (vars : Array Core.LocalVar) :
-    (lowerEnv m vars).sigs.size = m.impls.size := by
+    (lowerEnv m vars []).sigs.size = m.impls.size := by
   simp [lowerEnv]
 
 theorem lowerPlace_var_symbolRun_of_tyPlace {le : LEnv} {scopeCount : Nat}
@@ -1456,7 +1456,7 @@ theorem lowerPlace_var_symbolRun_of_tyPlace_lowerEnv {m : Core.Module}
     {x : Core.VarId} {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
     (hvars : env.vars = vars)
     (h : (Core.tyPlace env (.var x)).run fuel = .ok (info, fuel')) {ls : LS} :
-    LS.SymbolRun (lowerEnv m vars) scopeCount ls (fun v => [v]) (lowerPlace (.var x)) := by
+    LS.SymbolRun (lowerEnv m vars []) scopeCount ls (fun v => [v]) (lowerPlace (.var x)) := by
   apply lowerPlace_var_symbolRun_of_tyPlace h
   simp [lowerEnv, hvars]
 
@@ -1473,7 +1473,7 @@ theorem lowerPlace_global_symbolRun_of_tyPlace_lowerEnv {m : Core.Module}
     {g : Core.GlobalId} {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
     (hlimit : env.globalLimit ≤ m.globals.size)
     (h : (Core.tyPlace env (.global g)).run fuel = .ok (info, fuel')) {ls : LS} :
-    LS.SymbolRun (lowerEnv m vars) scopeCount ls (fun v => [v]) (lowerPlace (.global g)) := by
+    LS.SymbolRun (lowerEnv m vars []) scopeCount ls (fun v => [v]) (lowerPlace (.global g)) := by
   apply lowerPlace_global_symbolRun_of_tyPlace h
   simpa [lowerEnv] using hlimit
 

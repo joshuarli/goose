@@ -1,12 +1,5 @@
-import Goose.Core.Validate
+import Goose.Core.WellFormed
 import Goose.Proofs.Memory
-
-/-!
-Two facts that follow from a bounded unfolding of `validate`: the shape of the
-entry, and that a run starts in a store with no reference at all. What
-acceptance gives for every context, over stores, values and locations, is
-`Goose.Proofs.Safety.validated_context_sound`.
--/
 
 namespace Goose.Proofs.Core
 open Goose.Core Goose.Proofs.Memory
@@ -45,5 +38,13 @@ theorem validate_entry_shape (m : Module) (h : validate m = .ok ()) :
 theorem initial_liveRefs : LiveRefs St.initial.store := by
   intro r v h
   simp [St.initial, Store.empty] at h
+
+theorem validate_wellFormed (m : Module) (accepted : validate m = .ok ()) : WellFormed m where
+  tables := validate_declarativeTables m accepted
+  implementationTyping := Declarative.accepted_implementationTyping m accepted
+  globalTyping := Declarative.accepted_globalTyping m accepted
+  contextRoots := Declarative.accepted_contextRoots m accepted
+  globalRoots := Declarative.accepted_globalRoots m accepted
+  demand := validate_declarativeDemand m accepted
 
 end Goose.Proofs.Core

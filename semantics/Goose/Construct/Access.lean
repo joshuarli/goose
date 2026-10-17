@@ -12,9 +12,6 @@ def Ty.isRefSlice : Ty → Bool
   | .ref _ (.slice ..) => true
   | _ => false
 
-def Ty.ownerElem? : Ty → Option Ty
-  | .grow element | .growshrink element | .limited element _ => some element
-  | _ => none
 
 def Place.derefVar? : Place → Option VarId
   | .deref (.read (.var variableId)) => some variableId
@@ -25,59 +22,20 @@ structure AccessEnv where
   impl : Impl
   ctx : Context
 
-mutual
-def AccessEnv.placeType? (env : AccessEnv) : Place → Option Ty
-  | .var x => (env.impl.vars[x]?).map (·.ty)
-  | .global g => (env.mod.globals[g]?).map (·.ty)
-  | .deref e => do
-    match ← env.exprType? e with
-    | .ref _ t => some t
-    | _ => none
-  | .elem v _ _ => env.viewElement? v
-  | .field p i => do
-    match ← env.placeType? p with
-    | .structT sid _ => ((← env.mod.structs[sid]?).fields[i]?).map (·.ty)
-    | _ => none
+def AccessEnv.declarations (env : AccessEnv) : DeclarationEnv := ⟨env.mod, env.impl.vars⟩
 
-def AccessEnv.viewElement? (env : AccessEnv) : View → Option Ty
-  | .of p => do
-    match ← env.placeType? p with
-    | .arr t _ | .varr t | .grow t | .growshrink t | .limited t _ => some t
-    | _ => none
-  | .val e => do
-    match ← env.exprType? e with
-    | .slice _ t => some t
-    | _ => none
+def AccessEnv.placeType? (env : AccessEnv) (place : Place) : Option Ty :=
+  env.declarations.placeType? place
 
-def AccessEnv.exprType? (env : AccessEnv) : Expr → Option Ty
-  | .lit t _ => some (.int t)
-  | .bool _ | .cmp .. | .and .. | .or .. | .not _ => some .bool
-  | .read p => env.placeType? p
-  | .ref m p => (env.placeType? p).map (.ref m)
-  | .slice m v _ _ _ => (env.viewElement? v).map (.slice m)
-  | .len _ => some (.int .i64)
-  | .un _ e _ => env.exprType? e
-  | .bin _ a _ _ => env.exprType? a
-  | .conv _ t _ _ => some t
-  | .call c _ _ => do
-    let context ← env.mod.contexts[c]?
-    let impl ← env.mod.impls[context.impl]?
-    match impl.results.toList with
-    | [] => some .unit
-    | [t] => some t.ty
-    | _ => none
-  | .push p _ _ => do some (.ref .mutable (← (← env.placeType? p).ownerElem?))
-  | .pop p _ => do (← env.placeType? p).ownerElem?
-  | .ifE _ t _ => env.blockType? t
-  | .blockE b => env.blockType? b
-  | .arrLit t _ | .fill t _ | .structLit t _ | .bytes t _ _ | .str t _ _ | .copy t _ _ => some t
-  | .resultLocal id _ => (env.impl.vars[id]?).map (·.ty)
-  | .values _ => none
+def AccessEnv.viewElement? (env : AccessEnv) (view : View) : Option Ty :=
+  env.declarations.viewElement? view
 
-def AccessEnv.blockType? (env : AccessEnv) : Block → Option Ty
-  | .mk _ _ none => some .unit
-  | .mk _ _ (some e) => env.exprType? e
-end
+def AccessEnv.exprType? (env : AccessEnv) (expression : Expr) : Option Ty :=
+  env.declarations.exprType? expression
+
+def AccessEnv.blockType? (env : AccessEnv) (block : Block) : Option Ty :=
+  env.declarations.blockType? block
+
 
 def AccessEnv.variableRoots (env : AccessEnv) (x : VarId) : V (List RootRef) :=
   match (env.ctx.varRoots.find? (·.1 == x)).map (·.2) with
@@ -88,6 +46,24 @@ def AccessEnv.contentRoots (env : AccessEnv) (x : VarId) : V (List RootRef) :=
   match (env.ctx.contentRoots.find? (·.1 == x)).map (·.2) with
   | some rs => pure rs
   | none => reject .root s!"slice-reference variable {x} has no checked content roots"
+
+private def mapExternalRoots (arguments : List (List RootRef)) (roots : List RootRef) : V (List RootRef) := do
+  let mut result := []
+  for root in roots do
+    match root with
+    | .static | .global _ => result := result ++ [root]
+    | .param position =>
+        let some actual := arguments[position]? | reject .call "result root names missing argument"
+        result := result ++ actual
+    | .local _ => reject .result "callee result names local root"
+  pure result.eraseDups
+
+private def mergeRootChannels (left right : List (List RootRef)) : V (List (List RootRef)) := do
+  if left.isEmpty then pure right
+  else if right.isEmpty then pure left
+  else
+    if left.length != right.length then reject .result "block result channel count mismatch"
+    pure ((left.zip right).map fun (a,b) => (a ++ b).eraseDups)
 
 mutual
 def AccessEnv.placeRoots (env : AccessEnv) : Place → V (List RootRef)
@@ -112,8 +88,8 @@ def AccessEnv.exprRoots (env : AccessEnv) : Expr → V (List RootRef)
   | .ref _ p => env.placeRoots p
   | .slice _ v _ _ _ => env.viewRoots v
   | .push p _ _ => env.placeRoots p
-  | .ifE _ t f => do pure ((← env.blockRoots t) ++ (← env.blockRoots f))
-  | .blockE b => env.blockRoots b
+  | .ifE _ t f _ => do pure ((← env.blockRoots t) ++ (← env.blockRoots f))
+  | .blockE b _ => env.blockRoots b
   | .call c args _ => do
     let some ctx := env.mod.contexts[c]? | reject .call "call has no context"
     let roots ← env.argsRoots args
@@ -141,38 +117,49 @@ def AccessEnv.argsRoots (env : AccessEnv) : List Arg → V (List (List RootRef))
   | a :: args => do pure ((← env.argRoots a) :: (← env.argsRoots args))
 
 def AccessEnv.blockRoots (env : AccessEnv) : Block → V (List RootRef)
-  | .mk _ _ none => pure []
-  | .mk _ _ (some e) => env.exprRoots e
-end
-private def mapExternalRoots (arguments : List (List RootRef)) (roots : List RootRef) : V (List RootRef) := do
-  let mut result := []
-  for root in roots do
-    match root with
-    | .static | .global _ => result := result ++ [root]
-    | .param position =>
-        let some actual := arguments[position]? | reject .call "result root names missing argument"
-        result := result ++ actual
-    | .local _ => reject .result "callee result names local root"
-  pure result.eraseDups
+  | block => do pure (← env.blockResultRoots block).flatten
 
-mutual
 def AccessEnv.resultRoots (env : AccessEnv) : Expr → V (List (List RootRef))
   | .call contextId arguments _ => do
       let some context := env.mod.contexts[contextId]? | reject .call "call context outside table"
       let arguments ← env.argsRoots arguments
       context.resultRoots.mapM (mapExternalRoots arguments)
   | .values operands => operands.mapM env.exprRoots
-  | .ifE _ left right => do
+  | .ifE _ left right _ => do
       let a ← env.blockResultRoots left
       let b ← env.blockResultRoots right
-      if a.length != b.length then reject .result "branch result channel count mismatch"
-      pure ((a.zip b).map fun (a,b) => (a ++ b).eraseDups)
-  | .blockE block => env.blockResultRoots block
+      mergeRootChannels a b
+  | .blockE block _ => do
+      let roots ← env.blockResultRoots block
+      if roots.isEmpty then
+        let some types := blockResultTypes? 10000 env.declarations block |
+          reject .type "cannot determine block result roots"
+        pure (types.map fun _ => [])
+      else pure roots
   | expression => do pure [← env.exprRoots expression]
 
 def AccessEnv.blockResultRoots (env : AccessEnv) : Block → V (List (List RootRef))
-  | .mk _ _ none => pure []
-  | .mk _ _ (some expression) => env.resultRoots expression
+  | .mk _ statements tail => do
+      let breaks ← env.statementBreakRoots statements
+      let normal ← match tail with | none => pure [] | some expression => env.resultRoots expression
+      mergeRootChannels breaks normal
+
+def AccessEnv.statementBreakRoots (env : AccessEnv) : List Stmt → V (List (List RootRef))
+  | [] => pure []
+  | statement :: rest => do
+      let current ← match statement with
+        | .breakValue expression _ => env.resultRoots expression
+        | .ifS _ (.mk _ left _) right _ => do
+            let left ← env.statementBreakRoots left
+            let right ← match right with
+              | none => pure []
+              | some (.mk _ statements _) => env.statementBreakRoots statements
+            mergeRootChannels left right
+        | .while _ (.mk _ statements _) _ |
+          .forRange _ _ _ (.mk _ statements _) _ |
+          .forEach _ _ _ _ (.mk _ statements _) _ => env.statementBreakRoots statements
+        | _ => pure []
+      mergeRootChannels current (← env.statementBreakRoots rest)
 end
 
 end Goose.Construct

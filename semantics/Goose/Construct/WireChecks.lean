@@ -18,7 +18,7 @@ private def module : Module := {
       .expr (.str (.varr (.int .u8)) [.text "hello", .view (.of (.var 0))] 0) 0,
       .expr (.copy (.varr (.int .u8)) (.var 0) 0) 0,
       .receive [0, 1] (.values [.resultLocal 0 0, .bytes (.varr (.int .u8)) [] 0]) 0,
-      .appendValue (.var 0) (.arrLit (.arr (.int .u8) 1) [.lit .u8 1]) 0,
+      .appendValue (.var 0) (.arrLit (.arr (.int .u8) 1) [.lit .u8 1] 0) 0,
       .appendConstruct (.var 0) (.bytes (.varr (.int .u8)) [1] 0) 0,
       .retForward (.call 0 [.construct (.bytes (.varr (.int .u8)) [] 0)] 0) 0,
       .returnFromForward 0 (.call 0 [] 0) 0,
@@ -71,5 +71,19 @@ private def namedStructModule : Module := { validModule with
 #guard rejects ((Writer.module namedStructModule).replace ",\"箱\"]" "]")
 #guard rejects ((Writer.module namedStructModule).replace "\"箱\"" "\"\"")
 #guard rejects ((Writer.module namedStructModule).replace ",\"箱\"]" ",\"箱\",\"extra\"]")
+
+
+private def sourceOriginExpressions : List Expr :=
+  [.arrLit (.arr (.int .u8) 1) [.lit .u8 1] 0,
+   .fill (.arr (.int .u8) 1) (.lit .u8 1) 0,
+   .ifE (.bool true) (.mk 1 [] none) (.mk 2 [] none) 0,
+   .blockE (.mk 1 [] none) 0]
+private def originModule (expression : Expr) : Module := { validModule with
+  impls := validModule.impls.map (fun impl => { impl with body := .mk 0 [] (some expression) }) }
+private def rejectsMissingExpressionOrigin (expression : Expr) : Bool :=
+  let encoded := Writer.expr (Writer.tyIndex validModule.types) expression
+  rejects ((Writer.module (originModule expression)).replace encoded (encoded.replace ",0]" "]"))
+#guard sourceOriginExpressions.all (fun expression => roundTrips (originModule expression))
+#guard sourceOriginExpressions.all rejectsMissingExpressionOrigin
 
 end Goose.Construct.WireChecks

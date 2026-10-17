@@ -22,6 +22,7 @@ inline TypeCheck::LVal TypeCheck::CheckLValue(Node *n) {
         RecordVal(n, v);
     };
     if (auto id = Is<Ident>(n)) {
+        if (!id->expansionerror.empty()) Error(id, string(id->expansionerror));
         auto vd = LookupVar(id->name, id->ns, n);
         if (!vd) {
             if (auto kind = ScopeNameKind(id->name))
@@ -602,6 +603,9 @@ inline VarDef *TypeCheck::HolderRootOf(const Val &v) { return ContentsOf(v).Root
 // Field / builtin-property resolution on an lvalue path.
 inline void TypeCheck::ResolveMemberLValue(LVal &lv, Dot *d) {
     auto t = lv.type;
+    if (d->accessorowner && !TypeEq(ast.PlainOf(t), d->accessorowner))
+        Error(d, cat("const for accessor belongs to ", TypeStr(d->accessorowner),
+                     ", not ", TypeStr(t)));
     // Steps the path into the named field of a field run; a frame
     // object's resizable tail has a header of its own to address.
     auto step = [&](const vector<Field> &fields, const vector<TypeExpr *> &ftypes,
@@ -958,6 +962,10 @@ inline Val TypeCheck::CheckValueAt(Node *&n, TypeExpr *expected, Dest d, bool ca
 inline Val TypeCheck::Operand(Node *n) {
     auto v = DecayRef(CheckV(n, nullptr));
     n->exprtype = v.type;
+    // An operator computes with the number an index type holds (§3.11), so
+    // nothing it computes is one. The operand keeps its type for the
+    // bounds-check pass, which an index operand's is for.
+    if (IsIndexT(v.type)) v.type = ast.NoIndex(v.type);
     return v;
 }
 
@@ -1148,6 +1156,22 @@ inline bool TypeCheck::FitsAt(Val &v, TypeExpr *dt) {
     switch (dt->kind) {
         case TY_INT:
             if (t->kind != TY_INT) return false;
+            // An index or bound type takes only a value of one of the same
+            // array (an index where a bound is wanted), at most as wide: no
+            // constant, and no computed value, says anything about the
+            // array's length (§3.11).
+            if (dt->ix) {
+                if (t->ix && t->ix->arr == dt->ix->arr && (dt->ix->upto || !t->ix->upto) &&
+                    ImplicitInt(t->intstorage, dt->intstorage)) {
+                    v.type = dt;
+                    return true;
+                }
+                fitfail = cat("expected a value of type ", TypeStr(dt), ", got ", TypeStr(t),
+                              v.ck == CK_INT || v.litint ? " constant" : "",
+                              " (only `x as ", TypeStr(dt), "` makes one, checking x against ",
+                              dt->ix->arr->name, ".len, §3.11)");
+                return false;
+            }
             // A literal parameter adapts to any integer type; whether the
             // literal fits is each call site's question.
             if (v.unsized) {
@@ -1339,6 +1363,19 @@ inline TypeExpr *TypeCheck::UnifyBranch(TypeExpr *a, TypeExpr *b, Node *at, bool
     if (!b) return a;
     if (TypeEq(a, b)) return a;
     if (TopConstEq(a, b)) return a->cq ? a : b;   // Read-only in one branch: in both.
+    if (a->kind == TY_INT && b->kind == TY_INT && (a->ix || b->ix)) {
+        // Index or bound types of one array join at the wider width, as a
+        // bound if either is one; anything else joins as the plain
+        // integers they are (§3.11).
+        if (a->ix && b->ix && a->ix->arr == b->ix->arr) {
+            auto upto = a->ix->upto || b->ix->upto;
+            if (ImplicitInt(a->intstorage, b->intstorage))
+                return ast.IndexTypeOf(b->intstorage, b->ix->arr, upto, at->line);
+            if (ImplicitInt(b->intstorage, a->intstorage))
+                return ast.IndexTypeOf(a->intstorage, a->ix->arr, upto, at->line);
+        }
+        return UnifyBranch(ast.NoIndex(a), ast.NoIndex(b), at, wantvalue);
+    }
     if (a->kind == TY_INT && b->kind == TY_INT) {
         if (ImplicitInt(a->intstorage, b->intstorage)) return b;
         if (ImplicitInt(b->intstorage, a->intstorage)) return a;
@@ -2174,6 +2211,9 @@ inline bool TypeCheck::Converts(const Val &v, TypeExpr *t) {
     auto vt = LoadType(v.type);
     if (t->kind == TY_INT) {
         if (vt->kind != TY_INT) return false;
+        if (t->ix)
+            return vt->ix && vt->ix->arr == t->ix->arr && (t->ix->upto || !vt->ix->upto) &&
+                   ImplicitInt(vt->intstorage, t->intstorage);
         if (vt->intstorage == t->intstorage) return true;
         if (v.ck == CK_INT || (v.litint && t->intstorage != IS_VARINT))
             return v.litint ? ConstsFit(v, t->intstorage)
@@ -2464,6 +2504,7 @@ inline void TypeCheck::ReportRedundantCasts() {
 // parameter default, which names what a top-level declaration would, a name
 // its scope makes something else is an error as well (DefaultScopeName).
 inline void TypeCheck::ConstName(Ident *id, const char *what) {
+    if (!id->expansionerror.empty()) Error(id, string(id->expansionerror));
     if (auto vd = LookupVar(id->name, id->ns); vd && !vd->isglobal)
         Error(id, cat(what, " ", id->name, " names a local variable, not a constant"));
     if (auto kind = ScopeNameKind(id->name))
@@ -2530,11 +2571,11 @@ inline int64_t TypeCheck::FillCount(Node *n) {
 inline bool TypeCheck::ConstIntValue(Node *n, Val &v, bool &literal,
                                      set<VarDecl *> &visiting, ConstUse *use) {
     if (auto i = Is<IntLit>(n)) {
-        v.type = ast.inttypes[i->uns ? IS_U64 : IS_I64];
+        v.type = i->fixedtype ? i->fixedtype : ast.inttypes[i->uns ? IS_U64 : IS_I64];
         v.ck = CK_INT;
         v.ival = i->val;
         v.uns = i->uns;
-        literal = true;
+        literal = !i->fixedtype;
         return true;
     }
     if (auto id = Is<Ident>(n)) {
@@ -2896,6 +2937,9 @@ inline TypeCheck::LitDeep TypeCheck::CheckInits(StructLit *sl, vector<Field> &fi
     auto pos = 0;
     for (auto &fi : sl->inits) {
         auto idx = -1;
+        if (fi.accessorowner && !TypeEq(ast.PlainOf(selft), fi.accessorowner))
+            Error(fi.val, cat("const for accessor belongs to ", TypeStr(fi.accessorowner),
+                              ", not ", TypeStr(selft)));
         if (named) {
             for (auto i = 0; i < (int)fields.size(); i++)
                 if (!fields[i].ispad && fields[i].name == fi.name) { idx = i; break; }
@@ -3031,6 +3075,7 @@ inline void TypeCheck::CheckStmts(Block *b) {
             break;
         }
         blockpos.back().idx = i;
+        if (auto cf = Is<ConstFor>(b->stmts[i])) b->stmts[i] = ExpandStatements(cf);
         CheckStmt(b->stmts[i]);
     }
     // Drop the unreachable suffix (including the tail), so later passes never

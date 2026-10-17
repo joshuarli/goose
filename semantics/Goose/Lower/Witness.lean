@@ -39,6 +39,7 @@ def assertFail : String := include_str "../../../test/gir/golden/gir_assert_fail
 def userAbort : String := include_str "../../../test/gir/golden/gir_user_abort.core.json"
 def exitCode : String := include_str "../../../test/gir/golden/gir_exit_code.core.json"
 def blockValue : String := include_str "../../../test/gir/golden/gir_ord02.core.json"
+def structLocal : String := include_str "../../../test/semantics/golden/struct_local.core.json"
 
 /-- A short instance of the committed counting while, with the same condition and body. -/
 def countingWhile : String :=
@@ -81,6 +82,12 @@ def hasCoveredWhile (bs : ByteArray) : Bool :=
 #guard (agreeLine .debug branches.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"assert\""
 #guard (agreeLine .debug intOverflow.toUTF8).startsWith "[\"agree\",[\"done\",[\"aborted\",\"int_overflow\""
 
+#guard covered structLocal.toUTF8
+#guard (agreeLine .release structLocal.toUTF8).startsWith
+  "[\"agree\",[\"done\",[\"returned\"],\"1 42 7\\n\"]"
+#guard (agreeLine .debug structLocal.toUTF8).startsWith
+  "[\"agree\",[\"done\",[\"returned\"],\"1 42 7\\n\"]"
+
 open Goose.Core Goose.GIR
 
 def rangeBody : Core.Block :=
@@ -96,12 +103,12 @@ def rangeModule : Core.Module :=
   { files := #["range.goose"], types := #[.int .i64], globals := #[],
     impls := #[impl],
     contexts := #[⟨0, "main", [], [], []⟩], entry := 0,
-    origins := #[⟨0, 1, "range"⟩] }
+    origins := #[⟨0, 1, "for"⟩] }
 
 def rangeVars : Array LocalVar := #[⟨"i", .int .i64, .immutable, 1, 0⟩]
 
 def rangeBuilder : LS :=
-  (lowerStmt none rangeStmt (lowerEnv rangeModule rangeVars) startLS).2
+  (lowerStmt none rangeStmt (lowerEnv rangeModule rangeVars []) startLS).2
 
 def rangeFunction : Func :=
   { name := "range", params := [], results := [],
@@ -116,7 +123,7 @@ theorem concrete_range_statement (n : Nat) (p : NumProfile) :
         Post ⟨p, rangeModule⟩ ⟨rangeVars, 0, [], 0⟩ ⟨⟨p, lower rangeModule⟩, rangeFunction⟩
           startLS ⟨0, [], {}, 0⟩ rangeBuilder fr' pt' []) := by
   apply stmt_range_sim n none 0 (.lit .i64 0) (.lit .i64 3) rangeBody 0 rfl rfl rfl
-    (lowerEnv rangeModule rangeVars) startLS rangeBuilder () (0, 0)
+    (lowerEnv rangeModule rangeVars []) startLS rangeBuilder () (0, 0)
     ⟨p, rangeModule⟩ ⟨rangeVars, 0, [], 0⟩ ⟨⟨p, lower rangeModule⟩, rangeFunction⟩
     ⟨0, [], {}, 0⟩
   · exact ⟨⟨"i", .int .i64, .immutable, 1, 0⟩, rfl, rfl⟩

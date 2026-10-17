@@ -9,6 +9,16 @@ open Goose.Core Goose.GIR Goose.Proofs.Memory
 
 abbrev ActivationTypes := ActId → Option Func
 
+def ActivationTypes.Extends (before after : ActivationTypes) : Prop :=
+  ∀ act fn, before act = some fn → after act = some fn
+
+theorem ActivationTypes.Extends.refl (activations : ActivationTypes) : activations.Extends activations :=
+  fun _ _ present => present
+
+theorem ActivationTypes.Extends.trans {first second third : ActivationTypes}
+    (left : first.Extends second) (right : second.Extends third) : first.Extends third :=
+  fun act fn present => right act fn (left act fn present)
+
 def runtimeDeclarations (cfg : GCfg) (activations : ActivationTypes) : RootDeclarations
   | .global id => cfg.mod.globals[id]?.map (·.ty)
   | .local act _ slot => (activations act).bind (fun fn => fn.slots[slot]?.map (·.ty))
@@ -18,6 +28,28 @@ def ActivationTypes.Before (activations : ActivationTypes) (next : ActId) : Prop
 
 def ActivationTypes.enter (activations : ActivationTypes) (act : ActId) (fn : Func) : ActivationTypes :=
   fun other => if other = act then some fn else activations other
+
+theorem ActivationTypes.enter_extends {activations : ActivationTypes} {act : ActId} {fn : Func}
+    (fresh : activations act = none) : activations.Extends (activations.enter act fn) := by
+  intro other owner present
+  by_cases same : other = act
+  · subst other
+    rw [fresh] at present
+    contradiction
+  · simpa only [ActivationTypes.enter, same, ↓reduceIte] using present
+
+theorem runtimeDeclarations_extends {cfg : GCfg} {before after : ActivationTypes}
+    (extension : before.Extends after) :
+    (runtimeDeclarations cfg before).Extends (runtimeDeclarations cfg after) := by
+  intro root ty present
+  cases root with
+  | global id => exact present
+  | «local» act scope slot =>
+    cases allocated : before act with
+    | none => simp [runtimeDeclarations, allocated] at present
+    | some fn =>
+      have kept := extension act fn allocated
+      simpa only [runtimeDeclarations, allocated, kept] using present
 
 def RuntimeStateTy (cfg : GCfg) (activations : ActivationTypes) (state : St) : Prop :=
   activations.Before state.nextAct ∧ WeakStoreTy (runtimeDeclarations cfg activations) state.store
@@ -48,12 +80,13 @@ theorem RuntimeStateTy.freshAct {cfg : GCfg} {activations : ActivationTypes} {be
     RuntimeStateTy cfg (activations.enter act fn) after ∧
       (activations.enter act fn) act = some fn ∧
       (runtimeDeclarations cfg activations).Extends
-        (runtimeDeclarations cfg (activations.enter act fn)) := by
+        (runtimeDeclarations cfg (activations.enter act fn)) ∧
+      activations.Extends (activations.enter act fn) := by
   simp only [Goose.Core.freshAct, Res.ok.injEq] at allocated
   obtain ⟨rfl, rfl⟩ := allocated
   have fresh := typed.1 before.nextAct (Nat.le_refl _)
   have extension := runtimeDeclarations_enter_extends (cfg := cfg) (fn := fn) fresh
-  refine ⟨⟨?_, typed.2.mono extension⟩, ?_, extension⟩
+  refine ⟨⟨?_, typed.2.mono extension⟩, ?_, extension, ActivationTypes.enter_extends fresh⟩
   · intro other bound
     change before.nextAct + 1 ≤ other at bound
     have different : other ≠ before.nextAct := Nat.ne_of_gt (Nat.lt_of_succ_le bound)
@@ -80,6 +113,7 @@ def RuntimeFrameTy (cfg : GCfg) (fn : Func) (activations : ActivationTypes)
     (fr : Frame) (state : St) : Prop :=
   RuntimeStateTy cfg activations state ∧ activations fr.act = some fn ∧
     WeakFrameTy (runtimeDeclarations cfg activations) (fn.valueTypes cfg.mod) fr
+
 
 theorem WeakFrameTy.empty (roots : RootDeclarations) (types : Array (Option VTy))
     (act depth : Nat) : WeakFrameTy roots types ⟨act, [], {}, depth⟩ := by
@@ -187,23 +221,39 @@ theorem WeakFrameTy.getVals {roots : RootDeclarations} {types : Array (Option VT
     · exact headTyped
     · exact tailTyped other present
 
-inductive FlatOperands (types : Array (Option VTy)) : List ValueId → TyList → Prop
-  | nil : FlatOperands types [] .nil
+inductive FieldOperands (types : Array (Option VTy)) : List ValueId → TyList → Prop
+  | nil : FieldOperands types [] .nil
   | cons {id ty ids rest}
-      (metadata : types[id]? = some (some (.data ty))) (flat : ty.flat = true)
-      (tail : FlatOperands types ids rest) : FlatOperands types (id :: ids) (.cons ty rest)
+      (metadata : types[id]? = some (some (.data ty)))
+      (tail : FieldOperands types ids rest) : FieldOperands types (id :: ids) (.cons ty rest)
+
+theorem FieldOperands.ofMap {types : Array (Option VTy)} {ids : List ValueId} {fields : TyList}
+    (metadata : ids.map (fun id => types[id]?) = fields.toList.map (fun ty => some (some (.data ty)))) :
+    FieldOperands types ids fields := by
+  cases fields with
+  | nil =>
+    cases ids with
+    | nil => exact .nil
+    | cons id ids => simp [TyList.toList] at metadata
+  | cons ty rest =>
+    cases ids with
+    | nil => simp [TyList.toList] at metadata
+    | cons id ids =>
+      simp only [TyList.toList, List.map_cons, List.cons.injEq] at metadata
+      exact .cons metadata.1 (FieldOperands.ofMap metadata.2)
+termination_by structural fields
 
 theorem WeakFrameTy.getFields {roots : RootDeclarations} {types : Array (Option VTy)}
     {fr : Frame} {ids : List ValueId} {fields : TyList} {values : List Val} {before after : St}
-    (typed : WeakFrameTy roots types fr) (operands : FlatOperands types ids fields)
+    (typed : WeakFrameTy roots types fr) (operands : FieldOperands types ids fields)
     (read : mapList (Goose.GIR.getVal fr) ids before = .ok values after) :
-    FieldsTy fields values ∧ after = before := by
+    WeakFieldsTy roots fields values ∧ after = before := by
   induction operands generalizing values before after with
   | nil =>
     simp only [mapList, pure_apply, Res.ok.injEq] at read
     obtain ⟨rfl, rfl⟩ := read
     exact ⟨True.intro, rfl⟩
-  | cons metadata flat tail ih =>
+  | cons metadata tail ih =>
     simp only [mapList] at read
     obtain ⟨value, middle, found, read⟩ := m_bind_ok read
     obtain ⟨headTyped, sameState⟩ := typed.getVal metadata found
@@ -213,7 +263,7 @@ theorem WeakFrameTy.getFields {roots : RootDeclarations} {types : Array (Option 
     subst middle
     simp only [pure_apply, Res.ok.injEq] at read
     obtain ⟨rfl, rfl⟩ := read
-    exact ⟨⟨headTyped.flat flat, tailTyped⟩, rfl⟩
+    exact ⟨⟨headTyped, tailTyped⟩, rfl⟩
 
 theorem WeakViewTy.mono {before after : RootDeclarations} {view : ViewVal} {element : Ty}
     (extension : before.Extends after) (typed : WeakViewTy before view element) :
@@ -233,6 +283,19 @@ theorem WeakViewTy.element {roots : RootDeclarations} {view : ViewVal} {element 
   · exact declared.append (.shrink (.root element))
   · exact declared.append (.limited (.root element))
 
+theorem WeakValueTy.arrayElements {roots : RootDeclarations} {value : Val} {ty element : Ty}
+    (typed : WeakValueTy roots value ty) (arrayType : arrayElem? ty = some element) :
+    ∃ values, value.elems? = some values ∧
+      ∀ (i : Nat) (child : Val), values[i]? = some child → WeakValueTy roots child element := by
+  cases ty <;> simp only [arrayElem?] at arrayType <;> try contradiction
+  all_goals simp only [Option.some.injEq] at arrayType; subst element
+  all_goals cases value <;> simp only [WeakValueTy] at typed <;> try contradiction
+  case arr.fixed => exact ⟨_, rfl, typed.2⟩
+  case grow.resizable => exact ⟨_, rfl, typed.2⟩
+  case growshrink.resizable => exact ⟨_, rfl, typed.2⟩
+  case limited.limited => exact ⟨_, rfl, typed.2.2.2.2⟩
+
+
 theorem WeakCellTy.mono {before after : RootDeclarations} {cell : RVal} {ty : VTy}
     (extension : before.Extends after) (typed : WeakCellTy before cell ty) :
     WeakCellTy after cell ty := by
@@ -247,6 +310,15 @@ theorem WeakFrameTy.mono {before after : RootDeclarations} {types : Array (Optio
     WeakFrameTy after types fr := by
   intro id cell ty metadata present
   exact (typed id cell ty metadata present).mono extension
+
+theorem RuntimeFrameTy.transfer {cfg : GCfg} {fn : Func} {before after : ActivationTypes}
+    {fr : Frame} {oldState newState : St} (typed : RuntimeFrameTy cfg fn before fr oldState)
+    (extension : before.Extends after) (stateTyped : RuntimeStateTy cfg after newState) :
+    RuntimeFrameTy cfg fn after fr newState := by
+  refine ⟨stateTyped, extension fr.act fn typed.2.1, ?_⟩
+  intro id cell ty metadata present
+  exact (typed.2.2 id cell ty metadata present).mono (runtimeDeclarations_extends extension)
+
 
 theorem execPure_slotAddr_typed {activations : ActivationTypes} {cx : FnCtx} {fr : Frame}
     {id : SlotId} {slot : Slot} {before after : St} {cell : RVal}
@@ -433,6 +505,12 @@ theorem readLoc_state {before after : St} {location : Loc} {value : Val}
   cases stored : before.store.read location <;> simp [stored] at read
   exact read.2.symm
 
+theorem lengthLoc_state {before after : St} {location : Loc} {len : Nat}
+    (read : lengthLoc location before = .ok len after) : after = before := by
+  unfold lengthLoc at read
+  cases stored : before.store.length location <;> simp [stored] at read
+  exact read.2.symm
+
 theorem getView_state {fr : Frame} {id : ValueId} {before after : St} {view : ViewVal}
     (read : Goose.GIR.getView fr id before = .ok view after) : after = before := by
   unfold Goose.GIR.getView at read
@@ -441,6 +519,32 @@ theorem getView_state {fr : Frame} {id : ValueId} {before after : St} {view : Vi
   subst middle
   cases cell <;> simp [fault, M.stop, pure_apply] at read
   exact read.2.symm
+
+theorem WeakViewTy.readRun {roots : RootDeclarations} {view : ViewVal} {element : Ty}
+    {before after : St} {values : Array Val} (viewTyped : WeakViewTy roots view element)
+    (storeTyped : WeakStoreTy roots before.store)
+    (evaluated : Goose.Core.readRun view before = .ok values after) :
+    (∀ (i : Nat) (value : Val), values[i]? = some value → WeakValueTy roots value element) ∧
+      after = before := by
+  unfold Goose.Core.readRun at evaluated
+  obtain ⟨old, middle, read, evaluated⟩ := m_bind_ok evaluated
+  have sameState := readLoc_state read
+  subst middle
+  have children : ∃ elements, old.elems? = some elements ∧
+      ∀ (i : Nat) (child : Val), elements[i]? = some child → WeakValueTy roots child element := by
+    rcases viewTyped with ⟨count, declared⟩ | declared | declared | ⟨capacity, declared⟩
+    all_goals exact ((storeTyped.readLoc declared read).1).arrayElements rfl
+  obtain ⟨elements, shape, elementsTyped⟩ := children
+  cases old <;> simp only [Val.elems?] at shape <;> try contradiction
+  all_goals simp only [Option.some.injEq] at shape; subst elements
+  all_goals simp only at evaluated
+  all_goals split at evaluated
+  all_goals first
+    | (simp [fault, M.stop] at evaluated; done)
+    | (simp only [pure_apply, Res.ok.injEq] at evaluated
+       obtain ⟨rfl, rfl⟩ := evaluated
+       exact ⟨elements_extract elementsTyped _ _, rfl⟩)
+
 
 theorem checkCapacityAtOrg_state {location : Loc} {count : Nat} {org : Option OriginId}
     {before after : St} {result : Unit}
@@ -637,7 +741,7 @@ theorem execPure_arrLit_typed {roots : RootDeclarations} {types : Array (Option 
 theorem execPure_structLit_typed {roots : RootDeclarations} {types : Array (Option VTy)}
     {cx : FnCtx} {fr : Frame} {ids : List ValueId} {sid : StructId} {fields : TyList}
     {before after : St} {cell : RVal} (frameTyped : WeakFrameTy roots types fr)
-    (operands : FlatOperands types ids fields)
+    (operands : FieldOperands types ids fields)
     (evaluated : execPure cx fr (.structLit (.structT sid fields) ids) before = .ok cell after) :
     WeakCellTy roots cell (.data (.structT sid fields)) ∧ after = before := by
   simp only [execPure] at evaluated
@@ -646,7 +750,7 @@ theorem execPure_structLit_typed {roots : RootDeclarations} {types : Array (Opti
   subst middle
   simp only [pure_apply, Res.ok.injEq] at evaluated
   obtain ⟨rfl, rfl⟩ := evaluated
-  exact ⟨⟨rfl, by simpa using WeakFieldsTy.ofFlat (roots := roots) fieldsTyped⟩, rfl⟩
+  exact ⟨⟨rfl, by simpa using fieldsTyped⟩, rfl⟩
 
 theorem pushAppend_typed {cfg : GCfg} {activations : ActivationTypes}
     {location : Loc} {value : Val} {owner element : Ty} {before after : St} {cell : RVal}
@@ -742,13 +846,281 @@ theorem execEff_slotInit_typed {activations : ActivationTypes} {fn : Func} {cfg 
     refine ⟨⟨frameTyped.1.1, frameTyped.1.2.introduce ?_ valueTyped⟩, frameTyped.2⟩
     simp [runtimeDeclarations, frameTyped.2.1, lookup]
 
+theorem truncateEffect_typed {cfg : GCfg} {fn : Func} {activations : ActivationTypes}
+    {fr fr' : Frame} {location : Loc} {owner element : Ty} {len : Nat} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (target : DeclaredLocation (runtimeDeclarations cfg activations) location owner)
+    (ownerType : owner.ownerElem? = some element)
+    (evaluated : (truncateLoc location len >>= fun _ => pure fr) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  obtain ⟨result, middle, shortened, evaluated⟩ := m_bind_ok evaluated
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  unfold truncateLoc at shortened
+  cases changed : before.store.truncate location len with
+  | error fault => simp [changed] at shortened
+  | ok store =>
+    simp only [changed, Res.ok.injEq] at shortened
+    obtain ⟨_, sameState⟩ := shortened
+    subst middle
+    exact ⟨⟨frameTyped.1.1, frameTyped.1.2.truncateOwner target ownerType changed⟩, frameTyped.2⟩
+
+theorem appendEffect_typed {cfg : GCfg} {fn : Func} {activations : ActivationTypes}
+    {fr fr' : Frame} {location : Loc} {owner element : Ty} {values : Array Val} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (target : DeclaredLocation (runtimeDeclarations cfg activations) location owner)
+    (ownerType : owner.ownerElem? = some element)
+    (valuesTyped : ∀ (i : Nat) (value : Val), values[i]? = some value →
+      WeakValueTy (runtimeDeclarations cfg activations) value element)
+    (evaluated : (appendLoc location values >>= fun _ => pure fr) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  obtain ⟨index, middle, appended, evaluated⟩ := m_bind_ok evaluated
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  unfold appendLoc at appended
+  cases changed : before.store.append location values with
+  | error fault => simp [changed] at appended
+  | ok result =>
+    obtain ⟨store, start⟩ := result
+    simp only [changed, Res.ok.injEq] at appended
+    obtain ⟨rfl, sameState⟩ := appended
+    subst middle
+    exact ⟨⟨frameTyped.1.1, frameTyped.1.2.appendOwner target ownerType valuesTyped changed⟩,
+      frameTyped.2⟩
+
+theorem writeEffect_typed {cfg : GCfg} {fn : Func} {activations : ActivationTypes}
+    {fr fr' : Frame} {location : Loc} {ty : Ty} {value : Val} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (target : DeclaredLocation (runtimeDeclarations cfg activations) location ty)
+    (valueTyped : WeakValueTy (runtimeDeclarations cfg activations) value ty)
+    (evaluated : (writeLoc location value >>= fun _ => pure fr) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  obtain ⟨result, middle, written, evaluated⟩ := m_bind_ok evaluated
+  simp only [pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  unfold writeLoc at written
+  cases changed : before.store.write location value with
+  | error fault => simp [changed] at written
+  | ok store =>
+    simp only [changed, Res.ok.injEq] at written
+    obtain ⟨_, sameState⟩ := written
+    subst middle
+    exact ⟨⟨frameTyped.1.1, frameTyped.1.2.write target valueTyped changed⟩, frameTyped.2⟩
+
+theorem execEff_clear_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {targetId : ValueId} {permission : Mutability} {owner element : Ty}
+    {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (metadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission owner))))
+    (ownerType : owner.ownerElem? = some element)
+    (evaluated : execEff fn fr (.clear targetId org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  unfold execEff at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨targetTyped, sameState⟩ := frameTyped.2.2.getVal metadata read
+  subst middle
+  obtain ⟨location, rfl, target⟩ := targetTyped
+  simp only [expectRef, pure_bind] at evaluated
+  exact truncateEffect_typed frameTyped target ownerType evaluated
+
+theorem execEff_popN_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {targetId countId : ValueId} {permission : Mutability} {owner element : Ty}
+    {countTy : IntTy} {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (targetMetadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission owner))))
+    (countMetadata : (fn.valueTypes cfg.mod)[countId]? = some (some (.data (.int countTy))))
+    (ownerType : owner.ownerElem? = some element)
+    (evaluated : execEff fn fr (.popN targetId countId org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  unfold execEff at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨targetTyped, sameState⟩ := frameTyped.2.2.getVal targetMetadata read
+  subst middle
+  obtain ⟨location, rfl, target⟩ := targetTyped
+  simp only [expectRef, pure_bind] at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨countTyped, sameState⟩ := frameTyped.2.2.getVal countMetadata read
+  subst middle
+  obtain ⟨count, rfl⟩ := countTyped.int
+  simp only [expectInt, pure_bind] at evaluated
+  obtain ⟨len, middle, measured, evaluated⟩ := m_bind_ok evaluated
+  have sameState := lengthLoc_state measured
+  subst middle
+  split at evaluated
+  · cases org <;> simp [abortAtOrg, abortAt, fault, M.stop] at evaluated
+  · exact truncateEffect_typed frameTyped target ownerType evaluated
+
+theorem execEff_replace_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {targetId valueId : ValueId} {permission : Mutability} {owner : Ty}
+    {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (targetMetadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission owner))))
+    (valueMetadata : (fn.valueTypes cfg.mod)[valueId]? = some (some (.data owner)))
+    (evaluated : execEff fn fr (.replace targetId valueId org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  unfold execEff at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨targetTyped, sameState⟩ := frameTyped.2.2.getVal targetMetadata read
+  subst middle
+  obtain ⟨location, rfl, target⟩ := targetTyped
+  simp only [expectRef, pure_bind] at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal valueMetadata read
+  subst middle
+  cases value <;> simp only at evaluated
+  all_goals first
+    | (simp [bind_apply, fault, M.stop] at evaluated; done)
+    | exact writeEffect_typed frameTyped target valueTyped evaluated
+
+theorem execEff_append_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {targetId viewId : ValueId} {permission viewPermission : Mutability}
+    {owner element : Ty} {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (targetMetadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission owner))))
+    (viewMetadata : (fn.valueTypes cfg.mod)[viewId]? = some (some (.view viewPermission element)))
+    (ownerType : owner.ownerElem? = some element)
+    (evaluated : execEff fn fr (.append targetId viewId org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  unfold execEff at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨targetTyped, sameState⟩ := frameTyped.2.2.getVal targetMetadata read
+  subst middle
+  obtain ⟨location, rfl, target⟩ := targetTyped
+  simp only [expectRef, pure_bind] at evaluated
+  obtain ⟨view, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨viewTyped, sameState⟩ := frameTyped.2.2.getView viewMetadata read
+  subst middle
+  obtain ⟨values, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨valuesTyped, sameState⟩ := viewTyped.readRun frameTyped.1.2 read
+  subst middle
+  obtain ⟨result, middle, checked, evaluated⟩ := m_bind_ok evaluated
+  have sameState := checkCapacityAtOrg_state checked
+  subst middle
+  exact appendEffect_typed frameTyped target ownerType valuesTyped evaluated
+
+theorem resizeTail_typed {cfg : GCfg} {fn : Func} {activations : ActivationTypes}
+    {fr fr' : Frame} {location : Loc} {owner element : Ty} {size : Int} {fill : Option Val}
+    {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (target : DeclaredLocation (runtimeDeclarations cfg activations) location owner)
+    (ownerType : owner.ownerElem? = some element)
+    (fillTyped : ∀ value, fill = some value → WeakValueTy (runtimeDeclarations cfg activations) value element)
+    (evaluated : (do
+      let len ← lengthLoc location
+      let size := wrap .i64 size
+      if size < 0 then abortAtOrg .resizeNegative org
+      else if size.toNat < len then
+        truncateLoc location size.toNat
+        pure fr
+      else if size.toNat == len then pure fr
+      else
+        match fill with
+        | none => abortAtOrg .resizeFill org
+        | some value => do
+          checkCapacityAtOrg location (size.toNat - len) org
+          let _ ← appendLoc location (Array.replicate (size.toNat - len) value)
+          pure fr) before = .ok fr' after) : RuntimeFrameTy cfg fn activations fr' after := by
+  obtain ⟨len, middle, measured, evaluated⟩ := m_bind_ok evaluated
+  have sameState := lengthLoc_state measured
+  subst middle
+  dsimp only at evaluated
+  split at evaluated
+  · cases org <;> simp [abortAtOrg, abortAt, fault, M.stop] at evaluated
+  · split at evaluated
+    · exact truncateEffect_typed frameTyped target ownerType evaluated
+    · split at evaluated
+      · simp only [pure_apply, Res.ok.injEq] at evaluated
+        obtain ⟨rfl, rfl⟩ := evaluated
+        exact frameTyped
+      · cases fill with
+        | none => cases org <;> simp [abortAtOrg, abortAt, fault, M.stop] at evaluated
+        | some value =>
+          obtain ⟨result, middle, checked, evaluated⟩ := m_bind_ok evaluated
+          have sameState := checkCapacityAtOrg_state checked
+          subst middle
+          apply appendEffect_typed frameTyped target ownerType _ evaluated
+          intro index selected present
+          rw [Array.getElem?_replicate] at present
+          split at present
+          · cases present
+            exact fillTyped value rfl
+          · contradiction
+
+theorem execEff_resize_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {targetId sizeId : ValueId} {permission : Mutability} {owner element : Ty}
+    {sizeTy : IntTy} {fillId : Option ValueId} {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (targetMetadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission owner))))
+    (sizeMetadata : (fn.valueTypes cfg.mod)[sizeId]? = some (some (.data (.int sizeTy))))
+    (fillMetadata : ∀ id, fillId = some id → (fn.valueTypes cfg.mod)[id]? = some (some (.data element)))
+    (ownerType : owner.ownerElem? = some element)
+    (evaluated : execEff fn fr (.resize targetId sizeId fillId org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  unfold execEff at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨targetTyped, sameState⟩ := frameTyped.2.2.getVal targetMetadata read
+  subst middle
+  obtain ⟨location, rfl, target⟩ := targetTyped
+  simp only [expectRef, pure_bind] at evaluated
+  obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+  obtain ⟨sizeTyped, sameState⟩ := frameTyped.2.2.getVal sizeMetadata read
+  subst middle
+  obtain ⟨size, rfl⟩ := sizeTyped.int
+  simp only [expectInt, pure_bind] at evaluated
+  cases fillId with
+  | none =>
+    simp only at evaluated
+    exact resizeTail_typed (size := size) (fill := none) (org := org) frameTyped target ownerType (by simp) evaluated
+  | some id =>
+    simp only at evaluated
+    obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
+    obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal (fillMetadata id rfl) read
+    subst middle
+    apply resizeTail_typed (size := size) (fill := some value) (org := org) frameTyped target ownerType _ evaluated
+    intro other same
+    cases same
+    exact valueTyped
+
+theorem render_state {value : Val} {before after : St} {output : String}
+    (rendered : Goose.Core.render value before = .ok output after) : after = before := by
+  cases value <;> simp [Goose.Core.render, fault, M.stop, pure_apply] at rendered
+  all_goals first
+    | exact rendered.2.symm
+    | (rename_i b
+       cases b <;> simp only [pure_apply, Res.ok.injEq] at rendered <;> exact rendered.2.symm)
+
+theorem renderPart_state {fr : Frame} {part : PrintPart} {before after : St} {output : String}
+    (rendered : renderPart fr part before = .ok output after) : after = before := by
+  cases part with
+  | text text =>
+    simp only [renderPart, pure_apply, Res.ok.injEq] at rendered
+    exact rendered.2.symm
+  | val id =>
+    unfold renderPart at rendered
+    obtain ⟨value, middle, read, rendered⟩ := m_bind_ok rendered
+    have sameState := (getVal_success read).2
+    subst middle
+    exact render_state rendered
+
+theorem execEff_print_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
+    {fr fr' : Frame} {parts : List PrintPart} {org : Option OriginId} {before after : St}
+    (frameTyped : RuntimeFrameTy cfg fn activations fr before)
+    (evaluated : execEff fn fr (.print parts org) before = .ok fr' after) :
+    RuntimeFrameTy cfg fn activations fr' after := by
+  unfold execEff at evaluated
+  obtain ⟨strings, middle, rendered, evaluated⟩ := m_bind_ok evaluated
+  have sameState := mapList_state (fun _ _ _ _ read => renderPart_state read) rendered
+  subst middle
+  simp only [emit, bind_apply, pure_apply, Res.ok.injEq] at evaluated
+  obtain ⟨rfl, rfl⟩ := evaluated
+  exact ⟨frameTyped.1, frameTyped.2⟩
+
 theorem execEff_store_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
     {fr fr' : Frame} {targetId valueId : ValueId} {permission : Mutability} {ty : Ty}
     {org : Option OriginId} {before after : St}
     (frameTyped : RuntimeFrameTy cfg fn activations fr before)
     (targetMetadata : (fn.valueTypes cfg.mod)[targetId]? = some (some (.data (.ref permission ty))))
     (valueMetadata : (fn.valueTypes cfg.mod)[valueId]? = some (some (.data ty)))
-    (readable : ty.readable = true)
     (evaluated : execEff fn fr (.store targetId valueId org) before = .ok fr' after) :
     RuntimeFrameTy cfg fn activations fr' after := by
   unfold execEff at evaluated
@@ -760,18 +1132,7 @@ theorem execEff_store_typed {activations : ActivationTypes} {fn : Func} {cfg : G
   obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
   obtain ⟨valueTyped, sameState⟩ := frameTyped.2.2.getVal valueMetadata read
   subst middle
-  obtain ⟨result, middle, written, evaluated⟩ := m_bind_ok evaluated
-  simp only [pure_apply, Res.ok.injEq] at evaluated
-  obtain ⟨rfl, rfl⟩ := evaluated
-  unfold writeLoc at written
-  cases stored : before.store.write location value with
-  | error fault => simp [stored] at written
-  | ok store =>
-    simp only [stored, Res.ok.injEq] at written
-    obtain ⟨_, sameState⟩ := written
-    subst middle
-    exact ⟨⟨frameTyped.1.1, frameTyped.1.2.writeReadable target readable valueTyped stored⟩,
-      frameTyped.2⟩
+  exact writeEffect_typed frameTyped target valueTyped evaluated
 
 theorem execEff_enter_typed {activations : ActivationTypes} {fn : Func} {cfg : GCfg}
     {fr fr' : Frame} {scope : ScopeId} {before after : St}
@@ -830,7 +1191,7 @@ theorem execPure_pop_typed {roots : RootDeclarations} {types : Array (Option VTy
     (metadata : types[id]? = some (some (.data (.ref permission owner))))
     (ownerType : owner.ownerElem? = some element) (storeTyped : WeakStoreTy roots before.store)
     (evaluated : execPure cx fr (.pop id org) before = .ok cell after) :
-    WeakCellTy roots cell (.data element) ∧ WeakStoreTy roots after.store := by
+    WeakCellTy roots cell (.data element) ∧ WeakStoreTy roots after.store ∧ after.nextAct = before.nextAct := by
   unfold execPure at evaluated
   obtain ⟨value, middle, read, evaluated⟩ := m_bind_ok evaluated
   obtain ⟨valueTyped, sameReadState⟩ := frameTyped.getVal metadata read
@@ -859,7 +1220,7 @@ theorem execPure_pop_typed {roots : RootDeclarations} {types : Array (Option VTy
       simp only [shrunk, Res.ok.injEq] at shortened
       obtain ⟨_, sameState⟩ := shortened
       subst finalState
-      exact ⟨selectedTyped, storeTyped.truncateOwner target ownerType shrunk⟩
+      exact ⟨selectedTyped, storeTyped.truncateOwner target ownerType shrunk, rfl⟩
 
 inductive ParamValuesTy (roots : RootDeclarations) : List (ValueId × VTy) → List RVal → Prop
   | nil : ParamValuesTy roots [] []
@@ -1039,14 +1400,14 @@ theorem FunctionEntry.typed {cfg : GCfg} {activations : ActivationTypes} {fn : F
       (args.map RVal.val))
     (entry : FunctionEntry fn depth args before fr after) :
     ∃ extended, (runtimeDeclarations cfg activations).Extends (runtimeDeclarations cfg extended) ∧
-      RuntimeFrameTy cfg fn extended fr after := by
+      activations.Extends extended ∧ RuntimeFrameTy cfg fn extended fr after := by
   obtain ⟨arity, act, fresh, allocated, entered⟩ := entry
-  obtain ⟨freshTyped, owner, extension⟩ := stateTyped.freshAct fn allocated
+  obtain ⟨freshTyped, owner, extension, activationExtension⟩ := stateTyped.freshAct fn allocated
   obtain ⟨frameTyped, sameState⟩ := enterBlock_typed lookup
     (WeakFrameTy.empty _ _ act depth) metadata (argsTyped.mono extension) entered
   have current := enterBlock_act entered
   change fr.act = act at current
-  refine ⟨activations.enter act fn, extension, ?_⟩
+  refine ⟨activations.enter act fn, extension, activationExtension, ?_⟩
   refine ⟨sameState ▸ freshTyped, ?_, frameTyped⟩
   rw [current]
   exact owner

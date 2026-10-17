@@ -64,16 +64,15 @@ private theorem instAt_of_insts {fn : Func} {point : Pt} {inst : Inst} {rest : L
 
 private theorem checked_op_pure {cfg : GCfg} {fn : Func} {point : Pt} {fr : Frame} {state : St}
     {result : ValueId} {op : Op} (accepted : validate cfg.mod = .ok ())
-    (comparisons : TrueComparisonFacts cfg) (reachable : RuntimePoint cfg fn point fr state)
+    (reachable : RuntimePoint cfg fn point fr state)
     (instruction : instAt fn point = some (.def result op)) :
     execPure ⟨checkedConfig cfg, checkedFunction fn⟩ fr (checkedOp op) = execPure ⟨cfg, fn⟩ fr op := by
   apply checked_execPure (cx := ⟨cfg, fn⟩) (op := op)
   intro view index same
   subst op
-  exact reachable_index accepted comparisons reachable instruction
+  exact reachable_index accepted reachable instruction
 
-private theorem checked_fuel_zero {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
-    (comparisons : TrueComparisonFacts cfg) :
+private theorem checked_fuel_zero {cfg : GCfg} (accepted : validate cfg.mod = .ok ()) :
     ExecAgreement cfg 0 ∧ EntryAgreement cfg 0 ∧ CallAgreement cfg 0 ∧ OpAgreement cfg 0 := by
   refine ⟨?_, ?_, ?_, ?_⟩
   · intro fn point fr state reachable; rfl
@@ -82,7 +81,7 @@ private theorem checked_fuel_zero {cfg : GCfg} (accepted : validate cfg.mod = .o
   · intro fn point fr state result op reachable instruction
     cases op <;> first
       | rfl
-      | exact congrFun (checked_op_pure accepted comparisons reachable instruction) state
+      | exact congrFun (checked_op_pure accepted reachable instruction) state
 
 private theorem lookupFn_success {cfg : GCfg} {callee : FnId} {state after : St} {fn : Func}
     (success : lookupFn cfg callee state = .ok fn after) :
@@ -135,7 +134,7 @@ private theorem checked_call_step {cfg : GCfg} {fuel : Nat}
       exact points (by omega) fn fr after (by omega) functionAt entry
 
 private theorem checked_op_step {cfg : GCfg} {fuel : Nat} (accepted : validate cfg.mod = .ok ())
-    (comparisons : TrueComparisonFacts cfg) (agreement : CallAgreement cfg fuel) :
+    (agreement : CallAgreement cfg fuel) :
     OpAgreement cfg (fuel + 1) := by
   intro fn point fr state result op reachable instruction
   cases op with
@@ -152,7 +151,7 @@ private theorem checked_op_step {cfg : GCfg} {fuel : Nat} (accepted : validate c
         exact RuntimePoint.call reachable instruction depth read lookup entry
       rw [calls]
   | _ =>
-    simpa only [execOp, checkedOp] using congrFun (checked_op_pure accepted comparisons reachable instruction) state
+    simpa only [execOp, checkedOp] using congrFun (checked_op_pure accepted reachable instruction) state
 
 private theorem checked_edge_exec {cfg : GCfg} {fn : Func} {fuel : Nat}
     (agreement : ExecAgreement cfg fuel) (fr : Frame) (target : BlockId) (args : List RVal) (state : St)
@@ -254,13 +253,13 @@ private theorem checked_exec_step {cfg : GCfg} {fuel : Nat}
                   (RuntimeStep.branchTrue instruction test read (by simpa [body] using entered))
 
 theorem checked_fuel {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
-    (comparisons : TrueComparisonFacts cfg) (fuel : Nat) :
+    (fuel : Nat) :
     ExecAgreement cfg fuel ∧ EntryAgreement cfg fuel ∧ CallAgreement cfg fuel ∧ OpAgreement cfg fuel := by
   induction fuel with
-  | zero => exact checked_fuel_zero accepted comparisons
+  | zero => exact checked_fuel_zero accepted
   | succ fuel ih =>
     exact ⟨checked_exec_step ih.1 ih.2.2.2, checked_entry_step ih.1,
-      checked_call_step ih.2.1, checked_op_step accepted comparisons ih.2.2.1⟩
+      checked_call_step ih.2.1, checked_op_step accepted ih.2.2.1⟩
 
 private theorem initGlobals_append (fuel : Nat) (cfg : GCfg) (before rest : List GlobalId) :
     GIR.initGlobals fuel cfg (before ++ rest) = (do
@@ -297,7 +296,7 @@ private theorem lookupInit_success {cfg : GCfg} {index : GlobalId} {state after 
     exact ⟨global, rfl, success.1.symm, success.2.symm⟩
 
 private theorem checked_initGlobals_suffix {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
-    (comparisons : TrueComparisonFacts cfg) (fuel : Nat) :
+    (fuel : Nat) :
     ∀ before rest state, before ++ rest = List.range cfg.mod.globals.size →
       GIR.initGlobals fuel cfg before St.initial = .ok () state →
       GIR.initGlobals fuel (checkedConfig cfg) rest state = GIR.initGlobals fuel cfg rest state := by
@@ -316,7 +315,7 @@ private theorem checked_initGlobals_suffix {cfg : GCfg} (accepted : validate cfg
       simp only []
       have entryAgreement : Goose.GIR.enterFn fuel (checkedConfig cfg) 0 (checkedFunction global.init) [] state =
           Goose.GIR.enterFn fuel cfg 0 global.init [] state := by
-        apply (checked_fuel accepted comparisons fuel).2.1
+        apply (checked_fuel accepted fuel).2.1
         intro positive fr after entry
         exact RuntimePoint.initializer positive indexValid (by simpa [beforeRange] using initialized) globalAt entry
       simp only [pure_apply]
@@ -336,20 +335,20 @@ private theorem checked_initGlobals_suffix {cfg : GCfg} (accepted : validate cfg
             simp only [bind_apply, initialized, GIR.initGlobals, looked, entered, bound, pure_apply]
 
 theorem checked_initGlobals {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
-    (comparisons : TrueComparisonFacts cfg) (fuel : Nat) :
+    (fuel : Nat) :
     GIR.initGlobals fuel (checkedConfig cfg) (List.range cfg.mod.globals.size) St.initial =
       GIR.initGlobals fuel cfg (List.range cfg.mod.globals.size) St.initial :=
-  checked_initGlobals_suffix accepted comparisons fuel [] (List.range cfg.mod.globals.size)
+  checked_initGlobals_suffix accepted fuel [] (List.range cfg.mod.globals.size)
     St.initial rfl rfl
 
 theorem checked_runModule {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
-    (comparisons : TrueComparisonFacts cfg) (fuel : Nat) :
+    (fuel : Nat) :
     GIR.runModule fuel (checkedConfig cfg) St.initial = GIR.runModule fuel cfg St.initial := by
   have sizes : (checkedConfig cfg).mod.globals.size = cfg.mod.globals.size := by
     simp [checkedConfig, checkedModule]
   have entry : (checkedConfig cfg).mod.entry = cfg.mod.entry := rfl
   simp only [GIR.runModule, sizes, entry, bind_apply]
-  rw [checked_initGlobals accepted comparisons fuel]
+  rw [checked_initGlobals accepted fuel]
   cases globals : GIR.initGlobals fuel cfg (List.range cfg.mod.globals.size) St.initial with
   | stop reason stopped => rfl
   | ok ignored state =>
@@ -357,16 +356,16 @@ theorem checked_runModule {cfg : GCfg} (accepted : validate cfg.mod = .ok ())
     simp only []
     have calls : callFn fuel (checkedConfig cfg) 0 cfg.mod.entry [] state =
         callFn fuel cfg 0 cfg.mod.entry [] state := by
-      apply (checked_fuel accepted comparisons fuel).2.2.1
+      apply (checked_fuel accepted fuel).2.2.1
       intro enough fn fr after depth lookup entered
       exact RuntimePoint.entry enough globals lookup entered
     rw [calls]
 
 theorem checked_run {m : GIR.Module} (accepted : validate m = .ok ())
-    (profile : NumProfile) (comparisons : TrueComparisonFacts ⟨profile, m⟩) (fuel : Nat) :
+    (profile : NumProfile) (fuel : Nat) :
     run fuel profile (checkedModule m) = run fuel profile m := by
   unfold run
-  have same := checked_runModule accepted comparisons fuel
+  have same := checked_runModule (cfg := ⟨profile, m⟩) accepted fuel
   change GIR.runModule fuel ⟨profile, checkedModule m⟩ St.initial = GIR.runModule fuel ⟨profile, m⟩ St.initial at same
   rw [same]
 

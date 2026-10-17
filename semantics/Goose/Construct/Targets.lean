@@ -17,14 +17,14 @@ def exprControl : Expr → ControlFacts
   | .read p | .ref _ p | .copy _ p _ => placeControl p
   | .slice _ v lo hi _ => (viewControl v).join ((boundControl lo).join (boundControl hi))
   | .len v => viewControl v
-  | .un _ e _ | .not e | .conv _ _ e _ | .fill _ e => exprControl e
+  | .un _ e _ | .not e | .conv _ _ e _ | .fill _ e _ => exprControl e
   | .bin _ a b _ | .cmp _ a b | .and a b | .or a b => (exprControl a).join (exprControl b)
   | .call context args _ => (ControlFacts.mk [context] []).join (argsControl args)
   | .push owner e _ => (placeControl owner).join (exprControl e)
   | .pop owner _ => placeControl owner
-  | .ifE condition left right => (exprControl condition).join ((blockControl left).join (blockControl right))
-  | .blockE block => blockControl block
-  | .arrLit _ elements | .structLit _ elements | .values elements => exprsControl elements
+  | .ifE condition left right _ => (exprControl condition).join ((blockControl left).join (blockControl right))
+  | .blockE block _ => blockControl block
+  | .arrLit _ elements _ | .structLit _ elements | .values elements => exprsControl elements
   | .str _ args _ => printControl args
 
 def placeControl : Place → ControlFacts

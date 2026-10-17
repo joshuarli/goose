@@ -19,6 +19,7 @@ import Goose.Lower.Unwind
 import Goose.Evidence.Provenance
 import Goose.Evidence.SSA
 import Goose.Evidence.Simulation
+import Goose.Evidence.SimulationChecks
 import Goose.Proofs.Construct
 import Goose.Proofs.Exit
 
@@ -256,5 +257,12 @@ end Goose.Audit
 #audit Goose.Proofs.Construct.terminal_keeps_prefix
 #audit Goose.Proofs.Construct.terminal_skips_remaining
 #audit Goose.Evidence.validated_cell_definition
+
+#audit Goose.Evidence.RuntimePoint.typed
+#audit Goose.Evidence.validated_true_cmp_fact
+#audit Goose.Proofs.Bounds.validated_trueComparisonFacts
+#audit Goose.Proofs.Bounds.checked_fuel
+#audit Goose.Proofs.Bounds.checked_initGlobals
+#audit Goose.Proofs.Bounds.SimulationChecks.fixture_run_replacement
 
 #audit_registry
