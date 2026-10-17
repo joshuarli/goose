@@ -16,7 +16,7 @@ theorem loopBody_counted_newPermissionInstructions
     (bodyFrames : ∀ depth exit, GeneratedTargetFrameRun
       (some ⟨depth,exit,.next header hint counter⟩) (body depth exit))
     (bodyNew : ∀ depth exit input value output,
-      GeneratedBuilderState input → LoopBuilderFrames (some ⟨depth,exit,.next header hint counter⟩) input →
+      GeneratedBuilderState input → input.cur.isSome = true → LoopBuilderFrames (some ⟨depth,exit,.next header hint counter⟩) input →
       first ≤ input.vals.size → before.Ext input → before.vals.size ≤ input.vals.size → TypePrefix before input →
       TermEdgesFramed none before input → body depth exit le input = (value,output) →
       NewPermissionInstructions module func le first input output)
@@ -62,7 +62,12 @@ theorem loopBody_counted_newPermissionInstructions
     forkAdvance trivial forkFramed.1 selectedRun
   have selectedTypes := (types_fork condition le before (bodyId,exit) forked forkRun).trans
     (types_setCur (some bodyId) le forked ignored selected selectedRun)
-  have child := bodyNew before.stack.length exit selected value ended selectedGenerated selectedFrames selectedLower
+  have selectedLive : selected.cur.isSome = true := by
+    have same := selectedRun
+    rw [setCur_run] at same
+    obtain ⟨_,rfl⟩ := Prod.mk.inj same
+    rfl
+  have child := bodyNew before.stack.length exit selected value ended selectedGenerated selectedLive selectedFrames selectedLower
     (forkAdvance.trans selectedFramed.2) selectedGrowth selectedTypes selectedFramed.1 bodyRun
   have endedDense := bodyDense before.stack.length exit le selected value ended bodyRun
     selectedGenerated.dense selectedGenerated.live
@@ -107,7 +112,7 @@ theorem lowerRange_counted_newPermissionInstructions
     (bodyFrames : ∀ depth exit, GeneratedTargetFrameRun
       (some ⟨depth,exit,.next header hint counter⟩) (body depth exit))
     (bodyNew : ∀ depth exit input value output,
-      GeneratedBuilderState input → LoopBuilderFrames (some ⟨depth,exit,.next header hint counter⟩) input →
+      GeneratedBuilderState input → input.cur.isSome = true → LoopBuilderFrames (some ⟨depth,exit,.next header hint counter⟩) input →
       first ≤ input.vals.size → before.Ext input → before.vals.size ≤ input.vals.size → TypePrefix before input →
       TermEdgesFramed none before input → body depth exit le input = (value,output) →
       NewPermissionInstructions module func le first input output)
@@ -125,11 +130,11 @@ theorem lowerRange_counted_newPermissionInstructions
   have loop := loopBody_counted_newPermissionInstructions middleGenerated middleLower
     ⟨middleHead,middleRow,middleParams.trans headParams⟩ bodyDense bodyAdvance bodyTypes bodyFrames
     (by
-      intro depth exit input value output inputGenerated inputFrames inputLower prefixExt prefixGrowth prefixTypes prefixFramed run
+      intro depth exit input value output inputGenerated inputLive inputFrames inputLower prefixExt prefixGrowth prefixTypes prefixFramed run
       have compareExt := (advB_emitDef _ le before condition middle comparison).ext
       have compareFramed := generatedTargetFrame_emitDef none (.cmp .lt hint counter bound)
         before le before condition middle (.refl _) trivial (.refl _ _) comparison
-      exact bodyNew depth exit input value output inputGenerated inputFrames inputLower
+      exact bodyNew depth exit input value output inputGenerated inputLive inputFrames inputLower
         (compareExt.trans prefixExt)
         (Nat.le_trans (advB_emitDef _ le before condition middle comparison).vals prefixGrowth)
         ((types_emitDef _ le before condition middle comparison).trans prefixTypes)
@@ -152,7 +157,7 @@ theorem lowerRange_newPermissionInstructions
     (bodyFrames : ∀ depth exit, GeneratedTargetFrameRun
       (some ⟨depth,exit,.next header hint counter⟩) (body depth exit))
     (bodyNew : ∀ depth exit input value output,
-      GeneratedBuilderState input → LoopBuilderFrames (some ⟨depth,exit,.next header hint counter⟩) input →
+      GeneratedBuilderState input → input.cur.isSome = true → LoopBuilderFrames (some ⟨depth,exit,.next header hint counter⟩) input →
       first ≤ input.vals.size → before.Ext input → before.vals.size ≤ input.vals.size → TypePrefix before input →
       TermEdgesFramed none before input → body depth exit le input = (value,output) →
       NewPermissionInstructions module func le first input output)

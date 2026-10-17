@@ -67,7 +67,7 @@ theorem forRange_newPermissionInstructions
     (hiNew : ∀ input value output, GeneratedBuilderState input → first ≤ input.vals.size →
       lowerExpr hi le input = (value,output) → NewPermissionInstructions module func le first input output)
     (bodyNew : ∀ hint header counter depth exit input value output,
-      GeneratedBuilderState input → LoopBuilderFrames (some ⟨depth,exit,.next header hint counter⟩) input →
+      GeneratedBuilderState input → input.cur.isSome = true → LoopBuilderFrames (some ⟨depth,exit,.next header hint counter⟩) input →
       first ≤ input.vals.size →
       lowerBlock (some ⟨depth,exit,.next header hint counter⟩) [(slot,counter,origin)] false body le input = (value,output) →
       NewPermissionInstructions module func le first input output)
@@ -122,8 +122,8 @@ theorem forRange_newPermissionInstructions
         (fun depth exit => advB_lowerBlock _ [(slot,counter,origin)] false body)
         (fun depth exit => types_lowerBlock _ [(slot,counter,origin)] false body)
         (fun depth exit => generatedTargetFrame_lowerBlock _ [(slot,counter,origin)] false body)
-        (fun depth exit input value output gen frames lower _ _ _ _ run =>
-          bodyNew hint header counter depth exit input value output gen frames lower run) bodyRun
+        (fun depth exit input value output gen live frames lower _ _ _ _ run =>
+          bodyNew hint header counter depth exit input value output gen live frames lower run) bodyRun
   exact prior.compose_framed tailRules (show rangeStatementTail slot origin body initial bound le hiState = (result,after) from tailRun)
     (rangeStatementTail_dense _ _ _ _ _) (rangeStatementTail_advance _ _ _ _ _)
     (rangeStatementTail_types _ _ _ _ _) (rangeStatementTail_frames _ _ _ _ _) hiGenerated trivial

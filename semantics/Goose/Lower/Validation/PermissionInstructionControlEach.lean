@@ -17,7 +17,7 @@ theorem lowerEach_counted_newPermissionInstructions
     (bodyFrames : ∀ depth exit, GeneratedTargetFrameRun
       (some ⟨depth,exit,.next header .i64 counter⟩) (body depth exit))
     (bodyNew : ∀ depth exit input value output,
-      GeneratedBuilderState input → LoopBuilderFrames (some ⟨depth,exit,.next header .i64 counter⟩) input →
+      GeneratedBuilderState input → input.cur.isSome = true → LoopBuilderFrames (some ⟨depth,exit,.next header .i64 counter⟩) input →
       first ≤ input.vals.size → before.Ext input → before.vals.size ≤ input.vals.size →
       TypePrefix before input → TermEdgesFramed none before input →
       body depth exit le input = (value,output) → NewPermissionInstructions module func le first input output)
@@ -45,8 +45,8 @@ theorem lowerEach_counted_newPermissionInstructions
   have loop := loopBody_counted_newPermissionInstructions comparedGenerated (Nat.le_trans lower valuesCompared)
     ⟨comparedHead,comparedHeadRow,comparedHeadParams.trans headParams⟩
     bodyDense bodyAdvance bodyTypes bodyFrames
-    (fun depth exit input value output gen frames floor extension grows types terms childRun =>
-      bodyNew depth exit input value output gen frames floor (beforeCompared.trans extension)
+    (fun depth exit input value output gen live frames floor extension grows types terms childRun =>
+      bodyNew depth exit input value output gen live frames floor (beforeCompared.trans extension)
         (Nat.le_trans valuesCompared grows) (typesCompared.trans types)
         (comparedFrames.1.compose terms beforeCompared) childRun) loopRun
   have measuredNew := NewPermissionInstructions.eachLen (module := module) (func := func) (first := first) measureRun
