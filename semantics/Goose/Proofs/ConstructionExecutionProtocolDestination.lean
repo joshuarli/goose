@@ -6,6 +6,21 @@ set_option Elab.async false
 namespace Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Construct Goose.Core
 
+theorem destinationOwnersOrdered_replace (state : ConstructionState) (id : DestinationId)
+    (before after : PendingDestination) (present : state.destinations[id]? = some before)
+    (use : after.use = before.use) (valid : DestinationOwnersOrdered state) :
+    DestinationOwnersOrdered { state with destinations := state.destinations.set! id after } := by
+  intro index destination found
+  simp only [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds] at found
+  by_cases same : id = index
+  · subst index
+    by_cases inside : id < state.destinations.size
+    · simp only [inside, ↓reduceIte, Option.some.injEq] at found
+      subst destination
+      simpa only [use] using valid id before present
+    · simp [inside] at found
+  · exact valid index destination (by simpa only [same, ↓reduceIte] using found)
+
 theorem destinationStorageReferences_replace (state : ConstructionState) (id : DestinationId)
     (destination : PendingDestination) (storage : Array ReceivingStorage)
     (size : state.storage.size ≤ storage.size)
@@ -167,5 +182,43 @@ theorem destinationTraceProtocol_replace_silent (state : ConstructionState) (id 
   simpa using destinationTraceProtocol_replace state id before after [] present
     (by intro index different; rfl)
     (by intro phase matched; exact ⟨phase, rfl, transition phase matched⟩) valid
+
+theorem destinationTraceProtocol_emit (state : ConstructionState) (id : DestinationId)
+    (destination : PendingDestination) (events : List ConstructionEvent)
+    (present : state.destinations[id]? = some destination)
+    (other : ∀ index, index ≠ id → destinationObservations index events = [])
+    (transition : ∀ phase, phase.matchesDestination destination → ∃ next,
+      runDestinationTrace id phase events = some next ∧ next.matchesDestination destination)
+    (valid : DestinationTraceProtocol state) :
+    DestinationTraceProtocol { state with events := state.events ++ events } := by
+  intro index
+  by_cases same : index = id
+  · subst index
+    have previous := valid id
+    rw [present] at previous
+    obtain ⟨phase, accepted, matched⟩ := previous
+    obtain ⟨next, continued, matchedNext⟩ := transition phase matched
+    simp only [present]
+    refine ⟨next, ?_, matchedNext⟩
+    rw [runDestinationTrace_append, accepted]
+    simpa using continued
+  · have traceUnchanged : runDestinationTrace index .unseen (state.events ++ events) =
+        runDestinationTrace index .unseen state.events := by
+      rw [runDestinationTrace_append]
+      simp only [runDestinationTrace, other index same, runDestinationObservations]
+      cases runDestinationObservations .unseen (destinationObservations index state.events) <;> rfl
+    simpa only [traceUnchanged] using valid index
+
+theorem copy_destination_trace_transition (id : DestinationId) (source : CopySource)
+    (destination : PendingDestination) (count : Nat) (progress : destination.progress = .open count)
+    (phase : DestinationTracePhase) (valid : phase.matchesDestination destination) :
+    runDestinationTrace id phase [.copy source id] = some phase := by
+  cases phase with
+  | unseen | published | abandoned =>
+      simp [DestinationTracePhase.matchesDestination, DestinationTracePhase.matchesProgress,
+        progress] at valid
+  | live staged wrote =>
+      simp [runDestinationTrace, destinationObservations, observeDestination,
+        runDestinationObservations, destinationTraceStep]
 
 end Goose.Proofs.ConstructionExecutionProtocol

@@ -303,30 +303,38 @@ def DestinationStorageReferencesValid (state : ConstructionState) : Prop :=
       destination.storage < state.storage.size ∧
         destination.backing.receiverStorage < state.storage.size
 
+def DestinationOwnersOrdered (state : ConstructionState) : Prop :=
+  ∀ (id : DestinationId) (destination : PendingDestination),
+    state.destinations[id]? = some destination →
+      match destination.use with
+      | .receiver => True
+      | .child owner | .replacement owner => owner < id
+
 def DestinationLifecycleInvariant (state : ConstructionState) : Prop :=
   DestinationTraceProtocol state ∧ DestinationCapabilitiesIndexed state ∧
-    DestinationStorageReferencesValid state
+    DestinationStorageReferencesValid state ∧ DestinationOwnersOrdered state
 
 theorem initial_destination_lifecycle_invariant :
     DestinationLifecycleInvariant ConstructionState.initial := by
-  refine ⟨initial_destination_trace_protocol, initial_destination_capabilities, ?_⟩
-  intro id destination present
-  simp [ConstructionState.initial] at present
+  refine ⟨initial_destination_trace_protocol, initial_destination_capabilities, ?_, ?_⟩
+  all_goals
+    intro id destination present
+    simp [ConstructionState.initial] at present
 
 theorem destinationLifecycleInvariant_storage_frame (state : ConstructionState)
     (storage : Array ReceivingStorage) (size : storage.size = state.storage.size)
     (valid : DestinationLifecycleInvariant state) :
     DestinationLifecycleInvariant { state with storage := storage } := by
-  refine ⟨valid.1, valid.2.1, ?_⟩
+  refine ⟨valid.1, valid.2.1, ?_, valid.2.2.2⟩
   intro id destination present
-  simpa only [size] using valid.2.2 id destination present
+  simpa only [size] using valid.2.2.1 id destination present
 
 theorem reserveStorage_destination_lifecycle_invariant (bytes : ByteArray) (count : Nat)
     (state : ConstructionState) (valid : DestinationLifecycleInvariant state) :
     DestinationLifecycleInvariant (reserveStorage bytes count state).finalState := by
-  refine ⟨valid.1, valid.2.1, ?_⟩
+  refine ⟨valid.1, valid.2.1, ?_, valid.2.2.2⟩
   intro id destination present
-  have references := valid.2.2 id destination present
+  have references := valid.2.2.1 id destination present
   change destination.storage < (state.storage.push ⟨bytes, count⟩).size ∧
     destination.backing.receiverStorage < (state.storage.push ⟨bytes, count⟩).size
   simp only [Array.size_push]
