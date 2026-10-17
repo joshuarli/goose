@@ -68,7 +68,7 @@ theorem generatedTargetFrame_lowerExpr (lc : Option LoopCtx) : ∀ e : Expr, Gen
   | .ifE c t f => by
     simp only [lowerExpr]
     exact GeneratedTargetFrameRun.bind (generatedTargetFrame_lowerExpr lc c) fun cv =>
-      generatedTargetFrame_ifE_core lc cv ((generatedTargetFrame_lowerBlock none [] true t).withLoop (outer := lc)) ((generatedTargetFrame_lowerBlock none [] true f).withLoop (outer := lc))
+      generatedTargetFrame_ifE_recorded_core lc cv (sourceBlockScope t) ((generatedTargetFrame_lowerBlock none [] true t).withLoop (outer := lc)) ((generatedTargetFrame_lowerBlock none [] true f).withLoop (outer := lc))
   | .blockE b => by
     simp only [lowerExpr]
     exact (generatedTargetFrame_lowerBlock none [] true b).withLoop (outer := lc)
