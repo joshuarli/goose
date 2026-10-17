@@ -3,6 +3,8 @@ import Goose.Proofs.Num
 import Goose.Proofs.Share
 import Goose.Reuse.Model
 import Goose.Proofs.Lower
+import Goose.Lower.TypedStatementFamily
+import Goose.Lower.ReflectionInduction
 import Goose.Lower.Loops
 import Goose.Lower.While
 import Goose.Lower.Prefix
@@ -192,6 +194,9 @@ end Goose.Audit
 #audit Goose.Proofs.Core.initial_liveRefs
 
 #audit Goose.Proofs.Lower.lower_correct_ctl
+#audit Goose.Lower.typedModule_simulation
+#audit Goose.Lower.acceptedModule_reflection
+#audit Goose.Lower.acceptedModule_never_faults
 #audit Goose.Lower.claims
 #audit Goose.Lower.blockPreClaim
 #audit Goose.Lower.stmt_while_sim
