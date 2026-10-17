@@ -29,6 +29,19 @@ theorem EmittedBuilder.freezeTo {le : LEnv} {initial before : LS}
       exact (Array.getElem?_eq_some_iff.mp row).1
   next => exact builder
 
+theorem EmittedBuilder.borrowTo {le : LEnv} {initial before : LS}
+    (builder : EmittedBuilder le initial before) (requested : Mutability) (value : ValueId) :
+    EmittedBuilder le initial (Goose.Lower.borrowTo requested value le before).2 := by
+  rcases emitted_borrowTo_cases le before requested value with same | ⟨type, row, success, same⟩
+  · rw [same]
+    exact builder.freezeTo requested value
+  · rw [same]
+    apply builder.emitDef (.ownerBorrow value) (fun _ => ⟨type, success⟩)
+    intro active operand member
+    have equal : operand = value := by simpa [Op.uses] using member
+    subst operand
+    exact (Array.getElem?_eq_some_iff.mp row).1
+
 theorem emitted_checked_lowerPlace_var {env : Core.TEnv} {variableId : VarId} {info : PlaceInfo}
     {start finish : Nat} (source : Core.tyPlace env (.var variableId) start = .ok (info, finish))
     (results : List Ty) {initial before : LS}
@@ -72,13 +85,13 @@ theorem emitted_checked_lowerExpr_ref {le : LEnv} {initial before : LS}
     (requested : Mutability) (place : Place)
     (child : EmittedBuilder le initial (lowerPlace place le before).2) :
     EmittedBuilder le initial (lowerExpr (.ref requested place) le before).2 := by
-  exact child.freezeTo requested (lowerPlace place le before).1
+  exact child.borrowTo requested (lowerPlace place le before).1
 
 theorem emitted_checked_lowerArg_byRef {le : LEnv} {initial before : LS}
     (requested : Mutability) (place : Place)
     (child : EmittedBuilder le initial (lowerPlace place le before).2) :
     EmittedBuilder le initial (lowerArg (.byRef requested place) le before).2 := by
-  exact child.freezeTo requested (lowerPlace place le before).1
+  exact child.borrowTo requested (lowerPlace place le before).1
 
 theorem emitted_checked_lowerExpr_read {le : LEnv} {initial before : LS} (place : Place)
     (child : EmittedBuilder le initial (lowerPlace place le before).2)
