@@ -1855,6 +1855,7 @@ def main():
             if name == "compiler_units_builder":
                 sources.extend((tc.REPO_ROOT / "src" / "process.cpp",
                                 tc.REPO_ROOT / "src" / "progress.cpp"))
+                unit_extra.insert(0, f"-I{tc.REPO_ROOT / 'test' / 'fixtures' / 'compiler_units_builder'}")
                 unit_extra.append(f"-I{tc.REPO_ROOT / 'third_party' / 'subprocess'}")
                 if not tc.IS_WINDOWS and not tc.IS_MACOS:
                     unit_libs.append("-ldl")
