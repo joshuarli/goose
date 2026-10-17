@@ -304,17 +304,47 @@ class GirReplacementContentFlow {
             return find(expected.begin(), expected.end(), root) != expected.end();
         });
     }
-    Query MappedBound(const GirFunc &function, const State &state, const vector<int> &args, const vector<CoreRootRef> &bound) const {
-        vector<CoreRootRef> result;
+    struct CallerStorage {};
+    class ContentInputBound {
+        variant<vector<CoreRootRef>, CallerStorage> value;
+    public:
+        explicit ContentInputBound(vector<CoreRootRef> roots = {}) : value(std::move(roots)) {}
+        explicit ContentInputBound(CallerStorage storage) : value(storage) {}
+        ContentInputBound Join(const ContentInputBound &other) const {
+            if (holds_alternative<CallerStorage>(value) || holds_alternative<CallerStorage>(other.value))
+                return ContentInputBound(CallerStorage {});
+            auto roots = get<vector<CoreRootRef>>(value);
+            AddRoots(roots, get<vector<CoreRootRef>>(other.value));
+            return ContentInputBound(std::move(roots));
+        }
+        bool Covers(const Query &actual) const {
+            return actual && (holds_alternative<CallerStorage>(value) || Within(actual, get<vector<CoreRootRef>>(value)));
+        }
+    };
+    optional<ContentInputBound> AdmittedArgumentBound(const GirFunc &callee, const GirFunc &function,
+        const State &state, const vector<int> &args, int index) const {
+        if (index < 0 || index >= (int)callee.params.size() || index >= (int)args.size()) return nullopt;
+        auto actual = Normalize(function, At(state.values, args[index]));
+        if (!actual) return nullopt;
+        auto row = find_if(callee.roots.params.begin(), callee.roots.params.end(), [&](const auto &entry) { return entry.first == index; });
+        if (row != callee.roots.params.end()) {
+            CoreRootRef self { CoreRootRef::Param, index };
+            if (GirRefLike(module, callee.params[index]) && find(row->second.begin(), row->second.end(), self) != row->second.end())
+                return ContentInputBound(CallerStorage {});
+            for (auto &root : row->second) if (root.kind == CoreRootRef::Global) AddRoot(*actual, root);
+        }
+        return ContentInputBound(std::move(*actual));
+    }
+    optional<ContentInputBound> InputBound(const GirFunc &callee, const GirFunc &function,
+        const State &state, const vector<int> &args, const vector<CoreRootRef> &bound) const {
+        ContentInputBound result;
         for (auto &root : bound) {
-            if (root.kind == CoreRootRef::Global || root.kind == CoreRootRef::Static) AddRoot(result, root);
-            else if (root.kind != CoreRootRef::Param || root.index < 0 || root.index >= (int)args.size()) return nullopt;
-            else {
-                auto actual = At(state.values, args[root.index]);
-                auto mapped = Normalize(function, actual);
-                if (!mapped) return nullopt;
-                AddRoots(result, *mapped);
-            }
+            if (root.kind == CoreRootRef::Global) result = result.Join(ContentInputBound({ root }));
+            else if (root.kind == CoreRootRef::Param) {
+                auto next = AdmittedArgumentBound(callee, function, state, args, root.index);
+                if (!next) return nullopt;
+                result = result.Join(*next);
+            } else return nullopt;
         }
         return result;
     }
@@ -336,7 +366,8 @@ class GirReplacementContentFlow {
             if (!GirRefLike(module, callee.params[parameter])) continue;
             if (parameter >= args.size()) return false;
             auto declared = ParameterRoots(callee, (int)parameter);
-            if (declared == vector<CoreRootRef> { { CoreRootRef::Param, (int)parameter } }) continue;
+            CoreRootRef self { CoreRootRef::Param, (int)parameter };
+            if (find(declared.begin(), declared.end(), self) != declared.end()) continue;
             auto actual = Normalize(function, At(state.values, args[parameter]));
             if (!actual) return false;
             for (auto &root : *actual) {
@@ -346,8 +377,8 @@ class GirReplacementContentFlow {
         }
         for (auto &row : callee.roots.contents) {
             if (row.first < 0 || row.first >= (int)args.size()) return false;
-            auto expected = MappedBound(function, state, args, row.second);
-            if (!expected || !Within(Normalize(function, Content(function, state, At(state.values, args[row.first]))), *expected)) return false;
+            auto expected = InputBound(callee, function, state, args, row.second);
+            if (!expected || !expected->Covers(Normalize(function, Content(function, state, At(state.values, args[row.first]))))) return false;
         }
         return true;
     }

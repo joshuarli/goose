@@ -1073,6 +1073,79 @@ GirModule ActualHolderAliasModule(bool aliased) {
     return module;
 }
 
+void AdmitsCallerStorageThroughGenericContentBounds() {
+    auto module = GlobalEmptyContentReplacement();
+    for (int index : { 1, 2 }) {
+        auto global = module.globals[0];
+        global.name = cat("content_owner", index);
+        module.globals.push_back(std::move(global));
+    }
+    auto owner = module.globals[0].ty;
+    auto integer = module.Type(owner).elem;
+    auto slice = module.SliceType(CoreMut::Const, integer);
+    auto holder = module.RefType(CoreMut::Mut, slice);
+    auto &caller = module.funcs[1];
+    caller.params.clear();
+    caller.roots = {};
+    caller.slots = { { slice, CoreVarKind::Var, 0, 0 } };
+    caller.summary.unknown = true;
+    auto enter = Inst(GirOp::Enter);
+    enter.idx = 0;
+    auto address = [](int value, int global) { auto inst = Inst(GirOp::Global, value); inst.idx = global; return inst; };
+    auto initial = Inst(GirOp::ViewSlice, 3, 2);
+    initial.mut = CoreMut::Const;
+    auto slot = Inst(GirOp::Slot, 4);
+    slot.idx = 0;
+    auto initialize = Inst(GirOp::Init, -1, 3);
+    initialize.idx = 0;
+    auto payload = Inst(GirOp::ViewSlice, 7, 6);
+    payload.mut = CoreMut::Const;
+    auto write = Inst(GirOp::Call);
+    write.idx = 2;
+    write.vals = { 4, 7 };
+    auto read = Inst(GirOp::Call);
+    read.idx = 3;
+    read.vals = { 4, 3 };
+    auto zero = Inst(GirOp::Int, 8);
+    zero.ty = integer;
+    zero.text = "0";
+    auto literal = Inst(GirOp::Arr, 9);
+    literal.ty = owner;
+    literal.vals = { 8 };
+    auto leave = Inst(GirOp::Leave);
+    leave.idx = 0;
+    caller.blocks = { { {}, { enter, address(0, 0), address(1, 1), Inst(GirOp::Snap, 2, 1), initial,
+        slot, initialize, address(5, 2), Inst(GirOp::Snap, 6, 5), payload, write,
+        Inst(GirOp::Clear, -1, 0), read, zero, literal, Inst(GirOp::Replace, -1, 0, 9), leave, Inst(GirOp::Ret) } } };
+    GirFunc writer;
+    writer.name = "content_writer";
+    writer.params = { holder, slice };
+    writer.scopes = { -1 };
+    writer.summary.unknown = true;
+    writer.roots.contents = { { 0, { { CoreRootRef::Global, 1 }, { CoreRootRef::Param, 1 } } } };
+    writer.blocks = { { { { 0, holder }, { 1, slice } }, { Inst(GirOp::Store, -1, 0, 1), Inst(GirOp::Ret) } } };
+    module.funcs.push_back(writer);
+    GirFunc reader;
+    reader.name = "generic_content_reader";
+    reader.params = { holder, slice };
+    reader.scopes = { -1 };
+    reader.summary.unknown = true;
+    reader.roots.params = { { 1, { { CoreRootRef::Param, 1 } } } };
+    reader.roots.contents = { { 0, { { CoreRootRef::Param, 1 } } } };
+    reader.blocks = { { { { 0, holder }, { 1, slice } }, { Inst(GirOp::Load, 2, 0), Inst(GirOp::SliceView, 3, 2),
+        Inst(GirOp::ViewLen, 4, 3), Inst(GirOp::Ret) } } };
+    module.funcs.push_back(reader);
+    assert(Code(module).empty());
+    module.funcs[3].roots.params[0].second.push_back({ CoreRootRef::Global, 1 });
+    assert(Code(module).empty());
+    module.funcs[3].roots.params[0].second = { { CoreRootRef::Global, 1 }, { CoreRootRef::Global, 2 } };
+    assert(Code(module).empty());
+    module.funcs[3].roots.params[0].second = { { CoreRootRef::Global, 1 } };
+    assert(Code(module) == "GIR-V060");
+    module.funcs[3].roots.params.clear();
+    assert(Code(module) == "GIR-V060");
+}
+
 void ChecksActualHolderAliasesAfterCallWrites() {
     for (bool aliased : { false, true })
         assert(Code(ActualHolderAliasModule(aliased)) == (aliased ? "GIR-V060" : ""));
@@ -1191,6 +1264,7 @@ void IncludesActualRefSliceBackingReads() {
 }
 
 int main() {
+    AdmitsCallerStorageThroughGenericContentBounds();
     DistinguishesReturnedOwnerAddressesFromReads();
     PreservesActualGlobalCallDependencies();
     RetainsSpecializedGlobalPolicyWithEmptyActualArguments();
