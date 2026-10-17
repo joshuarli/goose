@@ -63,4 +63,48 @@ theorem SnapshotContentsWitness.setCur {le : LEnv}
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
   exact ⟨witness.closed, witness.noninteger, witness.ownerMember, witness.fresh, witness.beforeSnapshot⟩
 
+theorem SnapshotContentsWitness.emitTerm {le : LEnv}
+    {first snapshot owner : ValueId} {authorized : ValueId → Prop} {before after : LS}
+    {term : Term} {result : Unit}
+    (witness : SnapshotContentsWitness le first snapshot owner authorized before)
+    (checked : before.DenseDefinitions) (bounded : LiveBound before)
+    (run : Goose.Lower.emitTerm term le before = (result, after))
+    (edges : ∀ edge ∈ term.permissionEdges, ∀ destination,
+      (permissionFunc le before).blocks[edge.1]? = some destination →
+      ∀ entry ∈ destination.params.zip edge.2, authorized entry.1.1 → authorized entry.2) :
+    SnapshotContentsWitness le first snapshot owner authorized after := by
+  cases live : before.cur with
+  | none =>
+    rw [emitTerm_none term le live] at run
+    obtain ⟨_, rfl⟩ := Prod.mk.inj run
+    exact witness
+  | some current =>
+    exact ⟨witness.closed.emitTerm checked bounded live run edges,
+      witness.noninteger.emitTerm live run, witness.ownerMember, witness.fresh, witness.beforeSnapshot⟩
+
+theorem SnapshotContentsWitness.emitTerm_before {le : LEnv}
+    {first snapshot owner : ValueId} {authorized : ValueId → Prop} {before after : LS}
+    {term : Term} {result : Unit}
+    (witness : SnapshotContentsWitness le first snapshot owner authorized before)
+    (generated : GeneratedBuilderState before)
+    (run : Goose.Lower.emitTerm term le before = (result, after))
+    (earlier : ∀ edge ∈ term.permissionEdges, ∀ destination,
+      (permissionFunc le before).blocks[edge.1]? = some destination →
+      ∀ parameter ∈ destination.params, parameter.1 < first) :
+    SnapshotContentsWitness le first snapshot owner authorized after := by
+  apply witness.emitTerm generated.dense generated.live run
+  intro edge member destination row entry belongs permitted
+  exact (Nat.not_lt_of_ge (witness.fresh _ permitted)
+    (earlier edge member destination row entry.1 (List.of_mem_zip belongs).1)).elim
+
+theorem snapshot_definition_lt {state : LS} {snapshot owner : ValueId} {mode : SnapshotMode}
+    (checked : state.DenseDefinitions) (member : .def snapshot (.snapshot mode owner) ∈ state.insts) :
+    snapshot < state.vals.size := by
+  apply checked.mem_lt
+  obtain ⟨block, belongs, defined⟩ := List.mem_flatMap.mp member
+  apply List.mem_flatMap.mpr
+  refine ⟨block, belongs, ?_⟩
+  simp only [BlockB.defs, List.mem_append]
+  exact Or.inr (List.mem_filterMap.mpr ⟨.def snapshot (.snapshot mode owner), defined, rfl⟩)
+
 end Goose.Lower.Validation
