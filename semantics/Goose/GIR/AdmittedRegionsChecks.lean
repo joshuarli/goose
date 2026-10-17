@@ -264,6 +264,66 @@ private def specializedWrapperProv := specializedWrapper.provenance
   (specializedReturnCaller.valueTypes specializedReturnModule)).value 4 |>.any fun roots =>
     roots.contains (.global 0) && roots.contains (.global 1)
 
+private def returnedReader : Func :=
+  { function "returned.reader" [holder,slice] #[]
+    [.def 2 (.load 0), .term (.ret [2] (some 0))]
+    { params := #[(0,[.param 0]),(1,[.global 0,.global 1])], contents := #[(0,[.param 1])],
+      results := #[[.param 1]], slots := some #[] }
+    with results := [slice], summary := .known ⟨[.param 0],[],[],[],[],false,false⟩ }
+private def returnedWrapper : Func :=
+  { function "returned.wrapper" [holder,holder,slice] #[]
+    [.def 3 (.call 2 [0,2] (some 0)), .eff (.store 1 3 (some 0)), .term (.ret [] (some 0))]
+    { params := #[(0,[.param 0]),(1,[.param 1]),(2,[.global 0,.global 1])],
+      contents := #[(0,[.global 0,.global 1]),(1,[.param 2])], slots := some #[] }
+    with summary := .known ⟨[.param 0],[.param 1],[],[],[.param 1],false,false⟩ }
+private def returnedCaller : Func :=
+  { function "returned.main" [] #[⟨slice,.mutable,0,0⟩,⟨slice,.mutable,0,1⟩]
+    [.def 0 (.globalAddr 0), .def 1 (.snapshot .owner 0),
+     .def 2 (.viewSlice .mutable 1 .omitted .omitted (some 0)), .eff (.slotInit 0 2 (some 0)),
+     .def 3 (.globalAddr 1), .def 4 (.snapshot .owner 3),
+     .def 5 (.viewSlice .mutable 4 .omitted .omitted (some 0)), .eff (.slotInit 1 5 (some 0)),
+     .def 6 (.slotAddr 0), .def 7 (.slotAddr 1), .def 8 (.call 1 [6,7,5] (some 0)),
+     .def 9 (.load 7), .def 10 (.sliceView 9), .def 11 (.constInt .i64 0),
+     .def 12 (.indexChecked 10 11 (some 0)), .eff (.store 12 11 (some 0)),
+     .term (.ret [] (some 0))]
+    { slots := some #[(0,[.global 0,.global 1]),(1,[.global 1])] }
+    with summary := .known ⟨[.global 0,.global 1],[.global 1],[],[],[],true,false⟩ }
+private def returnedModule : Module :=
+  module #[returnedCaller,returnedWrapper,returnedReader] #[global,{ global with name := "H" }]
+private def returnedWrapperProv := returnedWrapper.provenance
+  (resultRoots returnedModule returnedModule.implTypes) (returnedWrapper.valueTypes returnedModule)
+  returnedModule.rootCount
+private def returnedCallerProv := returnedCaller.provenance
+  (resultRoots returnedModule returnedModule.implTypes) (returnedCaller.valueTypes returnedModule)
+  returnedModule.rootCount
+#guard rootsChecked returnedModule
+#guard returnedWrapper.rootsWithin (mapRawContentRoots returnedWrapperProv [0,2] [.param 1])
+  (returnedWrapper.receiverContentCeiling returnedWrapperProv (.param 0))
+#guard !returnedWrapper.rootsWithin (returnedWrapper.receiverContentCeiling returnedWrapperProv (.param 0))
+  (mapRawContentRoots returnedWrapperProv [0,2] [.param 1])
+#guard !admitted returnedModule
+#guard (validate returnedModule).isOk == false
+#guard rootsAt returnedCallerProv.slots 1 == [.global 1]
+#guard ((replacementContentFlow returnedModule).forFunction returnedCaller
+  (returnedCaller.valueTypes returnedModule)).value 9 |>.any fun roots =>
+    roots.contains (.global 0) && roots.contains (.global 1)
+#guard (returnedCaller.summaryClosed (returnedCaller.effects returnedModule returnedCallerProv)).isOk
+private def returnedWideModule : Module :=
+  let entry : Func :=
+    { returnedCaller with
+      roots := { returnedCaller.roots with slots := some #[(0,[.global 0,.global 1]),(1,[.global 0,.global 1])] }
+      summary := .known ⟨[.global 0,.global 1],[.global 0,.global 1],[],[],[],true,false⟩ }
+  let wrapper : Func :=
+    { returnedWrapper with roots := { returnedWrapper.roots with
+      contents := #[(0,[.global 0,.global 1]),(1,[.global 0,.global 1])] } }
+  let reader : Func :=
+    { returnedReader with roots := { returnedReader.roots with
+      contents := #[(0,[.global 0,.global 1])], results := #[[.global 0,.global 1]] } }
+  { returnedModule with funcs := #[entry,wrapper,reader] }
+#guard rootsChecked returnedWideModule
+#guard admitted returnedWideModule
+#guard (validate returnedWideModule).isOk
+
 private def phiCallee : Func :=
   { function "phi.callee" [holder] #[]
     [.def 1 (.globalAddr 1), .def 2 (.snapshot .owner 1),
