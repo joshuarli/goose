@@ -209,7 +209,7 @@ theorem concrete_noReturn_call_expression (profile : NumProfile) (n : Nat) :
 
 #guard [NumProfile.release, .debug].all fun profile =>
   match enterCall 20 ⟨profile, source⟩ 4 0 [] St.initial,
-      callFn 30 ⟨profile, lower source⟩ 4 1 [] St.initial with
+      callFn 30 ⟨profile, lower source⟩ 4 0 [] St.initial with
   | .ok (.int .i64 9) coreState, .ok (.int .i64 9) girState =>
     coreState.trace == girState.trace && coreState.nextAct == girState.nextAct &&
       coreState.nextScope == girState.nextScope &&
