@@ -433,7 +433,7 @@ def funcMayReturn (mayReturn : Array Bool) (f : Func) : Bool := Id.run do
     | 0, _, _ => true
     | fuel + 1, [], _ => false
     | fuel + 1, b :: todo, seen =>
-      if seen[b]?.getD false then walk fuel todo seen
+      if seen[b]?.getD false then walk (fuel + 1) todo seen
       else
         let seen := seen.set! b true
         match f.blocks[b]? with
@@ -443,6 +443,7 @@ def funcMayReturn (mayReturn : Array Bool) (f : Func) : Bool := Id.run do
           | .returns => true
           | .stops => walk fuel todo seen
           | .branches targets => walk fuel (targets ++ todo) seen
+  termination_by fuel todo _ => (fuel, todo.length)
   return walk (f.blocks.size + 1) [0] (Array.replicate f.blocks.size false)
 
 /-- The greatest conservative approximation, descending from the assumption
