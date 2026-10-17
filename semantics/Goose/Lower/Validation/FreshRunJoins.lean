@@ -99,4 +99,74 @@ theorem patchBrs_incoming_values {env : LEnv} {before after : LS} {join source :
     have same : input = value := by simpa using argument
     simpa only [same] using pendingMember
 
+theorem patchBrs_branch_present {env : LEnv} {before after : LS} {join source : BlockId}
+    {pending : List (BlockId × ValueId)} {result : Unit} {value : ValueId}
+    (run : patchBrs join pending env before = (result, after))
+    (pendingMember : (source, value) ∈ pending) (bounded : source < before.blocks.size) :
+    ∃ body, after.blocks[source]? = some body ∧ Inst.term (.br join [value]) ∈ body.insts.toList := by
+  induction pending generalizing before result after with
+  | nil => simp at pendingMember
+  | cons head rest ih =>
+    obtain ⟨block, input⟩ := head
+    simp only [patchBrs, bind_eq] at run
+    obtain ⟨_, middle, patched, tail⟩ := run
+    rcases List.mem_cons.mp pendingMember with same | later
+    · obtain ⟨rfl, rfl⟩ := Prod.mk.inj same
+      let old := before.blocks[source]
+      have oldAt : before.blocks[source]? = some old := by simp [old, bounded]
+      have middleAt : middle.blocks[source]? =
+          some { old with insts := old.insts.push (.term (.br join [value])) } := by
+        rw [patchTerm_run] at patched
+        obtain ⟨_, rfl⟩ := Prod.mk.inj patched
+        simp [Array.getElem?_modify, oldAt]
+      obtain ⟨body, bodyAt, _, extra, append⟩ := (adv_patchBrs_ext rest tail).2 source _ middleAt
+      exact ⟨body, bodyAt, by rw [append]; simp⟩
+    · apply ih tail later
+      have size : middle.blocks.size = before.blocks.size := by
+        rw [patchTerm_run] at patched
+        obtain ⟨_, rfl⟩ := Prod.mk.inj patched
+        simp
+      simpa only [size] using bounded
+
+theorem freshLiteralValue_joinAt {env : LEnv} {before allocated captured after : LS}
+    {ty : VTy} {join : BlockId} {parameter : ValueId} {pending : List (BlockId × ValueId)}
+    (allocation : newBlock [ty] env before = ((join, [parameter]), allocated))
+    (patch : patchBrs join pending env allocated = ((), captured))
+    (bounded : TargetsBounded before) (pendingNonempty : pending ≠ [])
+    (pendingBounds : ∀ item ∈ pending, item.1 < before.blocks.size)
+    {loop : Option LoopCtx} (frames : LoopBuilderFrames loop before)
+    (framed : TermEdgesFramed loop captured after) (extension : captured.Ext after)
+    (closed : ∀ body ∈ after.blocks.toList, ClosedBlock body)
+    {func : Func} {types : Array (Option VTy)} (blocks : func.blocks = finishBlocks after.blocks)
+    (inputs : ∀ item ∈ pending, FreshLiteralValue func types item.2) :
+    FreshLiteralValue func types parameter := by
+  have fresh := newBlock_fresh (LS.Ext.refl before) allocation
+  have noIncoming := newBlock_no_incoming allocation bounded
+  have allocatedCaptured := adv_patchBrs_ext pending patch
+  obtain ⟨joinBody, joinAt, joinParams⟩ := newBlock_params allocation
+  have allocatedBound : join < allocated.blocks.size := (Array.getElem?_eq_some_iff.mp joinAt).1
+  obtain ⟨capturedBody, capturedAt, _, _, _⟩ := allocatedCaptured.2 join joinBody joinAt
+  have capturedBound : join < captured.blocks.size := (Array.getElem?_eq_some_iff.mp capturedAt).1
+  obtain ⟨finalBody, finalAt, finalParams, _, _⟩ := (allocatedCaptured.trans extension).2 join joinBody joinAt
+  have finalBound : join < after.blocks.size := (Array.getElem?_eq_some_iff.mp finalAt).1
+  have targetBound : join < func.blocks.size := by simp only [blocks, finishBlocks, Array.size_map]; exact finalBound
+  have finalRow : func.blocks[join]? = some (cfgBlock finalBody) := by
+    simp only [blocks, finishBlocks, Array.getElem?_map, finalAt, Option.map_some, cfgBlock]
+  have parameterAt : func.blocks[join].params[0]? = some (parameter, ty) := by
+    have blockEqual := (Array.getElem?_eq_some_iff.mp finalRow).2
+    rw [blockEqual]
+    simp only [cfgBlock, finalParams, joinParams]
+    rfl
+  obtain ⟨item, itemMember⟩ := List.exists_mem_of_ne_nil pending pendingNonempty
+  have itemBound : item.1 < allocated.blocks.size :=
+    Nat.lt_of_lt_of_le (pendingBounds item itemMember) (by
+      rw [newBlock1_run] at allocation
+      obtain ⟨_, rfl⟩ := Prod.mk.inj allocation
+      simp)
+  obtain ⟨body, bodyAt, branch⟩ := patchBrs_branch_present patch itemMember itemBound
+  apply freshLiteralValue_of_framed frames fresh capturedBound framed extension closed blocks targetBound parameterAt
+    bodyAt branch (by rfl)
+  intro source old term args input row member edge argument
+  exact inputs (source, input) (patchBrs_incoming_values patch noIncoming row member edge argument)
+
 end Goose.Lower.Validation
