@@ -138,7 +138,7 @@ theorem resolved_emitDef {module : Core.Module} {le : LEnv}
       · have old : before.vals[value]? = some (some type) := by
           simpa only [Array.getElem?_push, fresh, ↓reduceIte] using row
         exact checked.values value type old
-  
+
 
 theorem resolved_emitEffect {module : Core.Module} {le : LEnv} (effect : Effect) :
     EmittedResolvedRun module le (emitEffect effect) := by
