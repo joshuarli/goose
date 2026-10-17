@@ -8,9 +8,9 @@ theorem emitted_checked_branches {le : LEnv} {initial before : LS}
     (builder : EmittedBuilder le initial before) (condition : ValueId)
     (conditionBound : before.cur.isSome = true → condition < before.vals.size)
     (first second : B ValueId)
-    (firstChecked : ∀ initial before, EmittedBuilder le initial before → EmittedBuilder le initial (first le before).2)
-    (secondChecked : ∀ initial before, EmittedBuilder le initial before → EmittedBuilder le initial (second le before).2)
-    (firstAdvance : AdvB first) (secondAdvance : AdvB second)
+    (firstChecked : ∀ initial started, EmittedBuilder le initial started → TypePrefix before started → EmittedBuilder le initial (first le started).2)
+    (secondChecked : ∀ initial started, EmittedBuilder le initial started → TypePrefix before started → EmittedBuilder le initial (second le started).2)
+    (firstAdvance : AdvB first) (secondAdvance : AdvB second) (firstTypes : TypeRun first)
     (tail : Option BlockId → ValueId → Option BlockId → ValueId → B α)
     (tailChecked : ∀ initial startedT evaluatedT valueT startedF evaluatedF valueF,
       EmittedBuilder le initial evaluatedF → first le startedT = (valueT, evaluatedT) →
@@ -48,7 +48,9 @@ theorem emitted_checked_branches {le : LEnv} {initial before : LS}
     nat_omega)
   rw [startTRun] at startedTBuilder
   dsimp only at startedTBuilder
-  have evaluatedTBuilder := firstChecked initial startedT startedTBuilder
+  have startTTypes := (types_fork condition le before _ _ forkRun).trans
+    (types_setCur (some before.blocks.size) le forked _ _ startTRun)
+  have evaluatedTBuilder := firstChecked initial startedT startedTBuilder startTTypes
   rw [firstRun] at evaluatedTBuilder
   dsimp only at evaluatedTBuilder
   have firstAdv := firstAdvance le startedT _ _ firstRun
@@ -64,7 +66,9 @@ theorem emitted_checked_branches {le : LEnv} {initial before : LS}
     nat_omega)
   rw [startFRun] at startedFBuilder
   dsimp only at startedFBuilder
-  have evaluatedFBuilder := secondChecked initial startedF startedFBuilder
+  have startFTypes := startTTypes.trans ((firstTypes le startedT _ _ firstRun).trans
+    (types_setCur (some (before.blocks.size + 1)) le evaluatedT _ _ startFRun))
+  have evaluatedFBuilder := secondChecked initial startedF startedFBuilder startFTypes
   rw [secondRun] at evaluatedFBuilder
   dsimp only at evaluatedFBuilder
   have secondAdv := secondAdvance le startedF _ _ secondRun
@@ -83,9 +87,9 @@ theorem emitted_checked_ifValue {le : LEnv} {initial before : LS}
     (builder : EmittedBuilder le initial before) (condition : ValueId)
     (conditionBound : before.cur.isSome = true → condition < before.vals.size)
     (first second : B ValueId)
-    (firstChecked : ∀ initial before, EmittedBuilder le initial before → EmittedBuilder le initial (first le before).2)
-    (secondChecked : ∀ initial before, EmittedBuilder le initial before → EmittedBuilder le initial (second le before).2)
-    (firstAdvance : AdvB first) (secondAdvance : AdvB second)
+    (firstChecked : ∀ initial started, EmittedBuilder le initial started → TypePrefix before started → EmittedBuilder le initial (first le started).2)
+    (secondChecked : ∀ initial started, EmittedBuilder le initial started → TypePrefix before started → EmittedBuilder le initial (second le started).2)
+    (firstAdvance : AdvB first) (secondAdvance : AdvB second) (firstTypes : TypeRun first)
     (firstBound : ValueRun first) (secondBound : ValueRun second) :
     EmittedBuilder le initial ((Goose.Lower.whenLive 0 fun _ => do
       let (tb, eb) ← Goose.Lower.fork condition
@@ -101,7 +105,7 @@ theorem emitted_checked_ifValue {le : LEnv} {initial before : LS}
   | some block =>
     rw [whenLive_some _ _ _ live]
     exact emitted_checked_branches builder condition conditionBound first second firstChecked secondChecked
-      firstAdvance secondAdvance (fun endT valueT endF valueF => Goose.Lower.joinValue endT valueT endF valueF)
+      firstAdvance secondAdvance firstTypes (fun endT valueT endF valueF => Goose.Lower.joinValue endT valueT endF valueF)
       (fun _ startedT evaluatedT valueT startedF evaluatedF valueF builder firstRun secondRun growth =>
         builder.joinValue evaluatedT.cur evaluatedF.cur valueT valueF
           (fun live => Nat.lt_of_lt_of_le (firstBound le startedT _ _ firstRun live) growth)
@@ -112,9 +116,9 @@ theorem emitted_checked_ifArms {le : LEnv} {initial before : LS}
     (builder : EmittedBuilder le initial before) (condition : ValueId)
     (conditionBound : before.cur.isSome = true → condition < before.vals.size)
     (first second : B ValueId)
-    (firstChecked : ∀ initial before, EmittedBuilder le initial before → EmittedBuilder le initial (first le before).2)
-    (secondChecked : ∀ initial before, EmittedBuilder le initial before → EmittedBuilder le initial (second le before).2)
-    (firstAdvance : AdvB first) (secondAdvance : AdvB second) :
+    (firstChecked : ∀ initial started, EmittedBuilder le initial started → TypePrefix before started → EmittedBuilder le initial (first le started).2)
+    (secondChecked : ∀ initial started, EmittedBuilder le initial started → TypePrefix before started → EmittedBuilder le initial (second le started).2)
+    (firstAdvance : AdvB first) (secondAdvance : AdvB second) (firstTypes : TypeRun first) :
     EmittedBuilder le initial ((Goose.Lower.whenLive () fun _ => do
       let (tb, eb) ← Goose.Lower.fork condition
       Goose.Lower.setCur (some tb)
@@ -129,14 +133,14 @@ theorem emitted_checked_ifArms {le : LEnv} {initial before : LS}
   | some block =>
     rw [whenLive_some _ _ _ live]
     exact emitted_checked_branches builder condition conditionBound first second firstChecked secondChecked
-      firstAdvance secondAdvance (fun endT _ endF _ => Goose.Lower.joinArms endT endF)
+      firstAdvance secondAdvance firstTypes (fun endT _ endF _ => Goose.Lower.joinArms endT endF)
       (fun _ _ evaluatedT _ _ evaluatedF _ builder _ _ _ => builder.joinArms evaluatedT.cur evaluatedF.cur) rfl
 
 
 theorem emitted_checked_ifThen {le : LEnv} {initial before : LS}
     (builder : EmittedBuilder le initial before) (condition : ValueId)
     (conditionBound : before.cur.isSome = true → condition < before.vals.size) (body : B ValueId)
-    (bodyChecked : ∀ initial before, EmittedBuilder le initial before → EmittedBuilder le initial (body le before).2)
+    (bodyChecked : ∀ initial started, EmittedBuilder le initial started → TypePrefix before started → EmittedBuilder le initial (body le started).2)
     (bodyAdvance : AdvB body) :
     EmittedBuilder le initial ((Goose.Lower.whenLive () fun _ => do
       let (tb, xb) ← Goose.Lower.fork condition
@@ -176,7 +180,9 @@ theorem emitted_checked_ifThen {le : LEnv} {initial before : LS}
       nat_omega)
     rw [startRun] at startBuilder
     dsimp only at startBuilder
-    have evaluatedBuilder := bodyChecked initial started startBuilder
+    have startedTypes := (types_fork condition le before _ _ forkRun).trans
+      (types_setCur (some before.blocks.size) le forked _ _ startRun)
+    have evaluatedBuilder := bodyChecked initial started startBuilder startedTypes
     rw [bodyRun] at evaluatedBuilder
     dsimp only at evaluatedBuilder
     have bodyAdv := bodyAdvance le started _ _ bodyRun
