@@ -1,4 +1,6 @@
 import Goose.Lower.FuelBoundTyped
+import Goose.Lower.FuelBoundControlSteps
+import Goose.Lower.FuelBoundTypedMethods
 import Goose.Lower.PrintSources
 import Goose.Lower.ReflectionBranchesSteps
 import Goose.Lower.ReflectionOutput
@@ -7,60 +9,6 @@ import Goose.Lower.ReflectionTransfersCoercion
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Proofs.Fuel
-
-theorem TypedExprFuelBound.source_mono {sourceFuel larger fuel : Nat} {cfg : Cfg}
-    {results : List Ty} {expression : Expr}
-    (bounded : TypedExprFuelBound sourceFuel fuel cfg results expression)
-    (enough : sourceFuel ≤ larger) : TypedExprFuelBound larger fuel cfg results expression := by
-  intro env state source metadata ls after id pt cx fr lowering point extension related moduleEq
-    resultsEq generated
-  exact (bounded env state source metadata ls after id pt cx fr lowering point extension related
-    moduleEq resultsEq generated).source_mono
-      (fun n k bound => (monoAll n k bound).expr cfg env expression) enough
-
-theorem FuelBoundAt.eff_step {sourceFuel fuel : Nat} {cx : FnCtx} {pt : Pt}
-    {fr : Frame} {nextFrame : α → Frame} {e : Effect} {source : Nat → M α} {state : St}
-    (instruction : instAt cx.fn pt = some (.eff e))
-    (equal : execEff cx.fn fr e = source sourceFuel >>= fun value => pure (nextFrame value)) :
-    FuelBoundAt sourceFuel (fuel + 1) cx pt fr source
-      (fun value _ pt' fr' => pt' = (pt.1, pt.2 + 1) ∧ fr' = nextFrame value) state := by
-  have step : runAt cx pt fr (fuel + 1) state =
-      (execEff cx.fn fr e >>= fun frame => runAt cx (pt.1, pt.2 + 1) frame fuel) state := by
-    simp only [runAt, instsAt_cons instruction, exec]
-  intro result final done
-  rw [step, bind_apply] at done
-  cases effectRun : execEff cx.fn fr e state with
-  | ok frame after =>
-      rw [effectRun] at done
-      have sourceEqual :
-          (source sourceFuel >>= fun value => pure (nextFrame value)) state = .ok frame after := by
-        rw [← equal]
-        exact effectRun
-      rw [bind_apply] at sourceEqual
-      cases sourceRun : source sourceFuel state with
-      | stop stop sourceAfter => rw [sourceRun] at sourceEqual; cases sourceEqual
-      | ok value sourceAfter =>
-          rw [sourceRun] at sourceEqual
-          cases sourceEqual
-          exact Or.inl ⟨value, after, (pt.1, pt.2 + 1), nextFrame value,
-            fuel, rfl, ⟨rfl, rfl⟩, by omega, done⟩
-  | stop stop after =>
-      rw [effectRun] at done
-      have nonTimeout : NonTimeout (Res.stop stop after : Res Val) := by
-        intro timeoutState impossible
-        cases impossible
-        exact final after done.symm
-      have sourceEqual :
-          (source sourceFuel >>= fun value => pure (nextFrame value)) state = .stop stop after := by
-        rw [← equal]
-        exact effectRun
-      rw [bind_apply] at sourceEqual
-      cases sourceRun : source sourceFuel state with
-      | ok value sourceAfter => rw [sourceRun] at sourceEqual; cases sourceEqual
-      | stop sourceStop sourceAfter =>
-          rw [sourceRun] at sourceEqual
-          cases sourceEqual
-          exact Or.inr ⟨stop, after, rfl, done.symm⟩
 
 theorem FuelBoundAt.abortTerm {sourceFuel fuel : Nat} {cx : FnCtx} {pt : Pt} {fr : Frame}
     {source : Nat → M α} {post : α → St → Pt → Frame → Prop} {state : St}
@@ -98,53 +46,6 @@ theorem FuelBoundAt.exitTerm {sourceFuel fuel : Nat} {cx : FnCtx} {pt : Pt} {fr 
       rw [targetRun] at done
       cases done
       exact Or.inr ⟨.exit code, state, sourceRun, rfl⟩
-
-theorem FuelBoundAt.condbr_take0 {sourceFuel fuel : Nat} {cx : FnCtx} {pt : Pt} {fr : Frame}
-    {condition : ValueId} {thenBlock elseBlock : BlockId} {thenTarget elseTarget : GIR.Block}
-    {selected : Bool} {source : Nat → M α} {post : α → St → Pt → Frame → Prop} {state : St}
-    (instruction : instAt cx.fn pt = some (.term (.condbr condition thenBlock [] elseBlock [])))
-    (conditionCell : fr.vals[condition]? = some (.val (.bool selected)))
-    (selectedBlock : cx.fn.blocks[if selected then thenBlock else elseBlock]? =
-      some (if selected then thenTarget else elseTarget))
-    (selectedParams : (if selected then thenTarget else elseTarget).params = [])
-    (bounded : FuelBoundAt sourceFuel fuel cx (if selected then thenBlock else elseBlock, 0)
-      fr source post state) : FuelBoundAt sourceFuel (fuel + 1) cx pt fr source post state :=
-  FuelBoundAt.step (congrFun (runAt_condbr_take0_step instruction conditionCell selectedBlock
-    selectedParams (by cases selected <;> rfl) fuel) state) bounded
-
-private theorem FuelBoundAt.br0 {sourceFuel fuel : Nat} {cx : FnCtx} {pt : Pt} {fr : Frame}
-    {blockId : BlockId} {block : GIR.Block} {source : Nat → M α}
-    {post : α → St → Pt → Frame → Prop} {state : St}
-    (instruction : instAt cx.fn pt = some (.term (.br blockId [])))
-    (blockAt : cx.fn.blocks[blockId]? = some block) (parameters : block.params = [])
-    (bounded : FuelBoundAt sourceFuel fuel cx (blockId, 0) fr source post state) :
-    FuelBoundAt sourceFuel (fuel + 1) cx pt fr source post state :=
-  FuelBoundAt.step (congrFun (runAt_br0_step instruction blockAt parameters fuel) state) bounded
-
-private theorem FuelBoundAt.br1 {sourceFuel fuel : Nat} {cx : FnCtx} {pt : Pt} {fr : Frame}
-    {blockId : BlockId} {block : GIR.Block} {value parameter : ValueId} {ty : VTy} {cell : RVal}
-    {source : Nat → M α} {post : α → St → Pt → Frame → Prop} {state : St}
-    (instruction : instAt cx.fn pt = some (.term (.br blockId [value])))
-    (blockAt : cx.fn.blocks[blockId]? = some block)
-    (parameters : block.params = [(parameter, ty)])
-    (valueCell : fr.vals[value]? = some cell)
-    (bounded : FuelBoundAt sourceFuel fuel cx (blockId, 0) (fr.set parameter cell) source post state) :
-    FuelBoundAt sourceFuel (fuel + 1) cx pt fr source post state :=
-  FuelBoundAt.step (congrFun (runAt_br1_step instruction blockAt parameters valueCell fuel) state) bounded
-
-private theorem leaf_eff_fuelBoundAt {cfg : Cfg} {env : Env} {cx : FnCtx}
-    {ls lsk ls1 : LS} {fr frk : Frame} {ptk : Pt} {cellsk : List (ValueId × RVal)}
-    {fuel sourceFuel : Nat} {state : St}
-    (base : Post cfg env cx ls fr lsk frk ptk cellsk) {effect : Effect} {le : LEnv}
-    (emit : emitEffect effect le lsk = ((), ls1)) (extension : ExtT ls1 cx.fn.blocks)
-    {source : Nat → M α}
-    (equal : execEff cx.fn frk effect = source sourceFuel >>= fun _ => pure frk) :
-    FuelBoundAt sourceFuel (fuel + 1) cx ptk frk source
-      (fun _ _ pt' fr' => Post cfg env cx ls fr ls1 fr' pt' []) state := by
-  obtain ⟨post, instruction⟩ := Post.eff_leaf base emit extension
-  exact (FuelBoundAt.eff_step instruction equal).mono fun value after pt' fr' matched => by
-    rcases matched with ⟨rfl, rfl⟩
-    exact post
 
 private theorem normalEffectFuelBoundAt {sourceFuel fuel : Nat} {cfg : Cfg} {env : Env}
     {cx : FnCtx} {ls lsk ls1 : LS} {fr frk : Frame} {ptk : Pt}
@@ -849,10 +750,10 @@ theorem typedStatementFuelBound_assert {sourceFuel fuel : Nat} {cfg : Cfg} {resu
                 StatementLoopPost cfg env cx ls fr after loop flow pt' fr')
               (state := next) (kind := .assert) (origin := origin)
               targetAbortInstruction sourceRun
-            exact FuelBoundAt.condbr_take0 (thenTarget := thenTargetBlock)
-              (elseTarget := elseTargetBlock) branchAt conditionCell
+            exact FuelBoundAt.condbr_take0 branchAt conditionCell
               (by simpa only [Bool.false_eq_true, ↓reduceIte] using elseTargetAt)
-              (by simpa only [Bool.false_eq_true, ↓reduceIte] using elseParameters) stopped
+              (by simpa only [Bool.false_eq_true, ↓reduceIte] using elseParameters)
+              (by cases false <;> rfl) stopped
         | true =>
             have finalPost : StatementLoopPost cfg env cx ls fr after loop (.normal .unit)
                 (thenBlock, 0) fr1 :=
@@ -873,10 +774,10 @@ theorem typedStatementFuelBound_assert {sourceFuel fuel : Nat} {cfg : Cfg} {resu
               (other := fun _ =>
                 (if true then pure (Flow.normal .unit) else abortAt .assert origin) >>= 
                   prepareLoopFlow env loop) branchSourceEq
-            have selectedBranch := FuelBoundAt.condbr_take0
-              (thenTarget := thenTargetBlock) (elseTarget := elseTargetBlock) branchAt conditionCell
+            have selectedBranch := FuelBoundAt.condbr_take0 branchAt conditionCell
               (by simpa only [Bool.false_eq_true, ↓reduceIte] using thenTargetAt)
-              (by simpa only [Bool.false_eq_true, ↓reduceIte] using thenParameters) selectedSource
+              (by simpa only [Bool.false_eq_true, ↓reduceIte] using thenParameters)
+              (by cases true <;> rfl) selectedSource
             cases loop <;>
               simpa [expectBool, prepareLoopFlow, prepareReturn, prepareLoopExit] using selectedBranch
   have sourceEq :
