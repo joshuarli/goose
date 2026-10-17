@@ -39,7 +39,7 @@ theorem EmittedAt.emitEffect (le : LEnv) (before : LS) (effect : Effect) :
   | some block =>
     apply EmittedAt.of_preserving
     · rw [emitEffect_run _ _ live]
-      exact ⟨Nat.le_refl _, fun _ _ => rfl⟩
+      exact EmittedTypePrefix.of_vals rfl
     · intro value op member
       rw [emitEffect_run _ _ live] at member
       rcases emittedDef_appendInst member with previous | fresh
@@ -53,7 +53,7 @@ theorem EmittedAt.emitTerm (le : LEnv) (before : LS) (term : Term) :
   | some block =>
     apply EmittedAt.of_preserving
     · rw [emitTerm_run _ _ live]
-      exact ⟨Nat.le_refl _, fun _ _ => rfl⟩
+      exact EmittedTypePrefix.of_vals rfl
     · intro value op member
       rw [emitTerm_run _ _ live] at member
       have same : .def value op ∈ (before.appendInst block (.term term)).insts := member
@@ -65,7 +65,7 @@ theorem EmittedAt.patchTerm (le : LEnv) (before : LS) (block : BlockId) (term : 
     EmittedAt le before (Goose.Lower.patchTerm block term) := by
   apply EmittedAt.of_preserving
   · rw [patchTerm_run]
-    exact ⟨Nat.le_refl _, fun _ _ => rfl⟩
+    exact EmittedTypePrefix.of_vals rfl
   · intro value op member
     rw [patchTerm_run] at member
     rcases emittedDef_appendInst member with previous | fresh
@@ -84,7 +84,7 @@ theorem EmittedAt.setCur (le : LEnv) (before : LS) (block : Option BlockId) :
     EmittedAt le before (Goose.Lower.setCur block) := by
   apply EmittedAt.of_preserving
   · rw [setCur_run]
-    exact ⟨Nat.le_refl _, fun _ _ => rfl⟩
+    exact EmittedTypePrefix.of_vals rfl
   · intro value op member
     rw [setCur_run] at member
     exact member
@@ -92,13 +92,13 @@ theorem EmittedAt.setCur (le : LEnv) (before : LS) (block : Option BlockId) :
 theorem EmittedAt.pushScope (le : LEnv) (before : LS) (scope : ScopeId) :
     EmittedAt le before (Goose.Lower.pushScope scope) := by
   apply EmittedAt.of_preserving
-  · exact ⟨Nat.le_refl _, fun _ _ => rfl⟩
+  · exact EmittedTypePrefix.of_vals rfl
   · exact fun _ _ member => member
 
 theorem EmittedAt.popScope (le : LEnv) (before : LS) :
     EmittedAt le before Goose.Lower.popScope := by
   apply EmittedAt.of_preserving
-  · exact ⟨Nat.le_refl _, fun _ _ => rfl⟩
+  · exact EmittedTypePrefix.of_vals rfl
   · exact fun _ _ member => member
 
 theorem EmittedAt.get (le : LEnv) (before : LS) : EmittedAt le before (get : B LS) := .refl

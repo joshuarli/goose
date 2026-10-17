@@ -7,16 +7,33 @@ open Goose.Core Goose.GIR
 structure EmittedTypePrefix (before after : LS) : Prop where
   size : before.vals.size ≤ after.vals.size
   lookup : ∀ value, value < before.vals.size → after.vals[value]? = before.vals[value]?
+  newRowsSome : ∀ value, before.vals.size ≤ value → value < after.vals.size →
+    ∃ type, after.vals[value]? = some (some type)
 
 theorem EmittedTypePrefix.refl (state : LS) : EmittedTypePrefix state state :=
-  ⟨Nat.le_refl _, fun _ _ => rfl⟩
+  ⟨Nat.le_refl _, fun _ _ => rfl, by intro value lower upper; nat_omega⟩
 
 theorem EmittedTypePrefix.trans {before middle after : LS}
     (first : EmittedTypePrefix before middle) (second : EmittedTypePrefix middle after) :
     EmittedTypePrefix before after := by
-  refine ⟨Nat.le_trans first.size second.size, ?_⟩
-  intro value bound
-  exact (second.lookup value (Nat.lt_of_lt_of_le bound first.size)).trans (first.lookup value bound)
+  refine ⟨Nat.le_trans first.size second.size, ?_, ?_⟩
+  · intro value bound
+    exact (second.lookup value (Nat.lt_of_lt_of_le bound first.size)).trans (first.lookup value bound)
+  · intro value lower upper
+    by_cases middle : value < middle.vals.size
+    · obtain ⟨type, row⟩ := first.newRowsSome value lower middle
+      exact ⟨type, (second.lookup value middle).trans row⟩
+    · exact second.newRowsSome value (Nat.le_of_not_gt middle) upper
+
+theorem EmittedTypePrefix.of_vals {before after : LS} (same : after.vals = before.vals) :
+    EmittedTypePrefix before after := by
+  refine ⟨by rw [same]; exact Nat.le_refl _, ?_, ?_⟩
+  · intro value bound
+    rw [same]
+  · intro value lower upper
+    rw [same] at upper
+    nat_omega
+
 
 theorem EmittedTypePrefix.typed {before after : LS} (prefixProof : EmittedTypePrefix before after) :
     TypePrefix before after := by
@@ -30,14 +47,47 @@ theorem emittedTypePrefix_emitDef (op : Op) (le : LEnv) (before : LS) :
   | none => rw [emitDef_none op le live]; exact .refl _
   | some block =>
     rw [emitDef_run op le live]
-    refine ⟨by simp, ?_⟩
-    intro value bound
-    simp [Array.getElem?_push, Nat.ne_of_lt bound]
+    refine ⟨by simp, ?_, ?_⟩
+    · intro value bound
+      simp [Array.getElem?_push, Nat.ne_of_lt bound]
+    · intro value lower upper
+      have same : value = before.vals.size := by simp only [Array.size_push] at upper; nat_omega
+      subst value
+      exact ⟨((op.resultTy (tyEnv le before)).toOption).getD (.data .unit), by simp⟩
+
+theorem emitted_newParam_rows (types : List VTy) (values : Array (Option VTy)) :
+    ∀ value, values.size ≤ value → value < (pushParamTypes types values).size →
+      ∃ type, (pushParamTypes types values)[value]? = some (some type) := by
+  induction types generalizing values with
+  | nil => intro value lower upper; simp [pushParamTypes] at upper; nat_omega
+  | cons type rest inductionHypothesis =>
+    intro value lower upper
+    by_cases first : value = values.size
+    · subst value
+      refine ⟨type, ?_⟩
+      have retained := pushParamTypes_preserves_lookup rest (values.push (some type)) values.size (by simp)
+      exact retained.trans (by simp)
+    · apply inductionHypothesis (values.push (some type)) value
+      · simp only [Array.size_push]
+        nat_omega
+      · exact upper
 
 theorem emittedTypePrefix_newBlock (types : List VTy) (le : LEnv) (before : LS) :
     EmittedTypePrefix before (newBlock types le before).2 := by
   rw [newBlock_run_general]
-  exact ⟨by simp [array_size_pushParamTypes], fun value bound => pushParamTypes_preserves_lookup _ _ _ bound⟩
+  exact ⟨by simp [array_size_pushParamTypes], fun value bound => pushParamTypes_preserves_lookup _ _ _ bound,
+    emitted_newParam_rows types before.vals⟩
+
+def EmittedTypesPresent (state : LS) : Prop :=
+  ∀ value, value < state.vals.size → ∃ type, state.vals[value]? = some (some type)
+
+theorem EmittedTypePrefix.present {before after : LS} (prefixProof : EmittedTypePrefix before after)
+    (present : EmittedTypesPresent before) : EmittedTypesPresent after := by
+  intro value bound
+  by_cases old : value < before.vals.size
+  · obtain ⟨type, row⟩ := present value old
+    exact ⟨type, (prefixProof.lookup value old).trans row⟩
+  · exact prefixProof.newRowsSome value (Nat.le_of_not_gt old) bound
 
 inductive EmittedTrace (le : LEnv) (initial : LS) : LS → Prop where
   | refl : EmittedTrace le initial initial
@@ -57,6 +107,9 @@ theorem EmittedTrace.prefix {le : LEnv} {initial final : LS} (trace : EmittedTra
   | preserve step result trace run retained definitions inductionHypothesis =>
     exact inductionHypothesis.trans retained
   | emit trace op type success inductionHypothesis => exact inductionHypothesis.trans (emittedTypePrefix_emitDef _ _ _)
+
+theorem EmittedTrace.present {le : LEnv} {initial final : LS} (trace : EmittedTrace le initial final)
+    (present : EmittedTypesPresent initial) : EmittedTypesPresent final := trace.prefix.present present
 
 theorem EmittedTrace.append {le : LEnv} {initial middle final : LS}
     (first : EmittedTrace le initial middle) (second : EmittedTrace le middle final) :
