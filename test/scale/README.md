@@ -213,16 +213,19 @@ absence of a success line on errors, warning presence, and that a damaged
 object is reported and rebuilt.
 
 `E10` checks numeric profiles, `-D`, available C compiler identities, and a
-binary-only compiler identity change. Raw independent C flags, a target-only
-change, and a runtime-text-only change are unavailable through the current
-compiler interface: `--debug` couples numeric mode with C flags, targets are
-not selectable, and runtime text is embedded in the compiler binary. Those
-dimensions have `status: unavailable`; they are not passes. An E10 run exits 2
-and reports `incomplete` while any such dimensions remain unavailable.
+binary-only compiler identity change. It also probes three contract fields at
+the production native-builder boundary. The probe injects raw C flags, a
+target identity, or a runtime identity into `UnitContractValues`, then uses
+`MakeContract` and `BuildUnitObjects` to compile Goose-emitted C units and
+checks that the original store remains reusable. The target probe uses the
+host compiler under a synthetic target identity. The runtime probe changes
+the runtime identity only; it does not claim a runtime-text-only full build.
+These probes qualify builder contract fields without claiming CLI selectors or
+cross-compilation support.
 
-Verification status for this harness update: targeted `E13` passed with both
-interruption points observed and recovery compared with clean builds. The
-seeded sequence's strengthened assertions were not rerun within the three
-matrix attempts; the earlier 60-step result is not evidence for this update.
-E10/H2 acceptance remains parked until the unavailable dimensions are covered
-or the acceptance contract is revised.
+The structural run passed the E10 CLI rows and E11 through E16. Its E10
+builder probe initially failed because the focused compiler-units checks did
+not pass. After repairing those checks, E10 was rerun and completed with
+`units_matrix: ok`. The seeded 60-step run also completed with
+`units_matrix: ok`. These runs establish correctness only; they are not timing
+results.
