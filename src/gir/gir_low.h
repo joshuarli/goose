@@ -1792,6 +1792,7 @@ private:
             }
             case GirOp::DestArg: {
                 auto destination = DestinationAt(i.a);
+                Publish(i.a, i.org);
                 shape[i.res].source = destination.source;
                 ownedArguments[i.res] = { shape[i.a].w[0], shape[i.a].w[1] };
                 if (IsResizableKind(HT(destination.type).kind)) {
@@ -2249,9 +2250,12 @@ private:
             auto fail = AbortBlock(GirAbortKind::Capacity, {}, i.org);
             CheckThen(CmpI(CoreCmpOp::Lt, I64(), len, ConstI(I64(), HT(owner).count)), fail);
         }
+        auto destination = CoreHasConstruction(h.profile) ? TraceId(GirTraceKind::Destination) : -1;
+        if (destination >= 0) Event(GirEventKind::Begin, { destination });
         auto base = OwnerData(i.a, owner);
         auto at = PtrAt(base, len, esz);
         StoreAt(elemty, at, shape[i.b].w);
+        if (destination >= 0) Event(GirEventKind::Write, { destination, ConstI(I64(), 0) });
         // Pilot push has no source-origin requirement, so keep its length increment unchecked.
         auto newLen = CoreHasShrink(h.profile)
             ? BinW(CoreBinOp::Add, I64(), len, ConstI(I64(), 1), true, i.org)
@@ -2261,6 +2265,7 @@ private:
             SimpleE(GirOp::StackBump, rs.w[1], -1, (int)esz);
             SimpleE(GirOp::HdrSetLen, address, newLen);
         }
+        if (destination >= 0) Event(GirEventKind::Publish, { destination });
         Define(i, { at });
         if (CoreHasConstruction(h.profile)) shape[i.res].source = ChildSource(rs.source, len);
     }
