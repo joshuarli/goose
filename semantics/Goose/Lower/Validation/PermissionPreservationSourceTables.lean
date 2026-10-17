@@ -40,6 +40,40 @@ theorem PermissionSourceTables.declarePre {env after : Core.TEnv} {resultTypes :
   have same := declarePre_tables pre source
   exact tables.retained same.2.1 same.2.2
 
+theorem PermissionSourceTables.lowerImpl {env : Core.TEnv} (impl : Core.Impl)
+    (vars : env.vars = impl.vars) (implementation : env.impl = some impl) :
+    PermissionSourceTables env impl.results.toList (lowerImpl env.mod impl) := by
+  constructor
+  · change (lowerEnv env.mod impl.vars impl.results.toList).slots =
+      (lowerEnv env.mod env.vars impl.results.toList).slots
+    rw [vars]
+  · rfl
+  · intro actual row
+    have same : impl = actual := Option.some.inj (implementation.symm.trans row)
+    subst actual
+    rfl
+
+theorem PermissionSourceTables.lowerContextAt {env : Core.TEnv} (context : Core.Context) (impl : Core.Impl)
+    (vars : env.vars = impl.vars) (implementation : env.impl = some impl) :
+    PermissionSourceTables env impl.results.toList (lowerContextAt env.mod context impl) :=
+  by
+    have tables := PermissionSourceTables.lowerImpl impl vars implementation
+    exact ⟨tables.slots, tables.results, tables.implementationResults⟩
+
+theorem PermissionSourceTables.lowerGlobal {env : Core.TEnv} (global : Core.Global)
+    (vars : env.vars = #[]) (implementation : env.impl = none) :
+    PermissionSourceTables env [global.ty] (lowerGlobal env.mod global).init := by
+  constructor
+  · change (lowerEnv env.mod #[] [global.ty]).slots = (lowerEnv env.mod env.vars [global.ty]).slots
+    rw [vars]
+  · rfl
+  · intro actual impossible
+    rw [implementation] at impossible
+    cases impossible
+
+#print axioms PermissionSourceTables.lowerImpl
+#print axioms PermissionSourceTables.lowerGlobal
+
 #print axioms PermissionSourceTables.retained
 #print axioms PermissionSourceTables.tyStmts
 
