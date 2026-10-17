@@ -72,6 +72,12 @@ theorem unreachable_freezeTo (m : Mutability) (r : ValueId) : UnreachableRun (fr
     | exact unreachable_pure _
     | (rename_i t; cases t <;> first | exact unreachable_pure _ | (rename_i m' _; cases m' <;> first | exact unreachable_pure _ | exact unreachable_emitDef _))
 
+theorem unreachable_borrowTo (mu : Mutability) (value : ValueId) : UnreachableRun (borrowTo mu value) := by
+  intro env before result after run checked
+  rcases borrowTo_cases run with frozen | emitted
+  · exact unreachable_freezeTo mu value env before result after frozen checked
+  · exact unreachable_emitDef _ env before result after emitted checked
+
 theorem unreachable_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : UnreachableRun (coerceTo target r org) := by
   unfold coerceTo
   refine UnreachableRun.bind (unreachable_valTy r) fun source => ?_

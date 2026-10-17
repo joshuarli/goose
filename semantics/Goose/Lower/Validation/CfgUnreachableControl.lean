@@ -53,7 +53,7 @@ theorem unreachable_eachElemValue (slot : VarId) (byRef : Bool)
       dsimp only
       cases declaration.ty <;> first
         | exact unreachable_pure _
-        | exact unreachable_freezeTo _ _
+        | exact unreachable_borrowTo _ _
 
 theorem unreachable_fork (condition : ValueId) : UnreachableRun (fork condition) := by
   unfold fork

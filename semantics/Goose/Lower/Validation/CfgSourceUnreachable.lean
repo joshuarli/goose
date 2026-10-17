@@ -17,7 +17,7 @@ theorem unreachable_lowerExpr : ∀ e : Expr, UnreachableRun (lowerExpr e)
     exact UnreachableRun.bind (unreachable_lowerPlace p) fun _ => unreachable_emitDef _
   | .ref m p => by
     simp only [lowerExpr]
-    exact UnreachableRun.bind (unreachable_lowerPlace p) fun r => unreachable_freezeTo m r
+    exact UnreachableRun.bind (unreachable_lowerPlace p) fun r => unreachable_borrowTo m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact UnreachableRun.bind (unreachable_lowerView v) fun _ => UnreachableRun.bind (unreachable_lowerBound lo) fun _ =>
@@ -85,7 +85,7 @@ theorem unreachable_lowerArg : ∀ a : Arg, UnreachableRun (lowerArg a)
   | .byVal e => by simp only [lowerArg]; exact unreachable_lowerExpr e
   | .byRef m p => by
     simp only [lowerArg]
-    exact UnreachableRun.bind (unreachable_lowerPlace p) fun r => unreachable_freezeTo m r
+    exact UnreachableRun.bind (unreachable_lowerPlace p) fun r => unreachable_borrowTo m r
 
 theorem unreachable_lowerArgs : ∀ as : List Arg, UnreachableRun (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact unreachable_pure _

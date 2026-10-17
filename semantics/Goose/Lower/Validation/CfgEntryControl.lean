@@ -60,7 +60,7 @@ theorem entry_eachElemValue (loop : Option LoopCtx) (slot : VarId) (byRef : Bool
       dsimp only
       cases declaration.ty <;> first
         | exact entry_pure loop _
-        | exact entry_freezeTo loop _ _
+        | exact entry_borrowTo loop _ _
 
 theorem entry_fork (loop : Option LoopCtx) (condition : ValueId) :
     EntryRun loop (fork condition) := by

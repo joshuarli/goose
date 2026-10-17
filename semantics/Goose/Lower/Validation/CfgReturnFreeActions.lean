@@ -72,6 +72,12 @@ theorem returnFree_freezeTo (m : Mutability) (r : ValueId) : ReturnFreeRun (free
     | exact returnFree_pure _
     | (rename_i t; cases t <;> first | exact returnFree_pure _ | (rename_i m' _; cases m' <;> first | exact returnFree_pure _ | exact returnFree_emitDef _))
 
+theorem returnFree_borrowTo (mu : Mutability) (value : ValueId) : ReturnFreeRun (borrowTo mu value) := by
+  intro env before result after run checked
+  rcases borrowTo_cases run with frozen | emitted
+  · exact returnFree_freezeTo mu value env before result after frozen checked
+  · exact returnFree_emitDef _ env before result after emitted checked
+
 theorem returnFree_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : ReturnFreeRun (coerceTo target r org) := by
   unfold coerceTo
   refine ReturnFreeRun.bind (returnFree_valTy r) fun source => ?_

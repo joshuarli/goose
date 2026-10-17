@@ -17,7 +17,7 @@ theorem returnFree_lowerExpr : ∀ e : Expr, ReturnFreeExpr e → ReturnFreeRun 
     exact ReturnFreeRun.bind (returnFree_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun _ => returnFree_emitDef _
   | .ref m p, free => by
     simp only [lowerExpr]
-    exact ReturnFreeRun.bind (returnFree_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun r => returnFree_freezeTo m r
+    exact ReturnFreeRun.bind (returnFree_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun r => returnFree_borrowTo m r
   | .slice m v lo hi org, free => by
     simp only [lowerExpr]
     exact ReturnFreeRun.bind (returnFree_lowerView v (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun _ => ReturnFreeRun.bind (returnFree_lowerBound lo (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun _ =>
@@ -85,7 +85,7 @@ theorem returnFree_lowerArg : ∀ a : Arg, ReturnFreeArg a → ReturnFreeRun (lo
   | .byVal e, free => by simp only [lowerArg]; exact returnFree_lowerExpr e (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)
   | .byRef m p, free => by
     simp only [lowerArg]
-    exact ReturnFreeRun.bind (returnFree_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun r => returnFree_freezeTo m r
+    exact ReturnFreeRun.bind (returnFree_lowerPlace p (by first | exact free | exact free.1 | exact free.2 | exact free.1.1 | exact free.1.2 | exact free.2.1 | exact free.2.2 | exact free.2.2.1 | exact free.2.2.2)) fun r => returnFree_borrowTo m r
 
 theorem returnFree_lowerArgs : ∀ as : List Arg, ReturnFreeArgs as → ReturnFreeRun (lowerArgs as)
   | [], free => by simp only [lowerArgs]; exact returnFree_pure _
