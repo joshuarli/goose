@@ -175,6 +175,103 @@ theorem listMapM_success_length (action : α → EvalM β) (inputs : List α)
   have trace := listMapM_success_trace action inputs initial values final result
   simpa using listMapMLoop_success_length action trace
 
+inductive EvalOperandsSuccess (config : EvalConfig) (environment : RuntimeActivation) :
+    Nat → List Channel → List Expr → ExecutionState → List Carrier → ExecutionState → Prop
+  | nil (fuel : Nat) (state : ExecutionState) :
+      EvalOperandsSuccess config environment fuel [] [] state [] state
+  | cons {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands : List Expr}
+      {initial producedState middle final : ExecutionState} {produced : List Carrier}
+      {carrier : Carrier} {carriers : List Carrier}
+      (produce : evalProduce fuel config environment [channel] operand initial =
+        .ok produced producedState)
+      (single : singleCarrier produced producedState = .ok carrier middle)
+      (tail : EvalOperandsSuccess config environment fuel channels operands middle carriers final) :
+      EvalOperandsSuccess config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial (carrier :: carriers) final
+
+theorem evalOperands_success_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) :
+    ∀ {channels : List Channel} {operands : List Expr} {initial final : ExecutionState}
+      {carriers : List Carrier},
+      evalOperands fuel config environment channels operands initial = .ok carriers final →
+      EvalOperandsSuccess config environment fuel channels operands initial carriers final := by
+  induction fuel with
+  | zero =>
+      intro channels operands initial final carriers result
+      simp only [evalOperands, timeout, EvalM.stop] at result
+      cases result
+  | succ fuel ih =>
+      intro channels operands initial final carriers result
+      cases channels with
+      | nil =>
+          cases operands with
+          | nil =>
+              simp only [evalOperands, pure] at result
+              cases result
+              exact .nil _ initial
+          | cons operand operands =>
+              simp only [evalOperands, fault, EvalM.stop] at result
+              cases result
+      | cons channel channels =>
+          cases operands with
+          | nil =>
+              simp only [evalOperands, fault, EvalM.stop] at result
+              cases result
+          | cons operand operands =>
+              simp only [evalOperands] at result
+              cases produce : evalProduce fuel config environment [channel] operand initial with
+              | ok produced producedState =>
+                  simp only [bind, produce] at result
+                  cases single : singleCarrier produced producedState with
+                  | ok carrier middle =>
+                      simp only [single] at result
+                      cases tail : evalOperands fuel config environment channels operands middle with
+                      | ok remaining final' =>
+                          simp only [tail, pure] at result
+                          injection result with carriersEq stateEq
+                          subst carriers
+                          subst final
+                          exact .cons produce single (ih tail)
+                      | stop reason final' => simp only [tail] at result; cases result
+                      | escape address exits final' => simp only [tail] at result; cases result
+                      | jump target kind final' => simp only [tail] at result; cases result
+                  | stop reason middle => simp only [single] at result; cases result
+                  | escape address exits middle => simp only [single] at result; cases result
+                  | jump target kind middle => simp only [single] at result; cases result
+              | stop reason middle => simp only [bind, produce] at result; cases result
+              | escape address exits middle => simp only [bind, produce] at result; cases result
+              | jump target kind middle => simp only [bind, produce] at result; cases result
+
+theorem evalOperands_success_count (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) {channels : List Channel} {operands : List Expr}
+    {initial final : ExecutionState} {carriers : List Carrier}
+    (trace : EvalOperandsSuccess config environment fuel channels operands initial carriers final) :
+    carriers.length = operands.length := by
+  induction trace with
+  | nil _ state => rfl
+  | @cons fuel channel channels operand operands initial middle final carrier carriers head tail ih =>
+      simp only [List.length_cons] at ih ⊢
+      omega
+
+theorem evalProduce_values_success_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
+    (initial final : ExecutionState) (carriers : List Carrier)
+    (result : evalProduce (fuel + 1) config environment channels (.values operands) initial =
+      .ok carriers final) :
+    EvalOperandsSuccess config environment fuel channels operands initial carriers final := by
+  apply evalOperands_success_trace fuel config environment
+  simpa only [evalProduce] using result
+
+theorem evalProduce_values_success_count (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
+    (initial final : ExecutionState) (carriers : List Carrier)
+    (result : evalProduce (fuel + 1) config environment channels (.values operands) initial =
+      .ok carriers final) :
+    carriers.length = operands.length :=
+  evalOperands_success_count fuel config environment (evalProduce_values_success_trace
+    fuel config environment channels operands initial final carriers result)
+
 theorem evalValue_fixedArray_operands_success_order (fuel : Nat) (config : EvalConfig)
     (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
     (origin : Goose.Core.OriginId) (initial final : ExecutionState) (values : List Value)
@@ -203,6 +300,42 @@ theorem evalValue_fixedArray_operands_success_order (fuel : Nat) (config : EvalC
       exact listMapM_success_trace _ _ _ _ _ operandsResult
   | stop reason final' => simp only [operandsResult] at result; cases result
   | escape address carriers final' => simp only [operandsResult] at result; cases result
+  | jump target kind final' => simp only [operandsResult] at result; cases result
+
+theorem evalValue_fixedArray_operands_stopped_prefix (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
+    (origin : Goose.Core.OriginId) (reason : Goose.Core.Stop) (initial final : ExecutionState)
+    (fixed : ty.nonfixed = false)
+    (result : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+      .stop reason final) :
+    ∃ visited, SourcePrefix visited operands := by
+  simp only [evalValue] at result
+  have notTrue : ¬ ty.nonfixed = true := by simp [fixed]
+  rw [ite_eq_right notTrue] at result
+  simp only [bind, pure] at result
+  cases operandsResult : operands.mapM (evalValue fuel config environment) initial with
+  | ok evaluated final' => simp only [operandsResult] at result; cases result
+  | stop stopped final' =>
+      exact listMapM_stopped_source_prefix _ _ _ _ _ operandsResult
+  | escape address carriers final' => simp only [operandsResult] at result; cases result
+  | jump target kind final' => simp only [operandsResult] at result; cases result
+
+theorem evalValue_fixedArray_operands_escaped_prefix (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
+    (origin : Goose.Core.OriginId) (address : ExitAddress) (carriers : List Carrier)
+    (initial final : ExecutionState) (fixed : ty.nonfixed = false)
+    (result : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+      .escape address carriers final) :
+    ∃ visited, SourcePrefix visited operands := by
+  simp only [evalValue] at result
+  have notTrue : ¬ ty.nonfixed = true := by simp [fixed]
+  rw [ite_eq_right notTrue] at result
+  simp only [bind, pure] at result
+  cases operandsResult : operands.mapM (evalValue fuel config environment) initial with
+  | ok evaluated final' => simp only [operandsResult] at result; cases result
+  | stop reason final' => simp only [operandsResult] at result; cases result
+  | escape address' carriers' final' =>
+      exact listMapM_escaped_source_prefix _ _ _ _ _ _ operandsResult
   | jump target kind final' => simp only [operandsResult] at result; cases result
 
 end Goose.Proofs.ConstructionExecution
