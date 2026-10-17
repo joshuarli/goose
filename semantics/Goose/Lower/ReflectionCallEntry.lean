@@ -117,4 +117,3 @@ theorem callFn_reflect_of_source {cfg : Cfg} {context : ContextId} {ctx : Contex
             arguments,Core.enterCall,lookupContext,lookupImpl,contextAt,implAt]
 
 end Goose.Lower
-

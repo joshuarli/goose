@@ -62,7 +62,7 @@ theorem typedExprReflection_ref {fuel : Nat} {cfg : Cfg} {results : List Ty} {pl
     exact metadata
   simp only [lowerExpr, bind_eq] at lowering
   obtain ⟨address, middle, placeRun, freeze⟩ := lowering
-  rcases freezeTo_cases freeze with ⟨rfl,rfl⟩ | ⟨definition⟩
+  rcases borrowTo_ref_cases freeze with ⟨rfl,rfl⟩ | definition | definition
   · have first := child env state placeSource placeMetadata ls after resultId pt cx fr placeRun
       point extension rel moduleEq resultsEq generated
     have composition : ReflectAtFuel fuel cx pt fr
@@ -73,6 +73,21 @@ theorem typedExprReflection_ref {fuel : Nat} {cfg : Cfg} {results : List Ty} {pl
       intro n location next pt' fr' done post residual bound
       exact ReflectAtFuel.ret residual post
     exact composition.of_source (fun n => ⟨n + 1, by simp only [evalExpr]⟩)
+  · have middleExtension := extension.of_adv (adv_emitDef definition)
+    have first := child env state placeSource placeMetadata ls middle address pt cx fr placeRun
+      point middleExtension rel moduleEq resultsEq generated
+    have composition : ReflectAtFuel fuel cx pt fr
+        (fun n => evalPlace n cfg env place >>= fun location => pure (.ref location))
+        (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId,.val value)]) state := by
+      refine first.bind ?_ (fun n k bound => (monoAll n k bound).place cfg env place)
+        (fun _ _ _ _ => MonoM.refl _)
+      intro n location next pt' fr' done post residual bound
+      have cell := post.has (address,.val (.ref location)) (by simp)
+      exact leaf_def_reflectAtFuel post definition extension (by intro f args org h; cases h)
+        RVal.val (sourceFuel := 0) (by
+          simp only [execPure, getVal_of cell, expectRef, pure_bind])
+    exact composition.of_source (fun n => ⟨n + 1, by simp only [evalExpr]⟩)
+
   · have middleExtension := extension.of_adv (adv_emitDef definition)
     have first := child env state placeSource placeMetadata ls middle address pt cx fr placeRun
       point middleExtension rel moduleEq resultsEq generated
@@ -226,7 +241,7 @@ theorem typedArgReflection_byRef {fuel : Nat} {cfg : Cfg} {results : List Ty} {p
     have placeMetadata : SourceResults placeSource.typingEnv placeSource.rootsEnv results := metadata
     simp only [lowerArg, bind_eq] at lowering
     obtain ⟨address, middle, placeRun, freeze⟩ := lowering
-    rcases freezeTo_cases freeze with ⟨rfl,rfl⟩ | ⟨definition⟩
+    rcases borrowTo_ref_cases freeze with ⟨rfl,rfl⟩ | definition | definition
     · have first := child env state placeSource placeMetadata ls after resultId pt cx fr placeRun
         point extension rel moduleEq resultsEq generated
       have composition : ReflectAtFuel fuel cx pt fr
@@ -237,6 +252,21 @@ theorem typedArgReflection_byRef {fuel : Nat} {cfg : Cfg} {results : List Ty} {p
         intro n location next pt' fr' done post residual bound
         exact ReflectAtFuel.ret residual post
       exact composition.of_source (fun n => ⟨n + 1, by simp only [evalArg]⟩)
+    · have middleExtension := extension.of_adv (adv_emitDef definition)
+      have first := child env state placeSource placeMetadata ls middle address pt cx fr placeRun
+        point middleExtension rel moduleEq resultsEq generated
+      have composition : ReflectAtFuel fuel cx pt fr
+          (fun n => evalPlace n cfg env place >>= fun location => pure (.ref location))
+          (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId,.val value)]) state := by
+        refine first.bind ?_ (fun n k bound => (monoAll n k bound).place cfg env place)
+          (fun _ _ _ _ => MonoM.refl _)
+        intro n location next pt' fr' done post residual bound
+        have cell := post.has (address,.val (.ref location)) (by simp)
+        exact leaf_def_reflectAtFuel post definition extension (by intro f args org h; cases h)
+          RVal.val (sourceFuel := 0) (by
+          simp only [execPure, getVal_of cell, expectRef, pure_bind])
+      exact composition.of_source (fun n => ⟨n + 1, by simp only [evalArg]⟩)
+
     · have middleExtension := extension.of_adv (adv_emitDef definition)
       have first := child env state placeSource placeMetadata ls middle address pt cx fr placeRun
         point middleExtension rel moduleEq resultsEq generated

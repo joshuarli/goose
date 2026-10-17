@@ -111,7 +111,7 @@ theorem exprReflection_ref {fuel : Nat} {place : Place} (mutability : Mutability
   intro cfg env cx le ls after fr pt resultId state rel point lowering extension
   simp only [lowerExpr, bind_eq] at lowering
   obtain ⟨address,middle,lowerPlaceRun,freeze⟩ := lowering
-  rcases freezeTo_cases freeze with ⟨rfl,rfl⟩ | ⟨emit⟩
+  rcases borrowTo_ref_cases freeze with ⟨rfl,rfl⟩ | emit | emit
   · have first := child cfg env cx le ls after fr pt resultId state rel point lowerPlaceRun extension
     have composition : ReflectAtFuel fuel cx pt fr
         (fun n => evalPlace n cfg env place >>= fun value => pure (.ref value))
@@ -121,6 +121,20 @@ theorem exprReflection_ref {fuel : Nat} {place : Place} (mutability : Mutability
       intro n value next pt' fr' source post residual bound
       exact ReflectAtFuel.ret residual post
     exact composition.of_source (fun n => ⟨n + 1,by simp only [evalExpr]⟩)
+  · have middleExtension := extension.of_adv (adv_emitDef emit)
+    have first := child cfg env cx le ls middle fr pt address state rel point lowerPlaceRun middleExtension
+    have composition : ReflectAtFuel fuel cx pt fr
+        (fun n => evalPlace n cfg env place >>= fun value => pure (.ref value))
+        (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId,.val value)]) state := by
+      refine first.bind ?_ (fun n k bound => (monoAll n k bound).place cfg env place)
+        (fun _ _ _ _ => MonoM.refl _)
+      intro n value next pt' fr' source post residual bound
+      have cell := post.has (address,.val (.ref value)) (by simp)
+      refine leaf_def_reflectAtFuel post emit extension (by intro f args org h; cases h)
+        RVal.val (sourceFuel := 0) ?_
+      simp only [execPure, getVal_of cell, expectRef, pure_bind]
+    exact composition.of_source (fun n => ⟨n + 1,by simp only [evalExpr]⟩)
+
   · have middleExtension := extension.of_adv (adv_emitDef emit)
     have first := child cfg env cx le ls middle fr pt address state rel point lowerPlaceRun middleExtension
     have composition : ReflectAtFuel fuel cx pt fr
