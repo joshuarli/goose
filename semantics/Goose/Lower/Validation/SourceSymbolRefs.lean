@@ -91,6 +91,16 @@ theorem LS.SourceSymbolsRun.of_insts_stack {le : LEnv} {scopeCount : Nat} {actio
   · intro scope member
     exact checked.2 scope (by rw [← stackEq] at member; exact member)
 
+theorem LS.SourceSymbolsRun.recordValueRootRecipe {le : LEnv} {scopeCount : Nat}
+    (value : ValueId) (sourceScope : ScopeId) :
+    LS.SourceSymbolsRun le scopeCount (Goose.Lower.recordValueRootRecipe value sourceScope) := by
+  apply LS.SourceSymbolsRun.of_insts_stack
+  · intro state
+    rw [recordValueRootRecipe_run]
+    rfl
+  · intro state
+    rw [recordValueRootRecipe_run]
+
 theorem LS.SourceSymbolsRun.bind {le : LEnv} {scopeCount : Nat} {action : B α}
     {next : α → B β} (first : LS.SourceSymbolsRun le scopeCount action)
     (second : ∀ value, LS.SourceSymbolsRun le scopeCount (next value)) :
@@ -1689,7 +1699,7 @@ theorem LS.SourceSymbolsRun.lowerEach {le : LEnv} {scopeCount : Nat}
   exact LS.SourceSymbolsRun.loopBody bodySource (LS.SourceSymbolsRun.rangeBack .i64 index header)
 
 theorem LS.SourceSymbolsRun.ifValue {le : LEnv} {scopeCount : Nat}
-    (condition : ValueId) {thenAction elseAction : B ValueId}
+    (condition : ValueId) (sourceScope : ScopeId) {thenAction elseAction : B ValueId}
     (thenSource : LS.SourceSymbolsRun le scopeCount thenAction)
     (elseSource : LS.SourceSymbolsRun le scopeCount elseAction) :
     LS.SourceSymbolsRun le scopeCount (Goose.Lower.whenLive 0 fun _ => do
@@ -1700,7 +1710,9 @@ theorem LS.SourceSymbolsRun.ifValue {le : LEnv} {scopeCount : Nat}
       Goose.Lower.setCur (some elseBlock)
       let elseValue ← elseAction
       let elseEnd ← Goose.Lower.curBlock
-      Goose.Lower.joinValue thenEnd thenValue elseEnd elseValue) := by
+      let result ← Goose.Lower.joinValue thenEnd thenValue elseEnd elseValue
+      Goose.Lower.recordValueRootRecipe result sourceScope
+      Pure.pure result) := by
   apply LS.SourceSymbolsRun.whenLive 0
   intro _
   apply LS.SourceSymbolsRun.bind (action := Goose.Lower.fork condition)
@@ -1720,7 +1732,10 @@ theorem LS.SourceSymbolsRun.ifValue {le : LEnv} {scopeCount : Nat}
   intro elseValue
   apply LS.SourceSymbolsRun.bind (action := Goose.Lower.curBlock) LS.SourceSymbolsRun.curBlock
   intro elseEnd
-  exact LS.SourceSymbolsRun.joinValue thenEnd thenValue elseEnd elseValue
+  apply LS.SourceSymbolsRun.bind (LS.SourceSymbolsRun.joinValue thenEnd thenValue elseEnd elseValue)
+  intro result
+  exact (LS.SourceSymbolsRun.recordValueRootRecipe result sourceScope).bind fun _ =>
+    LS.SourceSymbolsRun.pure result
 
 theorem LS.SourceSymbolsRun.lowerBlockValue {le : LEnv} {scopeCount : Nat}
     (want : Bool) (value : Option Core.Expr)
