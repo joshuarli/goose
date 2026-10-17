@@ -57,9 +57,9 @@ theorem ScopeTableContains.block {parents : Array (Option Nat)} {parent : Option
     · intro child childParent member
       exact contains child childParent (by simp [member])
 
-theorem lowerImplAt_lexicalScopeTable {module : Module} {implId : ImplId} {impl : Impl}
+theorem lowerImpl_lexicalScopeTable {module : Module} {impl : Impl}
     (checked : checkImpl module impl = .ok ()) :
-    ScopeTableContains (lowerImplAt module implId impl).scopes (blockScopes none impl.body) :=
+    ScopeTableContains (lowerImpl module impl).scopes (blockScopes none impl.body) :=
   scopeParents_contains (checkImpl_scopeOrder checked)
 
 theorem lowerGlobal_lexicalScopeTable {module : Module} {globalId : GlobalId} {global : Global}
