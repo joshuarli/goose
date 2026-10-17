@@ -147,6 +147,7 @@ theorem forEach_newPermissionInstructions
       sourceState.cur ≠ none → ∀ (header counter : ValueId) (depth exit : Nat) (input : LS) (value : ValueId) (output : LS),
       GeneratedBuilderState input → input.cur.isSome = true →
       LoopBuilderFrames (some ⟨depth,exit,.next header .i64 counter⟩) input →
+      input.vals[counter]? = some (some (.data (.int .i64))) →
       first ≤ input.vals.size → sourceState.Ext input → sourceState.vals.size ≤ input.vals.size →
       TypePrefix sourceState input → TermEdgesFramed none sourceState input →
       (do
@@ -217,15 +218,15 @@ theorem forEach_newPermissionInstructions
         (tail := fun header counter => lowerEach regrow owner sampled header counter
           (eachStatementBody slot index byRef origin body view header counter))
         startedGenerated startedLower ?_ actualHeader
-      intro header counter input output inputGenerated inputLower headerAt headerExt headerGrowth headerTypes headerFrames eachRun
-      apply (lowerEach_counted_newPermissionInstructions inputGenerated inputLower headerAt
+      intro header counter input output inputGenerated inputLower headerAt headerCounter headerExt headerGrowth headerTypes headerFrames eachRun
+      apply (lowerEach_counted_newPermissionInstructions inputGenerated inputLower headerAt headerCounter
         (eachStatementBody_dense slot index byRef origin body view header counter)
         (eachStatementBody_advance slot index byRef origin body view header counter)
         (eachStatementBody_types slot index byRef origin body view header counter)
         (eachStatementBody_frames slot index byRef origin body view header counter) ?_ eachRun).1
-      intro depth exit bodyInput value bodyOutput bodyGenerated bodyLive bodyFrames bodyLower bodyExt bodyGrowth bodyTypes bodyTerms bodyRun
+      intro depth exit bodyInput value bodyOutput bodyGenerated bodyLive bodyFrames bodyCounter bodyLower bodyExt bodyGrowth bodyTypes bodyTerms bodyRun
       exact bodyNew owner view sourceState sourceRun sourceLive header counter depth exit bodyInput value bodyOutput
-        bodyGenerated bodyLive bodyFrames bodyLower ((prefixExt.trans headerExt).trans bodyExt)
+        bodyGenerated bodyLive bodyFrames bodyCounter bodyLower ((prefixExt.trans headerExt).trans bodyExt)
         (Nat.le_trans (Nat.le_trans startedGrowth headerGrowth) bodyGrowth)
         ((prefixTypes.trans headerTypes).trans bodyTypes)
         ((prefixFrames.1.compose headerFrames prefixExt).compose bodyTerms (prefixExt.trans headerExt)) bodyRun

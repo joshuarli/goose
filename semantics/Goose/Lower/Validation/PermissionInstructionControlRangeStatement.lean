@@ -116,7 +116,7 @@ theorem forRange_newPermissionInstructions
         (tail := fun header counter => lowerRange hint counter bound header (fun depth exit =>
           lowerBlock (some ⟨depth,exit,.next header hint counter⟩) [(slot,counter,origin)] false body))
         hiGenerated hiLower ?_ actualHeader
-      intro header counter input output inputGenerated inputLower headerAt _ _ _ _ bodyRun
+      intro header counter input output inputGenerated inputLower headerAt _ _ _ _ _ bodyRun
       exact lowerRange_newPermissionInstructions inputGenerated inputLower headerAt
         (fun depth exit => dense_lowerBlock _ [(slot,counter,origin)] false body)
         (fun depth exit => advB_lowerBlock _ [(slot,counter,origin)] false body)
