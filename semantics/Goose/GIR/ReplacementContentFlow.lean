@@ -156,9 +156,23 @@ def result (f : Func) (vt : Array (Option VTy)) (state : State)
     | .call .. => .pending
     | _ => .unknown
 
-def sourceOperands : Inst → List ValueId
+def accessOperands : Inst → List ValueId
   | .term _ => []
+  | .def _ (.slotAddr _) | .def _ (.globalAddr _)
+  | .def _ (.fieldAddr _ _) | .def _ (.refFreeze _) | .def _ (.ownerBorrow _) => []
+  | .eff (.slotInit ..) => []
+  | .eff (.store address _ _) => [address]
   | inst => inst.uses
+
+def loadedResults : Inst → List ValueId
+  | .def value (.load _) => [value]
+  | _ => []
+
+def interiorLoadedResults (vt : Array (Option VTy)) (inst : Inst) : List ValueId :=
+  (loadedResults inst).filter fun value =>
+    match vt[value]?.join with
+    | some (.data type) => !type.isRefLike || type.interiorTarget?.isSome
+    | _ => true
 
 def touchValues (vt : Array (Option VTy)) (state : State) (values : List ValueId) : State :=
   { state with touched := values.foldl (fun roots value =>
@@ -173,15 +187,15 @@ def edge (f : Func) (state : State) (target : BlockId) (args : List ValueId) : S
 
 def step (m : Module) (states : Array State) (f : Func) (vt : Array (Option VTy))
     (state : State) (inst : Inst) : State := Id.run do
-  let state := touchValues vt state (sourceOperands inst)
+  let state := touchValues vt state (accessOperands inst)
   match inst with
   | .def value (.call fn args _) =>
       let (roots, after) := callState m states f state fn args
       let after := { after with values := addFlow after.values value (if valRefLike vt value then roots else .known []) }
-      return touchValues vt after [value]
+      return touchValues vt after (interiorLoadedResults vt inst)
   | .def value op =>
       let after := { state with values := addFlow state.values value (result f vt state value op) }
-      return touchValues vt after [value]
+      return touchValues vt after (interiorLoadedResults vt inst)
   | .eff (.slotInit slot value _) =>
       return { state with slots := addFlow state.slots slot (flowAt state.values value) }
   | .eff (.store address value _) =>

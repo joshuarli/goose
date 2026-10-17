@@ -391,8 +391,8 @@ theorem step_supported {m : Module} {states : Array State} {f : Func} {state : S
     (globalBound : ∀ value global, inst = .def value (.globalAddr global) → global < m.globals.size) :
     (step m states f vt state inst).Supported (atomUniverse m f) := by
   unfold step
-  have exposed := touchValues_supported valid vt (sourceOperands inst)
-  generalize touchValues vt state (sourceOperands inst) = current at *
+  have exposed := touchValues_supported valid vt (accessOperands inst)
+  generalize touchValues vt state (accessOperands inst) = current at *
   split
   · rename_i value fn args org
     have called := callState_supported inputs exposed fn args
