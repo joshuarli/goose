@@ -251,6 +251,9 @@ private:
         CheckStages();
         CheckStructTable();
         CheckProfileTypes();
+        for (auto &function : m.funcs)
+            if (function.lowResults && (!m.low || !CoreHasConstruction(m.profile)))
+                Fail("GIR-V090", "result channel descriptors appear outside construction GIR-L");
         CheckEntryAndGlobals();
         for (auto &f : m.funcs) sigs.push_back({ f.params, f.results });
         for (auto &f : m.funcs) fns.push_back({ cat("function ", f.name), &f, false, {}, 0 });
@@ -260,13 +263,20 @@ private:
         for (auto &fn : fns) ValueTypes(fn);
         for (auto &fn : fns) CheckTypes(fn);
         for (auto &fn : fns) CheckCfg(fn);
-        if (m.low && CoreHasConstruction(m.profile)) CheckLowTargetProtocols();
+        if (m.low && CoreHasConstruction(m.profile)) { CheckLowResultTables(); CheckLowTargetProtocols(); }
         CheckUnreachable();
         if (m.low) {
             lowPassedPairs.assign(m.funcs.size(), {});
             lowStackParams.assign(m.funcs.size(), {});
             lowMarkParams.assign(m.funcs.size(), {});
             lowReturnedOwnerPairs.assign(m.funcs.size(), false);
+            if (CoreHasConstruction(m.profile))
+                for (size_t function = 0; function < m.funcs.size(); function++)
+                    for (auto &result : *m.funcs[function].lowResults)
+                        if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout)) {
+                            lowStackParams[function].push_back(nonfixed->stack);
+                            lowMarkParams[function].push_back({ nonfixed->start, nonfixed->stack });
+                        }
             bool changed = true;
             int rounds = 0;
             while (changed && rounds++ < (int)m.funcs.size() * 4 + 8) {
@@ -573,6 +583,105 @@ private:
         return effects;
     }
 
+    struct LowResultWord {
+        int parameter;
+        GirTypeId type;
+        int64_t bytes;
+        bool operator==(const LowResultWord &) const = default;
+    };
+
+    vector<LowResultWord> LowResultWords(const GirLowResult &result) const {
+        auto primitive = [&](CoreType::Kind kind) {
+            for (size_t type = 0; type < m.types.size(); type++)
+                if (m.types[type].kind == kind && (kind != CoreType::Int || m.types[type].ity == CoreIntTy::I64)) return (int)type;
+            return -1;
+        };
+        auto pointer = primitive(CoreType::Ptr), integer = primitive(CoreType::Int);
+        if (auto scalar = get_if<GirLowScalarResult>(&result.layout))
+            return { { scalar->output, scalar->type, scalar->type >= 0 && scalar->type < (int)m.types.size() ? FlatSize(scalar->type) : 0 } };
+        if (auto snapshot = get_if<GirLowSnapshotResult>(&result.layout)) return { { snapshot->output, pointer, snapshot->bytes } };
+        if (auto reference = get_if<GirLowReferenceResult>(&result.layout)) return { { reference->output, pointer, m.pointerBytes } };
+        if (auto reference = get_if<GirLowResizableReferenceResult>(&result.layout))
+            return { { reference->header, pointer, m.pointerBytes }, { reference->stack, pointer, m.pointerBytes } };
+        if (auto slice = get_if<GirLowSliceResult>(&result.layout))
+            return { { slice->data, pointer, m.pointerBytes }, { slice->count, integer, 8 } };
+        auto &nonfixed = get<GirLowNonfixedResult>(result.layout);
+        return { { nonfixed.stack, pointer, 0 }, { nonfixed.start, pointer, 0 }, { nonfixed.count, integer, 8 } };
+    }
+
+    void CheckLowResultTables() {
+        auto bad = [&](const string &message) { Fail("GIR-V090", message); };
+        map<int, pair<size_t, int64_t>> sourceLayouts;
+        for (auto &function : m.funcs) {
+            if (!function.lowResults) bad("construction function omits its result channel descriptors");
+            set<int> parameters;
+            int previousParameter = -1;
+            for (auto &result : *function.lowResults) {
+                if (result.sourceType < 0) bad("low result source identity is negative");
+                int64_t detail = 0;
+                if (auto scalar = get_if<GirLowScalarResult>(&result.layout)) detail = scalar->type;
+                if (auto snapshot = get_if<GirLowSnapshotResult>(&result.layout)) detail = snapshot->bytes;
+                auto shape = make_pair(result.layout.index(), detail);
+                auto previous = sourceLayouts.emplace(result.sourceType, shape);
+                if (!previous.second && previous.first->second != shape) bad("one low result source identity has contradictory physical layouts");
+                if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout))
+                    if (nonfixed->request != CoreRequest::Value && nonfixed->request != CoreRequest::ElementRun)
+                        bad("nonfixed low result has no construction request");
+                for (auto &word : LowResultWords(result)) {
+                    if (word.parameter <= 0 || word.parameter >= (int)function.params.size() ||
+                        m.Type(function.params[word.parameter]).kind != CoreType::Ptr || !parameters.insert(word.parameter).second)
+                        bad("low result descriptors do not name distinct primitive output parameters");
+                    if (previousParameter >= 0 && word.parameter != previousParameter + 1)
+                        bad("low result outputs do not follow result and word order");
+                    previousParameter = word.parameter;
+                    if (word.type < 0 || word.type >= (int)m.types.size() || word.bytes < 0)
+                        bad("low result descriptor has an invalid primitive layout");
+                }
+                if (auto scalar = get_if<GirLowScalarResult>(&result.layout))
+                    if (m.Type(scalar->type).kind != CoreType::Int && m.Type(scalar->type).kind != CoreType::Bool)
+                        bad("scalar low result does not name an integer or boolean");
+                if (auto snapshot = get_if<GirLowSnapshotResult>(&result.layout))
+                    if (snapshot->bytes <= 0) bad("snapshot low result has no byte extent");
+            }
+            if (!parameters.empty()) {
+                auto first = *parameters.begin();
+                if ((int)parameters.size() != (int)function.params.size() - first)
+                    bad("low result outputs are not a dense signature suffix");
+            }
+        }
+        for (auto &target : m.lowtargets) for (auto member : target.members) {
+            auto &function = m.funcs[member];
+            if (function.lowResults->size() != target.channels.size()) bad("low target channel count disagrees with its member result ABI");
+            for (size_t result = 0; result < target.channels.size(); result++) {
+                auto &canonical = (*m.funcs[target.members[0]].lowResults)[result];
+                auto &actual = (*function.lowResults)[result];
+                if (canonical.layout.index() != actual.layout.index() || canonical.sourceType != actual.sourceType) bad("low target member result descriptor kinds disagree");
+                if (auto scalar = get_if<GirLowScalarResult>(&canonical.layout))
+                    if (scalar->type != get<GirLowScalarResult>(actual.layout).type) bad("low target scalar result types disagree");
+                if (auto snapshot = get_if<GirLowSnapshotResult>(&canonical.layout))
+                    if (snapshot->bytes != get<GirLowSnapshotResult>(actual.layout).bytes) bad("low target snapshot extents disagree");
+                if (auto nonfixed = get_if<GirLowNonfixedResult>(&canonical.layout))
+                    if (nonfixed->request != get<GirLowNonfixedResult>(actual.layout).request) bad("low target construction requests disagree");
+                auto &channel = target.channels[result];
+                auto words = LowResultWords((*function.lowResults)[result]);
+                if (words.size() != channel.incoming.size()) bad("low target incoming words disagree with its member result ABI");
+                bool nonfixed = holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout);
+                if (nonfixed != (channel.incoming.size() == 3)) bad("low target result kind disagrees with its member result ABI");
+                for (size_t word = 0; word < words.size(); word++) {
+                    auto expected = nonfixed && word < 2 ? m.Type(target.cells[channel.escaped[word]]).kind == CoreType::Ptr :
+                        target.cells[channel.escaped[word]] == words[word].type;
+                    if (!expected) bad("low target escaped word disagrees with its member result ABI");
+                    bool installed = false;
+                    auto parameter = function.blocks[0].params[words[word].parameter].first;
+                    for (auto &inst : function.blocks[0].insts)
+                        installed |= inst.op == GirOp::TargetStore && inst.idx == (int)(&target - m.lowtargets.data()) &&
+                            inst.idx2 == channel.incoming[word] && inst.a == parameter;
+                    if (!installed) bad("low target incoming cell does not install its declared result parameter");
+                }
+            }
+        }
+    }
+
     void CheckLowTargetProtocols() {
         auto bad = [&](const string &message) { Fail("GIR-V090", message); };
         vector<set<int>> needs(m.funcs.size()), escapes(m.funcs.size());
@@ -690,14 +799,6 @@ private:
                                 for (auto &inst : handler.insts)
                                     if (inst.op == GirOp::TargetLoad && inst.idx == target && inst.idx2 == cell) load = &inst;
                                 if (!load) bad("target case omits an escaped result cell");
-                                bool consumed = false;
-                                for (auto &inst : handler.insts) {
-                                    if (inst.res == load->res) continue;
-                                    vector<int> uses;
-                                    Uses(inst, uses);
-                                    consumed |= find(uses.begin(), uses.end(), load->res) != uses.end();
-                                }
-                                if (!consumed) bad("target case loads an escaped result cell without consuming it");
                             }
                             if (member(functionIndex, target)) {
                                 bool reference = false;
@@ -1544,7 +1645,7 @@ private:
             auto k = m.Type(t).kind;
             return k == CoreType::Int || k == CoreType::Bool || k == CoreType::Ptr;
         };
-        if (CoreHasConstruction(m.profile)) { CheckConstructionByteIntervals(fn); CheckLowSources(fn); }
+        if (CoreHasConstruction(m.profile)) { CheckConstructionByteIntervals(fn); CheckLowSources(fn); CheckLowResultFlow(fn); }
         for (auto t : f.params) if (!scalar(t)) bad("a parameter whose layout is not resolved");
         for (auto t : f.results) if (!scalar(t)) bad("a result whose layout is not resolved");
         if (CoreHasConstruction(m.profile) && !f.results.empty())
@@ -1594,6 +1695,656 @@ private:
                 if (i.op == GirOp::StackBump && i.idx >= 0 && i.b < 0 && i.idx == 0)
                     bad("a stack bumped by nothing");
             }
+    }
+
+    void CheckLowResultFlow(const Fn &fn) {
+        auto &function = *fn.f;
+        auto functionIndex = (int)(&function - m.funcs.data());
+        auto bad = [&](const string &message) { Fail("GIR-V090", cat(fn.label, ": ", message)); };
+        struct Address {
+            enum class Kind { Unknown, Value, Frame, Global, LocalStack, GlobalStack, StackBytes, SavedTarget, EscapedTarget } kind = Kind::Unknown;
+            int root = 0;
+            int64_t offset = 0;
+            int target = -1, cell = -1;
+            Address() = default;
+            Address(int identity, int64_t bytes) : kind(identity >= 0 ? Kind::Value : Kind::Frame),
+                root(identity >= 0 ? identity : (int)(-(int64_t)identity - 1)), offset(bytes) {}
+            static Address Target(int target, int cell, bool escaped) {
+                Address result;
+                result.kind = escaped ? Kind::EscapedTarget : Kind::SavedTarget;
+                result.target = target;
+                result.cell = cell;
+                return result;
+            }
+            bool SameBase(const Address &other) const {
+                return kind == other.kind && root == other.root && target == other.target && cell == other.cell;
+            }
+            bool operator==(const Address &) const = default;
+            auto operator<=>(const Address &) const = default;
+        };
+        struct Value {
+            Address address;
+            int target = -1, cell = -1, sourceResult = -1;
+            bool operator==(const Value &) const = default;
+        };
+        struct Blocked {
+            Address address;
+            int64_t bytes;
+            int call;
+            bool operator==(const Blocked &) const = default;
+            auto operator<=>(const Blocked &) const = default;
+        };
+        struct State {
+            map<int, Value> values, members;
+            map<Address, pair<Value, int64_t>> memory, bytePayloads;
+            map<Address, Value> stackEnds;
+            set<tuple<int, int, int>> extents;
+            set<Blocked> blocked;
+            set<pair<Address, int64_t>> initialized;
+            set<pair<int, int>> receiving, sourceReceiving;
+            map<pair<int, int>, Value> payload;
+            map<pair<int, int>, int> moves;
+            int flag = 0, pending = -1, inFlight = -1;
+            bool operator==(const State &) const = default;
+        };
+        vector<const GirInst *> definitions(fn.nvalues, nullptr);
+        for (auto &block : function.blocks) for (auto &inst : block.insts)
+            if (GirDefinesValue(inst)) definitions[inst.res] = &inst;
+        auto constant = [&](int value) -> optional<int64_t> {
+            if (value < 0 || value >= fn.nvalues) return nullopt;
+            auto inst = definitions[value];
+            if (!inst || inst->op != GirOp::Int) return nullopt;
+            int64_t number;
+            auto parsed = from_chars(inst->text.data(), inst->text.data() + inst->text.size(), number);
+            if (parsed.ec != errc() || parsed.ptr != inst->text.data() + inst->text.size()) return nullopt;
+            return number;
+        };
+        auto member = [&](int target) {
+            auto &members = m.lowtargets[target].members;
+            return find(members.begin(), members.end(), functionIndex) != members.end();
+        };
+        auto value = [&](const State &state, int id) {
+            auto found = state.values.find(id);
+            auto result = found == state.values.end() ? Value {} : found->second;
+            auto content = state.bytePayloads.find(result.address);
+            if (content != state.bytePayloads.end()) {
+                result.target = content->second.first.target;
+                result.cell = content->second.first.cell;
+            } else if (result.target >= 0 && result.cell >= 0) {
+                auto &target = m.lowtargets[result.target];
+                for (size_t position = 0; position < target.channels.size(); position++)
+                    if (target.channels[position].escaped[0] == result.cell &&
+                        holds_alternative<GirLowSnapshotResult>((*m.funcs[target.members[0]].lowResults)[position].layout))
+                        result.target = result.cell = -1;
+            }
+            return result;
+        };
+        auto overlaps = [&](Address a, int64_t bytes, const Blocked &blocked) {
+            if (a.kind != Address::Kind::Unknown && blocked.address.kind != Address::Kind::Unknown && !a.SameBase(blocked.address)) return false;
+            if (a.kind == Address::Kind::Unknown || blocked.address.kind == Address::Kind::Unknown || a.offset == INT64_MAX ||
+                blocked.address.offset == INT64_MAX || bytes == INT64_MAX || blocked.bytes == INT64_MAX) return true;
+            if (a.offset <= blocked.address.offset)
+                return (uint64_t)blocked.address.offset - (uint64_t)a.offset < (uint64_t)bytes;
+            return (uint64_t)a.offset - (uint64_t)blocked.address.offset < (uint64_t)blocked.bytes;
+        };
+        auto read = [&](const State &state, Address address, int64_t bytes) {
+            if (bytes == 0) return;
+            for (auto &blocked : state.blocked) if (blocked.call != -2 && overlaps(address, bytes, blocked))
+                bad("normal output is read before its call completed or its target payload landed");
+        };
+        auto initialize = [&](State &state, Address address, int64_t bytes) {
+            for (auto iterator = state.blocked.begin(); iterator != state.blocked.end();) {
+                auto &blocked = *iterator;
+                bool covered = address.kind != Address::Kind::Unknown && address.SameBase(blocked.address) &&
+                    address.offset != INT64_MAX && blocked.address.offset != INT64_MAX && address.offset <= blocked.address.offset &&
+                    (bytes == INT64_MAX || (blocked.bytes != INT64_MAX && bytes >= blocked.bytes &&
+                        (uint64_t)blocked.address.offset - (uint64_t)address.offset <= (uint64_t)(bytes - blocked.bytes)));
+                if (covered) iterator = state.blocked.erase(iterator); else ++iterator;
+            }
+        };
+        auto output = [&](const State &state, int target, size_t result, size_t word) {
+            auto words = LowResultWords((*function.lowResults)[result]);
+            auto parameter = function.blocks[0].params[words[word].parameter].first;
+            (void)target;
+            return value(state, parameter).address;
+        };
+        State entry;
+        for (auto &parameter : function.blocks[0].params)
+            if (m.Type(parameter.second).kind == CoreType::Ptr) entry.values[parameter.first].address = { parameter.first, 0 };
+        for (auto &result : *function.lowResults) for (auto &word : LowResultWords(result)) if (word.bytes)
+            entry.blocked.insert({ value(entry, function.blocks[0].params[word.parameter].first).address, word.bytes,
+                holds_alternative<GirLowNonfixedResult>(result.layout) ? -2 : -1 });
+        for (auto &result : *function.lowResults) if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout)) {
+            auto address = value(entry, function.blocks[0].params[nonfixed->count].first).address;
+            entry.initialized.insert({ address, 8 });
+            address.offset += 8;
+            entry.initialized.insert({ address, 8 });
+        }
+        vector<map<int, State>> incoming(function.blocks.size());
+        incoming[0].emplace(-1, entry);
+        vector<pair<int, int>> work { { 0, -1 } };
+        auto merge = [&](int block, State state) {
+            auto partition = state.inFlight;
+            auto found = incoming[block].find(partition);
+            if (found == incoming[block].end()) {
+                incoming[block].emplace(partition, std::move(state));
+                work.push_back({ block, partition });
+                return;
+            }
+            auto next = found->second;
+            for (auto *facts : { &next.values, &next.members }) {
+                auto &other = facts == &next.values ? state.values : state.members;
+                for (auto iterator = facts->begin(); iterator != facts->end();) {
+                    auto found = other.find(iterator->first);
+                    if (found == other.end() || found->second != iterator->second) iterator = facts->erase(iterator); else ++iterator;
+                }
+            }
+            for (auto iterator = next.memory.begin(); iterator != next.memory.end();) {
+                auto found = state.memory.find(iterator->first);
+                if (found == state.memory.end() || found->second != iterator->second) iterator = next.memory.erase(iterator); else ++iterator;
+            }
+            for (auto iterator = next.bytePayloads.begin(); iterator != next.bytePayloads.end();) {
+                auto found = state.bytePayloads.find(iterator->first);
+                if (found == state.bytePayloads.end() || found->second != iterator->second) iterator = next.bytePayloads.erase(iterator); else ++iterator;
+            }
+            for (auto iterator = next.stackEnds.begin(); iterator != next.stackEnds.end();) {
+                auto found = state.stackEnds.find(iterator->first);
+                if (found == state.stackEnds.end() || found->second != iterator->second) iterator = next.stackEnds.erase(iterator); else ++iterator;
+            }
+            for (auto iterator = next.moves.begin(); iterator != next.moves.end();) {
+                auto found = state.moves.find(iterator->first);
+                if (found == state.moves.end() || found->second != iterator->second) iterator = next.moves.erase(iterator); else ++iterator;
+            }
+            for (auto iterator = next.payload.begin(); iterator != next.payload.end();) {
+                auto found = state.payload.find(iterator->first);
+                if (found == state.payload.end() || found->second != iterator->second) iterator = next.payload.erase(iterator); else ++iterator;
+            }
+            set<tuple<int, int, int>> extents;
+            set_intersection(next.extents.begin(), next.extents.end(), state.extents.begin(), state.extents.end(), inserter(extents, extents.end()));
+            next.extents = std::move(extents);
+            set<pair<Address, int64_t>> initialized;
+            set_intersection(next.initialized.begin(), next.initialized.end(), state.initialized.begin(), state.initialized.end(), inserter(initialized, initialized.end()));
+            next.initialized = std::move(initialized);
+            next.blocked.insert(state.blocked.begin(), state.blocked.end());
+            next.receiving.insert(state.receiving.begin(), state.receiving.end());
+            next.sourceReceiving.insert(state.sourceReceiving.begin(), state.sourceReceiving.end());
+            if (next.flag != state.flag) next.flag = -1;
+            if (next.pending != state.pending) bad("control flow merges different calls awaiting their return discriminants");
+            if (!(next == found->second)) { found->second = std::move(next); work.push_back({ block, partition }); }
+        };
+        auto receive = [&](State &state, Address destination, const Value &stored, bool bytes, int64_t extent, int byteValue) {
+            if (stored.target < 0 || !member(stored.target)) return;
+            auto &target = m.lowtargets[stored.target];
+            for (size_t result = 0; result < target.channels.size(); result++) {
+                auto &channel = target.channels[result];
+                bool nonfixed = holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout);
+                for (size_t word = 0; word < channel.escaped.size(); word++) if (channel.escaped[word] == stored.cell) {
+                    if (nonfixed && word == 1) continue;
+                    size_t outputWord = nonfixed && word == 0 ? 1 : word;
+                    if (bytes != (nonfixed ? word == 0 : holds_alternative<GirLowSnapshotResult>((*function.lowResults)[result].layout))) continue;
+                    if (destination != output(state, stored.target, result, outputWord)) continue;
+                    if (bytes) {
+                        if (nonfixed && !state.extents.count({ stored.target, stored.cell, byteValue })) continue;
+                        if (auto snapshot = get_if<GirLowSnapshotResult>(&(*function.lowResults)[result].layout))
+                            if (extent != snapshot->bytes) continue;
+                    } else {
+                        auto words = LowResultWords((*function.lowResults)[result]);
+                        if (extent != words[outputWord].bytes) continue;
+                    }
+                    state.receiving.erase({ stored.target, stored.cell });
+                    if (nonfixed && bytes) state.moves[{ stored.target, (int)result }] = byteValue;
+                }
+            }
+        };
+        auto invalidateBytes = [&](State &state, Address address, int64_t bytes) {
+            for (auto iterator = state.memory.begin(); iterator != state.memory.end();)
+                if (overlaps(address, bytes, { iterator->first, iterator->second.second, 0 })) iterator = state.memory.erase(iterator); else ++iterator;
+            for (auto iterator = state.bytePayloads.begin(); iterator != state.bytePayloads.end();)
+                if (overlaps(address, bytes, { iterator->first, iterator->second.second, 0 })) iterator = state.bytePayloads.erase(iterator); else ++iterator;
+            if (address.kind == Address::Kind::Frame) state.members.erase(address.root);
+        };
+        auto invalidateLanding = [&](State &state, Address address, int64_t bytes) {
+            if (state.inFlight < 0 || !member(state.inFlight)) return;
+            auto target = state.inFlight;
+            for (size_t result = 0; result < m.lowtargets[target].channels.size(); result++) {
+                auto &channel = m.lowtargets[target].channels[result];
+                auto words = LowResultWords((*function.lowResults)[result]);
+                bool nonfixed = holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout);
+                for (size_t word = 0; word < channel.escaped.size(); word++) {
+                    if (nonfixed && word == 1) continue;
+                    auto position = nonfixed && word == 0 ? 1 : word;
+                    auto extent = nonfixed && word == 0 ? INT64_MAX : words[position].bytes;
+                    if (overlaps(address, bytes, { output(state, target, result, position), extent, 0 }))
+                        state.receiving.insert({ target, channel.escaped[word] });
+                }
+            }
+        };
+        auto protect = [&](const State &state, Address address, int64_t bytes, const Value *landing = nullptr, int byteValue = -1) {
+            if (bytes == 0 || state.inFlight < 0) return;
+            auto target = state.inFlight;
+            auto &receiver = m.funcs[m.lowtargets[target].members[0]];
+            for (size_t result = 0; result < m.lowtargets[target].channels.size(); result++) {
+                auto &channel = m.lowtargets[target].channels[result];
+                auto &layout = (*receiver.lowResults)[result].layout;
+                bool nonfixed = holds_alternative<GirLowNonfixedResult>(layout);
+                auto snapshot = get_if<GirLowSnapshotResult>(&layout);
+                if (!nonfixed && !snapshot) continue;
+                auto cell = channel.escaped[0];
+                bool local = member(target);
+                if (local && !state.receiving.count({ target, cell })) continue;
+                auto destination = local ? output(state, target, result, nonfixed ? 1 : 0) : Address {};
+                auto incoming = state.payload.find({ target, channel.incoming[0] });
+                auto snapshotDestination = incoming == state.payload.end() ? Address::Target(target, channel.incoming[0], false) : incoming->second.address;
+                bool exactLanding = landing && landing->target == target && landing->cell == cell &&
+                    (local ? address == destination : snapshot && address == snapshotDestination) &&
+                    (nonfixed ? state.extents.count({ target, cell, byteValue }) != 0 : bytes == snapshot->bytes);
+                if (exactLanding) continue;
+                bool escapedAlias = address.kind == Address::Kind::Unknown ||
+                    (address.kind == Address::Kind::EscapedTarget && address.target == target &&
+                        (address.cell == cell || (nonfixed && address.cell == channel.escaped[1]))) ||
+                    (address.kind == Address::Kind::SavedTarget && address.target == target &&
+                        address.cell == channel.incoming[nonfixed ? 1 : 0]);
+                bool receivingAlias = local && overlaps(address, bytes, { destination, nonfixed ? INT64_MAX : snapshot->bytes, 0 });
+                if (escapedAlias || receivingAlias)
+                    bad("pending escaped payload bytes are overwritten before landing");
+            }
+        };
+        map<Address, int> stackRoots;
+        int callOrdinal = 0;
+        map<const GirInst *, int> callIds;
+        map<int, int> flagCalls;
+        for (auto &block : function.blocks) for (size_t position = 0; position < block.insts.size(); position++) {
+            auto &inst = block.insts[position];
+            if (inst.op != GirOp::Call) continue;
+            callIds[&inst] = callOrdinal++;
+            if (position + 1 < block.insts.size() && block.insts[position + 1].op == GirOp::ReturnFlagGet)
+                flagCalls[block.insts[position + 1].res] = callIds[&inst];
+        }
+        while (!work.empty()) {
+            auto [block, partition] = work.back(); work.pop_back();
+            auto state = incoming[block].at(partition);
+            for (auto &inst : function.blocks[block].insts) {
+                if (state.pending >= 0) {
+                    switch (inst.op) {
+                        case GirOp::ReturnFlagGet: case GirOp::Int: case GirOp::Bool: case GirOp::Unit:
+                        case GirOp::Bin: case GirOp::Un: case GirOp::Cmp: case GirOp::BoolCmp:
+                        case GirOp::Not: case GirOp::Conv: case GirOp::Next: case GirOp::PtrEq:
+                        case GirOp::PtrOffset: case GirOp::FrameAddr: case GirOp::GlobalAddr:
+                        case GirOp::Br: case GirOp::CondBr: case GirOp::Unreachable: break;
+                        default: bad("a call awaiting its return discriminant resumes effects before dispatch");
+                    }
+                }
+                if (GirDefinesValue(inst) && m.Type(fn.vt[inst.res]).kind == CoreType::Ptr)
+                    state.values[inst.res] = Value { { inst.res, 0 } };
+                if (inst.op == GirOp::StackAt || inst.op == GirOp::GlobalStack) {
+                    auto &address = state.values[inst.res].address;
+                    address.kind = inst.op == GirOp::StackAt ? Address::Kind::LocalStack : Address::Kind::GlobalStack;
+                    address.root = inst.idx;
+                    address.target = inst.op == GirOp::StackAt ? inst.a : -1;
+                }
+                if (inst.op == GirOp::StackMark) {
+                    auto stack = value(state, inst.a).address;
+                    auto &address = state.values[inst.res].address;
+                    if (stack.kind == Address::Kind::Unknown) address = Address {};
+                    else {
+                        auto root = stackRoots.emplace(stack, (int)stackRoots.size()).first->second;
+                        address.kind = Address::Kind::StackBytes;
+                        address.root = root;
+                        address.offset = INT64_MAX;
+                    }
+                    auto end = state.stackEnds.find(stack);
+                    if (stack.kind != Address::Kind::Unknown && end != state.stackEnds.end()) state.values[inst.res] = end->second;
+                }
+                if (inst.op == GirOp::StackBump || inst.op == GirOp::StackRelease) {
+                    auto stack = value(state, inst.a).address;
+                    if (state.inFlight >= 0) {
+                        auto target = state.inFlight;
+                        for (size_t result = 0; result < m.lowtargets[target].channels.size(); result++) {
+                            auto &channel = m.lowtargets[target].channels[result];
+                            if (channel.incoming.size() != 3) continue;
+                            auto incoming = state.payload.find({ target, channel.incoming[0] });
+                            auto active = incoming == state.payload.end() ? Address::Target(target, channel.incoming[0], false) : incoming->second.address;
+                            if (stack.kind != Address::Kind::Unknown && stack != active) continue;
+                            if (inst.op == GirOp::StackBump) bad("stack growth changes an in-flight escaped payload interval");
+                            auto landed = state.moves.find({ target, (int)result });
+                            bool preserves = false;
+                            if (member(target) && landed != state.moves.end()) {
+                                auto release = definitions[inst.b];
+                                preserves = release && release->op == GirOp::PtrOffset && release->idx == 1 && release->b == landed->second &&
+                                    value(state, release->a).address == output(state, target, result, 1);
+                            } else {
+                                auto mark = value(state, inst.b);
+                                preserves = mark.target == target && mark.cell == channel.escaped[1];
+                            }
+                            if (!preserves) bad("stack release crosses an in-flight escaped payload interval");
+                        }
+                    }
+                    if (inst.op == GirOp::StackBump) state.stackEnds.erase(stack);
+                    else if (stack.kind != Address::Kind::Unknown) state.stackEnds[stack] = value(state, inst.b);
+                }
+                if (inst.op == GirOp::HdrBase) state.values[inst.res].address = Address {};
+                if (inst.op == GirOp::GlobalAddr) {
+                    auto &address = state.values[inst.res].address;
+                    address.kind = Address::Kind::Global;
+                    address.root = inst.idx;
+                }
+                if (inst.op == GirOp::FrameAddr) state.values[inst.res].address = { -inst.idx - 1, 0 };
+                if (inst.op == GirOp::LocalSet) {
+                    state.members[inst.idx] = value(state, inst.a);
+                    auto bytes = function.members[inst.idx].kind != GirMember::Scalar || m.Type(function.members[inst.idx].ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(function.members[inst.idx].ty);
+                    Address address { -inst.idx - 1, 0 };
+                    protect(state, address, bytes);
+                    invalidateLanding(state, address, bytes);
+                    initialize(state, address, bytes);
+                    for (auto iterator = state.memory.begin(); iterator != state.memory.end();)
+                        if (overlaps(address, bytes, { iterator->first, iterator->second.second, 0 })) iterator = state.memory.erase(iterator); else ++iterator;
+                    invalidateBytes(state, address, bytes);
+                    state.members[inst.idx] = value(state, inst.a);
+                    state.memory[address] = { value(state, inst.a), bytes };
+                    state.initialized.insert({ address, bytes });
+                    receive(state, address, value(state, inst.a), false, bytes, -1);
+                }
+                if (inst.op == GirOp::LocalGet) {
+                    auto bytes = function.members[inst.idx].kind != GirMember::Scalar || m.Type(function.members[inst.idx].ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(function.members[inst.idx].ty);
+                    read(state, { -inst.idx - 1, 0 }, bytes);
+                    auto found = state.members.find(inst.idx);
+                    state.values[inst.res] = found == state.members.end() ? Value {} : found->second;
+                }
+                if (inst.op == GirOp::PtrOffset) {
+                    auto address = value(state, inst.a).address;
+                    auto index = constant(inst.b);
+                    if (!index || address.offset == INT64_MAX || inst.idx <= 0 ||
+                        *index > INT64_MAX / inst.idx || *index < INT64_MIN / inst.idx ||
+                        (*index >= 0 && address.offset > INT64_MAX - *index * inst.idx) ||
+                        (*index < 0 && address.offset < INT64_MIN - *index * inst.idx)) address.offset = INT64_MAX;
+                    else address.offset += *index * inst.idx;
+                    state.values[inst.res].address = address;
+                }
+                if (inst.op == GirOp::TargetLoad) {
+                    auto found = state.payload.find({ inst.idx, inst.idx2 });
+                    if (found != state.payload.end()) state.values[inst.res] = found->second;
+                    else state.values[inst.res] = Value { Address::Target(inst.idx, inst.idx2, false) };
+                }
+                if (inst.op == GirOp::TargetStore) {
+                    auto stored = value(state, inst.a);
+                    if (state.inFlight == inst.idx && !member(inst.idx))
+                        for (auto &channel : m.lowtargets[inst.idx].channels)
+                            if (find(channel.escaped.begin(), channel.escaped.end(), inst.idx2) != channel.escaped.end() &&
+                                (stored.target != inst.idx || stored.cell != inst.idx2))
+                                bad("forwarding frame changes an in-flight escaped payload cell");
+                    if (state.inFlight == inst.idx && member(inst.idx) && !state.receiving.empty())
+                        if (stored.target != inst.idx || stored.cell != inst.idx2)
+                            bad("target activation is restored or changed before its payload lands");
+                    state.payload[{ inst.idx, inst.idx2 }] = stored;
+                }
+                if (inst.op == GirOp::PLoad) {
+                    auto address = value(state, inst.a).address;
+                    auto bytes = m.Type(inst.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(inst.ty);
+                    read(state, address, bytes);
+                    auto found = state.memory.find(address);
+                    state.values[inst.res] = address.kind == Address::Kind::Unknown || address.offset == INT64_MAX ||
+                        found == state.memory.end() || found->second.second != bytes ? Value {} : found->second.first;
+                }
+                if (inst.op == GirOp::PStore) {
+                    auto address = value(state, inst.a).address;
+                    auto bytes = m.Type(inst.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(inst.ty);
+                    protect(state, address, bytes);
+                    invalidateLanding(state, address, bytes);
+                    initialize(state, address, bytes);
+                    for (auto iterator = state.memory.begin(); iterator != state.memory.end();)
+                        if (overlaps(address, bytes, { iterator->first, iterator->second.second, 0 })) iterator = state.memory.erase(iterator); else ++iterator;
+                    if (address.kind == Address::Kind::Frame) {
+                        state.members.erase(address.root);
+                        auto &field = function.members[address.root];
+                        auto width = field.kind != GirMember::Scalar || m.Type(field.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(field.ty);
+                        if (address.offset == 0 && bytes == width) state.members[address.root] = value(state, inst.b);
+                    }
+                    invalidateBytes(state, address, bytes);
+                    if (address.kind == Address::Kind::Frame && address.offset == 0) {
+                        auto &field = function.members[address.root];
+                        auto width = field.kind != GirMember::Scalar || m.Type(field.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(field.ty);
+                        if (bytes == width) state.members[address.root] = value(state, inst.b);
+                    }
+                    if (address.kind != Address::Kind::Unknown && address.offset != INT64_MAX)
+                        state.memory[address] = { value(state, inst.b), bytes };
+                    if (address.kind != Address::Kind::Unknown && address.offset != INT64_MAX)
+                        state.initialized.insert({ address, bytes });
+                    receive(state, address, value(state, inst.b), false, bytes, -1);
+                }
+                if (inst.op == GirOp::HdrBase || inst.op == GirOp::HdrLen) read(state, value(state, inst.a).address, 16);
+                if (inst.op == GirOp::OutBytes) read(state, value(state, inst.a).address, constant(inst.b).value_or(INT64_MAX));
+                if (inst.op == GirOp::BytesCopy || inst.op == GirOp::BytesMove || inst.op == GirOp::BytesFill) {
+                    auto bytes = inst.vals.empty() ? optional<int64_t>(inst.idx) : constant(inst.vals[0]);
+                    auto count = bytes && *bytes >= 0 ? *bytes : INT64_MAX;
+                    auto source = value(state, inst.b);
+                    if (inst.op == GirOp::BytesFill) {
+                        if (bytes && *bytes >= 0 && inst.idx >= 0 && *bytes <= INT64_MAX / max(inst.idx, 1)) count = *bytes * inst.idx;
+                        else count = INT64_MAX;
+                        read(state, source.address, count == 0 ? 0 : inst.idx);
+                    } else read(state, source.address, count);
+                    auto destination = value(state, inst.a).address;
+                    protect(state, destination, count, inst.op == GirOp::BytesFill ? nullptr : &source,
+                        inst.vals.empty() ? -1 : inst.vals[0]);
+                    if (destination.kind == Address::Kind::Frame) state.members.erase(destination.root);
+                    invalidateLanding(state, destination, count);
+                    for (auto iterator = state.memory.begin(); iterator != state.memory.end();)
+                        if (overlaps(destination, count, { iterator->first, iterator->second.second, 0 })) iterator = state.memory.erase(iterator); else ++iterator;
+                    invalidateBytes(state, destination, count);
+                    if (inst.op != GirOp::BytesFill && source.target >= 0 && destination.kind != Address::Kind::Unknown && destination.offset != INT64_MAX) {
+                        auto &target = m.lowtargets[source.target];
+                        for (size_t result = 0; result < target.channels.size(); result++)
+                            if (target.channels[result].escaped[0] == source.cell)
+                                if (auto snapshot = get_if<GirLowSnapshotResult>(&(*m.funcs[target.members[0]].lowResults)[result].layout))
+                                    if (bytes && *bytes == snapshot->bytes) state.bytePayloads[destination] = { source, *bytes };
+                    }
+                    bool exactPayload = !inst.vals.empty() && source.target >= 0 &&
+                        state.extents.count({ source.target, source.cell, inst.vals[0] });
+                    if (bytes && *bytes >= 0 && count != INT64_MAX) {
+                        initialize(state, destination, count);
+                        if (destination.kind != Address::Kind::Unknown && destination.offset != INT64_MAX)
+                            state.initialized.insert({ destination, count });
+                    }
+                    else if (exactPayload) initialize(state, destination, INT64_MAX);
+                    if (inst.op != GirOp::BytesFill)
+                        receive(state, destination, source, true, bytes.value_or(-1), inst.vals.empty() ? -1 : inst.vals[0]);
+                }
+                if (inst.op == GirOp::HdrInit || inst.op == GirOp::HdrSetLen || inst.op == GirOp::Format) {
+                    auto address = value(state, inst.op == GirOp::Format ? inst.b : inst.a).address;
+                    auto bytes = inst.op == GirOp::Format ? 32 : inst.op == GirOp::HdrInit ? 16 : 8;
+                    if (inst.op == GirOp::HdrSetLen) {
+                        if (address.offset == INT64_MAX || address.offset > INT64_MAX - 8) address.offset = INT64_MAX;
+                        else address.offset += 8;
+                    }
+                    protect(state, address, bytes);
+                    invalidateLanding(state, address, bytes);
+                    invalidateBytes(state, address, bytes);
+                }
+                if (inst.op == GirOp::Call) {
+                    if (state.inFlight >= 0 || state.flag > 0) bad("a frame resumes calls while an escaped result is in flight");
+                    for (auto *facts : { &state.values, &state.members })
+                        for (auto &[id, fact] : *facts) {
+                            (void)id;
+                            fact.target = fact.cell = fact.sourceResult = -1;
+                            if (fact.address.kind == Address::Kind::EscapedTarget) fact.address = Address {};
+                        }
+                    state.stackEnds.clear();
+                    state.memory.clear();
+                    state.bytePayloads.clear();
+                    for (size_t target = 0; target < m.lowtargets.size(); target++)
+                        for (auto &channel : m.lowtargets[target].channels) for (auto cell : channel.escaped)
+                            state.payload.erase({ (int)target, cell });
+                    state.extents.clear();
+                    auto &callee = m.funcs[inst.idx];
+                    set<int> outputParameters;
+                    for (auto &result : *callee.lowResults) for (auto &word : LowResultWords(result)) outputParameters.insert(word.parameter);
+                    for (size_t parameter = 1; parameter < callee.params.size(); parameter++)
+                        if (m.Type(callee.params[parameter]).kind == CoreType::Ptr && !outputParameters.count((int)parameter))
+                        {
+                            auto address = value(state, inst.vals[parameter]).address;
+                            read(state, address, INT64_MAX);
+                            protect(state, address, INT64_MAX);
+                        }
+                    for (auto &result : *callee.lowResults) if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout)) {
+                        auto address = value(state, inst.vals[nonfixed->count]).address;
+                        if (address.kind == Address::Kind::Unknown || address.offset == INT64_MAX || !state.initialized.count({ address, 8 })) bad("nonfixed call count metadata is not initialized");
+                        if (address.offset > INT64_MAX - 8) bad("nonfixed call identity metadata address overflows");
+                        address.offset += 8;
+                        if (address.kind == Address::Kind::Unknown || address.offset == INT64_MAX || !state.initialized.count({ address, 8 })) bad("nonfixed call destination identity metadata is not initialized");
+                    }
+                    vector<Blocked> outputs;
+                    for (auto &result : *callee.lowResults) for (auto &word : LowResultWords(result)) if (word.bytes) {
+                        Blocked output { value(state, inst.vals[word.parameter]).address,
+                            holds_alternative<GirLowNonfixedResult>(result.layout) ? 16 : word.bytes, 0 };
+                        for (auto &previous : outputs) if (overlaps(output.address, output.bytes, previous))
+                            bad("call result output cells overlap or have unknown aliasing");
+                        outputs.push_back(output);
+                    }
+                    if (state.inFlight >= 0 && member(state.inFlight))
+                        for (auto &output : outputs) invalidateLanding(state, output.address, output.bytes);
+                    auto &effect = lowReturnFlagEffects[inst.idx];
+                    bool escaping = (effect.preservesInput && state.flag != 0) || any_of(effect.values.begin(), effect.values.end(), [](auto flag) { return flag != 0; });
+                    for (auto &result : *callee.lowResults) {
+                        auto words = LowResultWords(result);
+                        for (size_t word = 0; word < words.size(); word++) if (words[word].bytes ||
+                            (holds_alternative<GirLowNonfixedResult>(result.layout) && word == 1)) {
+                            auto address = value(state, inst.vals[words[word].parameter]).address;
+                            auto bytes = words[word].bytes ? words[word].bytes : INT64_MAX;
+                            initialize(state, address, bytes);
+                            if (address.kind == Address::Kind::Frame) state.members.erase(address.root);
+                            if (escaping) {
+                                state.blocked.insert({ address, bytes, callIds.at(&inst) });
+                                for (auto iterator = state.initialized.begin(); iterator != state.initialized.end();)
+                                    if (overlaps(iterator->first, iterator->second, { address, bytes, 0 })) iterator = state.initialized.erase(iterator); else ++iterator;
+                            } else if (address.kind != Address::Kind::Unknown && address.offset != INT64_MAX)
+                                state.initialized.insert({ address, bytes });
+                        }
+                    }
+                    state.pending = escaping ? callIds.at(&inst) : -1;
+                    auto returnedFlags = effect.values;
+                    bool unknownInput = effect.preservesInput && state.flag < 0;
+                    if (effect.preservesInput && state.flag >= 0) returnedFlags.insert(state.flag);
+                    state.flag = !unknownInput && returnedFlags.size() == 1 ? (int)*returnedFlags.begin() : -1;
+                }
+                if (inst.op == GirOp::SourceTargetGet) {
+                    auto enter = definitions[inst.a];
+                    if (enter && enter->op == GirOp::SourceTargetEnter) {
+                        state.values[inst.res].target = enter->idx;
+                        state.values[inst.res].sourceResult = inst.idx;
+                    }
+                }
+                if (inst.op == GirOp::SourceTargetResult && state.inFlight == inst.idx)
+                    bad("forwarding or receiving frame replaces in-flight reference provenance");
+                if (inst.op == GirOp::SourceResult && state.inFlight >= 0 && member(state.inFlight)) {
+                    auto target = state.inFlight;
+                    for (size_t result = 0; result < function.lowResults->size(); result++) {
+                        auto &layout = (*function.lowResults)[result].layout;
+                        bool reference = holds_alternative<GirLowReferenceResult>(layout) || holds_alternative<GirLowResizableReferenceResult>(layout);
+                        if (!reference) continue;
+                        if (LowResultWords((*function.lowResults)[result])[0].parameter != inst.idx) continue;
+                        auto source = value(state, inst.a);
+                        if (source.target != target || source.sourceResult != (int)result)
+                            bad("target catch returns reference provenance from another result channel");
+                        state.sourceReceiving.erase({ target, (int)result });
+                    }
+                }
+                if (inst.op == GirOp::ReturnFlagSet) state.flag = (int)constant(inst.a).value_or(-1);
+                if (inst.op == GirOp::Ret) {
+                    if (state.inFlight >= 0 && member(state.inFlight) && state.flag != 0)
+                        bad("target member propagates an escape instead of completing its catch");
+                    if (state.inFlight >= 0 && !member(state.inFlight) && state.flag != state.inFlight + 1)
+                        bad("forwarding frame changes its in-flight target discriminant");
+                    if (state.flag > 0 && state.inFlight >= 0)
+                        for (auto &channel : m.lowtargets[state.inFlight].channels) for (auto cell : channel.escaped)
+                            if (!state.payload.count({ state.inFlight, cell })) bad("forwarding frame loses an in-flight payload cell");
+                    if (state.flag <= 0) {
+                        if (!state.sourceReceiving.empty()) bad("target catch omits its escaped reference provenance");
+                        if (!state.receiving.empty()) bad("target catch returns without transferring its escaped payload");
+                        for (auto &result : *function.lowResults) for (auto &word : LowResultWords(result)) if (word.bytes) {
+                            auto address = value(state, function.blocks[0].params[word.parameter].first).address;
+                            for (auto &blocked : state.blocked) if (overlaps(address, word.bytes, blocked))
+                                bad("normal return omits a declared primitive result output");
+                        }
+                    }
+                }
+            }
+            auto *term = LastTerm(function.blocks[block]);
+            if (!term) continue;
+            auto edge = [&](int destination, const vector<int> &arguments, bool positive) {
+                auto next = state;
+                if (term->op == GirOp::CondBr) {
+                    auto condition = definitions[term->a];
+                    if (condition && condition->op == GirOp::PtrEq) {
+                        auto left = value(state, condition->a).address, right = value(state, condition->b).address;
+                        if (!positive && left.kind != Address::Kind::Unknown && left == right && left.offset != INT64_MAX) return;
+                    }
+                    if (positive && condition && condition->op == GirOp::PtrEq) {
+                        auto prove = [&](int computed, int endpoint) {
+                            auto offset = computed >= 0 && computed < fn.nvalues ? definitions[computed] : nullptr;
+                            if (!offset || offset->op != GirOp::PtrOffset || offset->idx != 1) return;
+                            auto source = value(state, offset->a), end = value(state, endpoint);
+                            if (source.target < 0 || source.target != end.target) return;
+                            for (auto &channel : m.lowtargets[source.target].channels)
+                                if (channel.incoming.size() == 3 && source.cell == channel.escaped[0] && end.cell == channel.escaped[1])
+                                    next.extents.insert({ source.target, source.cell, offset->b });
+                        };
+                        prove(condition->a, condition->b);
+                        prove(condition->b, condition->a);
+                    }
+                    if (condition && condition->op == GirOp::Cmp && condition->cmp == CoreCmpOp::Eq) {
+                        int flag = condition->a;
+                        auto tag = constant(condition->b);
+                        if (!tag) { flag = condition->b; tag = constant(condition->a); }
+                        auto call = flagCalls.find(flag);
+                        if (positive && tag && call != flagCalls.end() && call->second == state.pending) {
+                            next.flag = (int)*tag;
+                            if (*tag == 0) {
+                                next.pending = -1;
+                                for (auto iterator = next.blocked.begin(); iterator != next.blocked.end();)
+                                    if (iterator->call == call->second) {
+                                        if (iterator->address.kind != Address::Kind::Unknown && iterator->address.offset != INT64_MAX)
+                                            next.initialized.insert({ iterator->address, iterator->bytes });
+                                        iterator = next.blocked.erase(iterator);
+                                    } else ++iterator;
+                            } else if (*tag > 0 && *tag <= (int64_t)m.lowtargets.size()) {
+                                int target = (int)*tag - 1;
+                                next.pending = -1;
+                                next.inFlight = target;
+                                for (auto &channel : m.lowtargets[target].channels) {
+                                    for (auto cell : channel.escaped)
+                                        next.payload[{ target, cell }] = Value { Address::Target(target, cell, true), target, cell };
+                                    auto result = (size_t)(&channel - m.lowtargets[target].channels.data());
+                                    auto &layout = (*m.funcs[m.lowtargets[target].members[0]].lowResults)[result].layout;
+                                    if (auto snapshot = get_if<GirLowSnapshotResult>(&layout)) {
+                                        auto payload = next.payload.at({ target, channel.escaped[0] });
+                                        next.bytePayloads[payload.address] = { payload, snapshot->bytes };
+                                    }
+                                    if (channel.incoming.size() == 3) {
+                                        auto stack = next.payload.find({ target, channel.incoming[0] });
+                                        auto address = stack == next.payload.end() ? Address::Target(target, channel.incoming[0], false) : stack->second.address;
+                                        next.stackEnds[address] = next.payload.at({ target, channel.escaped[1] });
+                                    }
+                                    if (member(target)) {
+                                        auto result = (size_t)(&channel - m.lowtargets[target].channels.data());
+                                        auto &layout = (*function.lowResults)[result].layout;
+                                        if (holds_alternative<GirLowReferenceResult>(layout) || holds_alternative<GirLowResizableReferenceResult>(layout))
+                                            next.sourceReceiving.insert({ target, (int)result });
+                                    }
+                                    for (size_t word = 0; word < channel.escaped.size(); word++) {
+                                        if (channel.incoming.size() == 3 && word == 1) continue;
+                                        if (member(target)) next.receiving.insert({ target, channel.escaped[word] });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for (size_t position = 0; position < arguments.size(); position++)
+                    next.values[function.blocks[destination].params[position].first] = value(state, arguments[position]);
+                merge(destination, std::move(next));
+            };
+            if (term->op == GirOp::Br) edge(term->idx, term->vals, true);
+            if (term->op == GirOp::CondBr) { edge(term->idx, term->vals, true); edge(term->idx2, term->vals2, false); }
+        }
     }
 
     void CheckLowSources(const Fn &fn) {

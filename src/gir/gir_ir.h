@@ -240,10 +240,24 @@ struct GirMember {
     string name;
 };
 
+struct GirLowScalarResult { GirTypeId type; int output; };
+struct GirLowSnapshotResult { int64_t bytes; int output; };
+struct GirLowReferenceResult { int output; };
+struct GirLowResizableReferenceResult { int header, stack; };
+struct GirLowSliceResult { int data, count; };
+struct GirLowNonfixedResult { CoreRequest request; int stack, start, count; };
+using GirLowResultLayout = variant<GirLowScalarResult, GirLowSnapshotResult, GirLowReferenceResult,
+    GirLowResizableReferenceResult, GirLowSliceResult, GirLowNonfixedResult>;
+struct GirLowResult {
+    int sourceType;
+    GirLowResultLayout layout;
+};
+
 struct GirFunc {
     string name;
     vector<GirTypeId> params, results;
     vector<GirResultProtocol> resultProtocols;
+    optional<vector<GirLowResult>> lowResults;
     vector<GirSlot> slots;
     GirRootInfo roots;
     vector<int> scopes;   // The parent of each scope, or -1.
