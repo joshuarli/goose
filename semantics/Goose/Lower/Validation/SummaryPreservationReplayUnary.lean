@@ -17,7 +17,7 @@ theorem unary {env : PEnv} {op : UnOp} {operand : Expr} {origin : OriginId}
     (wholeEffect : EffectRefinement func after.eff target)
     (operandRun : lowerExpr operand le initial = (value, ls))
     (typeRun : intTyOf value le ls = (ty, ls))
-    (valueBound : value < ls.vals.size) (originBound : origin < le.mod.origins.size) :
+    (valueBound : ls.cur.isSome = true → value < ls.vals.size) (originBound : origin < le.mod.origins.size) :
     ∃ next, ReplayBuilder module results vt func target le scopeCount slots
         (lowerExpr (.un op operand origin) le initial).2 next ∧
       ((lowerExpr (.un op operand origin) le initial).2.cur.isSome = true →
@@ -32,10 +32,10 @@ theorem unary {env : PEnv} {op : UnOp} {operand : Expr} {origin : OriginId}
     cases op with
     | neg => exact (effectStep_neg_refines (effectRefinement_empty func before.eff)).trans wholeEffect
     | bitnot => exact effectRefinement_empty func target
-  exact ready.emitTypedDef (.un op ty value (some origin)) [] (.data (.int ty))
-    (by simpa [Op.uses] using valueBound)
-    (by simpa [Op.origin] using originBound) (by simp [Op.SymbolRefsValid]) delta
-    (fun _ member => by cases member) (fun _ => rfl)
+  exact ready.emitTypedDef_live (.un op ty value (some origin)) [] (.data (.int ty))
+    (by intro live; simpa [Op.uses] using valueBound live)
+    (by simpa [Op.origin] using originBound) (by simp [Op.SymbolRefsValid]) (fun _ => delta)
+    (fun _ _ member => by cases member) (fun _ _ => rfl)
 
 theorem logicalNot {env : PEnv} {operand : Expr} {initialSource before after : RState}
     {operandRoots sourceRoots : List RootRef} {initial : LS} {value : ValueId}
@@ -43,7 +43,7 @@ theorem logicalNot {env : PEnv} {operand : Expr} {initialSource before after : R
     (operandReplay : rpExpr env operand initialSource = .ok (operandRoots, before))
     (source : rpExpr env (.not operand) initialSource = .ok (sourceRoots, after))
     (operandRun : lowerExpr operand le initial = (value, ls))
-    (valueBound : value < ls.vals.size) :
+    (valueBound : ls.cur.isSome = true → value < ls.vals.size) :
     ∃ next, ReplayBuilder module results vt func target le scopeCount slots
         (lowerExpr (.not operand) le initial).2 next ∧
       ((lowerExpr (.not operand) le initial).2.cur.isSome = true →
@@ -57,8 +57,8 @@ theorem logicalNot {env : PEnv} {operand : Expr} {initialSource before after : R
   have whole : lowerExpr (.not operand) le initial = Goose.Lower.emitDef (.boolNot value) le ls := by
     simp only [lowerExpr, bind_run, operandRun]
   rw [whole]
-  exact ready.emitTypedDef (.boolNot value) [] (.data .bool)
-    (by simpa [Op.uses] using valueBound) (by simp [Op.origin]) (by simp [Op.SymbolRefsValid])
-    (effectRefinement_empty func target) (fun _ member => by cases member) (fun _ => rfl)
+  exact ready.emitTypedDef_live (.boolNot value) [] (.data .bool)
+    (by intro live; simpa [Op.uses] using valueBound live) (by simp [Op.origin]) (by simp [Op.SymbolRefsValid])
+    (fun _ => effectRefinement_empty func target) (fun _ _ member => by cases member) (fun _ _ => rfl)
 
 end Goose.Lower.Validation.SummaryPreservation.ReplayBuilder

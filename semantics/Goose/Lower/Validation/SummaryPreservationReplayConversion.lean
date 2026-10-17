@@ -28,7 +28,7 @@ theorem conversion {env : PEnv} {kind : ConvKind} {destination : IntTy}
     (wholeEffect : EffectRefinement func after.eff target)
     (operandRun : lowerExpr operand le initial = (value, ls))
     (typeRun : intTyOf value le ls = (sourceTy, ls))
-    (valueBound : value < ls.vals.size) (originBound : origin < le.mod.origins.size) :
+    (valueBound : ls.cur.isSome = true → value < ls.vals.size) (originBound : origin < le.mod.origins.size) :
     ∃ next, ReplayBuilder module results vt func target le scopeCount slots
         (lowerExpr (.conv kind (.int destination) operand origin) le initial).2 next ∧
       ((lowerExpr (.conv kind (.int destination) operand origin) le initial).2.cur.isSome = true →
@@ -47,10 +47,10 @@ theorem conversion {env : PEnv} {kind : ConvKind} {destination : IntTy}
     | widen => exact effectRefinement_empty func target
     | as => exact (effectRefinement_noteAborts (effectRefinement_empty func before.eff)).trans wholeEffect
     | asUnchecked => exact effectRefinement_empty func target
-  exact ready.emitTypedDef (.conv kind sourceTy destination value (some origin)) [] (.data (.int destination))
-    (by simpa [Op.uses] using valueBound)
-    (by simpa [Op.origin] using originBound) (by simp [Op.SymbolRefsValid]) delta
-    (fun _ member => by cases member) (fun _ => rfl)
+  exact ready.emitTypedDef_live (.conv kind sourceTy destination value (some origin)) [] (.data (.int destination))
+    (by intro live; simpa [Op.uses] using valueBound live)
+    (by simpa [Op.origin] using originBound) (by simp [Op.SymbolRefsValid]) (fun _ => delta)
+    (fun _ _ member => by cases member) (fun _ _ => rfl)
 
 end ReplayBuilder
 
