@@ -1,4 +1,4 @@
-import Goose.Lower.CoreToGir
+import Goose.Lower.ContextLowering
 import Goose.Core.Sound.Module
 
 namespace Goose.Lower.Validation
@@ -81,16 +81,16 @@ theorem validate_summaryTarget_bounds {module : Module} {index : ImplId} {impl :
   obtain ⟨_, _, state, _, _, summaryChecked⟩ := contextOk.body
   exact checkSummary_target_bounds summaryChecked known
 
-theorem lowerImplAt_summaryTarget_bounds {module : Module} {index : ImplId} {impl : Impl}
+theorem lowerImpl_summaryTarget_bounds {module : Module} {index : ImplId} {impl : Impl}
     {summary : Summary} (checked : validate module = .ok ())
     (lookup : module.impls[index]? = some impl) (known : impl.summary = .known summary) :
     ∀ target ∈ summary.reads ++ summary.writes ++ summary.grows ++ summary.shrinks ++ summary.rebinds,
       match target with
-      | .param param => param < (lowerImplAt module index impl).params.length
+      | .param param => param < (lowerImpl module impl).params.length
       | .global global => global < (lower module).globals.size := by
   intro target member
   have bound := validate_summaryTarget_bounds checked lookup known target member
-  cases target <;> simpa only [Target.Within, lowerImplAt, lower, Array.size_map,
+  cases target <;> simpa only [Target.Within, lowerImpl, lower, Array.size_map,
     List.length_map, Array.length_toList] using bound
 
 end Goose.Lower.Validation
