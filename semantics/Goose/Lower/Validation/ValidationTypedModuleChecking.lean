@@ -1,6 +1,7 @@
 import Goose.Lower.Validation.ValidationTypedModuleInterfaces
 import Goose.Lower.Validation.ValidationTypedModuleInstructions
 import Goose.Lower.Validation.EmittedMetadataStatic
+import Goose.Lower.Validation.EmittedMetadataStaticProfileSourceModule
 
 namespace Goose.Lower.Validation
 
@@ -150,5 +151,26 @@ theorem lower_checkTypes_shrink_of_accepted {module : Core.Module}
     (checkAll (lower module).infos fun info => checkTypes (lower module) info.label info.f info.vt) = .ok () := by
   apply Origins.checkAll_ok_of_forall
   exact fun info member => lower_info_checkTypes_shrink_of_accepted accepted profile member
+
+theorem lower_info_checkTypes_of_accepted {module : Core.Module}
+    (accepted : Core.validate module = .ok ()) {info : FnInfo}
+    (member : info ∈ (lower module).infos) :
+    checkTypes (lower module) info.label info.f info.vt = .ok () := by
+  apply check_types_of_instructions accepted member
+  · obtain ⟨_, source⟩ := lower_info_source accepted member
+    rcases source with ⟨contextIndex, context, impl, contextAt, implAt, same⟩ |
+      ⟨globalIndex, global, globalAt, same⟩
+    · rw [same]
+      exact lowerContextAt_functionProfile_of_accepted accepted implAt
+    · rw [same]
+      exact lowerGlobal_functionProfile_of_accepted accepted globalAt
+  · exact fun block blockMember instruction instructionMember =>
+      lower_instructions_typed_of_accepted accepted member blockMember instructionMember
+
+theorem lower_checkTypes_of_accepted {module : Core.Module}
+    (accepted : Core.validate module = .ok ()) :
+    (checkAll (lower module).infos fun info => checkTypes (lower module) info.label info.f info.vt) = .ok () := by
+  apply Origins.checkAll_ok_of_forall
+  exact fun info member => lower_info_checkTypes_of_accepted accepted member
 
 end Goose.Lower.Validation
