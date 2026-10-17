@@ -11,8 +11,10 @@ theorem lower_valueTypeShapes_of_accepted {module : Core.Module}
     ValueTypeShapes (func.valueTypes (lower module)) := by
   rcases List.mem_append.mp member with implementation | initializer
   · change func ∈ (module.contexts.map fun context =>
-        match (module.impls.map fun impl => (impl, lowerImpl module impl))[context.impl]? with
-        | some (impl, body) => { body with roots := lowerContextRootInfo context impl }
+        match (module.impls.map fun impl =>
+          (impl, lowerImplFromState module impl (lowerImplState module impl), lowerImplState module impl))[context.impl]? with
+        | some (impl, body, state) => { body with roots := { lowerContextRootInfo context impl with
+            values := lowerContextValueRoots module context impl state } }
         | none => invalidContextFunction context).toList at implementation
     simp only [Array.toList_map, List.mem_map] at implementation
     obtain ⟨context, contextMember, equality⟩ := implementation
