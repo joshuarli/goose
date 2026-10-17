@@ -190,4 +190,92 @@ theorem emitted_checked_generated_ifArms {le : LEnv} {initial before : LS}
       (fun _ _ evaluatedT _ _ evaluatedF _ builder generated _ _ _ =>
         ⟨builder.joinArms evaluatedT.cur evaluatedF.cur, generated.joinArms evaluatedT.cur evaluatedF.cur rfl⟩) rfl
 
+theorem emitted_checked_generated_shortCircuit {le : LEnv} {initial before : LS}
+    (builder : EmittedBuilder le initial before) (generated : GeneratedBuilderState before) (isAnd : Bool) (condition : ValueId)
+    (conditionBound : before.cur.isSome = true → condition < before.vals.size) (rhs : B ValueId)
+    (rhsChecked : ∀ initial before, EmittedBuilder le initial before → GeneratedBuilderState before →
+      EmittedBuilder le initial (rhs le before).2 ∧ GeneratedBuilderState (rhs le before).2)
+    (rhsAdvance : AdvB rhs) (rhsBound : ValueRun rhs) :
+    let after := (Goose.Lower.shortCircuit isAnd condition rhs le before).2
+    EmittedBuilder le initial after ∧ GeneratedBuilderState after := by
+  generalize actionRun : Goose.Lower.shortCircuit isAnd condition rhs le before = actionResult
+  obtain ⟨resultValue, after⟩ := actionResult
+  dsimp only
+  cases live : before.cur with
+  | none =>
+    simp only [Goose.Lower.shortCircuit, whenLive_none _ _ _ live] at actionRun
+    obtain ⟨_, rfl⟩ := Prod.mk.inj actionRun
+    exact ⟨builder, generated⟩
+  | some current =>
+    simp only [Goose.Lower.shortCircuit, whenLive_some _ _ _ live, bind_eq] at actionRun
+    obtain ⟨⟨rightBlock, joinBlock, parameter⟩, forked, forkRun, u1, started, startRun,
+      result, evaluated, rhsRun, u2, closed, closeRun, u3, resumed, resumeRun, pureRun⟩ := actionRun
+    have ids := scFork_ids forkRun
+    obtain ⟨rightId, restIds⟩ := Prod.mk.inj ids.1
+    obtain ⟨joinId, parameterId⟩ := Prod.mk.inj restIds
+    subst rightId joinId parameterId
+    have forkBuilder := builder.scFork isAnd condition conditionBound
+    rw [forkRun] at forkBuilder
+    dsimp only at forkBuilder
+    have startBuilder := forkBuilder.setCur (some before.blocks.size) (by
+      intro block same
+      have id := Option.some.inj same
+      subst block
+      have size := ids.2
+      nat_omega)
+    rw [startRun] at startBuilder
+    dsimp only at startBuilder
+    have forkGenerated := generated.scFork isAnd condition forkRun
+    have startBound : ∀ block, some before.blocks.size = some block → block < forked.blocks.size := by
+      intro block same
+      have id := Option.some.inj same
+      subst block
+      have size := ids.2
+      nat_omega
+    have startGenerated := forkGenerated.setCur _ startBound startRun
+    have evaluatedBuilder := rhsChecked initial started startBuilder startGenerated
+    rw [rhsRun] at evaluatedBuilder
+    dsimp only at evaluatedBuilder
+    have rhsAdv := rhsAdvance le started _ _ rhsRun
+    have closedBuilder := evaluatedBuilder.1.emitTerm (.br (before.blocks.size + 1) [result]) (by
+      intro active value member
+      have same : value = result := by simpa [Term.uses] using member
+      subst value
+      exact rhsBound le started result evaluated rhsRun active)
+    rw [closeRun] at closedBuilder
+    dsimp only at closedBuilder
+    have joinBound : before.blocks.size + 1 < evaluated.blocks.size := by
+      have size : started.blocks.size = forked.blocks.size := by
+        rw [setCur_run] at startRun
+        exact congrArg (fun pair => pair.2.blocks.size) startRun.symm
+      have forkSize := ids.2
+      have evaluatedSize := rhsAdv.ext.1
+      nat_omega
+    have closedGenerated := evaluatedBuilder.2.emitTerm (.br (before.blocks.size + 1) [result]) (by
+      intro target member
+      have same : target = before.blocks.size + 1 := by simpa [Term.successors] using member
+      subst target
+      exact joinBound) closeRun
+    have closeAdv := adv_emitTerm closeRun
+    have resumedBuilder := closedBuilder.setCur (some (before.blocks.size + 1)) (by
+      intro block same
+      have id := Option.some.inj same
+      subst block
+      have size : started.blocks.size = forked.blocks.size := by rw [setCur_run] at startRun; exact congrArg (fun pair => pair.2.blocks.size) startRun.symm
+      have forkSize := ids.2
+      have evaluatedSize := rhsAdv.ext.1
+      have closedSize := closeAdv.ext.1
+      nat_omega)
+    rw [resumeRun] at resumedBuilder
+    dsimp only at resumedBuilder
+    have resumeBound : ∀ block, some (before.blocks.size + 1) = some block → block < closed.blocks.size := by
+      intro block same
+      have id := Option.some.inj same
+      subst block
+      exact Nat.lt_of_lt_of_le joinBound closeAdv.ext.1
+    have resumedGenerated := closedGenerated.setCur _ resumeBound resumeRun
+    rw [pure_run] at pureRun
+    obtain ⟨_, rfl⟩ := Prod.mk.inj pureRun
+    exact ⟨resumedBuilder, resumedGenerated⟩
+
 end Goose.Lower.Validation
