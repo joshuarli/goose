@@ -1,4 +1,5 @@
 import Goose.Lower.ReflectionIterationsRange
+import Goose.Lower.ReflectionIterationsEachStatement
 import Goose.Lower.RangeFamily
 
 namespace Goose.Lower
