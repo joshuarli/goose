@@ -6,6 +6,47 @@ set_option Elab.async false
 namespace Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Construct Goose.Core
 
+theorem destinationCapabilities_push (state : ConstructionState) (destination : PendingDestination)
+    (correct : destination.capability.id = state.destinations.size)
+    (valid : DestinationCapabilitiesIndexed state) :
+    DestinationCapabilitiesIndexed { state with destinations := state.destinations.push destination } := by
+  intro index current present
+  rw [Array.getElem?_push] at present
+  by_cases same : index = state.destinations.size
+  · simp only [same, ↓reduceIte, Option.some.injEq] at present
+    subst current
+    exact correct.trans same.symm
+  · exact valid index current (by simpa only [same, ↓reduceIte] using present)
+
+theorem destinationCapabilities_replace (state : ConstructionState) (id : DestinationId)
+    (destination : PendingDestination) (correct : destination.capability.id = id)
+    (valid : DestinationCapabilitiesIndexed state) :
+    DestinationCapabilitiesIndexed { state with destinations := state.destinations.set! id destination } := by
+  intro index current present
+  simp only [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds] at present
+  by_cases same : id = index
+  · subst index
+    by_cases inside : id < state.destinations.size
+    · simp only [inside, ↓reduceIte, Option.some.injEq] at present
+      subst current
+      exact correct
+    · simp [inside] at present
+  · exact valid index current (by simpa only [same, ↓reduceIte] using present)
+
+theorem destinationOwnersOrdered_push (state : ConstructionState) (destination : PendingDestination)
+    (ordered : match destination.use with
+      | .receiver => True
+      | .child owner | .replacement owner => owner < state.destinations.size)
+    (valid : DestinationOwnersOrdered state) :
+    DestinationOwnersOrdered { state with destinations := state.destinations.push destination } := by
+  intro index current present
+  rw [Array.getElem?_push] at present
+  by_cases same : index = state.destinations.size
+  · simp only [same, ↓reduceIte, Option.some.injEq] at present
+    subst current
+    cases use : destination.use <;> simpa only [same, use] using ordered
+  · exact valid index current (by simpa only [same, ↓reduceIte] using present)
+
 theorem destinationOwnersOrdered_replace (state : ConstructionState) (id : DestinationId)
     (before after : PendingDestination) (present : state.destinations[id]? = some before)
     (use : after.use = before.use) (valid : DestinationOwnersOrdered state) :
@@ -221,5 +262,54 @@ theorem copy_destination_trace_transition (id : DestinationId) (source : CopySou
   | live staged wrote =>
       simp [runDestinationTrace, destinationObservations, observeDestination,
         runDestinationObservations, destinationTraceStep]
+
+theorem destinationLifecycleInvariant_push (state : ConstructionState)
+    (destination : PendingDestination) (events : List ConstructionEvent) (storage : Array ReceivingStorage)
+    (size : storage.size = state.storage.size)
+    (correct : destination.capability.id = state.destinations.size)
+    (writeStorage : destination.storage < state.storage.size)
+    (receiverStorage : destination.backing.receiverStorage < state.storage.size)
+    (ordered : match destination.use with
+      | .receiver => True
+      | .child owner | .replacement owner => owner < state.destinations.size)
+    (other : ∀ index, index ≠ state.destinations.size → destinationObservations index events = [])
+    (transition : ∃ phase,
+      runDestinationTrace state.destinations.size .unseen events = some phase ∧
+        phase.matchesDestination destination)
+    (valid : DestinationLifecycleInvariant state) :
+    DestinationLifecycleInvariant { state with
+      destinations := state.destinations.push destination
+      events := state.events ++ events
+      storage := storage } := by
+  refine ⟨destinationTraceProtocol_push state destination events other transition valid.1,
+    destinationCapabilities_push state destination correct valid.2.1, ?_,
+    destinationOwnersOrdered_push state destination ordered valid.2.2.2⟩
+  apply destinationStorageReferences_push state destination storage
+  · omega
+  · simpa only [size] using writeStorage
+  · simpa only [size] using receiverStorage
+  · exact valid.2.2.1
+
+theorem destinationLifecycleInvariant_replace_silent (state : ConstructionState) (id : DestinationId)
+    (before after : PendingDestination) (storage : Array ReceivingStorage)
+    (present : state.destinations[id]? = some before)
+    (size : storage.size = state.storage.size)
+    (capability : after.capability.id = before.capability.id)
+    (backing : after.backing = before.backing) (use : after.use = before.use)
+    (transition : ∀ phase : DestinationTracePhase,
+      phase.matchesDestination before → phase.matchesDestination after)
+    (valid : DestinationLifecycleInvariant state) :
+    DestinationLifecycleInvariant { state with
+      destinations := state.destinations.set! id after, storage := storage } := by
+  refine ⟨destinationTraceProtocol_replace_silent state id before after present transition valid.1,
+    destinationCapabilities_replace state id after
+      (capability.trans (valid.2.1 id before present)) valid.2.1, ?_,
+    destinationOwnersOrdered_replace state id before after present use valid.2.2.2⟩
+  apply destinationStorageReferences_replace state id after storage
+  · omega
+  · simpa only [PendingDestination.storage, backing, size] using
+      (valid.2.2.1 id before present).1
+  · simpa only [backing, size] using (valid.2.2.1 id before present).2
+  · exact valid.2.2.1
 
 end Goose.Proofs.ConstructionExecutionProtocol
