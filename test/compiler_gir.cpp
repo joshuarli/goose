@@ -5104,13 +5104,18 @@ void ConstructionGrowArrayUsesElementDestinations() {
     auto bumps = 0;
     auto headerInitializations = 0;
     auto lengthUpdates = 0;
-    for (auto &func : low.funcs) for (auto &block : func.blocks) for (auto &inst : block.insts) {
-        copies += inst.op == GirOp::BytesCopy;
-        bumps += inst.op == GirOp::StackBump;
-        headerInitializations += inst.op == GirOp::HdrInit;
-        lengthUpdates += inst.op == GirOp::HdrSetLen;
-        assert(inst.op != GirOp::DestOpen && inst.op != GirOp::DestWrite &&
-               inst.op != GirOp::DestFinish && inst.op != GirOp::DestPublish);
+    for (auto &func : low.funcs) {
+        map<int, string> constants;
+        for (auto &block : func.blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::Int) constants[inst.res] = inst.text;
+        for (auto &block : func.blocks) for (auto &inst : block.insts) {
+            copies += inst.op == GirOp::BytesCopy && constants[inst.vals[0]] == "8";
+            bumps += inst.op == GirOp::StackBump;
+            headerInitializations += inst.op == GirOp::HdrInit;
+            lengthUpdates += inst.op == GirOp::HdrSetLen;
+            assert(inst.op != GirOp::DestOpen && inst.op != GirOp::DestWrite &&
+                   inst.op != GirOp::DestFinish && inst.op != GirOp::DestPublish);
+        }
     }
     assert(copies == 3);
     assert(bumps == 3);
@@ -5876,25 +5881,25 @@ GirModule ConstructionNamedGrowAsPackedResultModule() {
     auto &callee = m.funcs[1];
     callee.results[0] = packedType;
     callee.blocks[0].params[0].second = m.CarrierType(CoreType::Dest, packedType, CoreRequest::Value);
-    auto local = Def(GirOp::Slot, 10);
+    auto local = Def(GirOp::Slot, 11);
     local.idx = 0;
-    auto append = Def(GirOp::Push, 12);
-    append.a = 10;
-    append.b = 11;
+    auto append = Def(GirOp::Push, 13);
+    append.a = 11;
+    append.b = 12;
     append.org = 0;
-    auto sample = Def(GirOp::Snap, 13);
-    sample.a = 10;
+    auto sample = Def(GirOp::Snap, 14);
+    sample.a = 11;
     sample.snap = GirSnapshotMode::Owner;
-    auto render = Def(GirOp::Render, 14);
-    render.a = 13;
+    auto render = Def(GirOp::Render, 15);
+    render.a = 14;
     render.org = 0;
     GirInst print;
     print.op = GirOp::Print;
-    print.parts = { { false, {}, 14 } };
+    print.parts = { { false, {}, 15 } };
     print.org = 0;
     auto &instructions = callee.blocks[0].insts;
     auto beforeNamed = find_if(instructions.begin(), instructions.end(), [](auto &inst) { return inst.op == GirOp::ExitReserve; });
-    instructions.insert(beforeNamed, { local, Int(m, 11, "9"), append, sample, render, print });
+    instructions.insert(beforeNamed, { local, Int(m, 12, "9"), append, sample, render, print });
     callee.summary.outputs = true;
     auto slot = Def(GirOp::Slot, 3);
     slot.idx = 0;
@@ -6384,7 +6389,8 @@ GirModule ConstructionNamedAliasModule() {
     auto receiving = Def(GirOp::ReceivingOpen, 3); receiving.a = 0;
     auto writer = Def(GirOp::DestRenew, 4); writer.a = 3;
     auto original = callee.blocks[0].insts;
-    original[2].a = 4; original[3].a = 4;
+    original[2].a = 10; original[3].a = 10;
+    auto prepare = Def(GirOp::DestPrepareNamed, 10); prepare.a = 4; prepare.idx = 0; prepare.org = 0;
     GirInst bind;
     bind.op = GirOp::DestBind; bind.idx = 0; bind.a = 2; bind.org = 0;
     auto reserve = Def(GirOp::ExitReserve, 5); reserve.a = 3; reserve.exitSource = GirExitNamedAlias { 0 }; reserve.org = 0;
@@ -6401,7 +6407,7 @@ GirModule ConstructionNamedAliasModule() {
     GirInst rejected; rejected.op = GirOp::Abort; rejected.abort = GirAbortKind::Assert; rejected.org = 0;
     callee.summary.aborts = true;
     Main(m).summary.aborts = true;
-    callee.blocks[0].insts = { Enter(0), receiving, writer, original[1], original[2], original[3], bind, reserve, role, CondBr(9, 1, 2) };
+    callee.blocks[0].insts = { Enter(0), receiving, writer, prepare, original[1], original[2], original[3], bind, reserve, role, CondBr(9, 1, 2) };
     callee.blocks.push_back(GirBlock { {}, { mark, named, cancelled, cancel, landed, release, Leave(0), Ret({ 8 }) } });
     callee.blocks.push_back(GirBlock { {}, { rejected } });
     return m;
@@ -6505,8 +6511,8 @@ void ConstructionNamedAliasesMaterializeAfterAllOperands() {
     callee.roots.results.push_back({});
     auto &instructions = callee.blocks[1].insts;
     auto selected = find_if(instructions.begin(), instructions.end(), [](const auto &inst) { return inst.op == GirOp::ReservedNamed; });
-    instructions.insert(selected, Int(module, 10, "99"));
-    instructions.back().vals.push_back(10);
+    instructions.insert(selected, Int(module, 11, "99"));
+    instructions.back().vals.push_back(11);
     auto projection = Def(GirOp::Result, 3); projection.a = 2; projection.idx = 0;
     auto &caller = Main(module).blocks[0].insts;
     caller[4].a = 3;
@@ -7330,6 +7336,155 @@ CoreModule ConstructionNamedOwnerWithScalarResultModule() {
     return core;
 }
 
+void ConstructionNamedPreparationUsesTheDeclaredLocalType() {
+    for (bool packedLocal : { false, true }) {
+        auto core = ConstructionNamedOwnerWithScalarResultModule();
+        auto grow = core.impls[1].vars[2].type;
+        auto packed = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = core.Type(grow).elem });
+        if (packedLocal) {
+            core.impls[1].vars[2].type = packed;
+            core.impls[1].body.stmts[0].expr->type = packed;
+            core.impls[1].body.stmts[1].values[0]->type = packed;
+        } else {
+            core.impls[1].results[0].type = packed;
+            core.impls[0].vars[0].type = packed;
+            core.impls[0].body.stmts[0].expr->type = packed;
+        }
+        auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+                               [](const CoreOrigin &) { return 0; }).Lower();
+        assert(Code(high) == "");
+        bool prepared = false;
+        for (auto &block : high.funcs[1].blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::DestPrepareNamed) {
+                assert(inst.idx == 2 && inst.org == 0);
+                prepared = true;
+            }
+        assert(prepared);
+        assert(Code(GirToLow(high).Lower()) == "");
+    }
+    auto module = ConstructionNamedAliasModule();
+    assert(Code(module) == "");
+    auto &body = module.funcs[1].blocks[0].insts;
+    auto prepared = find_if(body.begin(), body.end(), [](const auto &inst) { return inst.op == GirOp::DestPrepareNamed; });
+    prepared->idx = 1;
+    assert(Code(module) == "GIR-V010");
+    module = ConstructionNamedAliasModule();
+    module.funcs[1].slots.push_back(module.funcs[1].slots[0]);
+    module.funcs[1].slots.back().var = 1;
+    module.funcs[1].blocks[0].insts[3].idx = 1;
+    assert(Code(module) == "GIR-V060");
+    module = ConstructionNamedAliasModule();
+    auto &unprepared = module.funcs[1].blocks[0].insts;
+    unprepared.erase(unprepared.begin() + 3);
+    for (auto &inst : unprepared) if (inst.a == 10) inst.a = 4;
+    assert(Code(module) == "GIR-V060");
+    module = ConstructionNamedAliasModule();
+    auto &instructions = module.funcs[1].blocks[0].insts;
+    instructions[3].org = -1;
+    assert(Code(module) == "GIR-V100");
+    module = ConstructionNamedAliasModule();
+    auto &late = module.funcs[1].blocks[0].insts;
+    late[5].a = 4;
+    rotate(late.begin() + 3, late.begin() + 4, late.begin() + 6);
+    assert(Code(module) == "GIR-V060");
+}
+
+GirModule ConstructionValuePrefixAdapterModule(bool variable = true) {
+    auto module = Base();
+    module.profile = CoreProfile::Construction;
+    auto byte = module.IntType(CoreIntTy::U8);
+    auto packed = module.Intern(CoreType { .kind = variable ? CoreType::VarArr : CoreType::Grow, .elem = byte });
+    GirFunc adapter;
+    adapter.name = "adapter";
+    adapter.results = { packed };
+    adapter.resultProtocols = { { CoreRequest::ElementRun, nullopt } };
+    adapter.roots.results = { {} };
+    adapter.scopes = { -1 };
+    adapter.summary.constructs = { 0 };
+    adapter.summary.aborts = true;
+    auto value = Def(GirOp::DestValue, 1); value.a = 0; value.org = 0;
+    GirInst write; write.op = GirOp::DestBytes; write.a = 1; write.bytes = { 65 }; write.org = 0;
+    auto built = Def(GirOp::DestFinish, 2); built.a = 1;
+    auto run = Def(GirOp::DestRelocate, 3); run.a = 2; run.reason = GirEventReason::HeaderRemoval; run.org = 0;
+    adapter.blocks = { GirBlock { { { 0, module.CarrierType(CoreType::Dest, packed, CoreRequest::ElementRun) } },
+        { Enter(0), value, write, built, run, Leave(0), Ret({ 3 }) } } };
+    module.funcs.push_back(std::move(adapter));
+    return module;
+}
+
+void ConstructionPhysicalPrefixHelpersRequireExactLiveAuthority() {
+    auto low = GirToLow(ConstructionNamedAliasModule()).Lower();
+    assert(Code(low) == "");
+    auto invalid = low;
+    bool changed = false;
+    for (auto &block : invalid.funcs[1].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::ControlAttemptPrepareNamed) {
+            for (auto &source : invalid.funcs[1].blocks) for (auto &value : source.insts)
+                if (value.res == inst.b) { value.text = "8"; changed = true; }
+        }
+    assert(changed && Code(invalid) == "GIR-V090");
+    invalid = low;
+    changed = false;
+    for (auto &block : invalid.funcs[1].blocks) {
+        auto prepare = find_if(block.insts.begin(), block.insts.end(), [](const auto &inst) {
+            return inst.op == GirOp::ControlAttemptPrepareNamed;
+        });
+        if (prepare == block.insts.end()) continue;
+        auto metadata = prepare->a;
+        auto write = find_if(prepare + 1, block.insts.end(), [&](const auto &inst) {
+            return inst.op == GirOp::PStore && inst.a == metadata;
+        });
+        if (write == block.insts.end()) continue;
+        rotate(prepare, prepare + 1, write + 1);
+        changed = true;
+    }
+    assert(changed && Code(invalid) == "GIR-V090");
+    invalid = low;
+    changed = false;
+    for (auto &block : invalid.funcs[1].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::ControlAttemptPrepareNamed) { inst.op = GirOp::ControlAttemptNormalize; inst.b = -1; changed = true; }
+    assert(changed && Code(invalid) == "GIR-V090");
+    invalid = low;
+    changed = false;
+    for (auto &block : invalid.funcs[1].blocks) {
+        auto returned = find_if(block.insts.begin(), block.insts.end(), [](const auto &inst) {
+            return inst.op == GirOp::ControlAttemptReturn;
+        });
+        if (returned == block.insts.end()) continue;
+        int next = 0;
+        for (auto &candidate : invalid.funcs[1].blocks) {
+            next += (int)candidate.params.size();
+            for (auto &inst : candidate.insts) next += GirDefinesValue(inst);
+        }
+        auto prefix = Def(GirOp::ControlAttemptPrefix, next);
+        prefix.a = returned->a;
+        block.insts.insert(returned + 1, prefix);
+        changed = true;
+        break;
+    }
+    assert(changed && Code(invalid) == "GIR-V090");
+    for (bool variable : { false, true }) {
+        auto adapter = ConstructionValuePrefixAdapterModule(variable);
+        assert(Code(adapter) == "");
+        auto adapted = GirToLow(adapter).Lower();
+        assert(Code(adapted) == "");
+        int packed = 0, removed = 0;
+        for (auto &block : adapted.funcs[1].blocks) for (auto &inst : block.insts) {
+            packed += inst.op == GirOp::ControlAttemptPack;
+            removed += inst.op == GirOp::ControlAttemptRemoveHeader;
+        }
+        assert(packed == 1 && removed == 1);
+        for (auto forbidden : { GirOp::ControlAttemptPack, GirOp::ControlAttemptRemoveHeader }) {
+            auto invalidState = adapted;
+            for (auto &block : invalidState.funcs[1].blocks) for (auto &inst : block.insts)
+                if (inst.op == forbidden)
+                    inst.op = forbidden == GirOp::ControlAttemptPack ? GirOp::ControlAttemptRemoveHeader : GirOp::ControlAttemptPack;
+            assert(Code(invalidState) == "GIR-V090");
+        }
+    }
+
+}
+
 void ConstructionNamedCopiesKeepTheirHeaderStorageSeparateFromScalarOutputs() {
     auto core = ConstructionNamedOwnerWithScalarResultModule();
     auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } }, [](const CoreOrigin &) { return 0; }).Lower();
@@ -7402,7 +7557,7 @@ void ConstructionProtocolHandlesStayImplicitOnEdges() {
     auto ticket = ConstructionNamedAliasModule();
     auto ticketType = ticket.CarrierType(CoreType::ExitReservation, ticket.funcs[1].results[0], CoreRequest::Value);
     ticket.funcs[1].blocks[0].insts.back().vals = { 5 };
-    ticket.funcs[1].blocks[1].params = { { 10, ticketType } };
+    ticket.funcs[1].blocks[1].params = { { 11, ticketType } };
     assert(Code(ticket) == "GIR-V060");
     auto parked = ConstructionReceivingLeaseModule();
     auto &parkedBody = Main(parked).blocks[0].insts;
@@ -8220,6 +8375,8 @@ int main() {
     ConstructionTargetDestinationsForwardProgressThroughCalls();
     ConstructionCompletedResultsSurviveLaterEscapingOperands();
     ConstructionReceivingWritersRejectDuplicationAndStaleUse();
+    ConstructionNamedPreparationUsesTheDeclaredLocalType();
+    ConstructionPhysicalPrefixHelpersRequireExactLiveAuthority();
     ConstructionNamedCopiesKeepTheirHeaderStorageSeparateFromScalarOutputs();
     ConstructionReceivingCompletionCountsJoinWithoutChangingOwnership();
     ConstructionProtocolHandlesStayImplicitOnEdges();

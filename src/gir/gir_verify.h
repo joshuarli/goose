@@ -100,12 +100,12 @@ private:
             case GirOp::ControlOwnerCheck: case GirOp::ControlOwnerExtend: case GirOp::ControlOwnerUpdate: case GirOp::ControlOwnerResult:
             case GirOp::ControlReceivingNew: case GirOp::ControlReceivingOpen: case GirOp::ControlReceivingCurrent:
             case GirOp::ControlReceivingRenew: case GirOp::ControlReceivingRefresh: case GirOp::ControlAttemptStack:
-            case GirOp::ControlAttemptStart: case GirOp::ControlAttemptProgress: case GirOp::ControlAttemptMode:
-            case GirOp::ControlAttemptReceiving: case GirOp::ControlAttemptView: case GirOp::ControlExitWait: case GirOp::ControlExitSelect: case GirOp::ControlExitReserve:
+            case GirOp::ControlAttemptStart: case GirOp::ControlAttemptProgress: case GirOp::ControlAttemptPrefix: case GirOp::ControlAttemptMode:
+            case GirOp::ControlAttemptReceiving: case GirOp::ControlExitWait: case GirOp::ControlExitSelect: case GirOp::ControlExitReserve:
             case GirOp::ControlExitIsNamed: case GirOp::ControlExitAdopt: case GirOp::ControlExitSelected: case GirOp::ControlExitPrepare: case GirOp::ControlExitCommit:
             case GirOp::ControlReceivingCancel: case GirOp::ControlAttemptAbandon: case GirOp::ControlLeave:
             case GirOp::ControlCallPop: case GirOp::ControlReceivingDrop: case GirOp::ControlReceivingTransfer: case GirOp::ControlExitMarkNamed: case GirOp::ControlExitRelease: case GirOp::ControlExitDiscard:
-            case GirOp::ControlAttemptCancel: case GirOp::ControlAttemptChild: case GirOp::ControlAttemptFinish:
+            case GirOp::ControlAttemptCancel: case GirOp::ControlAttemptPrepareNamed: case GirOp::ControlAttemptNormalize: case GirOp::ControlAttemptPack: case GirOp::ControlAttemptRemoveHeader: case GirOp::ControlAttemptChild: case GirOp::ControlAttemptFinish:
             case GirOp::ControlAttemptAttach: case GirOp::ControlAttemptPublish: case GirOp::ControlAttemptReturn:
                 throw CompileError { "construction control operand contract is missing" };
             case GirOp::Int: case GirOp::Bool: case GirOp::Unit: case GirOp::Slot: case GirOp::Global:
@@ -141,7 +141,7 @@ private:
             case GirOp::ExitIsNamed: case GirOp::ReservedDest: case GirOp::ReservedNamed: case GirOp::ExitMarkNamed: case GirOp::ExitRelease:
             case GirOp::DestBytes: case GirOp::DestFinish: case GirOp::DestPublish:
             case GirOp::Result: case GirOp::DestChild: case GirOp::DestArg:
-            case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
+            case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate: case GirOp::DestPrepareNamed: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
             case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestBind:
             case GirOp::DestCancel: case GirOp::ReturnFlagSet: case GirOp::TargetStore:
             case GirOp::SourceCallGet: case GirOp::SourceLeave: case GirOp::SourceCallPop: case GirOp::SourceResult: case GirOp::SourceGlobalSet: case GirOp::SourceTargetLeave: case GirOp::SourceTargetResult: case GirOp::SourceTargetGet: case GirOp::DestPublishRef:
@@ -226,7 +226,7 @@ private:
             case GirOp::Pop: case GirOp::PopN: case GirOp::Resize: case GirOp::Clear: case GirOp::Replace:
                 return true;
             case GirOp::DestOpen: case GirOp::DestWrite: case GirOp::DestFinish: case GirOp::DestPublish: case GirOp::DestBytes:
-            case GirOp::OutBytes: case GirOp::DestChild: case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
+            case GirOp::OutBytes: case GirOp::DestChild: case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestPrepareNamed: case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
             case GirOp::TargetReceiving: case GirOp::ExitReserve: case GirOp::ExitSelect: case GirOp::ReservedNamed: case GirOp::ExitMarkNamed: case GirOp::ExitRelease: case GirOp::ExitDiscard:
             case GirOp::ExitLand: case GirOp::ReceivingCancel:
             case GirOp::DestArg: case GirOp::DestAbandon: case GirOp::DestValue:
@@ -1372,7 +1372,7 @@ private:
                                     set(facts.control, i.res, at(facts.stack, entry.params[result->stack].first));
                             break;
                         case GirOp::ControlReceivingOpen: case GirOp::ControlReceivingCurrent: case GirOp::ControlReceivingRenew:
-                        case GirOp::ControlAttemptView: case GirOp::ControlExitWait: case GirOp::ControlExitReserve: case GirOp::ControlExitSelected:
+                        case GirOp::ControlExitWait: case GirOp::ControlExitReserve: case GirOp::ControlExitSelected:
                         case GirOp::ControlReceivingCancel: case GirOp::ControlAttemptAbandon: case GirOp::ControlExitAdopt:
                             set(facts.control, i.res, at(facts.control, i.a)); break;
                         case GirOp::ControlReceivingRefresh: case GirOp::ControlExitCommit:
@@ -1890,7 +1890,7 @@ private:
             if (auto reference = get_if<GirLowResizableReferenceResult>(&layout)) return reference->header;
             return nullopt;
         };
-        enum class Kind { Unknown, Scope, Receiving, Attempt, Record, Ticket, Call, Stack, Start, Progress, Mode, Prepared, Flag, Comparison, TicketRole, Owner, NamedBinding, OwnerTarget, Header };
+        enum class Kind { Unknown, Scope, Receiving, Attempt, Record, Ticket, Call, Stack, Start, Progress, Mode, Prefix, Prepared, Flag, Comparison, TicketRole, Owner, NamedBinding, OwnerTarget, Header };
         enum class Role { Waiting, Fresh, UnknownAlias, Named, Received };
         enum class RawState { Writing, Built, Cancelled };
         struct Fact {
@@ -1911,6 +1911,7 @@ private:
             map<int, int> ownerOutputCells, ownerExtensions;
             map<int, pair<int, set<int>>> unselectedCompletions;
             set<int> scopes, handles, exposedHandles, attempts, tickets, calls, called, extracted, prepared;
+            set<int> writtenAttempts, namedPreparations;
             map<int, vector<Fact>> inputs;
             map<int, set<int>> outputs;
             int flag = 0;
@@ -1950,6 +1951,8 @@ private:
             intersect(combined.values, next.values);
             intersect(combined.locals, next.locals);
             intersect(combined.targets, next.targets);
+            combined.writtenAttempts.insert(next.writtenAttempts.begin(), next.writtenAttempts.end());
+            combined.namedPreparations.insert(next.namedPreparations.begin(), next.namedPreparations.end());
             intersect(combined.localSources, next.localSources);
             intersect(combined.returnedHeaders, next.returnedHeaders);
             set<int> checked;
@@ -1979,6 +1982,12 @@ private:
                 return record;
             };
             auto attempt = [&](int result, Fact value) {
+                auto written = value.kind == Kind::Attempt && state.writtenAttempts.count(value.root);
+                auto prepared = value.kind == Kind::Attempt && state.namedPreparations.count(value.root);
+                state.writtenAttempts.erase(result);
+                state.namedPreparations.erase(result);
+                if (written) state.writtenAttempts.insert(result);
+                if (prepared) state.namedPreparations.insert(result);
                 value.kind = Kind::Attempt; value.root = result;
                 if (value.lineage < 0) value.lineage = value.owner;
                 state.attempts.insert(result); state.values[result] = std::move(value);
@@ -2028,6 +2037,8 @@ private:
                 }
                 for (auto [from, to] : renamed) {
                     if (next.attempts.erase(from)) next.attempts.insert(to);
+                    if (next.writtenAttempts.erase(from)) next.writtenAttempts.insert(to);
+                    if (next.namedPreparations.erase(from)) next.namedPreparations.insert(to);
                     for (auto &[key, value] : next.values) if (value.root == from) value.root = to;
                 }
                 merge(destination, std::move(next));
@@ -2106,7 +2117,7 @@ private:
                         state.attempts.erase(previous.root); previous.owner = handle.root; attempt(inst.res, previous); break;
                     }
                     case GirOp::ControlAttemptStack: case GirOp::ControlAttemptStart: case GirOp::ControlAttemptProgress:
-                    case GirOp::ControlAttemptMode: case GirOp::ControlAttemptReceiving: {
+                    case GirOp::ControlAttemptMode: case GirOp::ControlAttemptPrefix: case GirOp::ControlAttemptReceiving: {
                         auto raw = require(inst.a, Kind::Attempt);
                         if (inst.op == GirOp::ControlAttemptReceiving) {
                             if (!state.handles.count(raw.owner)) bad("raw attempt has no live receiving authority for call delegation");
@@ -2117,14 +2128,39 @@ private:
                             state.values[inst.res] = owner->second;
                         } else {
                             raw.kind = inst.op == GirOp::ControlAttemptStack ? Kind::Stack : inst.op == GirOp::ControlAttemptStart ? Kind::Start :
-                                inst.op == GirOp::ControlAttemptProgress ? Kind::Progress : Kind::Mode;
+                                inst.op == GirOp::ControlAttemptProgress ? Kind::Progress :
+                                inst.op == GirOp::ControlAttemptPrefix ? Kind::Prefix : Kind::Mode;
                             state.values[inst.res] = raw;
                         }
                         break;
                     }
-                    case GirOp::ControlAttemptView: {
-                        auto raw = require(inst.a, Kind::Attempt); state.values[inst.res] = raw; break;
+                    case GirOp::ControlAttemptPrepareNamed: {
+                        auto raw = require(inst.a, Kind::Attempt);
+                        auto prefix = integer(inst.b);
+                        if (raw.raw != RawState::Writing || raw.target >= 0 || raw.result < 0 ||
+                            !prefix || (*prefix != 0 && *prefix != 4) || state.writtenAttempts.count(raw.root) ||
+                            !state.namedPreparations.insert(raw.root).second)
+                            bad("named preparation has no exact unwritten result attempt or physical prefix");
+                        break;
                     }
+                    case GirOp::ControlAttemptNormalize: {
+                        auto raw = require(inst.a, Kind::Attempt);
+                        if (raw.raw != RawState::Built || raw.result < 0 ||
+                            (raw.target >= 0 && find(m.lowtargets[raw.target].members.begin(), m.lowtargets[raw.target].members.end(),
+                                (int)(&function - m.funcs.data())) == m.lowtargets[raw.target].members.end()))
+                            bad("physical normalization does not own a normal result completion");
+                        break;
+                    }
+                    case GirOp::ControlAttemptPack: {
+                        auto raw = require(inst.a, Kind::Attempt);
+                        if (raw.raw != RawState::Writing || state.writtenAttempts.count(raw.root))
+                            bad("physical packing does not own an unwritten destination");
+                        break;
+                    }
+                    case GirOp::ControlAttemptRemoveHeader:
+                        if (require(inst.a, Kind::Attempt).raw != RawState::Built)
+                            bad("header removal does not own a completed destination");
+                        break;
                     case GirOp::ControlExitWait: {
                         auto handle = require(inst.a, Kind::Receiving);
                         if (handle.callee != -2 || handle.target >= 0 || state.unselectedCompletions.count(handle.root))
@@ -2291,12 +2327,16 @@ private:
                         auto raw = require(inst.a, Kind::Attempt); carried(inst.vals); state.attempts.erase(raw.root);
                         raw.raw = RawState::Cancelled; attempt(inst.res, raw); break;
                     }
-                    case GirOp::ControlAttemptFinish:
-                        complete(require(inst.a, Kind::Attempt)); break;
+                    case GirOp::ControlAttemptFinish: {
+                        auto raw = require(inst.a, Kind::Attempt);
+                        state.writtenAttempts.insert(raw.root);
+                        complete(raw); break;
+                    }
                     case GirOp::ControlAttemptChild: {
                         auto parent = require(inst.a, Kind::Attempt), child = require(inst.b, Kind::Attempt);
                         if (parent.raw != RawState::Writing || child.raw != RawState::Writing || child.parent >= 0)
                             bad("construction child registration does not own fresh parent and child writers");
+                        state.writtenAttempts.insert(parent.root);
                         for (auto &[value, entry] : state.values) if (entry.kind == Kind::Attempt && entry.root == child.root) entry.parent = parent.lineage;
                         break;
                     }
@@ -2501,7 +2541,11 @@ private:
                     case GirOp::BytesFill:
                         recordAddress(inst.a); break;
                     case GirOp::PStore:
-                        recordAddress(inst.a);
+                        if (recordAddress(inst.a)) {
+                            auto address = fact(inst.a);
+                            if (address.kind == Kind::Attempt || address.kind == Kind::Record)
+                                state.writtenAttempts.insert(address.root);
+                        }
                         if (function.lowResults) for (size_t result = 0; result < function.lowResults->size(); result++)
                             if (auto output = referenceOutput(function, result); output && function.blocks[0].params[*output].first == inst.a)
                                 state.returnedHeaders[*output] = fact(inst.b);
@@ -3036,7 +3080,6 @@ private:
                     state.initialized.insert({ created.address, GirConstructionMetadataBytes });
                     if (inst.op == GirOp::ControlExitCommit) created.graphStart = value(state, inst.vals[0]).address;
                 }
-                if (inst.op == GirOp::ControlAttemptView) state.values[inst.res] = value(state, inst.a);
                 if (inst.op == GirOp::ControlAttemptStack || inst.op == GirOp::ControlAttemptStart ||
                     inst.op == GirOp::ControlAttemptMode || inst.op == GirOp::ControlAttemptProgress) {
                     auto raw = value(state, inst.a);
@@ -4567,9 +4610,7 @@ private:
                     slot >= (int)f.slots.size() || !aliases.insert(slot).second)
                     TypeFail(fn, "named result slot aliases an invalid or repeated value channel");
                 auto local = f.slots[slot].ty;
-                bool sameLayout = local == type || (m.Type(type).kind == CoreType::VarArr &&
-                    GirResizableKind(m.Type(local).kind) && m.Type(local).elem == m.Type(type).elem);
-                if (!sameLayout)
+                if (!GirNonfixed(m, local) || !GirAdaptsTo(m, local, type))
                     TypeFail(fn, "named result slot aliases an invalid or repeated value channel");
             }
         }
@@ -4894,7 +4935,7 @@ private:
                                             " is taken outside scope ", f.slots[s].scope));
                 };
                 switch (i.op) {
-                    case GirOp::Slot: case GirOp::Init: case GirOp::DestBind: slotin(i.idx); break;
+                    case GirOp::Slot: case GirOp::Init: case GirOp::DestPrepareNamed: case GirOp::DestBind: slotin(i.idx); break;
                     case GirOp::ExitReserve: case GirOp::ExitSelect:
                         if (auto binding = GirNamedExitBinding(i.exitSource)) slotin(*binding);
                         break;
@@ -5469,7 +5510,7 @@ private:
                 if (auto append = get_if<GirDestAppendReceiver>(&i.destReceiver)) return RootsAt(p.vals, append->reference);
                 if (auto push = get_if<GirDestPushReceiver>(&i.destReceiver)) return RootsAt(p.vals, push->reference);
                 return {};
-            case GirOp::DestFinish: case GirOp::DestAbandon: case GirOp::DestAdapt:
+            case GirOp::DestPrepareNamed: case GirOp::DestFinish: case GirOp::DestAbandon: case GirOp::DestAdapt:
             case GirOp::DestAdaptFinish: case GirOp::DestValue: case GirOp::DestRelocate:
             case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestPublishRef:
                 return RootsAt(p.vals, i.a);
@@ -5917,6 +5958,7 @@ private:
             int target = -1;
             int parent = -1;
             int slot = -1;
+            int preparedNamedSlot = -1;
             int pushReference = -1;
             int argumentFunction = -1;
             int argumentPosition = -1;
@@ -6659,9 +6701,19 @@ private:
                             receiver->second.writer = -1;
                         break;
                     }
+                    case GirOp::DestPrepareNamed: {
+                        auto owner = consume(inst.a);
+                        if (owner.target >= 0 || owner.channel < 0 || owner.count != 0 || owner.preparedNamedSlot >= 0 ||
+                            owner.staged || owner.valueAdapter ||
+                            f.resultProtocols[owner.channel].namedSlot != inst.idx || state.named.count(inst.idx))
+                            bad("named preparation does not own its unwritten initialization channel");
+                        owner.preparedNamedSlot = inst.idx;
+                        moveOwner(inst.res, owner);
+                        break;
+                    }
                     case GirOp::DestBind: {
                         auto owner = consume(inst.a);
-                        if (owner.adaptedFrom >= 0 || owner.channel < 0 || f.resultProtocols[owner.channel].namedSlot != inst.idx ||
+                        if (owner.adaptedFrom >= 0 || owner.channel < 0 || owner.preparedNamedSlot != inst.idx || f.resultProtocols[owner.channel].namedSlot != inst.idx ||
                             state.named.count(inst.idx)) bad("named local does not own its declared incoming result channel");
                         owner.slot = inst.idx;
                         if (auto receiver = state.receivers.find(owner.receiving); receiver != state.receivers.end()) {

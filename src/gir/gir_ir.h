@@ -19,7 +19,7 @@ enum class GirOp : uint8_t {
     Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, IndexProven, Push, Pop, Call, Arr, Fill,
     Struct, Field, Bytes, Result, DestOpen, DestChild, DestFinish,
     DestArg, DestAbandon, DestValue, DestRelocate, DestStage, DestFit,
-    CallConstruct, Render, DestPublishRef, DestAdapt, DestAdaptFinish,
+    CallConstruct, Render, DestPublishRef, DestPrepareNamed, DestAdapt, DestAdaptFinish,
     ReceivingOpen, TargetReceiving, DestRenew, DestRefresh, ExitWait, ExitReserve, ExitIsNamed, ReservedDest, ReservedNamed,
     ExitLand, ExitAdopt, ReceivingCancel,
     // Instructions that define a value, low stage.
@@ -27,7 +27,7 @@ enum class GirOp : uint8_t {
     HdrLen, StaticBytes, ReturnFlagGet, TargetLoad, Format, TraceId, PtrEq, SourceNew, SourceChild, SourceParam, SourceEnter, SourceCallPush, SourceCallGet, SourceGlobal, SourceTargetEnter, SourceTargetGet,
     ControlEnter, ControlCallPush, ControlCallParam, ControlCallGet, ControlOwnerNone, ControlNamedBind, ControlOwnerBind, ControlOwnerParam, ControlOwnerGet, ControlOwnerTargetEnter, ControlOwnerTargetGet, ControlReceivingNew, ControlReceivingOpen, ControlReceivingCurrent,
     ControlReceivingRenew, ControlReceivingRefresh, ControlAttemptStack, ControlAttemptStart,
-    ControlAttemptProgress, ControlAttemptMode, ControlAttemptReceiving, ControlAttemptView,
+    ControlAttemptProgress, ControlAttemptPrefix, ControlAttemptMode, ControlAttemptReceiving,
     ControlExitWait, ControlExitReserve, ControlExitIsNamed, ControlExitAdopt, ControlExitSelected, ControlExitPrepare, ControlExitCommit,
     ControlReceivingCancel, ControlAttemptAbandon,
     // Instructions that define none, high stage.
@@ -38,7 +38,7 @@ enum class GirOp : uint8_t {
     PStore, LocalSet, StackRelease, StackBump, HdrInit, HdrSetLen, BytesCopy, BytesMove,
     BytesFill, RtCall, ReturnFlagSet, TargetStore, OutBytes, Event, SourceLeave, SourceCallPop, SourceResult, SourceCopy, SourceGlobalSet, SourceTargetLeave, SourceTargetResult,
     ControlLeave, ControlCallPop, ControlOwnerCheck, ControlOwnerExtend, ControlOwnerUpdate, ControlOwnerResult, ControlOwnerTargetResult, ControlOwnerTargetLeave, ControlReceivingDrop, ControlReceivingTransfer, ControlExitSelect, ControlExitMarkNamed, ControlExitRelease, ControlExitDiscard, ControlAttemptCancel,
-    ControlAttemptChild, ControlAttemptFinish, ControlAttemptAttach, ControlAttemptPublish, ControlAttemptReturn,
+    ControlAttemptPrepareNamed, ControlAttemptNormalize, ControlAttemptPack, ControlAttemptRemoveHeader, ControlAttemptChild, ControlAttemptFinish, ControlAttemptAttach, ControlAttemptPublish, ControlAttemptReturn,
     // Terminators.
     Br, CondBr, Invoke, Ret, Escape, Abort, Exit, Unreachable,
 };
@@ -61,7 +61,7 @@ inline bool GirHighOnly(GirOp op) {
         case GirOp::DestArg:
         case GirOp::DestAbandon: case GirOp::DestValue: case GirOp::DestRelocate:
         case GirOp::DestStage: case GirOp::DestFit: case GirOp::CallConstruct:
-        case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestAdapt: case GirOp::DestAdaptFinish: case GirOp::AppendValue: case GirOp::DestAttach:
+        case GirOp::Render: case GirOp::DestPublishRef: case GirOp::DestPrepareNamed: case GirOp::DestAdapt: case GirOp::DestAdaptFinish: case GirOp::AppendValue: case GirOp::DestAttach:
         case GirOp::DestText: case GirOp::DestCopy: case GirOp::DestRepeat: case GirOp::DestSnapshot: case GirOp::DestBind:
         case GirOp::ReceivingOpen: case GirOp::TargetReceiving: case GirOp::DestRenew: case GirOp::DestRefresh:
         case GirOp::ExitWait: case GirOp::ExitReserve: case GirOp::ExitSelect: case GirOp::ExitIsNamed: case GirOp::ReservedDest: case GirOp::ReservedNamed:
@@ -257,9 +257,13 @@ inline optional<GirControlContract> GirControlOf(GirOp op) {
         case GirOp::ControlAttemptStack: return GirControlContract { "l_control_attempt_stack", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
         case GirOp::ControlAttemptStart: return GirControlContract { "l_control_attempt_start", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
         case GirOp::ControlAttemptProgress: return GirControlContract { "l_control_attempt_progress", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptPrefix: return GirControlContract { "l_control_attempt_prefix", Form::Operand, Kind::Int, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptPrepareNamed: return GirControlContract { "l_control_attempt_prepare_named", Form::Pair, nullopt, { Kind::Ptr, Kind::Int }, nullopt };
+        case GirOp::ControlAttemptPack: return GirControlContract { "l_control_attempt_pack", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptRemoveHeader: return GirControlContract { "l_control_attempt_remove_header", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
+        case GirOp::ControlAttemptNormalize: return GirControlContract { "l_control_attempt_normalize", Form::Operand, nullopt, { Kind::Ptr }, nullopt };
         case GirOp::ControlAttemptMode: return GirControlContract { "l_control_attempt_mode", Form::Operand, Kind::Bool, { Kind::Ptr }, nullopt };
         case GirOp::ControlAttemptReceiving: return GirControlContract { "l_control_attempt_receiving", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
-        case GirOp::ControlAttemptView: return GirControlContract { "l_control_attempt_view", Form::PairValues, Kind::Ptr, { Kind::Ptr, Kind::Ptr, Kind::Int }, nullopt };
         case GirOp::ControlExitIsNamed: return GirControlContract { "l_control_exit_is_named", Form::Operand, Kind::Bool, { Kind::Ptr }, nullopt };
         case GirOp::ControlExitWait: return GirControlContract { "l_control_exit_wait", Form::Operand, Kind::Ptr, { Kind::Ptr }, nullopt };
         case GirOp::ControlExitSelect: return GirControlContract { "l_control_exit_select", Form::Source, nullopt, { Kind::Ptr }, Kind::Ptr };

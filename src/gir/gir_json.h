@@ -885,6 +885,8 @@ private:
             case GirOp::DestChild:
                 def("i_dest_child"); Append(out, ",", i.a, ",", T(i.ty), ",");
                 OptOrg(out, i.org); out += ']'; return;
+            case GirOp::DestPrepareNamed:
+                def("i_dest_prepare_named"); Append(out, ",", i.a, ",", i.idx, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::DestAdapt:
                 def("i_dest_adapt"); Append(out, ",", i.a, ",", T(i.ty), ",\"", CoreRequestName(i.request), "\",");
                 OptOrg(out, i.org); out += ']'; return;

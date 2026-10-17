@@ -1920,7 +1920,17 @@ private:
                     if (currentResults)
                         for (size_t result = 0; result < currentResults->size(); result++)
                             if ((*currentResults)[result].namedLocal == s.var) {
-                                auto completed = LowerConstruct(*s.expr, RenewReceiving(resultReceivings[result]), org);
+                                auto destination = RenewReceiving(resultReceivings[result]);
+                                GirInst prepare;
+                                prepare.op = GirOp::DestPrepareNamed;
+                                prepare.a = destination;
+                                prepare.idx = s.var;
+                                prepare.org = org;
+                                auto prepared = EmitDef(std::move(prepare));
+                                rawReceivings[prepared] = rawReceivings.at(destination);
+                                if (auto ticket = rawReservations.find(destination); ticket != rawReservations.end())
+                                    rawReservations[prepared] = ticket->second;
+                                auto completed = LowerConstruct(*s.expr, prepared, org);
                                 if (cur < 0) return;
                                 DropCompletedReceiving(completed);
                                 GirInst bind;

@@ -561,6 +561,17 @@ public:
                     return GirTyErr("receiving target has no nonfixed result channel");
                 return GirTyOk(m.CarrierType(CoreType::Receiving, member.results[i.idx2], member.resultProtocols[i.idx2].request));
             }
+            case GirOp::DestPrepareNamed: {
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                if (!env.function || carrier.kind != CoreType::Dest || carrier.request != CoreRequest::Value ||
+                    i.idx < 0 || i.idx >= (int)env.slots.size() ||
+                    !GirNonfixed(m, env.slots[i.idx].ty) ||
+                    !GirAdaptsTo(m, env.slots[i.idx].ty, carrier.elem))
+                    return GirTyErr("named preparation has no compatible local destination");
+                return input;
+            }
             case GirOp::DestAdapt: {
                 auto input = Val(i.a);
                 if (!input.ok()) return input;
@@ -859,7 +870,8 @@ public:
             return GirTyErr("owner target binding result is outside its logical result table");
 
         if (!contract->result) return GirTyOk(env.m.UnitType());
-        return GirTyOk(*contract->result == CoreType::Bool ? env.m.BoolType() : env.m.PtrType());
+        return GirTyOk(*contract->result == CoreType::Bool ? env.m.BoolType() :
+            *contract->result == CoreType::Int ? env.m.IntType(CoreIntTy::I64) : env.m.PtrType());
     }
 
     GirTyResult Data(int v) {
@@ -915,7 +927,7 @@ private:
             changed = false;
             for (auto &block : *env.blocks) for (auto &inst : block.insts) {
                 switch (inst.op) {
-                    case GirOp::DestFinish: case GirOp::DestAbandon: case GirOp::DestValue:
+                    case GirOp::DestPrepareNamed: case GirOp::DestFinish: case GirOp::DestAbandon: case GirOp::DestValue:
                     case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestRelocate:
                         merge(origins[inst.res], origins[inst.a]); break;
                     case GirOp::CallConstruct: {
