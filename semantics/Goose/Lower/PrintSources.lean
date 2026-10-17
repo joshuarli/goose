@@ -5,47 +5,20 @@ namespace Goose.Lower
 open Goose.Core Goose.Proofs.Memory
 open Goose.Core.Sound
 
-inductive PrintSourceSequence {cfg : Cfg} (env : Env) (fuel : Nat) :
-    List PrintArg → St → List String → St → Prop
-  | nil {state : St} : PrintSourceSequence (cfg := cfg) env fuel [] state [] state
+inductive PrintSourceCursor {cfg : Cfg} (env : Env) (fuel : Nat) (results : List Ty) :
+    List PrintArg → St → Prop
+  | nil {state : St} : PrintSourceCursor (cfg := cfg) env fuel results [] state
   | text {text : String} {args : List PrintArg} {state : St}
-      {parts : List String} {after : St}
-      (tail : PrintSourceSequence (cfg := cfg) env fuel args state parts after) :
-      PrintSourceSequence (cfg := cfg) env fuel (.text text :: args) state (text :: parts) after
-  | expr {expr : Expr} {args : List PrintArg} {state after : St}
-      {part : String} {parts : List String} {final : St}
+      (tail : PrintSourceCursor (cfg := cfg) env fuel results args state) :
+      PrintSourceCursor (cfg := cfg) env fuel results (.text text :: args) state
+  | expr {expr : Expr} {args : List PrintArg} {state : St}
       (source : ExprSource cfg env expr state)
       (printable : (∃ ty, source.ty = .int ty) ∨ source.ty = .bool)
-      (value : Val)
-      (evaluated : evalExpr fuel cfg env expr state = .ok value after)
-      (rendered : render value after = .ok part after)
-      (tail : PrintSourceSequence (cfg := cfg) env fuel args after parts final) :
-      PrintSourceSequence (cfg := cfg) env fuel (.expr expr :: args) state (part :: parts) final
-
-private theorem mapList_cons_ok {α β : Type} (f : α → M β) (head : α) (tail : List α)
-    (state : St) (parts : List β) (after : St)
-    (done : mapList f (head :: tail) state = .ok parts after) :
-    ∃ value middle rest,
-      parts = value :: rest ∧ f head state = .ok value middle ∧
-        mapList f tail middle = .ok rest after := by
-  change M.bind' (f head) (fun value =>
-    M.bind' (mapList f tail) (fun rest => M.pure' (value :: rest))) state =
-      .ok parts after at done
-  cases hhead : f head state with
-  | stop error stopped =>
-      simp [M.bind', hhead] at done
-  | ok value middle =>
-      simp only [M.bind', hhead] at done
-      change M.bind' (mapList f tail) (fun rest => M.pure' (value :: rest)) middle =
-        .ok parts after at done
-      cases htail : mapList f tail middle with
-      | stop error stopped => simp [M.bind', htail] at done
-      | ok rest final =>
-          simp only [M.bind', htail] at done
-          simp only [M.pure'] at done
-          injection done with hparts hafter
-          subst parts after
-          exact ⟨value, middle, rest, rfl, rfl, htail⟩
+      (metadata : SourceResults source.typingEnv source.rootsEnv results)
+      (resume : ∀ {part final},
+        execPrintArg (fuel + 1) cfg env (.expr expr) state = .ok part final →
+        PrintSourceCursor (cfg := cfg) env fuel results args final) :
+      PrintSourceCursor (cfg := cfg) env fuel results (.expr expr :: args) state
 
 private def printSuffixFuture {cfg : Module} {plans : Array (Array DemandPoint)}
     {path : List Nat} {args : List PrintArg} {origin : OriginId}
@@ -136,7 +109,7 @@ private theorem execPrintExpr_success {cfg : Cfg} {env : Env} {expr : Expr}
 private theorem printSourcesSuffix {cfg : Cfg} {env : Env} {all : List PrintArg}
     {origin : OriginId} {initial : St}
     (source : StmtSource cfg env (.print all origin) initial) (fuel offset : Nat)
-    {args : List PrintArg} {state final : St} {parts : List String}
+    {args : List PrintArg} {state : St}
     (suffix : args = all.drop offset)
     {typingStart typingFinal : Nat}
     (typed : tyPrintArgs source.typingEnv args typingStart = .ok ((), typingFinal))
@@ -149,14 +122,11 @@ private theorem printSourcesSuffix {cfg : Cfg} {env : Env} {all : List PrintArg}
       (source.context.mayShrink source.world.ownerP source.observation) source.observation state.store)
     (classified : cfg.mod.profile = .shrink →
       ClassifiedParameters cfg.mod source.world.P source.world.D source.observation state.store)
-    (done : mapList (execPrintArg (fuel + 1) cfg env) args state = .ok parts final) :
-    PrintSourceSequence (cfg := cfg) env fuel args state parts final := by
-  induction args generalizing offset typingStart typingFinal rootsStart rootsFinal state parts final with
-  | nil =>
-      simp only [mapList, M.pure'] at done
-      injection done with hparts hfinal
-      subst parts final
-      exact .nil
+    {results : List Ty}
+    (metadata : SourceResults source.typingEnv source.rootsEnv results) :
+    PrintSourceCursor (cfg := cfg) env fuel results args state := by
+  induction args generalizing offset typingStart typingFinal rootsStart rootsFinal state with
+  | nil => exact .nil
   | cons arg rest ih =>
       have hdrop : arg :: rest = all.drop offset := suffix
       have harg : all[offset]? = some arg := by
@@ -165,20 +135,11 @@ private theorem printSourcesSuffix {cfg : Cfg} {env : Env} {all : List PrintArg}
       have hrest : rest = all.drop (offset + 1) := by
         have h := congrArg (fun xs : List PrintArg => xs.drop 1) hdrop
         simpa using h
-      obtain ⟨part, middle, restParts, hparts, hhead, htail⟩ :=
-        mapList_cons_ok (execPrintArg (fuel + 1) cfg env) arg rest state parts final done
-      subst parts
       cases arg with
       | text text =>
           simp only [tyPrintArgs] at typed
           simp only [rpPrintArgs] at rooted
-          have htext : execPrintArg (fuel + 1) cfg env (.text text) state = .ok text state := by
-            simp only [execPrintArg]
-            rfl
-          rw [htext] at hhead
-          injection hhead with hpart hmiddle
-          subst part middle
-          refine .text (ih (offset + 1) hrest typed rooted effects ?_ observed classified htail)
+          refine .text (ih (offset + 1) hrest typed rooted effects ?_ observed classified)
           simpa [printSuffixFuture, PrintArg.variables] using frame
       | expr expr =>
           simp only [tyPrintArgs] at typed
@@ -192,8 +153,6 @@ private theorem printSourcesSuffix {cfg : Cfg} {env : Env} {all : List PrintArg}
             cases ty <;> inv at htypedRest <;> first
               | exact ⟨Or.inl ⟨_, rfl⟩, htypedRest⟩
               | exact ⟨Or.inr rfl, htypedRest⟩
-          obtain ⟨value, after, heval, hrender, hmiddle⟩ := execPrintExpr_success hhead
-          subst middle
           have childAt : (DemandNode.statement (.print all origin)).child? offset =
               some (.expression expr) := by
             simp [DemandNode.child?, DemandNode.children, harg]
@@ -252,10 +211,17 @@ private theorem printSourcesSuffix {cfg : Cfg} {env : Env} {all : List PrintArg}
               hChildFuture, hRetained, hMayShrink⟩ := source.expressionChildSource offset expr
                 childAt visible typingStart typingNext ty rootsStart rootsNext roots
                 htypedExpr hrootedExpr effectsExpr childFrame observed classified
-          let result := child.result fuel value heval
+          have childMetadata : SourceResults child.typingEnv child.rootsEnv results := by
+            rw [hTypingEnv, hRootsEnv]
+            exact metadata
           have childPrintable : (∃ t, child.ty = .int t) ∨ child.ty = .bool := by
             rw [hChildTy]
             exact hty.1
+          refine .expr child childPrintable childMetadata ?_
+          intro part final doneArg
+          obtain ⟨value, after, heval, hrender, hfinal⟩ := execPrintExpr_success doneArg
+          subst final
+          let result := child.result fuel value heval
           have hchildContext : child.context.outputFuture = childContext.outputFuture := by
             simpa [childContext, phase] using hChildFuture
           have nextFrame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
@@ -294,15 +260,15 @@ private theorem printSourcesSuffix {cfg : Cfg} {env : Env} {all : List PrintArg}
           have nextClassified : cfg.mod.profile = .shrink →
               ClassifiedParameters cfg.mod source.world.P source.world.D source.observation after.store := by
             simpa [hWorld, hObservation] using result.classified
-          refine .expr child childPrintable value heval hrender ?_
           exact ih (offset + 1) hrest hty.2 hrootedRest effects nextFrame
-            nextObserved nextClassified htail
+            nextObserved nextClassified
 
-theorem StmtSource.printSources {cfg : Cfg} {env : Env} {args : List PrintArg}
-    {origin : OriginId} {state final : St} {parts : List String}
+theorem StmtSource.printSourceCursor {cfg : Cfg} {env : Env} {args : List PrintArg}
+    {origin : OriginId} {state : St}
     (source : StmtSource cfg env (.print args origin) state) (fuel : Nat)
-    (done : mapList (execPrintArg (fuel + 1) cfg env) args state = .ok parts final) :
-    PrintSourceSequence (cfg := cfg) env fuel args state parts final := by
+    {results : List Ty}
+    (metadata : SourceResults source.typingEnv source.rootsEnv results) :
+    PrintSourceCursor (cfg := cfg) env fuel results args state := by
   have typedStmt := source.typed
   simp only [tyStmt] at typedStmt
   inv at typedStmt
@@ -316,6 +282,6 @@ theorem StmtSource.printSources {cfg : Cfg} {env : Env} {args : List PrintArg}
     (PMono.noteOutputs _ _ _ houtputs).2.trans source.effects
   have frame := printSuffixFrame source
   exact printSourcesSuffix source fuel 0 rfl htyped hrooted effects frame source.observed
-    source.classified done
+    source.classified metadata
 
 end Goose.Lower
