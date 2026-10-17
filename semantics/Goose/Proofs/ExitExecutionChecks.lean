@@ -131,5 +131,7 @@ theorem inactiveTarget_rejected :
 #print axioms Goose.Proofs.ExitExecution.evaluation_preservesFresh
 #print axioms Goose.Proofs.ExitExecution.initGlobals_preservesFresh
 #print axioms Goose.Proofs.ExitExecution.runModule_freshActivations
+#print axioms Goose.Proofs.ExitExecution.targetActivation_selects_nearest
+#print axioms Goose.Proofs.ExitExecution.runModule_selectedTarget_nearest
 
 end Goose.Proofs.ExitExecutionChecks

@@ -115,5 +115,10 @@ theorem zeroFill_rejected : validate (effectfulFill 0) =
 #print axioms zeroFill_rejected
 #print axioms Goose.Proofs.ConstructionExecution.evaluation_keepsEventPrefix
 #print axioms Goose.Proofs.ConstructionExecution.runModule_keepsEventPrefix
+#print axioms Goose.Proofs.ConstructionExecution.evaluation_preservesConstructionBegins
+#print axioms Goose.Proofs.ConstructionExecution.runModule_preservesConstructionBegins
+#print axioms Goose.Proofs.ConstructionExecution.runModule_destinationBeginIds
+#print axioms Goose.Proofs.ConstructionExecution.runModule_distinctDestinationBegins
+#print axioms Goose.Proofs.ConstructionExecution.runModule_destinationBegins_cover
 
 end Goose.Proofs.ConstructionExecutionChecks
