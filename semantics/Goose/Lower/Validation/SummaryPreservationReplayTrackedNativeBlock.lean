@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.SummaryPreservationSourceEnvironments
 import Goose.Lower.Validation.SummaryPreservationReplayNativeBlock
 import Goose.Lower.Validation.SummaryPreservationReplayTrackedBlock
 
@@ -27,7 +28,7 @@ theorem typedBlockTrackedNative {module : GIR.Module} {results : Array (List Roo
     (loopBounds : LoopBuilderTargets loop ls)
     (native : NativeRows vt (lowerBlock loop bindings want (.mk scope statements value) le ls).2)
     (statementChild : ∀ env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance,
-      env1.mod = env.mod → env1.vars = env.vars →
+      env1.mod = env.mod → env1.vars = env.vars → env1.impl = env.impl → env1.inExpr = env.inExpr →
       tyStmts env1 scope statements tn1 = .ok (env2, tn2) →
       rpStmts { penv with scopes := scope :: penv.scopes } statements sourceBefore = .ok ((), sourceAfter) →
       EffectRefinement func sourceAfter.eff target →
@@ -40,7 +41,7 @@ theorem typedBlockTrackedNative {module : GIR.Module} {results : Array (List Roo
         (∀ index, index < provenance.vals.size → rootsAt next.vals index = rootsAt provenance.vals index) ∧
         ReturnBoundsPreserved expected state provenance (lowerStmts loop statements le state).2 next)
     (expressionChild : ∀ expression env2 tn2 sourceBefore state provenance,
-      env2.mod = env.mod → env2.vars = env.vars →
+      env2.mod = env.mod → env2.vars = env.vars → env2.impl = env.impl → env2.inExpr = env.inExpr →
       value = some expression → tyExpr env2 expression tn2 = .ok (type, finish) →
       rpExpr { penv with scopes := scope :: penv.scopes } expression sourceBefore = .ok (sourceRoots, after) →
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
@@ -65,6 +66,7 @@ theorem typedBlockTrackedNative {module : GIR.Module} {results : Array (List Roo
     tyBlock_ok env typedPre scope statements value start type finish source
   obtain ⟨_, sourceMiddle, rootStatements, rootValue, _localRoots, _range⟩ :=
     rpBlockValue_ok penv rootPre scope statements value before sourceRoots range after replayed
+  have declaredSame := (declarePre_ok _ _ _ _ _ _ declared).1
   have declaredTables := declarePre_tables typedPre declared
   have statementTables := tyStmts_tables statements typedStatements
   have statementEffect : EffectRefinement func sourceMiddle.eff target := by
@@ -78,7 +80,7 @@ theorem typedBlockTrackedNative {module : GIR.Module} {results : Array (List Roo
     have childGenerated : GeneratedBuilderState state := by rw [entryEq]; exact initializedGenerated
     have childNative : NativeRows vt (lowerStmts loop statements le state).2 := by rw [entryEq]; exact bodyNative
     exact statementChild env1 env2 tn1 tn2 _ sourceMiddle state provenance
-      declaredTables.1 declaredTables.2.1 typedStatements rootStatements statementEffect stateReady entryEq childGenerated childNative
+      declaredTables.1 declaredTables.2.1 declaredSame.impl declaredSame.inExpr typedStatements rootStatements statementEffect stateReady entryEq childGenerated childNative
   · intro state provenance entryEq stateReady
     obtain ⟨_initializedGenerated, bodyGenerated, _bodyNative, valueNative⟩ := native_block_stages generated loopBounds native
     have childGenerated : GeneratedBuilderState state := by rw [entryEq]; exact bodyGenerated
@@ -97,6 +99,8 @@ theorem typedBlockTrackedNative {module : GIR.Module} {results : Array (List Roo
         subst value
         exact expressionChild expression env2 tn2 sourceMiddle state provenance
           (statementTables.1.trans declaredTables.1) (statementTables.2.1.trans declaredTables.2.1)
+          (statementTables.2.2.trans declaredSame.impl)
+          ((source_statements_inExpr statements typedStatements).trans declaredSame.inExpr)
           rfl typedValue rootValue stateReady entryEq childGenerated childNative)
     have frame := ReturnFrameRun.of_absence (fun _ => ReturnFrames.returnAbsent_lowerBlockValue want value valueFree)
       le state (lowerBlockValue want value le state).1 (lowerBlockValue want value le state).2 rfl

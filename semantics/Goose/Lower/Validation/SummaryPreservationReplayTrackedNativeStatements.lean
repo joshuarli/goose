@@ -21,7 +21,7 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
     (native : NativeRows vt (lowerStmts loop statements le ls).2)
     (scopes : env.inExpr = false → ∀ entered ∈ ls.stack, entered < scopeCount)
     (step : ∀ statement, statement ∈ statements → ∀ env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance,
-      env1.mod = env.mod → env1.vars = env.vars →
+      env1.mod = env.mod → env1.vars = env.vars → env1.impl = env.impl → env1.inExpr = env.inExpr →
       tyStmt env1 scope statement tn1 = .ok (env2, tn2) →
       rpStmt penv statement sourceBefore = .ok ((), sourceAfter) →
       EffectRefinement func sourceAfter.eff target →
@@ -61,7 +61,7 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
         simpa only [whole] using native
       have firstNative := restNative.of_prefix (types_lowerStmts loop rest le (lowerStmt loop statement le ls).2 _ _ rfl)
       obtain ⟨middle, middleReady, firstRoots, firstTransfer⟩ := step statement (by simp) env middleEnv start middleCounter
-        before middleSource ls upper rfl rfl firstTyped firstReplay firstEffect ready (by simp [current]) generatedState loopBounds firstNative scopes
+        before middleSource ls upper rfl rfl rfl rfl firstTyped firstReplay firstEffect ready (by simp [current]) generatedState loopBounds firstNative scopes
       have middleTables := tyStmt_tables statement firstTyped
       have advance := advB_lowerStmt loop statement le ls (lowerStmt loop statement le ls).1 (lowerStmt loop statement le ls).2 rfl
       have middleGenerated : GeneratedBuilderState (lowerStmt loop statement le ls).2 :=
@@ -75,9 +75,10 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
         exact scopes ((source_statement_inExpr statement firstTyped).symm.trans outside)
       obtain ⟨next, completed, nextRoots, nextTransfer⟩ := ih middleReady restTyped restReplay
         middleGenerated middleLoopBounds restNative middleScopes
-        (fun child member env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance moduleEq variablesEq =>
+        (fun child member env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance moduleEq variablesEq implEq modeEq =>
           step child (List.mem_cons_of_mem _ member) env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance
-            (moduleEq.trans middleTables.1) (variablesEq.trans middleTables.2.1))
+            (moduleEq.trans middleTables.1) (variablesEq.trans middleTables.2.1)
+            (implEq.trans middleTables.2.2) (modeEq.trans (source_statement_inExpr statement firstTyped)))
       rw [whole]
       refine ⟨next, completed, ?_, firstTransfer.trans nextTransfer⟩
       intro index bound
