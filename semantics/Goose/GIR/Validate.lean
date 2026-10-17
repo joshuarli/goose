@@ -745,6 +745,17 @@ def isLiteralRunType : Ty → Bool
   | .grow _ | .growshrink _ => true
   | _ => false
 
+def freshRunRound (f : Func) (valid : Array Bool) : Array Bool × Bool := Id.run do
+  let mut valid := valid
+  let mut changed := false
+  for h : target in [0:f.blocks.size] do
+    for ((v, _), param) in f.blocks[target].params.zipIdx do
+      let incoming := incomingValues f target param
+      if !valid[v]! && !incoming.isEmpty && incoming.all (fun source => valid[source]?.getD false) then
+        valid := valid.set! v true
+        changed := true
+  return (valid, changed)
+
 def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
   let mut valid := Array.replicate f.numValues false
   for b in f.blocks do
@@ -756,14 +767,10 @@ def freshRuns (f : Func) (vt : Array (Option VTy)) : Array Bool := Id.run do
   let mut changed := true
   let mut fuel := f.numValues + 1
   while changed && fuel > 0 do
-    changed := false
+    let (next, progress) := freshRunRound f valid
+    valid := next
+    changed := progress
     fuel := fuel - 1
-    for h : target in [0:f.blocks.size] do
-      for ((v, _), param) in f.blocks[target].params.zipIdx do
-        let incoming := incomingValues f target param
-        if !valid[v]! && !incoming.isEmpty && incoming.all (fun source => valid[source]?.getD false) then
-          valid := valid.set! v true
-          changed := true
   return valid
 
 def rootsOverlap (a b : List RootRef) : Bool :=
@@ -867,6 +874,30 @@ def transferEmptyEdge (f : Func) (facts : List ValueId) (target : BlockId)
       if current.contains argument && !current.contains parameter then current ++ [parameter]
       else current) facts
 
+def emptyFactRound (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov)
+    (states : Array (Option (List ValueId))) : Array (Option (List ValueId)) × Bool := Id.run do
+  let mut states := states
+  let mut changed := false
+  let oldStates := states
+  for h : b in [0:f.blocks.size] do
+    if let some block := f.blocks[b]? then
+      if let some incoming := oldStates[b]? |>.join then
+        let outgoing := transferEmptyBlock m vt p incoming block
+        for (target, args) in block.terms.flatMap termEdges do
+          if target < states.size then
+            let edgeFacts := transferEmptyEdge f outgoing target args
+            match states[target]? with
+            | some none =>
+              states := states.set! target (some edgeFacts)
+              changed := true
+            | some (some previous) =>
+              let merged := previous.filter edgeFacts.contains
+              if merged != previous then
+                states := states.set! target (some merged)
+                changed := true
+            | none => pure ()
+  return (states, changed)
+
 def emptyFactsAtBlocks (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) :
     Array (Option (List ValueId)) := Id.run do
   let mut states : Array (Option (List ValueId)) := Array.replicate f.blocks.size none
@@ -874,26 +905,10 @@ def emptyFactsAtBlocks (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Pr
   let mut changed := true
   let mut fuel := (f.blocks.size + 1) * (f.numValues + 1) + 1
   while changed && fuel > 0 do
-    changed := false
+    let (next, progress) := emptyFactRound m f vt p states
+    states := next
+    changed := progress
     fuel := fuel - 1
-    let oldStates := states
-    for h : b in [0:f.blocks.size] do
-      if let some block := f.blocks[b]? then
-        if let some incoming := oldStates[b]? |>.join then
-          let outgoing := transferEmptyBlock m vt p incoming block
-          for (target, args) in block.terms.flatMap termEdges do
-            if target < states.size then
-              let edgeFacts := transferEmptyEdge f outgoing target args
-              match states[target]? with
-              | some none =>
-                states := states.set! target (some edgeFacts)
-                changed := true
-              | some (some previous) =>
-                let merged := previous.filter edgeFacts.contains
-                if merged != previous then
-                  states := states.set! target (some merged)
-                  changed := true
-              | none => pure ()
   return states
 
 def checkReplace (m : Module) (f : Func) (vt : Array (Option VTy)) (p : Prov) (validRuns : Array Bool)
