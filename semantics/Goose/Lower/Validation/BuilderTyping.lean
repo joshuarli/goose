@@ -1,5 +1,6 @@
 import Goose.Lower.Validation.ValueTypes
 import Goose.Lower.Validation.InterfaceTypes
+import Goose.Lower.Validation.ExpressionTypingBorrowOps
 
 namespace Goose.Lower.Validation
 
@@ -99,7 +100,7 @@ theorem lowerExpr_ref_var_exact {env : Core.TEnv} {varId : VarId} {mu : Mutabili
     rw [placeRun] at place
     dsimp only at place
     have midLive : mid.cur = some block := place.1.trans live
-    have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (by simpa only [referenceType] using place.2) permission midLive
+    have frozen := borrowTo_typed (le := lowerEnv env.mod env.vars results) (by simpa only [referenceType] using place.2) permission midLive
     simpa only [lowerExpr, bind_run, placeRun, place.1] using frozen
 
 theorem lowerExpr_ref_global_exact {env : Core.TEnv} {global : GlobalId} {mu : Mutability} {ty : Ty}
@@ -116,7 +117,7 @@ theorem lowerExpr_ref_global_exact {env : Core.TEnv} {global : GlobalId} {mu : M
     rw [placeRun] at place
     dsimp only at place
     have midLive : mid.cur = some block := place.1.trans live
-    have frozen := freezeTo_typed (le := lowerEnv env.mod vars results) (by simpa only [referenceType] using place.2) permission midLive
+    have frozen := borrowTo_typed (le := lowerEnv env.mod vars results) (by simpa only [referenceType] using place.2) permission midLive
     simpa only [lowerExpr, bind_run, placeRun, place.1] using frozen
 
 theorem tyExpr_read_place {env : Core.TEnv} {place : Place} {ty : Ty} {start finish : Nat}

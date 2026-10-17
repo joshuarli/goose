@@ -183,6 +183,12 @@ theorem checked_freezeTo (m : Mutability) (r : ValueId) : CheckedRun (freezeTo m
     | exact CheckedRun.pure _
     | (rename_i t; cases t <;> first | exact CheckedRun.pure _ | (rename_i m' _; cases m' <;> first | exact CheckedRun.pure _ | exact checked_emitDef _))
 
+theorem checked_borrowTo (m : Mutability) (r : ValueId) : CheckedRun (borrowTo m r) := by
+  intro le before result after run
+  rcases borrowTo_cases run with frozen | borrowed
+  · exact checked_freezeTo m r le before result after frozen
+  · exact checked_emitDef (.ownerBorrow r) (by trivial) le before result after borrowed
+
 theorem checked_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : CheckedRun (coerceTo target r org) := by
   unfold coerceTo
   refine CheckedRun.bind (checked_valTy r) fun source => ?_
@@ -245,7 +251,7 @@ theorem checked_eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) :
     | some lv =>
       dsimp only
       cases lv.ty with
-      | ref m t => exact checked_freezeTo m elem
+      | ref m t => exact checked_borrowTo m elem
       | _ => exact CheckedRun.pure _
 
 theorem checked_regrowOf (o : Option ValueId) : CheckedRun (regrowOf o) := by
@@ -440,7 +446,7 @@ theorem checked_lowerExpr : ∀ e : Expr, CheckedRun (lowerExpr e)
     exact CheckedRun.bind (checked_lowerPlace p) fun _ => checked_emitDef _
   | .ref m p => by
     simp only [lowerExpr]
-    exact CheckedRun.bind (checked_lowerPlace p) fun r => checked_freezeTo m r
+    exact CheckedRun.bind (checked_lowerPlace p) fun r => checked_borrowTo m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact CheckedRun.bind (checked_lowerView v) fun _ => CheckedRun.bind (checked_lowerBound lo) fun _ =>
@@ -511,7 +517,7 @@ theorem checked_lowerArg : ∀ a : Arg, CheckedRun (lowerArg a)
   | .byVal e => by simp only [lowerArg]; exact checked_lowerExpr e
   | .byRef m p => by
     simp only [lowerArg]
-    exact CheckedRun.bind (checked_lowerPlace p) fun r => checked_freezeTo m r
+    exact CheckedRun.bind (checked_lowerPlace p) fun r => checked_borrowTo m r
 
 theorem checked_lowerArgs : ∀ as : List Arg, CheckedRun (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact CheckedRun.pure _
