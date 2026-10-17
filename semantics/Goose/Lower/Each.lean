@@ -595,7 +595,7 @@ theorem each_sim_bounded (n : Nat) (cx : FnCtx) (cfg : Cfg) (env : Env)
   | zero =>
     intro i fr _
     simp only [execEach]
-    exact SimE.of_timeout_bind
+    exact SimE.of_simG SimG.of_timeout_bind
   | succ n ih =>
     intro i fr hinv
     rw [prepareReturn_execEach]
