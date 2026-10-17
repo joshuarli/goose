@@ -7,16 +7,6 @@ open Goose.GIR (ValueId BlockId SlotId ScopeId FnId VTy Bnd PrintPart Op Effect 
   instsAt runAt Frame FnCtx RVal Func Slot)
 open Goose.GIR
 
-theorem checkCapacityAtOrg_some (l : Loc) (count : Nat) (org : OriginId) :
-    checkCapacityAtOrg l count (some org) = checkAppendCapacity l count org := by
-  funext s
-  cases hread : readLoc l s with
-  | stop err state => simp [checkCapacityAtOrg, checkAppendCapacity, hread, bind_apply]
-  | ok value state =>
-    cases value <;>
-      simp [checkCapacityAtOrg, checkAppendCapacity, hread, abortAtOrg, abortAt,
-        M.stop, bind_apply, pure_apply, M.instMonad, M.bind', M.pure']
-
 /-! ### The fragment -/
 
 mutual
