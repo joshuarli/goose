@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.CfgGeneratedEdgeShortCircuit
+import Goose.Lower.Validation.CfgGeneratedEdgeScalar
 
 namespace Goose.Lower.Validation
 
@@ -84,5 +85,87 @@ theorem generated_edge_lowerContinue (env : LEnv) (context : Option LoopCtx) (or
   intro before result after run generated loop checked
   obtain ⟨extension, afterChecked⟩ := edge_lowerContinue_at context origin env before after result run checked loop
   exact ⟨generated.lowerStmt context (.cont origin) loop.targets run, extension, afterChecked⟩
+
+theorem generated_edge_lowerWhile_at (env : LEnv) (context : Option LoopCtx) (header : BlockId)
+    {condition : B ValueId} {body : Nat → BlockId → B ValueId}
+    (conditionEdges : GeneratedEdgeRun env context condition)
+    (bodyEdges : ∀ depth exit, GeneratedEdgeRun env (some ⟨depth, exit, .jump header⟩) (body depth exit))
+    (before after : LS) (result : Unit)
+    (run : lowerWhile header condition body env before = (result, after))
+    (generated : GeneratedBuilderState before) (loop : LoopEdgeArguments context before)
+    (checked : BuilderEdgeArguments before) (headerEdge : EdgeArguments before header []) :
+    GeneratedBuilderState after ∧ EdgeExtension before after ∧ BuilderEdgeArguments after := by
+  obtain ⟨conditionValue, middle, conditionRun, tail⟩ := bind_eq.mp run
+  obtain ⟨middleGenerated, middleExtension, middleChecked⟩ :=
+    conditionEdges before conditionValue middle conditionRun generated loop checked
+  cases current : middle.cur with
+  | none =>
+    rw [whenLive_none _ _ env current] at tail
+    obtain ⟨_, rfl⟩ := Prod.mk.inj tail
+    exact ⟨middleGenerated, middleExtension, middleChecked⟩
+  | some block =>
+    rw [whenLive_some _ _ env current] at tail
+    obtain ⟨afterGenerated, finalExtension, afterChecked⟩ :=
+      generated_edge_loopBody_at env context conditionValue (.jump header) bodyEdges
+        (fun depth exit => generated_edge_jumpBack env depth exit header)
+        middle after result tail middleGenerated (loop.extend middleExtension) middleChecked
+        (by simp [current]) (headerEdge.extend middleExtension)
+    exact ⟨afterGenerated, middleExtension.trans finalExtension, afterChecked⟩
+
+theorem generated_edge_lowerRange_at (env : LEnv) (context : Option LoopCtx)
+    (ty : IntTy) (counter bound : ValueId) (header : BlockId)
+    {body : Nat → BlockId → B ValueId}
+    (bodyEdges : ∀ depth exit, GeneratedEdgeRun env (some ⟨depth, exit, .next header ty counter⟩) (body depth exit))
+    (before after : LS) (result : Unit)
+    (run : lowerRange ty counter bound header body env before = (result, after))
+    (generated : GeneratedBuilderState before) (loop : LoopEdgeArguments context before)
+    (checked : BuilderEdgeArguments before) (current : before.cur.isSome = true)
+    (frame : CounterHeader before header ty counter)
+    (counterTyped : before.vals[counter]? = some (some (.data (.int ty)))) :
+    GeneratedBuilderState after ∧ EdgeExtension before after ∧ BuilderEdgeArguments after := by
+  obtain ⟨condition, middle, compareRun, tail⟩ := bind_eq.mp run
+  obtain ⟨middleGenerated, middleExtension, middleChecked⟩ :=
+    generated_edge_emitDef env context (.cmp .lt ty counter bound) before condition middle compareRun generated loop checked
+  have sameCurrent : middle.cur = before.cur := by
+    cases equal : before.cur with
+    | none => rw [emitDef_none _ env equal] at compareRun; simpa only [Function.comp_apply, equal] using congrArg (LS.cur ∘ Prod.snd) compareRun.symm
+    | some block => rw [emitDef_run _ env equal] at compareRun; simpa only [Function.comp_apply, equal] using congrArg (LS.cur ∘ Prod.snd) compareRun.symm
+  obtain ⟨afterGenerated, finalExtension, afterChecked⟩ :=
+    generated_edge_loopBody_at env context condition (.next header ty counter) bodyEdges
+      (fun depth exit => generated_edge_rangeBack env depth exit header ty counter)
+      middle after result tail middleGenerated (loop.extend middleExtension) middleChecked
+      (by simpa only [sameCurrent] using current)
+      ⟨frame.extend middleExtension, middleExtension.types _ _ counterTyped⟩
+  exact ⟨afterGenerated, middleExtension.trans finalExtension, afterChecked⟩
+
+theorem generated_edge_lowerEach_at (env : LEnv) (context : Option LoopCtx)
+    (regrow : Bool) (owner : Option ValueId) (sampled : ValueId) (header : BlockId) (counter : ValueId)
+    {body : Nat → BlockId → B ValueId}
+    (bodyEdges : ∀ depth exit, GeneratedEdgeRun env (some ⟨depth, exit, .next header .i64 counter⟩) (body depth exit))
+    (before after : LS) (result : Unit)
+    (run : lowerEach regrow owner sampled header counter body env before = (result, after))
+    (generated : GeneratedBuilderState before) (loop : LoopEdgeArguments context before)
+    (checked : BuilderEdgeArguments before) (current : before.cur.isSome = true)
+    (frame : CounterHeader before header .i64 counter)
+    (counterTyped : before.vals[counter]? = some (some (.data (.int .i64)))) :
+    GeneratedBuilderState after ∧ EdgeExtension before after ∧ BuilderEdgeArguments after := by
+  obtain ⟨bound, middle, lengthRun, tail⟩ := bind_eq.mp run
+  obtain ⟨middleGenerated, middleExtension, middleChecked⟩ :=
+    generated_edge_eachLen env context regrow owner sampled before bound middle lengthRun generated loop checked
+  have sameCurrent : middle.cur = before.cur := by
+    cases regrow
+    · obtain ⟨_, rfl⟩ := pure_eq.mp lengthRun; rfl
+    · simp only [eachLen, ite_true] at lengthRun
+      cases equal : before.cur with
+      | none => rw [emitDef_none _ env equal] at lengthRun
+                simpa only [Function.comp_apply, equal] using congrArg (LS.cur ∘ Prod.snd) lengthRun.symm
+      | some block => rw [emitDef_run _ env equal] at lengthRun
+                      simpa only [Function.comp_apply, equal] using congrArg (LS.cur ∘ Prod.snd) lengthRun.symm
+  obtain ⟨afterGenerated, finalExtension, afterChecked⟩ :=
+    generated_edge_lowerRange_at env context .i64 counter bound header bodyEdges middle after result tail
+      middleGenerated (loop.extend middleExtension) middleChecked
+      (by simpa only [sameCurrent] using current)
+      (frame.extend middleExtension) (middleExtension.types _ _ counterTyped)
+  exact ⟨afterGenerated, middleExtension.trans finalExtension, afterChecked⟩
 
 end Goose.Lower.Validation

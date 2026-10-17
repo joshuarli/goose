@@ -82,4 +82,26 @@ theorem edge_inScope {action : B α} (scope : ScopeId)
   refine EdgeRun.bind (EdgeRun.of_tables ?_) fun _ => EdgeRun.pure value
   intros; rw [popScope_run]; exact ⟨rfl, rfl⟩
 
+theorem edge_regrowOf (owner : Option ValueId) : EdgeRun (regrowOf owner) := by
+  cases owner with
+  | none => exact edge_pure _
+  | some value => exact edge_growOwner value
+
+theorem edge_eachSampled (regrow : Bool) (view : ValueId) : EdgeRun (eachSampled regrow view) := by
+  cases regrow <;> first | exact edge_pure _ | exact edge_emitDef _
+
+theorem edge_eachLen (regrow : Bool) (owner : Option ValueId) (sampled : ValueId) :
+    EdgeRun (eachLen regrow owner sampled) := by
+  cases regrow <;> first | exact edge_pure _ | exact edge_emitDef _
+
+theorem edge_eachElemValue (slot : VarId) (byRef : Bool) (value : ValueId) : EdgeRun (eachElemValue slot byRef value) := by
+  unfold eachElemValue
+  cases byRef
+  · exact edge_emitDef _
+  · refine EdgeRun.bind edge_read fun env => ?_
+    cases env.vars[slot]? with
+    | none => exact edge_pure _
+    | some localInfo =>
+      cases tyEq : localInfo.ty <;> simp only [tyEq] <;> first | exact edge_pure _ | exact edge_borrowTo _ _
+
 end Goose.Lower.Validation
