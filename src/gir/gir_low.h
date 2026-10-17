@@ -822,9 +822,8 @@ private:
             }
         }
         PlaceSlots();
-        // Signature.
         Sig initsig;
-        if (global >= 0) { initsig = Signature(f); initsig.params = { I64() }; }
+        if (global >= 0) initsig.params = { I64() };
         sig = global >= 0 ? &initsig : &lsigs[FuncIndex(f)];
         lf.params = sig->params;
         lf.results = sig->results;
