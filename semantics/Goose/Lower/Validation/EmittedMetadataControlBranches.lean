@@ -98,6 +98,36 @@ theorem EmittedMetadata.ifValue {le : LEnv} {loop : Option LoopCtx} {before : LS
       (fun endT valueT endF valueF => Goose.Lower.joinValue endT valueT endF valueF)
       (fun _ _ _ _ _ checked => checked.joinValue _ _ _ _) rfl
 
+theorem EmittedMetadata.ifValue_recorded {le : LEnv} {loop : Option LoopCtx} {before : LS}
+    (checked : EmittedMetadata le before) (generated : GeneratedBuilderState before)
+    (loopBounds : LoopBuilderTargets loop before) (loopTypes : EmittedLoopTypes loop before)
+    (condition : ValueId) (sourceScope : ScopeId)
+    (conditionAt : before.cur.isSome = true → before.vals[condition]? = some (some (.data .bool)))
+    {yes no : B ValueId} (yesSource : EmittedMetadataAction le loop yes) (noSource : EmittedMetadataAction le loop no) :
+    EmittedMetadata le ((Goose.Lower.whenLive 0 fun _ => do
+      let (tb, eb) ← Goose.Lower.fork condition
+      Goose.Lower.setCur (some tb)
+      let valueT ← yes
+      let endT ← Goose.Lower.curBlock
+      Goose.Lower.setCur (some eb)
+      let valueF ← no
+      let endF ← Goose.Lower.curBlock
+      let value ← Goose.Lower.joinValue endT valueT endF valueF
+      Goose.Lower.recordValueRootRecipe value sourceScope
+      Pure.pure value) le before).2 := by
+  cases live : before.cur with
+  | none => rw [whenLive_none _ _ _ live]; exact checked
+  | some current =>
+    rw [whenLive_some _ _ _ live]
+    exact metadata_control_branches checked generated loopBounds loopTypes condition conditionAt yesSource noSource
+      (fun endT valueT endF valueF => do
+        let value ← Goose.Lower.joinValue endT valueT endF valueF
+        Goose.Lower.recordValueRootRecipe value sourceScope
+        Pure.pure value)
+      (fun state endT valueT endF valueF checked => by
+        let joined := Goose.Lower.joinValue endT valueT endF valueF le state
+        exact (checked.joinValue endT endF valueT valueF).recordValueRootRecipe joined.1 sourceScope) rfl
+
 theorem EmittedMetadata.ifArms {le : LEnv} {loop : Option LoopCtx} {before : LS}
     (checked : EmittedMetadata le before) (generated : GeneratedBuilderState before)
     (loopBounds : LoopBuilderTargets loop before) (loopTypes : EmittedLoopTypes loop before)

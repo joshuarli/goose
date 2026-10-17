@@ -75,7 +75,7 @@ theorem metadata_source_ifExpression {env : Core.TEnv} {results : List Ty}
   obtain ⟨value, middle, conditionRun, tailRun⟩ := bind_eq.mp run
   have conditionChecked := conditionChild resultTypes conditionSource before value middle generated trivial trivial conditionRun checked
   have middleGenerated := generated.lowerExpr condition conditionRun
-  have final := conditionChecked.ifValue middleGenerated (loop := none) trivial trivial value
+  have final := conditionChecked.ifValue_recorded middleGenerated (loop := none) trivial trivial value (sourceBlockScope yes)
     (fun active => lowerExpr_generated_typed condition conditionSource conditionRun active generated)
     (metadata_source_emptyBlock (yesChild (Core.exprEnv env)) resultTypes yesSource none true)
     (metadata_source_emptyBlock (noChild (Core.exprEnv env)) resultTypes noSource none true)

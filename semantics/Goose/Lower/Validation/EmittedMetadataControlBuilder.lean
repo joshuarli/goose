@@ -5,6 +5,16 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
+theorem EmittedMetadata.recordValueRootRecipe {le : LEnv} {before : LS}
+    (checked : EmittedMetadata le before) (value : ValueId) (sourceScope : ScopeId) :
+    EmittedMetadata le (Goose.Lower.recordValueRootRecipe value sourceScope le before).2 := by
+  apply checked.of_preserving (types_recordValueRootRecipe value sourceScope le before _ _ rfl)
+  intro inst member
+  have same : (Goose.Lower.recordValueRootRecipe value sourceScope le before).2.insts = before.insts := by
+    rw [recordValueRootRecipe_run]
+    rfl
+  exact Or.inl (same ▸ member)
+
 theorem EmittedMetadata.patchBrs {le : LEnv} {before : LS} (checked : EmittedMetadata le before)
     (target : BlockId) (incoming : List (BlockId × ValueId)) :
     EmittedMetadata le (Goose.Lower.patchBrs target incoming le before).2 := by
