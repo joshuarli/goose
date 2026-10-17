@@ -48,12 +48,12 @@ private theorem emptyBlock_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {scope : Sco
 open TypedExpressionChecks in
 theorem parameterized_body (profile : NumProfile) (depth : Nat) (values : List Val) (state : St)
     (hp : boolCallee.params.size = values.length) :
-    CalleeBodyAt 2 ⟨profile, sourceModule⟩ 1 boolCallee depth values state := by
+    CalleeBodyAt 2 ⟨profile, sourceModule⟩ ⟨1, "bools", [], [], []⟩ boolCallee depth values state := by
   let le := lowerEnv sourceModule boolCallee.vars boolCallee.results.toList
   let body := lowerBlock none (callPre boolCallee) false boolCallee.body le (callEntry boolCallee)
-  let cx : FnCtx := ⟨⟨profile, lower sourceModule⟩, lowerImplAt sourceModule 1 boolCallee⟩
+  let cx : FnCtx := ⟨⟨profile, lower sourceModule⟩, lowerContextAt sourceModule ⟨1, "bools", [], [], []⟩ boolCallee⟩
   have hextTail : ExtT (bodyTail boolCallee le body.1 body.2) cx.fn.blocks := by
-    rw [lowerImplAt_call_blocks]
+    rw [lowerContextAt_blocks, lowerImpl_call_blocks]
     exact extT_finish _
   have hextBody : ExtT body.2 cx.fn.blocks := hextTail.of_adv
     (advB_finishFunction boolCallee body.1 le body.2
@@ -62,7 +62,7 @@ theorem parameterized_body (profile : NumProfile) (depth : Nat) (values : List V
   apply SimEAt.of_simG
   exact emptyBlock_sim (le := le) (callPre_scopes (m := sourceModule) (impl := boolCallee) (by cbv))
     rfl (callEntry_pp boolCallee) hextBody
-    (callFrame_rel sourceModule profile 1 boolCallee state.nextAct (depth + 1) values)
+    (callFrame_rel sourceModule profile ⟨1, "bools", [], [], []⟩ boolCallee state.nextAct (depth + 1) values)
     (callFrame_preRel boolCallee state.nextAct (depth + 1) values hp)
 
 open TypedExpressionChecks in

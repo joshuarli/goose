@@ -41,12 +41,12 @@ theorem body_simulation (fuel : Nat) (cfg : Cfg) :
 
 theorem accepted_return_body (artifact : ArtifactProfile) (profile : NumProfile) (fuel : Nat)
     (accepted : Core.validate (module artifact) = .ok ()) :
-    SimEAt ⟨⟨profile, lower (module artifact)⟩, lowerImplAt (module artifact) 0 implementation⟩
+    SimEAt ⟨⟨profile, lower (module artifact)⟩, lowerContextAt (module artifact) ⟨0, "main", [], [], []⟩ implementation⟩
       (0, 0) initialFrame
       (execBlock fuel ⟨profile, module artifact⟩ ⟨#[], 0, [], 1⟩ [] body >>=
         prepareReturn ⟨#[], 0, [], 1⟩)
       (BlockFlowPost ⟨profile, module artifact⟩ ⟨#[], 0, [], 1⟩
-        ⟨⟨profile, lower (module artifact)⟩, lowerImplAt (module artifact) 0 implementation⟩
+        ⟨⟨profile, lower (module artifact)⟩, lowerContextAt (module artifact) ⟨0, "main", [], [], []⟩ implementation⟩
         initialBuilder initialFrame (loweredBody artifact).2 body false
         (loweredBody artifact).1) { St.initial with nextAct := 1 } := by
   obtain ⟨context, impl, hcontext, himpl, hparams, hresults, source, htyping, hroots⟩ :=
@@ -65,7 +65,7 @@ theorem accepted_return_body (artifact : ArtifactProfile) (profile : NumProfile)
   have hloops : source.typingEnv.loops = 0 := by rw [htyping]; rfl
   apply (body_simulation fuel ⟨profile, module artifact⟩).function _ _ source hmetadata hloops
     initialBuilder (loweredBody artifact).2 (loweredBody artifact).1 (0, 0)
-    ⟨⟨profile, lower (module artifact)⟩, lowerImplAt (module artifact) 0 implementation⟩
+    ⟨⟨profile, lower (module artifact)⟩, lowerContextAt (module artifact) ⟨0, "main", [], [], []⟩ implementation⟩
     initialFrame
   · exact (Prod.eta (loweredBody artifact)).symm
   · rfl
