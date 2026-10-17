@@ -84,4 +84,49 @@ theorem lowerExpr_scalar_boolean_apart
       (extension_inst_member extension member) scalar
   · exact .control control
 
+inductive ScalarControlStmt : Stmt → Prop
+  | expr (origin) {expr} : ScalarBooleanExpr expr → ScalarControlStmt (.expr expr origin)
+  | assert (origin) {expr} : ScalarBooleanExpr expr → ScalarControlStmt (.assertS expr origin)
+  | abort (message origin) : ScalarControlStmt (.abort message origin)
+  | exit (origin) {expr} : ScalarBooleanExpr expr → ScalarControlStmt (.exit expr origin)
+
+theorem scalarControl_lowerStmt {stmt : Stmt} (source : ScalarControlStmt stmt) (loop : Option LoopCtx) :
+    EmitsOnlyRun ScalarControlInstruction (lowerStmt loop stmt) := by
+  cases source with
+  | expr origin scalar =>
+    apply EmitsOnlyRun.bind (scalarBoolean_lowerExpr scalar)
+    intro _
+    exact .pure _ _
+  | assert origin scalar =>
+    apply EmitsOnlyRun.bind (scalarBoolean_lowerExpr scalar)
+    intro value
+    apply EmitsOnlyRun.whenLive
+    intro index
+    apply EmitsOnlyRun.bind (emitsOnly_fork _ (fun term => Or.inr (.term term)) value)
+    rintro ⟨pass, fail⟩
+    apply EmitsOnlyRun.bind (emitsOnly_setCur _ (some fail))
+    intro _
+    apply EmitsOnlyRun.bind (emitsOnly_emitTerm _ (Or.inr (.term _)))
+    intro _
+    exact emitsOnly_setCur _ (some pass)
+  | abort message origin => exact emitsOnly_emitTerm _ (Or.inr (.term _))
+  | exit origin scalar =>
+    apply EmitsOnlyRun.bind (scalarBoolean_lowerExpr scalar)
+    intro value
+    exact emitsOnly_emitTerm _ (Or.inr (.term _))
+
+theorem scalarControl_lowerStmts {stmts : List Stmt} (source : ∀ stmt ∈ stmts, ScalarControlStmt stmt)
+    (loop : Option LoopCtx) : EmitsOnlyRun ScalarControlInstruction (lowerStmts loop stmts) := by
+  induction stmts with
+  | nil => exact .pure _ _
+  | cons stmt rest ih =>
+    simp only [lowerStmts]
+    apply EmitsOnlyRun.bind (EmitsOnlyRun.unchanged (fun _ _ => rfl))
+    intro live
+    split
+    · apply EmitsOnlyRun.bind (scalarControl_lowerStmt (source stmt (by simp)) loop)
+      intro _
+      exact ih (fun stmt member => source stmt (by simp [member]))
+    · exact .pure _ _
+
 end Goose.Lower.Validation

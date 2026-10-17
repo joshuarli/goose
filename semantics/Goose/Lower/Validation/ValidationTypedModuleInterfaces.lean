@@ -1,5 +1,6 @@
 import Goose.Lower.Validation.ValidationTypedModuleFunctions
-import Goose.Lower.Validation.ValidationTypedModuleMetadata
+import Goose.Lower.Validation.ValidationTypedModuleEntry
+import Goose.Lower.Validation.ValidationTypedModuleGlobalInterface
 
 namespace Goose.Lower.Validation
 
