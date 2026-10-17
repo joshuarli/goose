@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.ReplacementDemandApart
+import Goose.Lower.Validation.ReplacementDemandAliases
 import Goose.Lower.Validation.ReplacementClosure
 import Goose.Lower.Validation.ReplacementIndependence
 import Goose.Lower.Validation.SummaryPreservationDisjointExpansion
@@ -83,6 +84,24 @@ theorem ReplacementDemandContext.descendant_call_query_apart {module : Core.Modu
   obtain ⟨effect, effectAt, rootAt⟩ := List.mem_flatMap.mp effectMember
   exact disjoint effect effectAt ownerRoot ownerMember effectRoot rootAt
 
+theorem ReplacementDemandContext.rhs_alias_query_apart {module : Core.Module}
+    {planOwner : Nat} {path : List Nat} {place : Place} {rhs : Expr} {origin : OriginId}
+    (context : ReplacementDemandContext module planOwner path place rhs origin)
+    {variableId : VarId} (used : variableId ∈ rhs.variables)
+    (active : variableId ∈ context.statement.expected.frame.active)
+    {target : DemandOwner}
+    (targetAt : context.planContext.approvals.access.owner place = .ok target)
+    (invalidates : target.invalidates = true) {alias : RetainedAlias}
+    (aliasAt : context.planContext.approvals.access.aliasVariable variableId = .ok (some alias))
+    (interior : alias.ty.interiorTarget?.isSome = true)
+    {func : Func} {queries : ReplacementQueries} {owner : ValueId} {query : ReplacementRootQuery}
+    (closed : ParameterRootsClosed func)
+    (ownerKnown : ReplacementRootsWithin (queries.value owner) (target.roots.flatMap func.expandParameterRoot))
+    (sourceKnown : ReplacementRootsWithin query (alias.roots.flatMap func.expandParameterRoot)) :
+    ReplacementApart queries owner query :=
+  replacementApart_of_expanded_source closed ownerKnown sourceKnown
+    (context.rhs_alias_disjoint used active targetAt invalidates aliasAt interior)
+
 theorem ReplacementDemandContext.descendant_read_load_apart {module : Core.Module}
     {planOwner : Nat} {path : List Nat} {place : Place} {rhs : Expr} {origin : OriginId}
     (context : ReplacementDemandContext module planOwner path place rhs origin)
@@ -123,6 +142,7 @@ theorem ReplacementDemandContext.descendant_read_load_apart {module : Core.Modul
 #print axioms ReplacementDemandContext.descendant_read_query_apart
 #print axioms ReplacementDemandContext.descendant_place_query_apart
 #print axioms ReplacementDemandContext.descendant_call_query_apart
+#print axioms ReplacementDemandContext.rhs_alias_query_apart
 #print axioms ReplacementDemandContext.descendant_read_load_apart
 
 end Goose.Lower.Validation
