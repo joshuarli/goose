@@ -112,7 +112,7 @@ private:
                 add(i.a); add(i.b);
                 for (auto v : i.vals) add(v);
                 break;
-            case GirOp::Un: case GirOp::Not: case GirOp::Conv: case GirOp::Next: case GirOp::Freeze:
+            case GirOp::Un: case GirOp::Not: case GirOp::Conv: case GirOp::Next: case GirOp::Freeze: case GirOp::OwnerBorrow:
             case GirOp::Load: case GirOp::Snap: case GirOp::SliceView: case GirOp::ViewLen: case GirOp::Field:
             case GirOp::ArrayLen: case GirOp::Fill: case GirOp::Init: case GirOp::Exit: case GirOp::Render:
                 add(i.a);
@@ -3923,6 +3923,7 @@ private:
                 return close(refof(v, mut, ignored) && mut == CoreMut::Mut);
             }
             if (def && def->op == GirOp::Freeze) return close(false);
+            if (def && def->op == GirOp::OwnerBorrow) return close(contentsMutable(def->a, open));
             if (def && def->op == GirOp::Field) {
                 auto base = fn.vt[def->a];
                 if (base < 0 || m.Type(base).kind != CoreType::Ref) return close(false);
@@ -3989,6 +3990,11 @@ private:
             open[v] = 1;
             auto close = [&](bool result) { open[v] = 0; return result; };
             auto *def = defs[v];
+            if (def && m.profile == CoreProfile::Shrink && def->op == GirOp::Slot)
+                return close(f.slots[def->idx].kind == CoreVarKind::Var);
+            if (def && m.profile == CoreProfile::Shrink && def->op == GirOp::Global)
+                return close(m.globals[def->idx].kind == CoreVarKind::Var);
+            if (def && def->op == GirOp::OwnerBorrow) return close(contentsMutable(def->a, open));
             if (def && def->op == GirOp::Field) {
                 auto base = fn.vt[def->a];
                 if (base < 0 || m.Type(base).kind != CoreType::Ref) return close(false);
@@ -4027,11 +4033,11 @@ private:
             if (t.kind == CoreType::Ref && t.mut == CoreMut::Mut) {
                 vector<char> open(fn.nvalues, 0);
                 auto kind = m.Type(t.elem).kind;
-                if (GirWholeOwnerBorrowUsesContents(kind))
+                if (GirWholeOwnerBorrowUsesContents(kind) && m.profile != CoreProfile::Shrink)
                     return contentsMutable(value, open);
                 if (!writable(value, open)) return false;
                 if (kind == CoreType::Arr || kind == CoreType::Struct || kind == CoreType::Slice ||
-                    kind == CoreType::Limited) {
+                    kind == CoreType::Limited || GirResizableKind(kind)) {
                     fill(open.begin(), open.end(), 0);
                     return contentsMutable(value, open);
                 }
@@ -4079,6 +4085,10 @@ private:
                 if (i.op == GirOp::Load) {
                     if (refof(i.a, mut, pt) && !GirReadable(m, pt))
                         Fail("GIR-V030", cat(fn.label, ": a load of a value that cannot be copied"));
+                } else if (i.op == GirOp::OwnerBorrow) {
+                    vector<char> open(fn.nvalues, 0);
+                    if (!contentsMutable(i.a, open))
+                        Fail("GIR-V030", cat(fn.label, ": owner borrow requires mutable contents"));
                 } else if (i.op == GirOp::Store) {
                     if (refof(i.a, mut, pt)) {
                         if (mut != CoreMut::Mut)
@@ -4334,7 +4344,7 @@ private:
             case GirOp::Field: return RootsAt(p.vals, i.a);
             case GirOp::Elem: case GirOp::ViewSlice: case GirOp::Index: case GirOp::IndexProven:
                 return RootsAt(p.vals, i.a);
-            case GirOp::Freeze: case GirOp::Snap: case GirOp::SliceView: case GirOp::Push:
+            case GirOp::Freeze: case GirOp::OwnerBorrow: case GirOp::Snap: case GirOp::SliceView: case GirOp::Push:
                 return RootsAt(p.vals, i.a);
             case GirOp::Load: {
                 Roots out;

@@ -15,7 +15,7 @@ using GirTypeId = CoreTypeId;
 
 enum class GirOp : uint8_t {
     // Instructions that define a value, high stage.
-    Int, Bool, Unit, Bin, Un, Cmp, BoolCmp, Not, Conv, Next, Slot, Global, Elem, Freeze, Load,
+    Int, Bool, Unit, Bin, Un, Cmp, BoolCmp, Not, Conv, Next, Slot, Global, Elem, Freeze, OwnerBorrow, Load,
     Snap, SliceView, ViewLen, ViewSlice, ArrayLen, Index, IndexProven, Push, Pop, Call, Arr, Fill,
     Struct, Field, Bytes, Result, DestOpen, DestChild, DestFinish, DestNamed, ResultExitDest,
     DestAbandonNamed, DestArg, DestAbandon, DestValue, DestRelocate, DestStage, DestFit,
@@ -41,7 +41,7 @@ inline bool GirIsTerminator(GirOp op) { return op >= GirOp::Br; }
 inline bool GirHighOnly(GirOp op) {
     switch (op) {
         case GirOp::BoolCmp: case GirOp::Next: case GirOp::Slot: case GirOp::Global: case GirOp::Elem:
-        case GirOp::Freeze: case GirOp::Load: case GirOp::Snap: case GirOp::SliceView:
+        case GirOp::Freeze: case GirOp::OwnerBorrow: case GirOp::Load: case GirOp::Snap: case GirOp::SliceView:
         case GirOp::ViewLen: case GirOp::ViewSlice: case GirOp::ArrayLen: case GirOp::Index:
         case GirOp::IndexProven:
         case GirOp::Push: case GirOp::Pop: case GirOp::Arr: case GirOp::Fill: case GirOp::Struct: case GirOp::Field:

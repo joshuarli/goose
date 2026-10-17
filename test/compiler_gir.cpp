@@ -1644,7 +1644,16 @@ GirModule ShrinkReplaceBindingModule(bool throughPhi, bool throughCall) {
 
 void RejectsReplacementThroughALetOwnerPhi() {
     assert(Code(ShrinkReplaceBindingModule(true, false)) == "GIR-V030");
-    assert(Code(ShrinkReplaceBindingModule(false, true)) == "");
+    auto raw = ShrinkReplaceBindingModule(false, true);
+    assert(Code(raw) == "GIR-V030");
+    auto borrow = Def(GirOp::OwnerBorrow, 3);
+    borrow.a = 1;
+    auto &instructions = Main(raw).blocks[0].insts;
+    auto call = find_if(instructions.begin(), instructions.end(), [](auto &inst) { return inst.op == GirOp::Call; });
+    assert(call != instructions.end());
+    call->vals[0] = borrow.res;
+    instructions.insert(call, borrow);
+    assert(Code(raw) == "");
 }
 
 GirModule ShrinkReplaceRunThroughPhi() {
@@ -6726,7 +6735,107 @@ void ConstructionTargetDestinationsForwardProgressThroughCalls() {
     assert(Code(GirToLow(high).Lower()) == "");
 }
 
+void OwnerBorrowsMakeMutableOwnerAuthorityExplicit() {
+    for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
+        auto m = Base();
+        m.profile = CoreProfile::Shrink;
+        auto integer = m.IntType(CoreIntTy::I64);
+        auto owner = m.Intern(CoreType { .kind = kind, .elem = integer });
+        auto reference = m.RefType(CoreMut::Mut, owner);
+        Main(m).slots = { { owner, CoreVarKind::Let, 0, 0 }, { reference, CoreVarKind::Let, 0, 1 } };
+        auto empty = Def(GirOp::Arr, 0);
+        empty.ty = owner;
+        auto slot = Def(GirOp::Slot, 1);
+        slot.idx = 0;
+        auto borrow = Def(GirOp::OwnerBorrow, 2);
+        borrow.a = 1;
+        Main(m).blocks[0].insts = { Enter(0), empty, Init(0, 0), slot, borrow, Init(1, 2), Leave(0), Ret() };
+        assert(Code(m) == "");
+        assert(GirWriter(m).Write().find("[\"i_owner_borrow\",2,1]") != string::npos);
+        assert(Code(GirToLow(m).Lower()) == "");
+        auto raw = m;
+        Main(raw).blocks[0].insts[5].a = 1;
+        assert(Code(raw) == "GIR-V030");
+        auto readOnly = m;
+        auto freeze = Def(GirOp::Freeze, 3);
+        freeze.a = 1;
+        Main(readOnly).blocks[0].insts[4].a = freeze.res;
+        Main(readOnly).blocks[0].insts.insert(Main(readOnly).blocks[0].insts.begin() + 4, freeze);
+        assert(Code(readOnly) == "GIR-V010");
+        auto limited = m;
+        limited.types[owner].kind = CoreType::Limited;
+        limited.types[owner].count = 4;
+        Main(limited).slots[0].kind = CoreVarKind::Var;
+        assert(Code(limited) == "GIR-V010");
+    }
+}
+
+void OwnerReferencesLowerThroughExplicitBorrowFormation() {
+    for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
+        auto core = CoreLengthModule(kind);
+        core.profile = CoreProfile::Shrink;
+        auto owner = core.impls[0].vars[0].type;
+        core.impls[0].vars[0].kind = CoreVarKind::Let;
+        auto mutableReference = core.Intern(CoreType { .kind = CoreType::Ref, .mut = CoreMut::Mut, .elem = owner });
+        auto readonlyReference = core.Intern(CoreType { .kind = CoreType::Ref, .mut = CoreMut::Const, .elem = owner });
+        auto origin = CoreOrigin { 0, 1, CoreOriginKind::Let };
+        core.impls[0].vars.push_back(CoreVar { "borrowed", mutableReference, CoreVarKind::Let, 0, origin });
+        core.impls[0].vars.push_back(CoreVar { "readonly", readonlyReference, CoreVarKind::Let, 0, origin });
+        for (int local = 1; local <= 2; local++) {
+            auto reference = make_unique<CoreExpr>();
+            reference->kind = CoreExprKind::Ref;
+            reference->type = local == 1 ? mutableReference : readonlyReference;
+            reference->mut = local == 1 ? CoreMut::Mut : CoreMut::Const;
+            reference->place = CoreLocal(0);
+            reference->org = origin;
+            CoreStmt bind;
+            bind.kind = CoreStmtKind::Let;
+            bind.var = local;
+            bind.expr = std::move(reference);
+            bind.org = origin;
+            core.impls[0].body.stmts.push_back(std::move(bind));
+        }
+        CoreImpl callee;
+        callee.name = "borrow_owner";
+        callee.params = { CoreParam { 0, true } };
+        callee.vars = { CoreVar { "owner", mutableReference, CoreVarKind::Let, 0, origin } };
+        callee.body.scope = 0;
+        core.impls.push_back(std::move(callee));
+        CoreContext context;
+        context.impl = 1;
+        context.varroots = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+        core.contexts.push_back(std::move(context));
+        auto call = make_unique<CoreExpr>();
+        call->kind = CoreExprKind::Call;
+        call->ctx = 1;
+        call->type = core.UnitType();
+        call->args.push_back(CoreArgReference { CoreMut::Mut, CoreLocal(0) });
+        call->org = origin;
+        CoreStmt invoke;
+        invoke.kind = CoreStmtKind::Expr;
+        invoke.expr = std::move(call);
+        invoke.org = origin;
+        core.impls[0].body.stmts.push_back(std::move(invoke));
+        auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+        assert(Code(high) == "");
+        int borrowed = 0;
+        for (auto &function : high.funcs) for (auto &block : function.blocks) for (auto &inst : block.insts)
+            borrowed += inst.op == GirOp::OwnerBorrow;
+        assert(borrowed == 2);
+        assert(Code(GirToLow(high).Lower()) == "");
+        if (kind == CoreType::Grow) {
+            core.profile = CoreProfile::Pilot;
+            auto pilot = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+            assert(Code(pilot) == "");
+            for (auto &function : pilot.funcs) for (auto &block : function.blocks) for (auto &inst : block.insts)
+                assert(inst.op != GirOp::OwnerBorrow);
+        }
+    }
+}
+
 int main() {
+    OwnerBorrowsMakeMutableOwnerAuthorityExplicit();
+    OwnerReferencesLowerThroughExplicitBorrowFormation();
     ConstructionTargetDestinationsForwardProgressThroughCalls();
     ConstructionNonfixedResultsTransferProgressAndIdentity();
     ConstructionTargetPayloadsRetainIdentityAndMode();
