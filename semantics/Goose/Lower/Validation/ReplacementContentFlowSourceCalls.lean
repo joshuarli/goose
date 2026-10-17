@@ -58,4 +58,51 @@ theorem mappedBound_from_source {func : Func} {state : State} {args : List Value
 
 #print axioms mappedBound_from_source
 
+theorem mappedBound_from_exact_source {func : Func} {state : State} {args : List ValueId}
+    {actualArgs sourceArgs : List (List RootRef)} {declared sourceResult : List RootRef}
+    (queried : args.mapM (fun value => normalize func (flowAt state.values value)) = some actualArgs)
+    (arguments : ∀ (index : Nat) (sourceRoots : List RootRef), sourceArgs[index]? = some sourceRoots →
+      ∃ actual, actualArgs[index]? = some actual ∧
+        ∀ root, root ∈ actual ↔ root ∈ sourceRoots.flatMap func.expandParameterRoot)
+    (sourceMapping : mapResultRoots sourceArgs [] declared = .ok sourceResult) :
+    ∃ actual, mappedBound func state args declared = some actual ∧
+      ∀ root, root ∈ actual ↔ root ∈ sourceResult.flatMap func.expandParameterRoot := by
+  obtain ⟨actual, found, upper⟩ := mappedBound_from_source queried (by
+    intro index sourceRoots row
+    obtain ⟨roots, actualRow, exactRoots⟩ := arguments index sourceRoots row
+    exact ⟨roots, actualRow, fun root member => (exactRoots root).mp member⟩) sourceMapping
+  have actualMapping : mapResultRoots actualArgs [] declared = .ok actual := by
+    cases mapped : mapResultRoots actualArgs [] declared with
+    | error message => simp [mappedBound, queried, mapped, Except.toOption] at found
+    | ok result =>
+      have same : result = actual := by simpa [mappedBound, queried, mapped, Except.toOption] using found
+      subst result
+      rfl
+  have mapped := (mapResultRoots_ok actualArgs declared [] actual actualMapping).2
+  refine ⟨actual, found, fun root => ⟨upper root, ?_⟩⟩
+  intro member
+  obtain ⟨sourceRoot, sourceMember, expanded⟩ := List.mem_flatMap.mp member
+  rcases mapResultRoots_sub sourceArgs declared [] sourceResult sourceMapping sourceRoot sourceMember with impossible |
+      ⟨declaredRoot, declaredMember, origin⟩
+  · cases impossible
+  · cases declaredRoot with
+    | «local» slot => exact False.elim origin
+    | global global =>
+      have identity : sourceRoot = .global global := origin
+      subst sourceRoot
+      have identity : root = .global global := by simpa [Func.expandParameterRoot] using expanded
+      subst root
+      exact mapped (.global global) declaredMember
+    | param index =>
+      obtain ⟨sourceRoots, sourceRow, rootMember⟩ := origin
+      obtain ⟨actualRoots, actualRow, exactRoots⟩ := arguments index sourceRoots sourceRow
+      have actualMember : root ∈ actualRoots := (exactRoots root).mpr
+        (List.mem_flatMap.mpr ⟨sourceRoot, rootMember, expanded⟩)
+      obtain ⟨mappedRoots, mappedRow, mappedWithin⟩ := mapped (.param index) declaredMember
+      have same : mappedRoots = actualRoots := Option.some.inj (mappedRow.symm.trans actualRow)
+      subst mappedRoots
+      exact mappedWithin root actualMember
+
+#print axioms mappedBound_from_exact_source
+
 end Goose.Lower.Validation.ReplacementContentFlowSource
