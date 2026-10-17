@@ -463,6 +463,30 @@ private:
             if (i) out += ',';
             Append(out, f.scopes[i]);
         }
+        if (CoreHasConstruction(m.profile)) {
+            out += "],[";
+            if (!f.lowResults) throw CompileError { "construction function omits its low result ABI" };
+            for (size_t i = 0; i < f.lowResults->size(); i++) {
+                if (i) out += ',';
+                auto &result = (*f.lowResults)[i];
+                if (auto scalar = get_if<GirLowScalarResult>(&result.layout))
+                    Append(out, "[\"lresult_scalar\",", result.sourceType, ",", T(scalar->type), ",", scalar->output, "]");
+                else if (auto snapshot = get_if<GirLowSnapshotResult>(&result.layout))
+                    Append(out, "[\"lresult_snapshot\",", result.sourceType, ",", snapshot->bytes, ",", snapshot->output, "]");
+                else if (auto reference = get_if<GirLowReferenceResult>(&result.layout))
+                    Append(out, "[\"lresult_reference\",", result.sourceType, ",", reference->output, "]");
+                else if (auto reference = get_if<GirLowResizableReferenceResult>(&result.layout))
+                    Append(out, "[\"lresult_resizable_reference\",", result.sourceType, ",", reference->header, ",", reference->stack, "]");
+                else if (auto slice = get_if<GirLowSliceResult>(&result.layout))
+                    Append(out, "[\"lresult_slice\",", result.sourceType, ",", slice->data, ",", slice->count, "]");
+                else {
+                    auto &nonfixed = get<GirLowNonfixedResult>(result.layout);
+                    Append(out, "[\"lresult_nonfixed\",", result.sourceType, ",");
+                    Str(out, CoreRequestName(nonfixed.request));
+                    Append(out, ",", nonfixed.stack, ",", nonfixed.start, ",", nonfixed.count, "]");
+                }
+            }
+        }
         out += "],[";
         for (size_t i = 0; i < f.blocks.size(); i++) {
             if (i) out += ',';

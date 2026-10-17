@@ -255,6 +255,7 @@ private:
         int source = -1;
         int resultPosition = -1;
         int target = -1;
+        int payloadEndMember = -1;
     };
 
     const GirFunc *hf = nullptr;
@@ -269,6 +270,7 @@ private:
     map<int, Destination> destinations;
     map<int, Destination> completions;
     vector<int> carrierRoots;
+    map<int, int> payloadEndMembers;
     map<int, int> scratchStacks;
     map<const GirInst *, int> printStacks;
     map<int, Destination> namedDestinations;
@@ -779,6 +781,7 @@ private:
         hf = &f;
         initglobal = global;
         lf = GirFunc {};
+        if (CoreHasConstruction(h.profile)) lf.lowResults.emplace();
         lf.name = f.name;
         lf.org = f.org;
         lf.key = f.key;
@@ -788,6 +791,7 @@ private:
         marks.clear();
         shape.clear();
         destinations.clear();
+        payloadEndMembers.clear();
         completions.clear();
         resultOutputs.clear();
         resultOutputPositions.clear();
@@ -882,6 +886,23 @@ private:
                         } else for (size_t word = 0; word < sig->resultWords[result].size(); word++) { positions.push_back((int)k); outputs.push_back(ids[k++]); }
                         resultOutputs.push_back(outputs);
                         resultOutputPositions.push_back(positions);
+                        if (global < 0) {
+                            auto type = f.results[result];
+                            auto kind = HT(type).kind;
+                            if (GirNonfixed(h, type))
+                                lf.lowResults->push_back({ type, GirLowNonfixedResult { f.resultProtocols[result].request,
+                                    positions[0], positions[1], positions[2] } });
+                            else if (IsAggregate(type))
+                                lf.lowResults->push_back({ type, GirLowSnapshotResult { Size(type), positions[0] } });
+                            else if (kind == CoreType::Ref) {
+                                if (positions.size() == 2)
+                                    lf.lowResults->push_back({ type, GirLowResizableReferenceResult { positions[0], positions[1] } });
+                                else lf.lowResults->push_back({ type, GirLowReferenceResult { positions[0] } });
+                            } else if (kind == CoreType::Slice)
+                                lf.lowResults->push_back({ type, GirLowSliceResult { positions[0], positions[1] } });
+                            else if (!positions.empty())
+                                lf.lowResults->push_back({ type, GirLowScalarResult { sig->resultWords[result][0], positions[0] } });
+                        }
                         if (GirNonfixed(h, f.results[result]) && global < 0)
                             shape[f.blocks[0].params[incoming++].first].w = outputs;
                     }
@@ -1457,6 +1478,13 @@ private:
             auto count = DestinationCount(inst.a);
             auto bytes = WalkElements(HT(before.elem).elem, PtrAt(shape[inst.a].w[1], ConstI(I64(), prefix), 1), count);
             bytes = BinW(CoreBinOp::Add, I64(), bytes, ConstI(I64(), prefix));
+            if (destination.target >= 0) {
+                if (destination.payloadEndMember < 0) throw CompileError { "target landing omits its escaped endpoint" };
+                auto end = Simple(GirOp::LocalGet, Ptr(), -1, -1, destination.payloadEndMember);
+                auto computedEnd = PtrAt(shape[inst.a].w[1], bytes, 1);
+                CheckThen(Simple(GirOp::PtrEq, l.BoolType(), computedEnd, end),
+                    AbortBlock(GirAbortKind::Assert, {}, inst.org));
+            }
             GirInst move;
             move.op = GirOp::BytesMove;
             move.a = target;
@@ -2750,7 +2778,19 @@ private:
                             destination.request = h.funcs[h.targets[edge.target].members[0]].resultProtocols[result].request;
                             destination.resultPosition = (int)result;
                             destination.target = edge.target;
-                            destinations[carrierRoots[parameter]] = destination;
+                            auto root = carrierRoots[parameter];
+                            auto endMember = payloadEndMembers.find(root);
+                            if (endMember == payloadEndMembers.end()) {
+                                GirMember member;
+                                member.kind = GirMember::Scalar;
+                                member.ty = Ptr();
+                                member.scope = 0;
+                                member.name = "escaped_payload_end";
+                                endMember = payloadEndMembers.emplace(root, Member(std::move(member))).first;
+                            }
+                            destination.payloadEndMember = endMember->second;
+                            SimpleE(GirOp::LocalSet, TargetCell(edge.target, channel.escaped[1]), -1, destination.payloadEndMember);
+                            destinations[root] = destination;
                         } else {
                             for (auto cell : channel.escaped) payload.w.push_back(TargetCell(edge.target, cell));
                             if (HT(results[result]).kind == CoreType::Ref && HandlesTarget(edge.target))
@@ -2930,6 +2970,7 @@ private:
         auto &g = h.globals[initglobal];
         if (CoreHasConstruction(h.profile) && GirNonfixed(h, g.ty)) {
             Publish(i.vals[0], i.org);
+            SimpleE(GirOp::ReturnFlagSet, ConstI(I64(), 0));
             SimpleE(GirOp::SourceLeave, sourceScope);
             GirInst ret; ret.op = GirOp::Ret; Term(std::move(ret)); return;
         }
@@ -2949,7 +2990,10 @@ private:
         } else {
             StoreAt(g.ty, addr, v.w);
         }
-        if (CoreHasConstruction(h.profile)) SimpleE(GirOp::SourceLeave, sourceScope);
+        if (CoreHasConstruction(h.profile)) {
+            SimpleE(GirOp::ReturnFlagSet, ConstI(I64(), 0));
+            SimpleE(GirOp::SourceLeave, sourceScope);
+        }
         GirInst r;
         r.op = GirOp::Ret;
         Term(std::move(r));

@@ -18,6 +18,32 @@ All records below are selected only by `core-construction`. `val` operands name 
 
 For a direct `CoreView::Of` length read, the high exporter evaluates the place once and emits `i_alen` on its reference when the pointee is `arr`, `grow`, `growshrink`, or `limited`. `varr` and other view expressions retain the `i_snap`/`i_vlen` path. This leaves the owner address available to the existing bounds-evidence matcher without changing sampled-view semantics.
 
+## Low result descriptors
+
+For `core-construction`, `gir-l/0.2` extends `lfunc` with one mandatory descriptor list between scopes and blocks:
+
+```text
+lfunc name [parameter_types] [] stack_count [members] [scope_parents] [lresult...] [blocks]
+lresult_scalar source_type_key primitive_type output_parameter
+lresult_snapshot source_type_key byte_extent output_parameter
+lresult_reference source_type_key address_output_parameter
+lresult_resizable_reference source_type_key header_output_parameter stack_output_parameter
+lresult_slice source_type_key data_output_parameter count_output_parameter
+lresult_nonfixed source_type_key request stack_parameter start_parameter count_parameter
+```
+
+Descriptor position is source result position. Output parameter positions form one ordered, distinct, consecutive suffix of the primitive function signature. Every named parameter is a pointer. Scalar descriptors name an integer or boolean primitive; snapshot extents are positive; reference outputs contain native pointers; slice counts and nonfixed counts are signed 64-bit integers. A nonfixed request is exactly `value` or `element_run`. Functions and global initializers with no results carry `[]`; omission is rejected. Pilot and shrink retain their previous seven-field `lfunc` records byte for byte. This profile-specific extension stays under `gir-l/0.2`; it does not add a fallback for the old construction record.
+
+A source type key is an opaque nonnegative module-local identity. Equal keys require equal physical descriptor kinds and layouts, independently of parameter positions and nonfixed request. Every member of one target must agree on result keys, descriptor kinds, layouts, and requests. The key preserves nominal distinctions within a checked low module; it does not prove that lowering faithfully translated the original source type. That is a separate translation obligation.
+
+The primitive parameter layout and C ABI are unchanged. The nonfixed count pointer still addresses two signed 64-bit fields: count at offset zero and destination identity at offset eight. The caller initializes both fields before invocation. The callee may read this incoming construction state, but must write its final count on normal return. Nonzero return discriminants do not initialize normal result outputs.
+
+The verifier follows output addresses through frame addresses, constant offsets, block parameters, local members, and currently installed target cells. It checks each function's normal output writes and each call's output separation and incoming metadata. Call outputs become readable only on the corresponding zero-discriminant edge or after an actual covering write. A merge retains initialization only when every incoming path proves it. Unknown aliases do not prove initialization. While a call awaits dispatch of its return discriminant, only pure scalar/address computations and control flow may execute; effects and memory reads require the corresponding normal or target edge. Different pending calls cannot merge. Ordinary calls cannot resume while an escaped result is in flight; forwarding and receiving epilogues use the closed cleanup operations.
+
+A member catch must transfer each exact escaped scalar, pointer, or count to its matching output channel. Loading or comparing a payload is insufficient. Complete snapshot copies retain byte provenance through aggregate frame staging. Later overlapping writes, including header writes, invalidate that transfer. Forwarding frames must retain the in-flight target discriminant and payload cells. Saved outer recursive cells and values retained across another call cannot stand in for the current payload. Reference source descriptors must follow their matching result channel. A forwarding `l_mark` retains the escaped end identity only while the tracked stack top is unchanged.
+
+Nonfixed handlers save each escaped end pointer in a frame scalar member. Before moving a landed interval, code compares `escaped_start + computed_byte_count` with that saved end. Only the true edge proves that the exact interval is moved; the false edge triggers the existing assertion abort before copying. The native count record remains 16 bytes. Each such result adds one pointer-sized frame member and one endpoint comparison and branch per landing. The verifier also requires the escaped count to reach the receiving count output. These checks establish declared output initialization and exact payload transfer; they are not a general proof of arbitrary low pointer memory safety.
+
 ## Low target table and operations
 
 The construction suffix of `gir-l/0.2` is a list of target tables:
@@ -42,7 +68,7 @@ For a fixed result, incoming cells are the addresses of its ordinary output word
 | `l_source_target_get` | `val result, val token, result_position` | In trace mode, reads the source descriptor captured for that activation. |
 | `l_source_target_leave` | `val token` | In trace mode, pops that activation's provenance frame. |
 
-An escaping low call remains an ordinary `l_call`. It reads the return flag immediately afterward, branches on zero for normal output, and compares each statically possible `target_id + 1` before entering that target's handler. The verifier checks activation ownership, installed and restored cells, discriminant coverage, handler operations, and the unreachable invalid-tag sentinel before native emission.
+An escaping low call remains an ordinary `i_call`. It reads the return flag immediately afterward, branches on zero for normal output, and compares each statically possible `target_id + 1` before entering that target's handler. The verifier checks activation ownership, installed and restored cells, discriminant coverage, handler operations, and the unreachable invalid-tag sentinel before native emission.
 
 ## Native stack and provenance handling
 
@@ -52,4 +78,4 @@ When no construction trace is requested, source-provenance operations have no na
 
 ## Focused checks
 
-The `compiler_gir` checks cover channel-position serialization and rejection, missing or duplicate activation, incomplete or repeated target dispatch, and a missing handler. The recursive multi-result fixture in `test/semantics/sem_construction_source_exit_recursive_multi.goose` checks two fixed result channels through an inner target return and recursive caller restoration.
+The `compiler_gir` checks cover mandatory result descriptors, typed output positions and type identities, channel-position serialization, missing or duplicate activation, incomplete or repeated target dispatch, dummy payload uses, constant and overwritten landing values, shortened moves, incorrect endpoints, and reads of normal output cells on an escape edge. The recursive multi-result fixture in `test/semantics/sem_construction_source_exit_recursive_multi.goose` checks two fixed result channels through an inner target return and recursive caller restoration.
