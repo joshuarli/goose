@@ -55,7 +55,7 @@ def rootsOfDef (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func)
   | .globalAddr g => [.global g]
   | .fieldAddr v _ | .refElem v _ | .viewSlice _ v _ _ _
   | .indexChecked v _ _ | .indexProven v _ => rootsAt p.vals v
-  | .refFreeze a | .sliceView a | .push a _ _ => rootsAt p.vals a
+  | .refFreeze a | .ownerBorrow a | .sliceView a | .push a _ _ => rootsAt p.vals a
   | .snapshot _ a => rootsAt p.vals a
   | .load a =>
     if valRefLike vt r then
