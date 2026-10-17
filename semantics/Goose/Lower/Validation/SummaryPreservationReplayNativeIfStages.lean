@@ -10,7 +10,7 @@ theorem native_if_condition {vt : Array (Option VTy)} {condition : Expr} {yes no
     (native : NativeRows vt (lowerExpr (.ifE condition yes no) le initial).2) :
     NativeRows vt (lowerExpr condition le initial).2 :=
   native.of_prefix (types_ifE_core (lowerExpr condition le initial).1
-    (types_lowerBlock none [] true yes) (types_lowerBlock none [] true no)
+    (sourceBlockScope yes) (types_lowerBlock none [] true yes) (types_lowerBlock none [] true no)
     le (lowerExpr condition le initial).2 _ _ rfl)
 
 theorem native_if_branches {vt : Array (Option VTy)} {condition : Expr} {yes no : Core.Block}
@@ -57,7 +57,9 @@ theorem native_if_branches {vt : Array (Option VTy)} {condition : Expr} {yes no 
     rw [forkSize]
     omega
   have whole : lowerExpr (.ifE condition yes no) le initial =
-      Goose.Lower.joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1 le noResult.2 := by
+      (Goose.Lower.joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1 >>= fun value => do
+        recordValueRootRecipe value (sourceBlockScope yes)
+        pure value) le noResult.2 := by
     apply lowerExpr_ifE_after_branches (rfl : lowerExpr condition le initial = lowered) selected
       (forked := forked) (yesLS := yesResult.2) (noLS := noResult.2)
       (yesBlock := lowered.2.blocks.size) (noBlock := lowered.2.blocks.size + 1)
@@ -68,7 +70,9 @@ theorem native_if_branches {vt : Array (Option VTy)} {condition : Expr} {yes no 
   have noNative : NativeRows vt noResult.2 := by
     apply native.of_prefix
     rw [whole]
-    exact types_joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1 le noResult.2 _ _ rfl
+    exact (TypeRun.bind (types_joinValue yesResult.2.cur yesResult.1 noResult.2.cur noResult.1) fun value =>
+      TypeRun.bind (types_recordValueRootRecipe value (sourceBlockScope yes)) fun _ =>
+        TypeRun.pure value) le noResult.2 _ _ rfl
   have yesNative : NativeRows vt yesResult.2 :=
     noNative.of_prefix ((types_setCur (some (lowered.2.blocks.size + 1)) le yesResult.2 _ _ rfl).trans
       (types_lowerBlock none [] true no le noStart noResult.1 noResult.2 rfl))

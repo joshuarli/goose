@@ -1,3 +1,4 @@
+import Goose.Lower.Frag
 import Goose.Lower.Validation.SummaryPreservationVariableShape
 import Goose.Lower.Validation.SummaryPreservationRefinedResults
 
@@ -66,7 +67,8 @@ theorem typedContextSlotUpper_parameter {module : Core.Module} {ctx : Context} {
     intro index member
     have same : index = slot := RootRef.param.inj (List.mem_singleton.mp member)
     subst index
-    simpa [lowerContextAt, lowerImpl] using (Array.getElem?_eq_some_iff.mp parameterRow).1
+    simpa [lowerContextAt, lowerImpl, lowerImplFromState_params] using
+      (Array.getElem?_eq_some_iff.mp parameterRow).1
 
 
 theorem annotation_parameter_bounds {module : Core.Module} {ctx : Context} {impl : Impl}

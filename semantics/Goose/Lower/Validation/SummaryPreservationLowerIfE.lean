@@ -24,9 +24,61 @@ theorem lowerExpr_ifE_after_branches {condition : Expr} {yes no : Core.Block}
     (yesRun : lowerBlock none [] true yes le { forked with cur := some yesBlock } = (yesValue, yesLS))
     (noRun : lowerBlock none [] true no le { yesLS with cur := some noBlock } = (noValue, noLS)) :
     lowerExpr (.ifE condition yes no) le initial =
-      joinValue yesLS.cur yesValue noLS.cur noValue le noLS := by
+      (joinValue yesLS.cur yesValue noLS.cur noValue >>= fun value => do
+        recordValueRootRecipe value (sourceBlockScope yes)
+        pure value) le noLS := by
   simp only [lowerExpr, bind_run, conditionRun, whenLive_some _ _ _ live,
     forkRun, setCur_run, yesRun, noRun, curBlock_run]
+
+theorem joinValue_recordValueRootRecipe_refined_witness {module : GIR.Module}
+    {results : Array (List RootRef)} {vt : Array (Option VTy)} {func : Func} {upper : Prov}
+    {source : Core.Eff} {sourceRoots : List RootRef} {ls final : LS} {le : LEnv}
+    {scopeCount : Nat} {value trueValue falseValue : ValueId} {trueEnd falseEnd : Option BlockId}
+    {sourceScope : ScopeId}
+    (symbols : ls.SymbolWF le scopeCount)
+    (witness : BuilderRootWitness results vt func upper ls)
+    (prior : BuilderEffectRefinement module vt func upper source ls)
+    (trueBound : ∀ block, trueEnd = some block → block < ls.blocks.size ∧ trueValue < ls.vals.size)
+    (falseBound : ∀ block, falseEnd = some block → block < ls.blocks.size ∧ falseValue < ls.vals.size)
+    (trueRoots : trueEnd.isSome = true → RootsRefine func (rootsAt upper.vals trueValue) sourceRoots)
+    (falseRoots : falseEnd.isSome = true → RootsRefine func (rootsAt upper.vals falseValue) sourceRoots)
+    (run : (joinValue trueEnd trueValue falseEnd falseValue >>= fun result => do
+      recordValueRootRecipe result sourceScope
+      pure result) le ls = (value, final)) :
+    ∃ next : Prov, BuilderRootWitness results vt func next final ∧
+      BuilderEffectRefinement module vt func next source final ∧
+      (final.cur.isSome = true → RootsRefine func (rootsAt next.vals value) sourceRoots) ∧
+      next.slots = upper.slots ∧
+      ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
+  cases joinResult : joinValue trueEnd trueValue falseEnd falseValue le ls with
+  | mk joinedValue joinedState =>
+    simp only [bind_run, recordValueRootRecipe_run, pure_run, joinResult] at run
+    obtain ⟨rfl, stateEq⟩ := Prod.mk.inj run
+    have recipeRun : recordValueRootRecipe joinedValue sourceScope le joinedState = ((), final) := by
+      rw [recordValueRootRecipe_run]
+      exact Prod.ext rfl stateEq
+    obtain ⟨next, joinedWitness, joinedEffects, joinedRoots, slots, unchanged⟩ :=
+      joinValue_refined_witness symbols witness prior trueBound falseBound trueRoots falseRoots joinResult
+    have blocksEq : final.blocks = joinedState.blocks := by
+      rw [← stateEq]
+    have valuesEq : final.vals = joinedState.vals := by
+      rw [← stateEq]
+    have currentEq : final.cur = joinedState.cur := by
+      rw [← stateEq]
+    have instructionsEq : final.insts = joinedState.insts := by
+      simp only [LS.insts, blocksEq]
+    refine ⟨next, ?_, ?_, ?_, slots, unchanged⟩
+    · constructor
+      · simpa only [valuesEq] using joinedWitness.valueSize
+      · intro instruction member
+        have oldMember : instruction ∈ joinedState.insts := by simpa only [instructionsEq] using member
+        simpa only [blocksEq] using joinedWitness.instructions instruction oldMember
+    · intro instruction member
+      have oldMember : instruction ∈ joinedState.insts := by simpa only [instructionsEq] using member
+      exact joinedEffects instruction oldMember
+    · intro live
+      apply joinedRoots
+      simpa only [currentEq] using live
 
 theorem lowerExpr_ifE_join_source_witness {env : PEnv} {condition : Expr} {yes no : Core.Block}
     {initialSource conditionState yesState after : RState}
@@ -61,11 +113,16 @@ theorem lowerExpr_ifE_join_source_witness {env : PEnv} {condition : Expr} {yes n
   rw [rpExpr_ifE_after_branches conditionReplay yesReplay noReplay] at source
   cases source
   rw [lowerExpr_ifE_after_branches conditionRun live forkRun yesRun noRun]
-  apply joinValue_refined_witness symbols witness prior yesBound noBound
+  apply joinValue_recordValueRootRecipe_refined_witness
+    (symbols := symbols) (witness := witness) (prior := prior)
+    (trueBound := yesBound) (falseBound := noBound) (sourceScope := sourceBlockScope yes)
+    (run := by
+      cases result : (joinValue yesLS.cur yesValue noLS.cur noValue >>= fun value => do
+        recordValueRootRecipe value (sourceBlockScope yes)
+        pure value) le noLS <;> rfl)
   · intro reachable
     exact (yesRefines reachable).source_mono (fun root member => mem_unionRoots_iff.mpr (Or.inl member))
   · intro reachable
     exact (noRefines reachable).source_mono (fun root member => mem_unionRoots_iff.mpr (Or.inr member))
-  · rfl
 
 end Goose.Lower.Validation.SummaryPreservation

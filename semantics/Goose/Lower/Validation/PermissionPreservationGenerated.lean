@@ -22,6 +22,13 @@ private theorem permission_generated_setCur_sizes {before after : LS} {le : LEnv
   obtain ⟨_, rfl⟩ := Prod.mk.inj run
   exact ⟨rfl, rfl⟩
 
+private theorem freshWritableEvidence_recordValueRootRecipe {le : LEnv} {first : Nat}
+    {state : LS} {value : ValueId} (evidence : FreshWritableEvidence le first state value)
+    (sourceScope : ScopeId) :
+    FreshWritableEvidence le first (recordValueRootRecipe value sourceScope le state).2 value := by
+  rw [recordValueRootRecipe_run]
+  simpa [FreshWritableEvidence, permissionFunc] using evidence
+
 set_option maxHeartbeats 2000000
 
 mutual
@@ -231,8 +238,17 @@ theorem lowerExpr_generated_binding (expr : Expr)
         have joined := joinValue_freshWritable elseAfterGenerated.dense elseAfterGenerated.live
           elseAfterGenerated.targets thenBound elseAfterGenerated.live thenTyped elseTyped
           (by intro intTy unequal; cases unequal) beforeJoin thenEvidence elseEvidence
-        rw [run] at joined
-        exact (joined live).1
+        cases joinResult : joinValue thenAfter.cur thenValue elseAfter.cur elseValue
+            (lowerEnv env.mod env.vars results) elseAfter with
+        | mk joinedValue joinedState =>
+          rw [joinResult] at joined
+          simp only [bind_run, recordValueRootRecipe_run, pure_run, joinResult] at run
+          obtain ⟨valueEq, stateEq⟩ := Prod.mk.inj run
+          subst value
+          subst after
+          have joinedLive : joinedState.cur.isSome = true := by simpa using live
+          simpa [recordValueRootRecipe_run] using
+            freshWritableEvidence_recordValueRootRecipe (joined joinedLive).1 (sourceBlockScope thenBody)
     · simp only [equal] at source
       change ((rej .type "the branches of `if` have different types" : Core.T Unit) >>=
         fun _ => pure thenTy) elseFinish = .ok (.ref .mutable target, finish) at source

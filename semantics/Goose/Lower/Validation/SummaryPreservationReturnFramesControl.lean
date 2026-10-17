@@ -6,6 +6,12 @@ open Goose.Core Goose.GIR
 
 variable {avoid : List ValueId × Option OriginId}
 
+theorem returnAbsent_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    ReturnAbsentRun (avoid := avoid) (recordValueRootRecipe value sourceScope) := by
+  apply ReturnAbsentRun.of_blocks
+  intro env state
+  rw [recordValueRootRecipe_run]
+
 theorem returnAbsent_curBlock : ReturnAbsentRun (avoid := avoid) curBlock := by
   apply ReturnAbsentRun.unchanged
   intros
@@ -96,7 +102,7 @@ theorem returnAbsent_joinArms (yes no : Option BlockId) : ReturnAbsentRun (avoid
   · refine ReturnAbsentRun.bind (returnAbsent_newBlock []) fun pair => ?_
     exact ReturnAbsentRun.bind (returnAbsent_patchBrs0 _ _) fun _ => returnAbsent_setCur _
 
-theorem returnAbsent_ifE_core (condition : ValueId)
+theorem returnAbsent_ifE_core (condition : ValueId) (sourceScope : ScopeId)
     {yes no : B ValueId} (yesRun : ReturnAbsentRun (avoid := avoid) yes) (noRun : ReturnAbsentRun (avoid := avoid) no) :
     ReturnAbsentRun (avoid := avoid) (whenLive 0 fun _ => do
       let (yesBlock, noBlock) ← fork condition
@@ -106,7 +112,9 @@ theorem returnAbsent_ifE_core (condition : ValueId)
       setCur (some noBlock)
       let noValue ← no
       let noEnd ← curBlock
-      joinValue yesEnd yesValue noEnd noValue) := by
+      let value ← joinValue yesEnd yesValue noEnd noValue
+      recordValueRootRecipe value sourceScope
+      pure value) := by
   refine returnAbsent_whenLive _ fun _ => ?_
   refine ReturnAbsentRun.bind (returnAbsent_fork condition) fun blocks => ?_
   refine ReturnAbsentRun.bind (returnAbsent_setCur _) fun _ => ?_
@@ -115,7 +123,9 @@ theorem returnAbsent_ifE_core (condition : ValueId)
   refine ReturnAbsentRun.bind (returnAbsent_setCur _) fun _ => ?_
   refine ReturnAbsentRun.bind noRun fun noValue => ?_
   refine ReturnAbsentRun.bind (returnAbsent_curBlock) fun noEnd => ?_
-  exact returnAbsent_joinValue yesEnd noEnd yesValue noValue
+  exact ReturnAbsentRun.bind (returnAbsent_joinValue yesEnd noEnd yesValue noValue) fun value =>
+    ReturnAbsentRun.bind (returnAbsent_recordValueRootRecipe value sourceScope) fun _ =>
+      returnAbsent_pure value
 
 theorem returnAbsent_ifS_some_core (condition : ValueId)
     {yes no : B ValueId} (yesRun : ReturnAbsentRun (avoid := avoid) yes) (noRun : ReturnAbsentRun (avoid := avoid) no) :
