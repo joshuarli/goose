@@ -16,8 +16,6 @@ FIXTURES = (
     ROOT / "test/semantics/sem_construction_named_result.goose",
     ROOT / "test/semantics/sem_construction_nested_target_mode.goose",
     ROOT / "test/semantics/sem_construction_bottom_block.goose",
-)
-FOCUSED_FIXTURES = (
     ROOT / "test/semantics/sem_construction_built_zero_replacement.goose",
 )
 NUMERIC_PROFILES = ("release", "debug")
@@ -187,7 +185,7 @@ def main():
     parser.add_argument("--semantics", type=Path, required=True)
     parser.add_argument("--cc", default="clang")
     parser.add_argument("--timeout", type=float, default=120)
-    fixture_options = FIXTURES + FOCUSED_FIXTURES
+    fixture_options = FIXTURES
     parser.add_argument("--fixture", choices=tuple(fixture.stem for fixture in fixture_options),
                         action="append")
     args = parser.parse_args()
