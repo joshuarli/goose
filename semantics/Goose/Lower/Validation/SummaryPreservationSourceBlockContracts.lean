@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.SummaryPreservationSourceControlKernelsBounds
 import Goose.Lower.Validation.SummaryPreservationSourceScopeBounds
 import Goose.Lower.Validation.SummaryPreservationReplayTypedPlacesContracts
 import Goose.Lower.Validation.SummaryPreservationTypedResultBounds
@@ -25,6 +26,7 @@ def BlockReplayAt (typingEnv : TEnv) (env : PEnv) (results : Array (List RootRef
       (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
       (typedContextSlotUpper env.mod env.ctx env.impl) initial upper →
     GeneratedBuilderState initial → LoopBuilderTargets loop initial →
+    LoopReplayBounds loop scopeCount initial →
     NativeRows vt (lowerBlock loop bindings want body
       (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 →
     ∃ next, ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
@@ -53,6 +55,7 @@ def StatementReplayAt (typingEnv : TEnv) (env : PEnv) (results : Array (List Roo
       (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
       (typedContextSlotUpper env.mod env.ctx env.impl) initial upper →
     GeneratedBuilderState initial → LoopBuilderTargets loop initial →
+    LoopReplayBounds loop scopeCount initial →
     NativeRows vt (lowerStmt loop statement (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 →
     ∃ next, ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
         (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
@@ -75,6 +78,7 @@ def StatementsReplayAt (typingEnv : TEnv) (env : PEnv) (results : Array (List Ro
       (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
       (typedContextSlotUpper env.mod env.ctx env.impl) initial upper →
     GeneratedBuilderState initial → LoopBuilderTargets loop initial →
+    LoopReplayBounds loop scopeCount initial →
     NativeRows vt (lowerStmts loop statements (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 →
     ∃ next, ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
         (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount

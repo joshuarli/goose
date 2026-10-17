@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.SummaryPreservationSourceControlKernelsBounds
 import Goose.Lower.Validation.SummaryPreservationSourceEnvironments
 import Goose.Lower.Validation.SummaryPreservationReplayTypedStatements
 import Goose.Lower.Validation.SummaryPreservationReplayNativeTypes
@@ -18,6 +19,7 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
     (wholeEffect : EffectRefinement func after.eff target)
     (generatedState : GeneratedBuilderState ls)
     (loopBounds : LoopBuilderTargets loop ls)
+    (loopReplay : LoopReplayBounds loop scopeCount ls)
     (native : NativeRows vt (lowerStmts loop statements le ls).2)
     (scopes : env.inExpr = false → ∀ entered ∈ ls.stack, entered < scopeCount)
     (step : ∀ statement, statement ∈ statements → ∀ env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance,
@@ -28,6 +30,7 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
       ReplayBuilder module results vt func target le scopeCount slots state provenance →
       state.cur.isSome = true →
       GeneratedBuilderState state → LoopBuilderTargets loop state →
+      LoopReplayBounds loop scopeCount state →
       NativeRows vt (lowerStmt loop statement le state).2 →
       (env1.inExpr = false → ∀ entered ∈ state.stack, entered < scopeCount) →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots
@@ -61,7 +64,7 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
         simpa only [whole] using native
       have firstNative := restNative.of_prefix (types_lowerStmts loop rest le (lowerStmt loop statement le ls).2 _ _ rfl)
       obtain ⟨middle, middleReady, firstRoots, firstTransfer⟩ := step statement (by simp) env middleEnv start middleCounter
-        before middleSource ls upper rfl rfl rfl rfl firstTyped firstReplay firstEffect ready (by simp [current]) generatedState loopBounds firstNative scopes
+        before middleSource ls upper rfl rfl rfl rfl firstTyped firstReplay firstEffect ready (by simp [current]) generatedState loopBounds loopReplay firstNative scopes
       have middleTables := tyStmt_tables statement firstTyped
       have advance := advB_lowerStmt loop statement le ls (lowerStmt loop statement le ls).1 (lowerStmt loop statement le ls).2 rfl
       have middleGenerated : GeneratedBuilderState (lowerStmt loop statement le ls).2 :=
@@ -74,7 +77,7 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
         rw [advance.stack]
         exact scopes ((source_statement_inExpr statement firstTyped).symm.trans outside)
       obtain ⟨next, completed, nextRoots, nextTransfer⟩ := ih middleReady restTyped restReplay
-        middleGenerated middleLoopBounds restNative middleScopes
+        middleGenerated middleLoopBounds (loopReplay.mono advance) restNative middleScopes
         (fun child member env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance moduleEq variablesEq implEq modeEq =>
           step child (List.mem_cons_of_mem _ member) env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance
             (moduleEq.trans middleTables.1) (variablesEq.trans middleTables.2.1)

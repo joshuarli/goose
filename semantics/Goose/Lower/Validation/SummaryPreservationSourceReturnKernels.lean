@@ -35,7 +35,7 @@ theorem statementReplay_return {typingEnv : TEnv} {env : PEnv}
     (child : ExpressionReplayAt typingEnv env results vt target scopeCount expression initial upper) :
     StatementReplayAt typingEnv env results vt target scopeCount loop scope (.ret (some expression) origin)
       initial upper := by
-  intro output start finish before after typed replay ceiling scopes stack ready generated loopBounds native
+  intro output start finish before after typed replay ceiling scopes stack ready generated loopBounds loopReplay native
   have originBound : origin < (lowerEnv env.mod env.impl.vars env.impl.results.toList).mod.origins.size := by
     simpa only [stmtSourceOrigin, lowerEnv, ← tables.moduleEq] using Core.tyStmt_success_origin_bound typed
   obtain ⟨expected, actual, impl, outside, implAt, resultTypes, expressionTyped, passable, _⟩ :=

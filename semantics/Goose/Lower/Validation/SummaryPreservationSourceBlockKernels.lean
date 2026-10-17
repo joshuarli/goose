@@ -30,7 +30,7 @@ theorem blockReplay_of_children {typingEnv : TEnv} {env : PEnv}
         expression state provenance) :
     BlockReplayAt typingEnv env results vt target scopeCount loop bindings want
       (.mk scope statements value) initial upper := by
-  intro type start finish before after roots range typed replay ceiling scopes metadata values rootBounds stack ready generated loopBounds native
+  intro type start finish before after roots range typed replay ceiling scopes metadata values rootBounds stack ready generated loopBounds loopReplay native
   have parts := SourceScopesWithin.block_parts scopes
   have statementScopes := (SourceScopesWithin.statements_parent statements (some scope) none).mp parts.2.1
   apply ready.typedBlockTrackedNative loop (contextTypedResultUpper env.mod env.ctx) bindings want scope statements value
@@ -64,7 +64,11 @@ theorem blockReplay_of_children {typingEnv : TEnv} {env : PEnv}
               (Goose.Lower.pushScope scope (lowerEnv env.mod env.impl.vars env.impl.results.toList)
                 (Goose.Lower.emitEffect (.enter scope)
                   (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2).2 _ _ rfl).ext.1
-            simpa only [pushScope_run, Goose.Lower.emitEffect, Goose.Lower.curBlock, bind_run, get_apply, pure_run] using growth))) childNative
+            simpa only [pushScope_run, Goose.Lower.emitEffect, Goose.Lower.curBlock, bind_run, get_apply, pure_run] using growth)))
+      (by
+        rw [entryEq]
+        exact ((loopReplay.mono (advB_emitEffect (.enter scope) _ initial _ _ rfl)).pushScope parts.1).mono
+          (advB_initSlots bindings _ _ _ _ rfl)) childNative
   · intro expression env2 tn2 childBefore state provenance moduleEq variablesEq implEq modeEq present
       childTyped childReplay childReady entryEq childGenerated childNative
     have expressionScopes : SourceScopesWithin scopeCount (Core.exprScopes none expression) := by

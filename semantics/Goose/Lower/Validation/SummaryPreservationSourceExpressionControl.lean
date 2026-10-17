@@ -28,7 +28,7 @@ theorem expressionReplay_if {condition : Expr} {yes no : Core.Block}
     obtain ⟨next, nextReady, nextValue, nextRoots, _transfer⟩ :=
       blockChild body bodyMember state provenance type tn1 tn2 childBefore childAfter childRoots range
         childTyped childReplay childCeiling scopes (by simp) (by simp) (by simp)
-        (by intro outside; simp [exprEnv] at outside) childReady childGenerated trivial childNative
+        (by intro outside; simp [exprEnv] at outside) childReady childGenerated trivial trivial childNative
     exact ⟨next, nextReady, nextValue rfl, nextRoots⟩
 
 theorem expressionReplay_block {body : Core.Block}
@@ -41,7 +41,7 @@ theorem expressionReplay_block {body : Core.Block}
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj same
   obtain ⟨next, nextReady, nextValue, nextRoots, _transfer⟩ :=
     child type start finish before after roots range typed bodyReplay ceiling scopes
-      (by simp) (by simp) (by simp) (by intro outside; simp [exprEnv] at outside) ready generated trivial native
+      (by simp) (by simp) (by simp) (by intro outside; simp [exprEnv] at outside) ready generated trivial trivial native
   exact ⟨next, nextReady, nextValue rfl, nextRoots⟩
 
 #print axioms expressionReplay_if
