@@ -20,6 +20,8 @@ inductive IndependentOwnerExpr : Expr → Prop
   | block {body} : IndependentOwnerBlock body → IndependentOwnerExpr (.blockE body)
 inductive IndependentOwnerBlock : Core.Block → Prop
   | result (scope) {expr} : IndependentOwnerExpr expr → IndependentOwnerBlock (.mk scope [] (some expr))
+  | prefixResult (scope statements) {expr} : (∀ stmt ∈ statements, ScalarControlStmt stmt) →
+      IndependentOwnerExpr expr → IndependentOwnerBlock (.mk scope statements (some expr))
 end
 
 mutual
@@ -73,6 +75,22 @@ theorem independentOwner_lowerBlock {body : Core.Block} (source : IndependentOwn
     apply EmitsOnlyRun.bind (emitsOnly_emitEffect _ (Or.inl (Or.inr (.leave scope))))
     intro _
     exact .pure _ _
+  | prefixResult scope statements prefixIndependent expr =>
+    simp only [lowerBlock]
+    apply EmitsOnlyRun.bind (emitsOnly_emitEffect _ (Or.inl (Or.inr (.enter scope))))
+    intro _
+    apply EmitsOnlyRun.inScope
+    simp only [initSlots, lowerBlockValue]
+    apply EmitsOnlyRun.bind (EmitsOnlyRun.pure _ ())
+    intro _
+    apply EmitsOnlyRun.bind ((scalarControl_lowerStmts prefixIndependent none).weaken (fun _ => Or.inl))
+    intro _
+    apply EmitsOnlyRun.bind (independentOwner_lowerExpr expr)
+    intro value
+    apply EmitsOnlyRun.bind (emitsOnly_emitEffect _ (Or.inl (Or.inr (.leave scope))))
+    intro _
+    exact .pure _ _
+
 end
 
 theorem independentOwner_literal_of_source {ty : Ty} {values : List Expr}
@@ -89,6 +107,8 @@ inductive IndependentOwnerShape : Expr → Prop
   | block {body} : IndependentOwnerBlockShape body → IndependentOwnerShape (.blockE body)
 inductive IndependentOwnerBlockShape : Core.Block → Prop
   | result (scope) {expr} : IndependentOwnerShape expr → IndependentOwnerBlockShape (.mk scope [] (some expr))
+  | prefixResult (scope statements) {expr} : (∀ stmt ∈ statements, ScalarControlStmt stmt) →
+      IndependentOwnerShape expr → IndependentOwnerBlockShape (.mk scope statements (some expr))
 end
 
 mutual
@@ -114,6 +134,10 @@ theorem independentOwnerBlock_of_source {body : Core.Block} (shape : Independent
   | result scope expr =>
     obtain ⟨_, _, _, _, _, _, _, child⟩ := tyBlock_checked_children source
     exact .result scope (independentOwner_of_source expr child)
+  | prefixResult scope statements prefixIndependent expr =>
+    obtain ⟨_, _, _, _, _, _, _, child⟩ := tyBlock_checked_children source
+    exact .prefixResult scope statements prefixIndependent (independentOwner_of_source expr child)
+
 end
 
 theorem lowerExpr_independent_owner_apart
