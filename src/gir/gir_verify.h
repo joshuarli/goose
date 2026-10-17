@@ -5443,7 +5443,8 @@ private:
                                 " differ from the receiving storage ceiling"));
                         auto rawMapped = RawMapDeclaredContents(p, inst.vals, row.second);
                         for (auto &root : RootsAt(p.vals, inst.vals[row.first]))
-                            if (!RootsWithin(f, rawMapped, ReceiverContentCeiling(f, p, root)))
+                            if (!RootsWithin(f, rawMapped, ReceiverContentCeiling(f, p, root)) ||
+                                !RootsWithin(f, ReceiverContentCeiling(f, p, root), rawMapped))
                                 Fail("GIR-V050", cat(fn.label, " call to ", callee.name, " content roots for parameter ", row.first,
                                     " exceed a possible receiving storage ceiling"));
                     }

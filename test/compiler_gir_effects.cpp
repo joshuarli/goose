@@ -1313,6 +1313,12 @@ void NormalizesRawSpecializedCallContentRegions() {
     callee.roots.contents = { { 0, { { CoreRootRef::Param, 1 } } } };
     callee.blocks = { { { { 0, holder }, { 1, slice } }, { Inst(GirOp::Ret) } } };
     module.funcs.push_back(callee);
+    assert(Code(module) == "GIR-V050");
+    module.funcs[1].params.push_back(slice);
+    module.funcs[1].blocks[0].params.push_back({ 2, slice });
+    module.funcs[1].roots.params.push_back({ 2, { { CoreRootRef::Global, 0 } } });
+    module.funcs[1].roots.contents[0].second = { { CoreRootRef::Param, 2 }, { CoreRootRef::Global, 0 } };
+    module.funcs[2].roots.contents[0].second.push_back({ CoreRootRef::Global, 0 });
     assert(Code(module).empty());
     module.funcs[2].roots.contents[0].second.clear();
     assert(Code(module) == "GIR-V050");
@@ -1515,6 +1521,114 @@ GirModule SpecializedContentCorrelation(bool nested) {
         Inst(GirOp::Store, -1, 0, target + 2), Inst(GirOp::Ret) } } };
     module.funcs.push_back(writer);
     return module;
+}
+
+GirModule SymbolicReturnedContentCorrelation() {
+    auto module = GlobalEmptyContentReplacement();
+    auto other = module.globals[0];
+    other.name = "other";
+    module.globals.push_back(std::move(other));
+    auto integer = module.Type(module.globals[0].ty).elem;
+    auto slice = module.SliceType(CoreMut::Mut, integer);
+    auto holder = module.RefType(CoreMut::Mut, slice);
+    vector<CoreRootRef> globals { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } };
+    for (auto &global : module.globals) {
+        auto zero = Inst(GirOp::Int, 0);
+        zero.ty = integer;
+        zero.text = "0";
+        auto array = Inst(GirOp::Arr, 1);
+        array.ty = global.ty;
+        array.vals = { 0 };
+        auto ret = Inst(GirOp::Ret);
+        ret.vals = { 1 };
+        global.init.blocks = { { {}, { zero, array, ret } } };
+    }
+    module.funcs.clear();
+    GirFunc caller;
+    caller.name = "returned_content_caller";
+    caller.scopes = { -1 };
+    caller.slots = { { slice, CoreVarKind::Var, 0, 0 }, { slice, CoreVarKind::Var, 0, 1 } };
+    caller.roots.slots = vector<pair<int, vector<CoreRootRef>>> {
+        { 0, globals }, { 1, { { CoreRootRef::Global, 1 } } } };
+    caller.summary.reads = { { true, 0 }, { true, 1 } };
+    caller.summary.writes = { { true, 1 } };
+    caller.summary.aborts = true;
+    auto enter = Inst(GirOp::Enter);
+    enter.idx = 0;
+    auto first = Inst(GirOp::Global, 0);
+    first.idx = 0;
+    auto firstSlice = Inst(GirOp::ViewSlice, 2, 1);
+    firstSlice.mut = CoreMut::Mut;
+    auto firstInit = Inst(GirOp::Init, -1, 2);
+    firstInit.idx = 0;
+    auto second = Inst(GirOp::Global, 3);
+    second.idx = 1;
+    auto secondSlice = Inst(GirOp::ViewSlice, 5, 4);
+    secondSlice.mut = CoreMut::Mut;
+    auto secondInit = Inst(GirOp::Init, -1, 5);
+    secondInit.idx = 1;
+    auto firstAddress = Inst(GirOp::Slot, 6);
+    firstAddress.idx = 0;
+    auto secondAddress = Inst(GirOp::Slot, 7);
+    secondAddress.idx = 1;
+    auto call = Inst(GirOp::Call);
+    call.idx = 1;
+    call.vals = { 6, 5, 7 };
+    auto zero = Inst(GirOp::Int, 10);
+    zero.ty = integer;
+    zero.text = "0";
+    auto leave = Inst(GirOp::Leave);
+    leave.idx = 0;
+    caller.blocks = { { {}, { enter, first, Inst(GirOp::Snap, 1, 0), firstSlice, firstInit,
+        second, Inst(GirOp::Snap, 4, 3), secondSlice, secondInit, firstAddress, secondAddress,
+        call, Inst(GirOp::Load, 8, 7), Inst(GirOp::SliceView, 9, 8), zero,
+        Inst(GirOp::Index, 11, 9, 10), Inst(GirOp::Store, -1, 11, 10), leave, Inst(GirOp::Ret) } } };
+    module.funcs.push_back(caller);
+    GirFunc wrapper;
+    wrapper.name = "returned_content_wrapper";
+    wrapper.params = { holder, slice, holder };
+    wrapper.scopes = { -1 };
+    wrapper.roots.slots.emplace();
+    wrapper.roots.params = { { 1, globals } };
+    wrapper.roots.contents = { { 0, globals }, { 2, { { CoreRootRef::Param, 1 } } } };
+    wrapper.summary.reads = { { false, 0 } };
+    wrapper.summary.writes = { { false, 2 } };
+    wrapper.summary.rebinds = { { false, 2 } };
+    auto inner = Inst(GirOp::Call, 3);
+    inner.idx = 2;
+    inner.vals = { 0, 1 };
+    wrapper.blocks = { { { { 0, holder }, { 1, slice }, { 2, holder } },
+        { inner, Inst(GirOp::Store, -1, 2, 3), Inst(GirOp::Ret) } } };
+    module.funcs.push_back(wrapper);
+    GirFunc reader;
+    reader.name = "symbolic_content_reader";
+    reader.params = { holder, slice };
+    reader.results = { slice };
+    reader.scopes = { -1 };
+    reader.roots.slots.emplace();
+    reader.roots.params = { { 1, globals } };
+    reader.roots.contents = { { 0, { { CoreRootRef::Param, 1 } } } };
+    reader.roots.results = { { { CoreRootRef::Param, 1 } } };
+    reader.summary.reads = { { false, 0 } };
+    auto ret = Inst(GirOp::Ret);
+    ret.vals = { 2 };
+    reader.blocks = { { { { 0, holder }, { 1, slice } }, { Inst(GirOp::Load, 2, 0), ret } } };
+    module.funcs.push_back(reader);
+    return module;
+}
+
+void PreservesReturnedContentCorrelation() {
+    auto module = SymbolicReturnedContentCorrelation();
+    auto observed = Code(module);
+    if (observed != "GIR-V050") fprintf(stderr, "symbolic returned content: %s\n", observed.empty() ? "accepted" : observed.c_str());
+    assert(observed == "GIR-V050");
+    vector<CoreRootRef> globals { { CoreRootRef::Global, 0 }, { CoreRootRef::Global, 1 } };
+    module.funcs[0].roots.slots->at(1).second = globals;
+    module.funcs[0].summary.writes.push_back({ true, 0 });
+    module.funcs[1].roots.contents[1].second = globals;
+    module.funcs[2].roots.contents[0].second = globals;
+    module.funcs[2].roots.results[0] = globals;
+    assert(Code(module).empty());
 }
 
 void PreservesSpecializedContentCorrelation() {
@@ -1980,6 +2094,7 @@ void IncludesActualRefSliceBackingReads() {
 }
 
 int main() {
+    PreservesReturnedContentCorrelation();
     PreservesSpecializedContentCorrelation();
     RejectsNestedReferenceParameters();
     NormalizesRawSpecializedCallContentRegions();
