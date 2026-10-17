@@ -219,4 +219,62 @@ theorem exprReflection_un {fuel : Nat} {expression : Expr} (operation : UnOp) (o
   simp only [operationSource,bind_apply]
   cases expectInt value s <;> rfl
 
+theorem exprReflection_conv_int {fuel : Nat} {expression : Expr} (kind : ConvKind) (target : IntTy) (origin : OriginId)
+    (child : ExprReflection fuel expression) : ExprReflection fuel (.conv kind (.int target) expression origin) := by
+  intro cfg env cx le ls after fr pt resultId state rel point lowering extension
+  simp only [lowerExpr, bind_eq] at lowering
+  obtain ⟨argument,middle,lowerExprRun,type,middle',typeRun,emit⟩ := lowering
+  have same := intTyOf_eq typeRun
+  subst same
+  have middleExtension := extension.of_adv (adv_emitDef emit)
+  have first := child cfg env cx le ls middle' fr pt argument state rel point lowerExprRun middleExtension
+  let operationSource := fun value => do
+    let (type,integer) ← expectInt value
+    match evalConv cfg.profile kind type target integer with
+    | .ok result => pure (Val.int target result)
+    | .error kind => abortAt (AbortKind.ofNum kind) origin
+  have composition : ReflectAtFuel fuel cx pt fr
+      (fun n => evalExpr n cfg env expression >>= operationSource)
+      (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId,.val value)]) state := by
+    refine first.bind ?_ (fun n k bound => (monoAll n k bound).expr cfg env expression)
+      (fun _ _ _ _ => MonoM.refl _)
+    intro n value next pt' fr' source post residual bound
+    have cell := post.has (argument,.val value) (by simp)
+    refine leaf_def_reflectAtFuel post emit extension (by intro f args org h; cases h)
+      RVal.val (sourceFuel := 0) ?_
+    cases value with
+    | int t integer =>
+      simp only [execPure,getVal_of cell,expectInt,pure_bind,post.rel.prof]
+      cases evalConv cfg.profile kind t target integer <;> rfl
+    | _ =>
+      funext s
+      simp only [execPure,getVal_of cell,expectInt,pure_bind]
+      rfl
+  refine composition.of_source (fun n => ⟨n + 1,?_⟩)
+  simp only [evalExpr]
+  apply congrFun
+  apply congrArg (fun continuation : Val → M Val => evalExpr n cfg env expression >>= continuation)
+  funext value s
+  simp only [operationSource,bind_apply]
+  cases expectInt value s <;> rfl
+
+theorem exprReflection_fill_arr {fuel : Nat} {expression : Expr} (element : Ty) (count : Nat)
+    (child : ExprReflection fuel expression) : ExprReflection fuel (.fill (.arr element count) expression) := by
+  intro cfg env cx le ls after fr pt resultId state rel point lowering extension
+  simp only [lowerExpr,bind_eq] at lowering
+  obtain ⟨argument,middle,lowerExprRun,emit⟩ := lowering
+  have middleExtension := extension.of_adv (adv_emitDef emit)
+  have first := child cfg env cx le ls middle fr pt argument state rel point lowerExprRun middleExtension
+  have composition : ReflectAtFuel fuel cx pt fr
+      (fun n => evalExpr n cfg env expression >>= fun value => pure (.fixed (Array.replicate count value)))
+      (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId,.val value)]) state := by
+    refine first.bind ?_ (fun n k bound => (monoAll n k bound).expr cfg env expression)
+      (fun _ _ _ _ => MonoM.refl _)
+    intro n value next pt' fr' source post residual bound
+    have cell := post.has (argument,.val value) (by simp)
+    refine leaf_def_reflectAtFuel post emit extension (by intro f args org h; cases h)
+      RVal.val (sourceFuel := 0) ?_
+    simp only [execPure,expectFixedCount,getVal_of cell,pure_bind]
+  exact composition.of_source (fun n => ⟨n + 1,by simp only [evalExpr,expectFixedCount,pure_bind]⟩)
+
 end Goose.Lower
