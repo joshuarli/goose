@@ -28,7 +28,7 @@ structure Frame where
   named : List (SlotId × DestinationId) := []
   parameterOrdinals : List StorageId := []
   copySources : Std.HashMap ValueId Core.CopySource := {}
-  elementReceivers : List (DestinationId × Loc) := []
+  pushOwners : List (Loc × Loc) := []
 
 private def getCell (frame : Frame) (id : ValueId) : EvalM RVal :=
   match frame.vals[id]? with
@@ -263,6 +263,17 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
         pure (.dest (← openReceiver fuel config function frame receiver ty request count (← origin org)))
     | .destChild parent element org =>
         pure (.dest (← liftConstruction (← origin org) (openChild (← getDest frame parent) element (← receivingLayout config.layout element))))
+    | .destAdapt destination producer request org =>
+        let id ← getDest frame destination
+        liftConstruction (← origin org) (adaptConstructionDestination id producer request)
+        pure (.dest id)
+    | .destAdaptFinish closed org =>
+        let id ← getProtocol frame closed
+        liftConstruction (← origin org) (finishConstructionAdaptation id)
+        match ← getCell frame closed with
+        | .built _ => pure (.built id)
+        | .cancelled _ => pure (.cancelled id)
+        | _ => fault .shape
     | .destFinish destination org =>
         let id ← getDest frame destination
         let pending ← getDestination id
@@ -292,6 +303,12 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
         | .exiting _ replacement => liftConstruction (← origin org) (abandonPreservingExit id replacement)
         | _ => liftConstruction (← origin org) (abandonTree id)
         pure (.cancelled id)
+    | .destPublishRef built org =>
+        let id ← getBuilt frame built
+        let location := (← getDestination id).capability.receiver
+        let some owner := frame.pushOwners.lookup location | fault .flow
+        publishDestination fuel config id (← origin org) (some owner)
+        pure (.value (.ref location))
     | .destArg built org =>
         let id ← getBuilt frame built
         publishDestination fuel config id (← origin org)
@@ -466,7 +483,7 @@ def evalEffect : Nat → Config → Func → Frame → Effect → EvalM Frame
         pure { frame with named := (slot,id) :: frame.named }
     | .destPublish built org =>
         let id ← getBuilt frame built
-        publishDestination fuel config id (← origin org) (frame.elementReceivers.lookup id)
+        publishDestination fuel config id (← origin org) (frame.pushOwners.lookup (← getDestination id).capability.receiver)
         pure frame
     | .destCancel cancelled org =>
         let .cancelled id ← getCell frame cancelled | fault .shape
@@ -491,10 +508,10 @@ def executeInsts : Nat → Config → Func → Frame → List Inst → EvalM (Li
           | _ => pure none
         let receivers ← match op, value with
           | .destOpen (.push reference) .., .dest id => do
-              pure ((id, ← expectRef (← getValue frame reference)) :: frame.elementReceivers)
-          | _, _ => pure frame.elementReceivers
+              pure (((← getDestination id).capability.receiver, ← expectRef (← getValue frame reference)) :: frame.pushOwners)
+          | _, _ => pure frame.pushOwners
         let sources := match copySource with | some source => frame.copySources.insert result source | none => frame.copySources.erase result
-        executeInsts fuel config function { frame with vals := frame.vals.insert result value, copySources := sources, elementReceivers := receivers } rest
+        executeInsts fuel config function { frame with vals := frame.vals.insert result value, copySources := sources, pushOwners := receivers } rest
     | .eff effect :: rest =>
         executeInsts fuel config function (← evalEffect fuel config function frame effect) rest
     | .term term :: _ => match term with

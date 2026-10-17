@@ -1015,6 +1015,8 @@ Decoding rejects profile-selected arity/tag errors, byte values above 255, empty
 
 This profile inherits the completed GIR-H shrink contract and selects the following module/signature shapes. Core target ids, member order, result positions, scopes and slots are retained; member implementation ids become the corresponding function ids. Global initializer functions appended by the lowering are never target members. The same lexical and size limits apply. `dest`, `built` and `cancelled` are SSA-only protocol types, never data types, slot types, struct components, stored values, source arguments or source results.
 
+The exact JSON operands for adapter, published-reference, and target-exit records are listed in the [construction GIR wire note](goose-ir-construction-wire.md).
+
 | Tag | Fields | Meaning |
 |---|---|---|
 | `module` | `str` schema (`gir-h/0.4`), `str` profile (`core-construction`), `[file]`, `[Ty]`, `[struct_def]`, `[target]`, `[global]`, `[func]`, `fn` entry, `[origin]` | Exactly ten fields after the tag. |
