@@ -4,14 +4,16 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
+variable {targets : List BlockId}
+
 theorem ReplacementSitesAt.block_generated {le : LEnv} {before : LS} (loop : Option LoopCtx)
     (pre : List (SlotId × ValueId × OriginId)) (want : Bool) (scope : ScopeId)
     (statements : List Stmt) (value : Option Expr)
     (generated : GeneratedBuilderState before) (bounds : LoopBuilderTargets loop before)
-    (statementsStorage : ∀ state, GeneratedBuilderState state → LoopBuilderTargets loop state →
-      ReplacementSitesAt le state (lowerStmts loop statements))
-    (valueStorage : ∀ state, GeneratedBuilderState state → ReplacementSitesAt le state (lowerBlockValue want value)) :
-    ReplacementSitesAt le before (lowerBlock loop pre want (.mk scope statements value)) := by
+    (statementSites : ∀ state, GeneratedBuilderState state → LoopBuilderTargets loop state →
+      ReplacementSitesAt (targets := targets) le state (lowerStmts loop statements))
+    (valueSites : ∀ state, GeneratedBuilderState state → ReplacementSitesAt (targets := targets) le state (lowerBlockValue want value)) :
+    ReplacementSitesAt (targets := targets) le before (lowerBlock loop pre want (.mk scope statements value)) := by
   let entered := Goose.Lower.emitEffect (.enter scope) le before
   let pushed := Goose.Lower.pushScope scope le entered.2
   let initialized := Goose.Lower.initSlots pre le pushed.2
@@ -35,8 +37,8 @@ theorem ReplacementSitesAt.block_generated {le : LEnv} {before : LS} (loop : Opt
   apply (ReplacementSitesAt.pushScope _ _ _).bind
   apply ReplacementSitesAt.bind
   · apply (ReplacementSitesAt.initSlots _ _ _).bind
-    apply (statementsStorage initialized.2 initializedGenerated initializedBounds).bind
-    apply (valueStorage ended.2 endedGenerated).bind
+    apply (statementSites initialized.2 initializedGenerated initializedBounds).bind
+    apply (valueSites ended.2 endedGenerated).bind
     exact (ReplacementSitesAt.emitEffect _ (by intros; trivial)).bind (ReplacementSitesAt.pure _ _ _)
   · exact (ReplacementSitesAt.popScope _ _).bind (ReplacementSitesAt.pure _ _ _)
 

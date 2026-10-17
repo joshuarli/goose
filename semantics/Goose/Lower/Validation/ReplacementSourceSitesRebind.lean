@@ -5,15 +5,17 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.Core.Sound Goose.GIR
 
+variable {targets : List BlockId}
+
 theorem replacementSites_rebind_source {env output : Core.TEnv} {results : List Ty}
     {slot : VarId} {expr : Expr} {origin : OriginId} {scope start finish : Nat}
     (source : Core.tyStmt env scope (.rebind slot expr origin) start = .ok (output, finish))
     (sourceTypes : SourceReadableEnvironment env)
-    (exprChild : ReplacementSitesExprChild env results expr)
+    (exprChild : ReplacementSitesExprChild (targets := targets) env results expr)
     (loop : Option LoopCtx) {before : LS} (generated : GeneratedBuilderState before) :
-    ReplacementSitesAt (lowerEnv env.mod env.vars results) before (lowerStmt loop (.rebind slot expr origin)) := by
+    ReplacementSitesAt (targets := targets) (lowerEnv env.mod env.vars results) before (lowerStmt loop (.rebind slot expr origin)) := by
   obtain ⟨localVar, childType, row, _, reference, mutable, childSource, passable, _⟩ := tyStmt_rebind_children source
-  change ReplacementSitesAt _ _ (lowerExpr expr >>= fun value => do
+  change ReplacementSitesAt (targets := targets) _ _ (lowerExpr expr >>= fun value => do
     let value ← coerceSlot slot value origin
     let address ← emitDef (.slotAddr slot)
     emitEffect (.store address value (some origin)))
