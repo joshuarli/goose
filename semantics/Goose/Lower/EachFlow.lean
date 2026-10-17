@@ -1,4 +1,5 @@
 import Goose.Lower.EachRuntime
+import Goose.Lower.GeneratedLoopFrames
 
 namespace Goose.Lower
 
@@ -195,6 +196,8 @@ def EachBlockCallback (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le : LEnv)
         else readLoc ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩) s = .ok ev state →
       Post cfg env cx input fr withValue frValue ptValue [(value, .val ev)] →
       PreRel frValue (eachIRPre x idx value counter org) (eachCorePre x idx ev i) →
+      GeneratedBuilderState withValue →
+      LoopBuilderFrames (some ⟨depth, exit, .next hb .i64 counter⟩) withValue →
       SimEAt cx ptValue frValue (execBlock fuel cfg env (eachCorePre x idx ev i) block >>=
         prepareReturn env)
         (LoopFlowPost cfg env cx withValue frValue blockOutput
@@ -207,6 +210,7 @@ theorem lowerEach_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le
     (hlow : lowerEach vw.resizable owner sampled hb counter
       (eachBodyBuilder x idx byRef block org view counter hb) le header = ((), output))
     (hpp : header.pp = some (hb, 0)) (hext : ExtT output cx.fn.blocks)
+    (generatedHeader : GeneratedBuilderState header)
     (hheader : ∃ target, cx.fn.blocks[hb]? = some target ∧
       target.params = [(counter, .data (.int .i64))])
     (hc : counter < header.vals.size) (hv : view < counter)
@@ -229,32 +233,151 @@ theorem lowerEach_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx) (le
       AdvB.bind (advB_eachElemValue x byRef elem) fun value => advB_lowerBlock _ _ _ block
   have hstackOutput := (advB_lowerEach vw.resizable owner sampled hb counter aBody
     le header () output hlow).stack
-  apply lowerEach_sim_at n cfg env cx le header output counter view sampled hb owner vw base x idx
-    byRef block (eachBodyBuilder x idx byRef block org view counter hb) allowed bodyAllowed
-    (EachFlowPost cfg env cx output counter base) hlow aBody hpp hext hc hv ho hs
-  · intro pt fr hp hsame hrel
-    exact Or.inl ⟨rfl, hp, hsame, hrel⟩
-  · exact henter
-  · exact hretain
-  · intro depth exit input result blockOutput back tb hbody hinput hback hextBack hextBlock
-      hcounterInput hstackInput hdepth hExit hExitBlock fuel hfuel i fr s hinv hallowed
-    unfold eachBodyBuilder at hbody
-    simp only [bind_eq] at hbody
-    obtain ⟨elem, withElem, hElem, value, withValue, hValue, hBlock⟩ := hbody
-    have htargets : LoopTargets cx.fn ⟨depth, exit, .next hb .i64 counter⟩ :=
-      ⟨hExitBlock, hheader⟩
+  obtain ⟨len, lsLen, cmp, lsCmp, tb, xb, lsf, input, result, blockOutput, lsBack,
+    hLen, hCmp, hFork, hInput, hBody, hBack, hExit⟩ := lowerEach_unfold hlow
+  have aBody := aBody lsCmp.stack.length xb le input result blockOutput hBody
+  have aBack := advB_rangeBack .i64 counter hb le blockOutput () lsBack hBack
+  have hextBack : ExtT lsBack cx.fn.blocks := by simpa [hExit, ExtT] using hext
+  have hextOutput := hextBack.of_adv aBack
+  have hextInput := hextOutput.of_adv aBody
+  have hextFork : ExtT lsf cx.fn.blocks := by simpa [hInput, ExtT] using hextInput
+  have hbranch := lowerEach_branch_sim cfg env cx le header lsLen lsCmp lsf input blockOutput lsBack output
+    counter view sampled len cmp hb tb xb owner vw base
+    (eachBodyBuilder x idx byRef block org view counter hb) result
+    hLen hCmp hFork hInput hBody aBody hBack hExit hpp hext hc hv ho hs
+  have hbranch' : EachBranch cx vw (hb, 0) (tb, 0)
+      (EachInv cfg env cx header counter view sampled owner vw base)
+      (EachInv cfg env cx input counter view sampled owner vw base) (EachFlowPost cfg env cx output counter base) := by
+    intro i fr hinv
+    exact (hbranch i fr hinv).mono fun length pt' fr' h => by
+      by_cases hi : i < length
+      · simpa only [hi, ite_true] using h
+      · simp only [hi, ite_false] at h ⊢
+        exact Or.inl ⟨rfl, h.2.1, h.2.2.1, h.2.2.2⟩
+  have aLen := advB_eachLen vw.resizable owner sampled le header len lsLen hLen
+  have aCmp := adv_emitDef hCmp
+  obtain ⟨block0, hcur, hlookup, _⟩ := LS.pp_some hpp
+  have hcurLen : lsLen.cur = some hb := by
+    cases hr : vw.resizable <;> simp only [eachLen, hr, Bool.false_eq_true, ite_false, ite_true] at hLen
+    · rw [pure_run] at hLen
+      have he := (Prod.mk.inj hLen).2
+      simpa [← he] using hcur
+    · rw [emitDef_run _ le hcur] at hLen
+      have he := (Prod.mk.inj hLen).2
+      simpa using (congrArg LS.cur he).symm.trans hcur
+  have hcurCmp : lsCmp.cur = some hb := by
+    rw [emitDef_run _ le hcurLen] at hCmp
+    have he := (Prod.mk.inj hCmp).2
+    simpa using (congrArg LS.cur he).symm.trans hcurLen
+  obtain ⟨blockCmp, hlookupCmp, _, _, _⟩ := (aLen.trans aCmp).ext.2 hb block0 hlookup
+  have hextCmp := hextFork.of_adv (adv_fork hcurCmp hFork)
+  have hfacts := fork_facts hFork (LS.pp_eq hcurCmp hlookupCmp) hextFork
+  have hppInput : input.pp = some (tb, 0) := by
+    rw [hInput]
+    exact LS.pp_cur hfacts.2.2.2.2.2.2.2.1
+  have hcounterInput : counter < input.vals.size := by
+    rw [hInput]
+    change counter < lsf.vals.size
+    rw [hfacts.2.2.2.1]
+    exact Nat.lt_of_lt_of_le hc (aLen.trans aCmp).vals
+  have hstackInput : input.stack = header.stack := by
+    rw [hInput]
+    exact hfacts.2.2.2.2.1.trans (aCmp.stack.trans aLen.stack)
+  have hdepth : lsCmp.stack.length = input.stack.length := by
+    rw [hInput]
+    exact congrArg List.length hfacts.2.2.2.2.1.symm
+  have hxbBack : lsBack.blocks[xb]? = some ⟨[], #[]⟩ := by
+    refine (aBody.trans aBack).keep xb ⟨[], #[]⟩ ?_ ?_
+    · rw [hInput]
+      intro he
+      have hb : tb = xb := Option.some.inj he
+      have hids := fork_ids hFork
+      have hpair := hids.1
+      have ht := (Prod.mk.inj hpair).1
+      have hx := (Prod.mk.inj hpair).2
+      nat_omega
+    · rw [hInput]
+      exact hfacts.2.2.2.2.2.2.2.2
+  have hppExit : output.pp = some (xb, 0) := by rw [hExit]; exact LS.pp_cur hxbBack
+  obtain ⟨exitBlock, hExitBlock, hExitParams⟩ := hextBack.params hxbBack
+  have hbodyEach : ∀ fuel, fuel < n → ∀ i fr s,
+      EachInv cfg env cx input counter view sampled owner vw base i fr → bodyAllowed i s →
+      SimEAt cx (tb, 0) fr (eachIterationCore fuel cfg env x idx byRef block vw i)
+        (EachStepPost cx (hb, 0)
+          (EachInv cfg env cx header counter view sampled owner vw base)
+          (EachFlowPost cfg env cx output counter base) i) s := by
+    intro fuel hfuel i fr s hinv hallowed
+    unfold eachBodyBuilder at hBody
+    simp only [bind_eq] at hBody
+    obtain ⟨elem, withElem, hElem, value, withValue, hValue, hBlock⟩ := hBody
+    have htargets : LoopTargets cx.fn ⟨lsCmp.stack.length, xb, .next hb .i64 counter⟩ :=
+      ⟨⟨exitBlock, hExitBlock, hExitParams⟩, hheader⟩
+    have hGeneratedInput : GeneratedBuilderState input := by
+      have hsetInput : setCur (some tb) le lsf = ((), input) := by
+        rw [setCur_run, hInput]
+      have hids := fork_ids hFork
+      have htb : tb = lsCmp.blocks.size := by simpa using congrArg Prod.fst hids.1
+      have htbBound : tb < lsf.blocks.size := by
+        calc
+          tb < lsCmp.blocks.size + 2 := by
+            rw [htb]
+            change lsCmp.blocks.size < Nat.succ (Nat.succ lsCmp.blocks.size)
+            exact Nat.lt_trans (Nat.lt_succ_self _) (Nat.lt_succ_self _)
+          _ = lsf.blocks.size := hids.2.symm
+      exact (generatedHeader.eachLen vw.resizable owner sampled hLen).emitDef
+        (.cmp .lt .i64 counter len) hCmp |>.fork cmp hFork |>.setCur (some tb)
+          (by intro current hcurrent; simp at hcurrent; subst current; exact htbBound) hsetInput
+    have hGeneratedWithElem := hGeneratedInput.emitDef (.refElem view counter) hElem
+    have hGeneratedWithValue := hGeneratedWithElem.eachElemValue x byRef elem hValue
+    have aElem := advB_emitDef (.refElem view counter) le input elem withElem hElem
+    have aValue := advB_eachElemValue x byRef elem le withElem value withValue hValue
+    have hcmpLeValue : lsCmp.blocks.size ≤ withValue.blocks.size := by
+      have hinputLe := aElem.trans aValue |>.ext.1
+      have hids := fork_ids hFork
+      have hlsfLe : lsCmp.blocks.size ≤ lsf.blocks.size := by rw [hids.2]; omega
+      have hinputBlocks : input.blocks = lsf.blocks := by simp [hInput]
+      rw [hinputBlocks] at hinputLe
+      exact Nat.le_trans hlsfLe hinputLe
+    have hheaderBound : hb < withValue.blocks.size := by
+      have hheaderBound := (Array.getElem?_eq_some_iff.mp hlookup).1
+      exact Nat.lt_of_lt_of_le hheaderBound (Nat.le_trans (aLen.trans aCmp).ext.1 hcmpLeValue)
+    have hxbBound : xb < withValue.blocks.size := by
+      have hids := fork_ids hFork
+      have hxb : xb = lsCmp.blocks.size + 1 := by simpa using congrArg Prod.snd hids.1
+      have hBound : xb < lsf.blocks.size := by
+        calc
+          xb < lsCmp.blocks.size + 2 := by
+            rw [hxb]
+            change Nat.succ lsCmp.blocks.size < Nat.succ (Nat.succ lsCmp.blocks.size)
+            exact Nat.lt_succ_self _
+          _ = lsf.blocks.size := hids.2.symm
+      have hinputLe := aElem.trans aValue |>.ext.1
+      have hinputBlocks : input.blocks = lsf.blocks := by simp [hInput]
+      rw [hinputBlocks] at hinputLe
+      exact Nat.lt_of_lt_of_le hBound hinputLe
+    have hloopBounds : LoopBuilderTargets
+        (some ⟨lsCmp.stack.length, xb, .next hb .i64 counter⟩) withValue := by
+      simp only [LoopBuilderTargets]
+      exact ⟨hxbBound, hheaderBound⟩
+    have aBlock := advB_lowerBlock _ _ _ block le withValue result blockOutput hBlock
+    have hextWithValue := hextOutput.of_adv aBlock
+    have hframes := LoopBuilderFrames.of_functionTargets htargets hloopBounds hextWithValue
+    have htargets' : LoopTargets cx.fn ⟨lsCmp.stack.length, xb, .next hb .i64 counter⟩ := htargets
     refine eachIteration_sim_at fuel cfg env cx le input withElem withValue blockOutput fr (tb, 0) s
-      view counter elem value result vw i x idx byRef block ⟨depth, exit, .next hb .i64 counter⟩
-      org _ hElem hValue hBlock hinput hextBlock hinv.rel hinv.viewValue hinv.counterValue
+      view counter elem value result vw i x idx byRef block ⟨lsCmp.stack.length, xb, .next hb .i64 counter⟩
+      org _ hElem hValue hBlock hppInput hextOutput hinv.rel hinv.viewValue hinv.counterValue
       hcounterInput ?_
     intro ev state ptValue frValue hsource PValue hpre
-    have hbodySim := hblock fuel hfuel depth exit input withElem withValue blockOutput elem value
-      result tb i fr s ev state ptValue frValue hElem hValue hBlock hextBlock hcounterInput
-      hstackInput hdepth htargets hinput hinv hallowed hsource PValue hpre
+    have hbodySim := hblock fuel hfuel lsCmp.stack.length xb input withElem withValue blockOutput elem value
+      result tb i fr s ev state ptValue frValue hElem hValue hBlock hextOutput hcounterInput
+      hstackInput hdepth htargets' hppInput hinv hallowed hsource PValue hpre
+      hGeneratedWithValue hframes
     exact hbodySim.mono fun flow _ ptAfter after _ hflow =>
-      eachLoopFlow_to_step cfg env cx le header input withValue blockOutput back output base fr
-        frValue after counter view sampled hb exit depth value result owner vw i ev block flow
+      eachLoopFlow_to_step cfg env cx le header input withValue blockOutput lsBack output base fr
+        frValue after counter view sampled hb xb lsCmp.stack.length value result owner vw i ev block flow
         ptValue ptAfter hinv PValue hflow hcounterInput hv ho hs hstackInput.symm
-        (hstackOutput.trans hstackInput.symm) hExit hback hextBack hheader
+        (hstackOutput.trans hstackInput.symm) hppExit hBack hextBack hheader
+  exact each_sim_at n cx cfg env x idx byRef block vw (hb, 0) (tb, 0)
+    _ _ allowed bodyAllowed (EachFlowPost cfg env cx output counter base) hbranch' henter hbodyEach hretain
 
 end Goose.Lower

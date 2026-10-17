@@ -13,7 +13,8 @@ theorem stmt_resize_typed_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
     (hfill : match fill with | none => True | some expr => TypedExprClaim n cfg results expr)
     (hlow : lowerStmt loop (.resize owner size fill org) (lowerEnv cfg.mod env.vars results) ls = ((), ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
-    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results) :
+    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results)
+    (hgenerated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.resize owner size fill org))
       (fun flow pt' fr' => flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) state := by
   obtain ⟨destination, element, typingEq, rootsEq, _, _, _, _, children⟩ := source.resizeSizeChildren
@@ -29,13 +30,13 @@ theorem stmt_resize_typed_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
     have hext2 : ExtT ls2 cx.fn.blocks := hext.of_adv (adv_emitEffect h3)
     have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (advB_lowerExpr size _ _ _ _ h2)
     simp only [execStmt]
-    refine SimEAt.bind (hplace env state destination metadata ls ls1 rp pt cx fr h1 hpp hext1 hrel hgir hresults)
+    refine SimEAt.bind (hplace env state destination metadata ls ls1 rp pt cx fr h1 hpp hext1 hrel hgir hresults hgenerated)
       fun l afterPlace pt1 fr1 donePlace P1 => ?_
     obtain ⟨sizeSource, integer, sizeTyping, sizeRoots, _⟩ := children n l afterPlace donePlace
     have sizeMetadata : SourceResults sizeSource.typingEnv sizeSource.rootsEnv results := by
       rw [sizeTyping, sizeRoots]
       exact hmetadata
-    refine SimEAt.bind (hsize env afterPlace sizeSource sizeMetadata ls1 ls2 v pt1 cx fr1 h2 P1.pp hext2 P1.rel hgir hresults)
+    refine SimEAt.bind (hsize env afterPlace sizeSource sizeMetadata ls1 ls2 v pt1 cx fr1 h2 P1.pp hext2 P1.rel hgir hresults (hgenerated.lowerPlace owner h1))
       fun va afterSize pt2 fr2 doneSize P2 => ?_
     refine SimEAt.expectInt fun t k hva => ?_
     subst hva
@@ -94,13 +95,13 @@ theorem stmt_resize_typed_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
     have hext2 : ExtT ls2 cx.fn.blocks := hext3.of_adv (advB_lowerExpr fillExpr _ _ _ _ h3)
     have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (advB_lowerExpr size _ _ _ _ h2)
     simp only [execStmt]
-    refine SimEAt.bind (hplace env state destination metadata ls ls1 rp pt cx fr h1 hpp hext1 hrel hgir hresults)
+    refine SimEAt.bind (hplace env state destination metadata ls ls1 rp pt cx fr h1 hpp hext1 hrel hgir hresults hgenerated)
       fun l afterPlace pt1 fr1 donePlace P1 => ?_
     obtain ⟨sizeSource, integer, sizeTyping, sizeRoots, _⟩ := children n l afterPlace donePlace
     have sizeMetadata : SourceResults sizeSource.typingEnv sizeSource.rootsEnv results := by
       rw [sizeTyping, sizeRoots]
       exact hmetadata
-    refine SimEAt.bind (hsize env afterPlace sizeSource sizeMetadata ls1 ls2 v pt1 cx fr1 h2 P1.pp hext2 P1.rel hgir hresults)
+    refine SimEAt.bind (hsize env afterPlace sizeSource sizeMetadata ls1 ls2 v pt1 cx fr1 h2 P1.pp hext2 P1.rel hgir hresults (hgenerated.lowerPlace owner h1))
       fun sizeVal afterSize pt2 fr2 doneSize P2 => ?_
     refine SimEAt.expectInt fun t k hsize => ?_
     subst hsize
@@ -108,7 +109,7 @@ theorem stmt_resize_typed_sim {n : Nat} {cfg : Cfg} {env : Env} {cx : FnCtx}
     have fillMetadata : SourceResults fillSource.typingEnv fillSource.rootsEnv results := by
       rw [fillTyping, fillRoots]
       exact hmetadata
-    refine SimEAt.bind (hfill env afterSize fillSource fillMetadata ls2 ls3 fv pt2 cx fr2 h3 P2.pp hext3 P2.rel hgir hresults)
+    refine SimEAt.bind (hfill env afterSize fillSource fillMetadata ls2 ls3 fv pt2 cx fr2 h3 P2.pp hext3 P2.rel hgir hresults ((hgenerated.lowerPlace owner h1).lowerExpr size h2))
       fun fillVal afterFill pt3 fr3 _ P3 => ?_
     have P13 := P1.comp P2 |>.comp P3
     have hl : fr3.vals[rp]? = some (.val (.ref l)) := P13.has (rp, _) (by simp)
@@ -179,11 +180,11 @@ theorem typedStatementLoopSimulation_resize {n : Nat} {cfg : Cfg} {results : Lis
     (hfill : match fill with | none => True | some expr => TypedExprClaim n cfg results expr) :
     TypedStatementLoopSimulation (n + 1) cfg results loop (.resize owner size fill org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   have resultEq : result = () := Subsingleton.elim _ _
   subst result
   cases fill with
-  | none => exact (stmt_resize_typed_sim source hmetadata hplace hsize (by trivial) hlow hpp hext hrel hgir hresults).prepareNormalLoopFlow
-  | some expr => exact (stmt_resize_typed_sim source hmetadata hplace hsize hfill hlow hpp hext hrel hgir hresults).prepareNormalLoopFlow
+  | none => exact (stmt_resize_typed_sim source hmetadata hplace hsize (by trivial) hlow hpp hext hrel hgir hresults hgenerated).prepareNormalLoopFlow
+  | some expr => exact (stmt_resize_typed_sim source hmetadata hplace hsize hfill hlow hpp hext hrel hgir hresults hgenerated).prepareNormalLoopFlow
 
 end Goose.Lower

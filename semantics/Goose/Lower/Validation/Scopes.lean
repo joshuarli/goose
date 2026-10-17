@@ -74,9 +74,9 @@ theorem checkGlobal_scopeOrder {module : Module} {index : GlobalId} {global : Gl
     simp only [checkGlobal, order] at checked
     simp [chk] at checked
 
-theorem lowerImplAt_scopeParents_earlier {module : Module} {implId : ImplId} {impl : Impl}
+theorem lowerImpl_scopeParents_earlier {module : Module} {impl : Impl}
     (checked : checkImpl module impl = .ok ()) (index parent : Nat)
-    (lookup : (lowerImplAt module implId impl).scopes[index]? = some (some parent)) :
+    (lookup : (lowerImpl module impl).scopes[index]? = some (some parent)) :
     parent < index :=
   scopeParents_earlier (checkImpl_scopeOrder checked) index parent lookup
 

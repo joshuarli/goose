@@ -28,6 +28,22 @@ def nestedBuilder (m : Core.Module) : LS := (nestedResult m).2
 def nestedFunction (m : Core.Module) : Func :=
   { scopeFunction with results := [.int .i64], blocks := finishBlocks (nestedBuilder m).blocks }
 
+private theorem scopedBuilder_generated : GeneratedBuilderState scopedBuilder := by
+  refine ⟨?_, ?_, ?_⟩
+  · simp [LS.DenseDefinitions, LS.defs, scopedBuilder, BlockB.defs]
+  · intro block current
+    have equal : block = 0 := Option.some.inj current.symm
+    subst block
+    simp [scopedBuilder]
+  · intro index body row target successor
+    have equal : index = 0 := by
+      have bound := (Array.getElem?_eq_some_iff.mp row).1
+      simpa [scopedBuilder] using bound
+    subst index
+    have bodyEqual : body = ⟨[], #[]⟩ := Option.some.inj row.symm
+    subst body
+    simp [Validation.cfgBlock, GIR.Block.terms] at successor
+
 private theorem singleBlockClaim (cfg : Cfg) (results : List Ty) (scope : Nat) (stmt : Stmt)
     (statement : ∀ n, TypedStatementLoopSimulation n cfg results none stmt) (n : Nat) :
     TypedBlockLoopSimulation n cfg results none [] [] false (.mk scope [stmt] none) := by
@@ -101,6 +117,7 @@ theorem concrete_nested_returning_block (cfg : Cfg) (fuel : Nat) (state : St)
   · trivial
   · rfl
   · rfl
+  · exact scopedBuilder_generated
 
 #guard match (execBlock 30 ⟨.release, Goose.Lower.ReturnChecks.sourceModule⟩ beforeEnv []
     nestedBlock >>= prepareReturn beforeEnv) localState with

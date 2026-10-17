@@ -1,3 +1,4 @@
+import Goose.Lower.GeneratedBuilder
 import Goose.Lower.RuntimeSim
 import Goose.Lower.Leaf
 import Goose.Lower.Coerce
@@ -277,7 +278,7 @@ def TypedExprClaim (n : Nat) (cfg : Cfg) (results : List Ty) (expr : Expr) : Pro
     SourceResults source.typingEnv source.rootsEnv results → ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerExpr expr (lowerEnv cfg.mod env.vars results) ls = (r, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results → GeneratedBuilderState ls →
     SimEAt cx pt fr (evalExpr n cfg env expr)
       (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val value)]) state
 
@@ -286,7 +287,7 @@ def TypedPlaceClaim (n : Nat) (cfg : Cfg) (results : List Ty) (place : Place) : 
     SourceResults source.typingEnv source.rootsEnv results → ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerPlace place (lowerEnv cfg.mod env.vars results) ls = (r, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results → GeneratedBuilderState ls →
     SimEAt cx pt fr (evalPlace n cfg env place)
       (fun location pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val (.ref location))]) state
 
@@ -295,7 +296,7 @@ def TypedViewClaim (n : Nat) (cfg : Cfg) (results : List Ty) (view : View) : Pro
     SourceResults source.typingEnv source.rootsEnv results → ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerView view (lowerEnv cfg.mod env.vars results) ls = (r, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results → GeneratedBuilderState ls →
     SimEAt cx pt fr (evalView n cfg env view)
       (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .view value)]) state
 
@@ -305,7 +306,7 @@ def TypedBoundClaim (n : Nat) (cfg : Cfg) (results : List Ty) (bound : Bound) : 
     ∀ (ls ls' : LS) (bnd : Bnd) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame) (length : Nat) (default : Int),
     lowerBound bound (lowerEnv cfg.mod env.vars results) ls = (bnd, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results → GeneratedBuilderState ls →
     SimEAt cx pt fr (evalBound n cfg env length default bound)
       (fun value pt' fr' => ∃ cells, BndSpec length default bnd value cells ∧
         Post cfg env cx ls fr ls' fr' pt' cells) state
@@ -1931,19 +1932,19 @@ theorem ExprSource.sliceChildren {cfg : Cfg} {env : Env} {view : View} {low high
 
 theorem typedExprClaim_zero (cfg : Cfg) (results : List Ty) (expr : Expr) :
     TypedExprClaim 0 cfg results expr := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   simp only [evalExpr]
   exact SimEAt.of_timeout state
 
 theorem typedPlaceClaim_zero (cfg : Cfg) (results : List Ty) (place : Place) :
     TypedPlaceClaim 0 cfg results place := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   simp only [evalPlace]
   exact SimEAt.of_timeout state
 
 theorem typedBoundClaim_zero (cfg : Cfg) (results : List Ty) (bound : Bound) :
     TypedBoundClaim 0 cfg results bound := by
-  intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults hgenerated
   simp only [evalBound]
   exact SimEAt.of_timeout state
 
@@ -1952,7 +1953,7 @@ theorem typedBoundClaim_omitted (n : Nat) (cfg : Cfg) (results : List Ty) :
   cases n with
   | zero => exact typedBoundClaim_zero _ _ _
   | succ n =>
-    intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults hgenerated
     simp only [lowerBound, pure_run] at hlow
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
     simp only [evalBound]
@@ -1963,7 +1964,7 @@ private theorem typedBoundClaim_expression {n : Nat} {cfg : Cfg} {results : List
     TypedBoundClaim (n + 1) cfg results (if fromEnd then .fromEnd expr else .expr expr) := by
   cases fromEnd
   all_goals (
-    intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults hgenerated
     obtain ⟨child, htyping, hroots, intTy, htype⟩ := source.expressionChild _
     have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
       rw [htyping, hroots]
@@ -1974,7 +1975,7 @@ private theorem typedBoundClaim_expression {n : Nat} {cfg : Cfg} {results : List
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpure
     simp only [Bool.false_eq_true, ite_false, ite_true, evalBound]
     refine SimEAt.bind (he env state child hchildMetadata ls middle id pt cx fr hchild hpp hext
-      hrel hgir hresults) fun value after pt' fr' hdone P => ?_
+      hrel hgir hresults hgenerated) fun value after pt' fr' hdone P => ?_
     have hvalue := (child.result n value hdone).typed
     rw [htype] at hvalue
     obtain ⟨integer, rfl⟩ := Core.Sound.hasTy_int hvalue
@@ -1993,13 +1994,13 @@ theorem typedBoundClaim_fromEnd {n : Nat} {cfg : Cfg} {results : List Ty} {expr 
 
 theorem typedViewClaim_zero (cfg : Cfg) (results : List Ty) (view : View) :
     TypedViewClaim 0 cfg results view := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   simp only [evalView]
   exact SimEAt.of_timeout state
 
 theorem typedViewClaim_of {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) : TypedViewClaim (n + 1) cfg results (.of place) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots⟩ := source.ofChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2009,7 +2010,7 @@ theorem typedViewClaim_of {n : Nat} {cfg : Cfg} {results : List Ty} {place : Pla
   have hextMiddle := hext.of_adv (adv_emitDef hview)
   simp only [evalView]
   refine SimEAt.bind (hp env state child hchildMetadata ls middle address pt cx fr hplace hpp
-    hextMiddle hrel hgir hresults) fun location after pt' fr' hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun location after pt' fr' hdone P => ?_
   have hcell := P.has (address, .val (.ref location)) (by simp)
   apply SimEAt.of_simG
   refine leaf_def P hview hext (by simp) RVal.view ?_
@@ -2017,7 +2018,7 @@ theorem typedViewClaim_of {n : Nat} {cfg : Cfg} {results : List Ty} {place : Pla
 
 theorem typedViewClaim_val {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) : TypedViewClaim (n + 1) cfg results (.val expr) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots, mutability, htype⟩ := source.valChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2027,7 +2028,7 @@ theorem typedViewClaim_val {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Exp
   have hextMiddle := hext.of_adv (adv_emitDef hview)
   simp only [evalView]
   refine SimEAt.bind (he env state child hchildMetadata ls middle id pt cx fr hchild hpp
-    hextMiddle hrel hgir hresults) fun value after pt' fr' hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun value after pt' fr' hdone P => ?_
   have hvalue := (child.result n value hdone).typed
   rw [htype] at hvalue
   obtain ⟨location, start, length, rfl, hslice⟩ := hvalue
@@ -2039,7 +2040,7 @@ theorem typedViewClaim_val {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Exp
 
 theorem typedExprClaim_len {n : Nat} {cfg : Cfg} {results : List Ty} {view : View}
     (hv : TypedViewClaim n cfg results view) : TypedExprClaim (n + 1) cfg results (.len view) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots⟩ := source.lenChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2049,7 +2050,7 @@ theorem typedExprClaim_len {n : Nat} {cfg : Cfg} {results : List Ty} {view : Vie
   have hextMiddle := hext.of_adv (adv_emitDef hlen)
   simp only [evalExpr]
   refine SimEAt.bind (hv env state child hchildMetadata ls middle id pt cx fr hview hpp
-    hextMiddle hrel hgir hresults) fun value after pt' fr' hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun value after pt' fr' hdone P => ?_
   have hcell := P.has (id, .view value) (by simp)
   apply SimEAt.of_simG
   refine leaf_def P hlen hext (by simp) RVal.val ?_
@@ -2059,7 +2060,7 @@ theorem typedExprClaim_slice {n : Nat} {cfg : Cfg} {results : List Ty} {view : V
     (hv : TypedViewClaim n cfg results view) (hl : TypedBoundClaim n cfg results low)
     (hh : TypedBoundClaim n cfg results high) (mutability : Mutability) (origin : OriginId) :
     TypedExprClaim (n + 1) cfg results (.slice mutability view low high origin) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨sampled, htyping, hroots, next⟩ := source.sliceChildren mutability origin
   have hviewMetadata : SourceResults sampled.typingEnv sampled.rootsEnv results := by
     rw [htyping, hroots]
@@ -2071,19 +2072,19 @@ theorem typedExprClaim_slice {n : Nat} {cfg : Cfg} {results : List Ty} {view : V
   have hextFirst := hextSecond.of_adv (advB_lowerBound low _ _ _ _ hlower)
   simp only [evalExpr]
   refine SimEAt.bind (hv env state sampled hviewMetadata ls first rv pt cx fr hview hpp hextFirst
-    hrel hgir hresults) fun value after pt1 fr1 hdone P1 => ?_
+    hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P1 => ?_
   obtain ⟨lower, hltyping, hlroots, nextLow⟩ := next n value after hdone
   have hlmetadata : SourceResults lower.typingEnv lower.rootsEnv results := by
     rw [hltyping, hlroots]
     exact hmetadata
   refine SimEAt.bind (hl env after lower hlmetadata first second bl pt1 cx fr1 value.len 0
-    hlower P1.pp hextSecond P1.rel hgir hresults) fun lo after2 pt2 fr2 hdone2 ⟨cl, hsl, P2⟩ => ?_
+    hlower P1.pp hextSecond P1.rel hgir hresults (hgenerated.lowerView view hview)) fun lo after2 pt2 fr2 hdone2 ⟨cl, hsl, P2⟩ => ?_
   obtain ⟨upper, hhtyping, hhroots⟩ := nextLow n lo after2 hdone2
   have hhmetadata : SourceResults upper.typingEnv upper.rootsEnv results := by
     rw [hhtyping, hhroots]
     exact hmetadata
   refine SimEAt.bind (hh env after2 upper hhmetadata second third bh pt2 cx fr2 value.len value.len
-    hupper P2.pp hextThird P2.rel hgir hresults) fun hi after3 pt3 fr3 hdone3 ⟨ch, hsh, P3⟩ => ?_
+    hupper P2.pp hextThird P2.rel hgir hresults ((hgenerated.lowerView view hview).lowerBound low hlower)) fun hi after3 pt3 fr3 hdone3 ⟨ch, hsh, P3⟩ => ?_
   have P123 := (P1.comp P2).comp P3
   have hviewCell := P123.has (rv, .view value) (by simp)
   have hcl : ∀ p ∈ cl, fr3.vals[p.1]? = some p.2 := fun p hp => P123.has p (by simp [hp])
@@ -2103,7 +2104,7 @@ theorem typedExprClaim_lit (n : Nat) (cfg : Cfg) (results : List Ty) (ty : IntTy
   cases n with
   | zero => exact typedExprClaim_zero _ _ _
   | succ n =>
-    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
     simp only [lowerExpr] at hlow
     simp only [evalExpr]
     exact SimEAt.of_simG (leaf_def (Post.init hrel hpp) hlow hext (by simp) RVal.val
@@ -2114,7 +2115,7 @@ theorem typedExprClaim_bool (n : Nat) (cfg : Cfg) (results : List Ty) (value : B
   cases n with
   | zero => exact typedExprClaim_zero _ _ _
   | succ n =>
-    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
     simp only [lowerExpr] at hlow
     simp only [evalExpr]
     exact SimEAt.of_simG (leaf_def (Post.init hrel hpp) hlow hext (by simp) RVal.val
@@ -2122,7 +2123,7 @@ theorem typedExprClaim_bool (n : Nat) (cfg : Cfg) (results : List Ty) (value : B
 
 theorem typedExprClaim_not {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) : TypedExprClaim (n + 1) cfg results (.not expr) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots, hbool⟩ := source.notChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2132,7 +2133,7 @@ theorem typedExprClaim_not {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Exp
   have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
   simp only [evalExpr]
   refine SimEAt.bind (he env state child hchildMetadata ls middle x pt cx fr hchild hpp
-    hextMiddle hrel hgir hresults) fun value after pt1 fr1 hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P => ?_
   have hvalue := (child.result n value hdone).typed
   rw [hbool] at hvalue
   obtain ⟨boolean, rfl⟩ := Core.Sound.hasTy_bool hvalue
@@ -2144,7 +2145,7 @@ theorem typedExprClaim_not {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Exp
 
 theorem typedExprClaim_read {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) : TypedExprClaim (n + 1) cfg results (.read place) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots⟩ := source.readChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2154,7 +2155,7 @@ theorem typedExprClaim_read {n : Nat} {cfg : Cfg} {results : List Ty} {place : P
   have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
   simp only [evalExpr]
   refine SimEAt.bind (hp env state child hchildMetadata ls middle id pt cx fr hchild hpp
-    hextMiddle hrel hgir hresults) fun location after pt1 fr1 hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun location after pt1 fr1 hdone P => ?_
   have hx := P.has (id, .val (.ref location)) (by simp)
   apply SimEAt.of_simG
   exact leaf_def P hdef hext (by simp) RVal.val
@@ -2163,7 +2164,7 @@ theorem typedExprClaim_read {n : Nat} {cfg : Cfg} {results : List Ty} {place : P
 theorem typedExprClaim_ref {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) (mutability : Mutability) :
     TypedExprClaim (n + 1) cfg results (.ref mutability place) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots⟩ := source.refChild mutability
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2173,12 +2174,12 @@ theorem typedExprClaim_ref {n : Nat} {cfg : Cfg} {results : List Ty} {place : Pl
   rcases freezeTo_cases hfreeze with ⟨rfl, rfl⟩ | hfreeze
   · simp only [evalExpr]
     refine SimEAt.bind (hp env state child hchildMetadata ls ls' r pt cx fr hchild hpp
-      hext hrel hgir hresults) fun location after pt1 fr1 hdone P => ?_
+      hext hrel hgir hresults hgenerated) fun location after pt1 fr1 hdone P => ?_
     exact SimEAt.ret P
   · have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hfreeze)
     simp only [evalExpr]
     refine SimEAt.bind (hp env state child hchildMetadata ls middle id pt cx fr hchild hpp
-      hextMiddle hrel hgir hresults) fun location after pt1 fr1 hdone P => ?_
+      hextMiddle hrel hgir hresults hgenerated) fun location after pt1 fr1 hdone P => ?_
     have hx := P.has (id, .val (.ref location)) (by simp)
     apply SimEAt.of_simG
     exact leaf_def P hfreeze hext (by simp) RVal.val
@@ -2187,7 +2188,7 @@ theorem typedExprClaim_ref {n : Nat} {cfg : Cfg} {results : List Ty} {place : Pl
 theorem typedExprClaim_bin {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr}
     (ha : TypedExprClaim n cfg results a) (hb : TypedExprClaim n cfg results b)
     (op : BinOp) (origin : OriginId) : TypedExprClaim (n + 1) cfg results (.bin op a b origin) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨intTy, left, htyping, hroots, htype, next⟩ := source.binChildren op origin
   have hleftMetadata : SourceResults left.typingEnv left.rootsEnv results := by
     rw [htyping, hroots]
@@ -2200,7 +2201,7 @@ theorem typedExprClaim_bin {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr
   have hextFirst : ExtT first cx.fn.blocks := hextMiddle.of_adv (advB_lowerExpr b _ _ _ _ hsecond)
   simp only [evalExpr]
   refine SimEAt.bind (ha env state left hleftMetadata ls first x pt cx fr hfirst hpp
-    hextFirst hrel hgir hresults) fun value after pt1 fr1 hdone P1 => ?_
+    hextFirst hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P1 => ?_
   have hvalue := (left.result n value hdone).typed
   rw [htype] at hvalue
   obtain ⟨integer, rfl⟩ := Core.Sound.hasTy_int hvalue
@@ -2210,7 +2211,7 @@ theorem typedExprClaim_bin {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr
     rw [htypingRight, hrootsRight]
     exact hmetadata
   refine SimEAt.bind (hb env after right hrightMetadata first same y pt1 cx fr1 hsecond P1.pp
-    hextMiddle P1.rel hgir hresults) fun value2 after2 pt2 fr2 hdone2 P2 => ?_
+    hextMiddle P1.rel hgir hresults (hgenerated.lowerExpr a hfirst)) fun value2 after2 pt2 fr2 hdone2 P2 => ?_
   have hvalue2 := (right.result n value2 hdone2).typed
   rw [htypeRight] at hvalue2
   obtain ⟨integer2, rfl⟩ := Core.Sound.hasTy_int hvalue2
@@ -2226,9 +2227,10 @@ theorem typed_shortCircuit_sim {isAnd : Bool} {x : ValueId} {rhs : B ValueId} {l
     (hs : shortCircuit isAnd x rhs le ls1 = (r, ls')) (hpp : ls1.pp = some pt1)
     (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr1 ls1)
     (hx : fr1.vals[x]? = some (.val (.bool β))) (hadv : AdvB rhs)
+    (hgenerated : GeneratedBuilderState ls1)
     (hrhs : ∀ (ls_d : LS) (y : ValueId) (ls_e : LS) (pt_d : Pt), rhs le ls_d = (y, ls_e) →
       ls_d.pp = some pt_d → ExtT ls_e cx.fn.blocks → Rel cfg env cx fr1 ls_d →
-      SimEAt cx pt_d fr1 cb (fun vb pt' fr' => Post cfg env cx ls_d fr1 ls_e fr' pt' [(y, .val vb)]) state) :
+      GeneratedBuilderState ls_d → SimEAt cx pt_d fr1 cb (fun vb pt' fr' => Post cfg env cx ls_d fr1 ls_e fr' pt' [(y, .val vb)]) state) :
     SimEAt cx pt1 fr1 (if isAnd then
       if β then cb >>= fun v => expectBool v >>= fun b => pure (.bool b) else pure (.bool false)
       else if β then pure (.bool true) else cb >>= fun v => expectBool v >>= fun b => pure (.bool b)) (fun v pt' fr' => Post cfg env cx ls1 fr1 ls' fr' pt' [(r, .val v)]) state := by
@@ -2326,7 +2328,10 @@ theorem typed_shortCircuit_sim {isAnd : Bool} {x : ValueId} {rhs : B ValueId} {l
     intro b' hg'
     refine SimG.goes hg' (SimG.ret ?_)
     exact Post.join (Same.refl _ _) hrel (Nat.le_refl _) hlt hmono hst_g hpp_g
-  have hrhs' := hrhs ls_d y ls_e (ls1.blocks.size, 0) h3 hdpp hext_e hrel_d
+  have generatedC := hgenerated.scFork isAnd x h1
+  have generatedD := generatedC.setCur (some ls1.blocks.size)
+    (by intro current same; cases same; exact (Array.getElem?_eq_some_iff.mp hbrb).1) h2
+  have hrhs' := hrhs ls_d y ls_e (ls1.blocks.size, 0) h3 hdpp hext_e hrel_d generatedD
   cases isAnd <;> cases β
   · -- or, false: the right operand
     have hi : instAt cx.fn pt1 = some (.term (.condbr x (ls1.blocks.size + 1) [x] ls1.blocks.size [])) := hinst
@@ -2351,7 +2356,7 @@ private theorem typedExprClaim_shortCircuit {n : Nat} {cfg : Cfg} {results : Lis
     TypedExprClaim (n + 1) cfg results (if isAnd then .and a b else .or a b) := by
   cases isAnd
   all_goals (
-    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
     obtain ⟨left, htyping, hroots, htype, next⟩ := source.shortCircuitChildren _
     have hleftMetadata : SourceResults left.typingEnv left.rootsEnv results := by
       rw [htyping, hroots]
@@ -2363,7 +2368,7 @@ private theorem typedExprClaim_shortCircuit {n : Nat} {cfg : Cfg} {results : Lis
       hext.of_adv (advB_shortCircuit _ x hadv _ _ _ _ hsc)
     simp only [Bool.false_eq_true, ite_false, ite_true, evalExpr]
     refine SimEAt.bind (ha env state left hleftMetadata ls first x pt cx fr hfirst hpp
-      hextFirst hrel hgir hresults) fun value after pt1 fr1 hdone P1 => ?_
+      hextFirst hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P1 => ?_
     have hvalue := (left.result n value hdone).typed
     rw [htype] at hvalue
     obtain ⟨boolean, rfl⟩ := Core.Sound.hasTy_bool hvalue
@@ -2374,10 +2379,10 @@ private theorem typedExprClaim_shortCircuit {n : Nat} {cfg : Cfg} {results : Lis
       exact hmetadata
     have hx := P1.has (x, .val (.bool boolean)) (by simp)
     refine SimEAt.mono (typed_shortCircuit_sim (cb := evalExpr n cfg env b) hsc P1.pp hext
-      P1.rel hx hadv ?_) fun v after2 pt' fr' done P => ?_
-    · intro ls_d y ls_e pt_d h3 hpp_d hext_e hrel_d
+      P1.rel hx hadv (hgenerated.lowerExpr a hfirst) ?_) fun v after2 pt' fr' done P => ?_
+    · intro ls_d y ls_e pt_d h3 hpp_d hext_e hrel_d generatedD
       exact hb env after right hrightMetadata ls_d ls_e y pt_d cx fr1 h3 hpp_d hext_e
-        hrel_d hgir hresults
+        hrel_d hgir hresults generatedD
     · exact (P1.comp P).sub (by simp)
   )
 
@@ -2392,7 +2397,7 @@ theorem typedExprClaim_or {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr}
 theorem typedExprClaim_cmp {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr}
     (ha : TypedExprClaim n cfg results a) (hb : TypedExprClaim n cfg results b)
     (op : CmpOp) : TypedExprClaim (n + 1) cfg results (.cmp op a b) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨left, htyping, hroots, next⟩ := source.cmpChildren op
   have hleftMetadata : SourceResults left.typingEnv left.rootsEnv results := by
     rw [htyping, hroots]
@@ -2414,13 +2419,13 @@ theorem typedExprClaim_cmp {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr
   have hextFirst : ExtT first cx.fn.blocks := hextMiddle.of_adv (advB_lowerExpr b _ _ _ _ hsecond)
   simp only [evalExpr]
   refine SimEAt.bind (ha env state left hleftMetadata ls first x pt cx fr hfirst hpp
-    hextFirst hrel hgir hresults) fun value after pt1 fr1 hdone P1 => ?_
+    hextFirst hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P1 => ?_
   obtain ⟨right, htypingRight, hrootsRight⟩ := next n value after hdone
   have hrightMetadata : SourceResults right.typingEnv right.rootsEnv results := by
     rw [htypingRight, hrootsRight]
     exact hmetadata
   refine SimEAt.bind (hb env after right hrightMetadata first same y pt1 cx fr1 hsecond P1.pp
-    hextMiddle P1.rel hgir hresults) fun value2 after2 pt2 fr2 hdone2 P2 => ?_
+    hextMiddle P1.rel hgir hresults (hgenerated.lowerExpr a hfirst)) fun value2 after2 pt2 fr2 hdone2 P2 => ?_
   have P12 := P1.comp P2
   have hx := P12.has (x, .val value) (by simp)
   have hy := P12.has (y, .val value2) (by simp)
@@ -2435,7 +2440,7 @@ theorem typedExprClaim_cmp {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr
 theorem typedExprClaim_un {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) (op : UnOp) (origin : OriginId) :
     TypedExprClaim (n + 1) cfg results (.un op expr origin) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots, intTy, htype⟩ := source.unChild op origin
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2447,7 +2452,7 @@ theorem typedExprClaim_un {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr
   have hextMiddle : ExtT same cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
   simp only [evalExpr]
   refine SimEAt.bind (he env state child hchildMetadata ls same id pt cx fr hchild hpp
-    hextMiddle hrel hgir hresults) fun value after pt1 fr1 hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P => ?_
   have hvalue := (child.result n value hdone).typed
   rw [htype] at hvalue
   obtain ⟨integer, rfl⟩ := Core.Sound.hasTy_int hvalue
@@ -2459,7 +2464,7 @@ theorem typedExprClaim_un {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr
 theorem typedExprClaim_push {n : Nat} {cfg : Cfg} {results : List Ty} {owner : Place} {argument : Expr}
     (hp : TypedPlaceClaim n cfg results owner) (ha : TypedExprClaim n cfg results argument)
     (origin : Option OriginId) : TypedExprClaim (n + 1) cfg results (.push owner argument origin) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨left, htyping, hroots, next⟩ := source.pushChildren origin
   have hleftMetadata : SourceResults left.typingEnv left.rootsEnv results := by
     rw [htyping, hroots]
@@ -2470,13 +2475,13 @@ theorem typedExprClaim_push {n : Nat} {cfg : Cfg} {results : List Ty} {owner : P
   have hextFirst := hextMiddle.of_adv (advB_lowerExpr argument _ _ _ _ hargument)
   simp only [evalExpr]
   refine SimEAt.bind (hp env state left hleftMetadata ls first address pt cx fr howner hpp
-    hextFirst hrel hgir hresults) fun location after pt1 fr1 hdone P1 => ?_
+    hextFirst hrel hgir hresults hgenerated) fun location after pt1 fr1 hdone P1 => ?_
   obtain ⟨right, htypingRight, hrootsRight⟩ := next n location after hdone
   have hrightMetadata : SourceResults right.typingEnv right.rootsEnv results := by
     rw [htypingRight, hrootsRight]
     exact hmetadata
   refine SimEAt.bind (ha env after right hrightMetadata first middle id pt1 cx fr1 hargument P1.pp
-    hextMiddle P1.rel hgir hresults) fun value after2 pt2 fr2 hdone2 P2 => ?_
+    hextMiddle P1.rel hgir hresults (hgenerated.lowerPlace owner howner)) fun value after2 pt2 fr2 hdone2 P2 => ?_
   have P12 := P1.comp P2
   have hownerCell := P12.has (address, .val (.ref location)) (by simp)
   have hvalueCell := P12.has (id, .val value) (by simp)
@@ -2492,7 +2497,7 @@ theorem typedExprClaim_push {n : Nat} {cfg : Cfg} {results : List Ty} {owner : P
 theorem typedExprClaim_pop {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) (origin : OriginId) :
     TypedExprClaim (n + 1) cfg results (.pop place origin) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots⟩ := source.popChild origin
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2502,7 +2507,7 @@ theorem typedExprClaim_pop {n : Nat} {cfg : Cfg} {results : List Ty} {place : Pl
   have hextMiddle := hext.of_adv (adv_emitDef hpop)
   simp only [evalExpr]
   refine SimEAt.bind (hp env state child hchildMetadata ls middle address pt cx fr hplace hpp
-    hextMiddle hrel hgir hresults) fun location after pt' fr' hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun location after pt' fr' hdone P => ?_
   have hcell := P.has (address, .val (.ref location)) (by simp)
   apply SimEAt.of_simG
   refine leaf_def P hpop hext (by simp) RVal.val ?_
@@ -2524,7 +2529,7 @@ theorem typedExprClaim_pop {n : Nat} {cfg : Cfg} {results : List Ty} {place : Pl
 theorem typedExprClaim_fill {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) (target : Ty) :
     TypedExprClaim (n + 1) cfg results (.fill target expr) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨element, count, htarget, child, htyping, hroots, htype⟩ := source.fillChild target
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2535,7 +2540,7 @@ theorem typedExprClaim_fill {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Ex
   have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
   simp only [evalExpr, Goose.Core.expectFixedCount, pure_bind]
   refine SimEAt.bind (he env state child hchildMetadata ls middle id pt cx fr hchild hpp
-    hextMiddle hrel hgir hresults) fun value after pt1 fr1 hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P => ?_
   have hx := P.has (id, .val value) (by simp)
   apply SimEAt.of_simG
   refine leaf_def P hdef hext (by simp) RVal.val ?_
@@ -2544,7 +2549,7 @@ theorem typedExprClaim_fill {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Ex
 theorem typedExprClaim_conv {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) (kind : ConvKind) (target : Ty) (origin : OriginId) :
     TypedExprClaim (n + 1) cfg results (.conv kind target expr origin) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots, intTy, targetInt, htype, htarget⟩ := source.convChild kind target origin
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2557,7 +2562,7 @@ theorem typedExprClaim_conv {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Ex
   have hextMiddle : ExtT same cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
   simp only [evalExpr]
   refine SimEAt.bind (he env state child hchildMetadata ls same id pt cx fr hchild hpp
-    hextMiddle hrel hgir hresults) fun value after pt1 fr1 hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P => ?_
   have hvalue := (child.result n value hdone).typed
   rw [htype] at hvalue
   obtain ⟨integer, rfl⟩ := Core.Sound.hasTy_int hvalue
@@ -2571,7 +2576,7 @@ theorem typedPlaceClaim_var (n : Nat) (cfg : Cfg) (results : List Ty) (id : VarI
   cases n with
   | zero => exact typedPlaceClaim_zero _ _ _
   | succ n =>
-    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
     simp only [lowerPlace] at hlow
     simp only [evalPlace]
     exact SimEAt.of_simG (leaf_def (Post.init hrel hpp) hlow hext (by simp)
@@ -2583,7 +2588,7 @@ theorem typedPlaceClaim_global (n : Nat) (cfg : Cfg) (results : List Ty) (id : G
   cases n with
   | zero => exact typedPlaceClaim_zero _ _ _
   | succ n =>
-    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
     simp only [lowerPlace] at hlow
     simp only [evalPlace]
     exact SimEAt.of_simG (leaf_def (Post.init hrel hpp) hlow hext (by simp)
@@ -2597,7 +2602,8 @@ theorem typedPlace_deref_sim {n : Nat} {cfg : Cfg} {results : List Ty} {expr : E
     (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame)
     (hlow : lowerPlace (.deref expr) (lowerEnv cfg.mod env.vars results) ls = (r, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
-    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results) :
+    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results)
+    (hgenerated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (evalPlace (n + 1) cfg env (.deref expr))
       (fun location pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val (.ref location))]) state := by
   obtain ⟨child, htyping, hroots, mutability, target, htype⟩ := source.derefChild hnormal
@@ -2607,7 +2613,7 @@ theorem typedPlace_deref_sim {n : Nat} {cfg : Cfg} {results : List Ty} {expr : E
   simp only [lowerPlace] at hlow
   simp only [evalPlace]
   refine SimEAt.bind (he env state child hchildMetadata ls ls' r pt cx fr hlow hpp
-    hext hrel hgir hresults) fun value after pt1 fr1 hdone P => ?_
+    hext hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P => ?_
   have hvalue := (child.result n value hdone).typed
   rw [htype] at hvalue
   obtain ⟨location, rfl, _⟩ := hvalue
@@ -2646,11 +2652,11 @@ theorem read_var_sim (n : Nat) (cfg : Cfg) (results : List Ty) (env : Env) (id :
 open Core.Sound in
 theorem typedPlaceClaim_deref {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) : TypedPlaceClaim (n + 1) cfg results (.deref expr) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   cases hslice : sliceRefTy source.typingEnv expr with
   | none =>
     exact typedPlace_deref_sim he env state source hslice hmetadata
-      ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+      ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   | some ty =>
     obtain ⟨id, localDecl, mu0, mu, element, rfl, hvisible, hvariable, htype, hflat, hty⟩ :=
       sliceRefTy_some hslice
@@ -2679,7 +2685,7 @@ theorem typedPlaceClaim_deref {n : Nat} {cfg : Cfg} {results : List Ty} {expr : 
 theorem typedPlaceClaim_elem {n : Nat} {cfg : Cfg} {results : List Ty} {view : View} {index : Expr}
     (hv : TypedViewClaim n cfg results view) (hi : TypedExprClaim n cfg results index)
     (origin : OriginId) : TypedPlaceClaim (n + 1) cfg results (.elem view index origin) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨intTy, left, htyping, hroots, next⟩ := source.elemChildren origin
   have hleftMetadata : SourceResults left.typingEnv left.rootsEnv results := by
     rw [htyping, hroots]
@@ -2690,13 +2696,13 @@ theorem typedPlaceClaim_elem {n : Nat} {cfg : Cfg} {results : List Ty} {view : V
   have hextFirst : ExtT first cx.fn.blocks := hextMiddle.of_adv (advB_lowerExpr index _ _ _ _ hsecond)
   simp only [evalPlace]
   refine SimEAt.bind (hv env state left hleftMetadata ls first vw pt cx fr hfirst hpp
-    hextFirst hrel hgir hresults) fun value after pt1 fr1 hdone P1 => ?_
+    hextFirst hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P1 => ?_
   obtain ⟨right, htypingRight, hrootsRight, htype⟩ := next n value after hdone
   have hrightMetadata : SourceResults right.typingEnv right.rootsEnv results := by
     rw [htypingRight, hrootsRight]
     exact hmetadata
   refine SimEAt.bind (hi env after right hrightMetadata first middle iv pt1 cx fr1 hsecond P1.pp
-    hextMiddle P1.rel hgir hresults) fun value2 after2 pt2 fr2 hdone2 P2 => ?_
+    hextMiddle P1.rel hgir hresults (hgenerated.lowerView view hfirst)) fun value2 after2 pt2 fr2 hdone2 P2 => ?_
   have hvalue := (right.result n value2 hdone2).typed
   rw [htype] at hvalue
   obtain ⟨integer, rfl⟩ := Core.Sound.hasTy_int hvalue
@@ -2715,7 +2721,7 @@ theorem typedPlaceClaim_elem {n : Nat} {cfg : Cfg} {results : List Ty} {view : V
 theorem typedPlaceClaim_field {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) (index : Nat) :
     TypedPlaceClaim (n + 1) cfg results (.field place index) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨child, htyping, hroots⟩ := source.fieldChild index
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
@@ -2725,7 +2731,7 @@ theorem typedPlaceClaim_field {n : Nat} {cfg : Cfg} {results : List Ty} {place :
   have hextMiddle := hext.of_adv (adv_emitDef hfield)
   simp only [evalPlace]
   refine SimEAt.bind (hp env state child hchildMetadata ls middle address pt cx fr hplace hpp
-    hextMiddle hrel hgir hresults) fun location after pt' fr' hdone P => ?_
+    hextMiddle hrel hgir hresults hgenerated) fun location after pt' fr' hdone P => ?_
   have hcell := P.has (address, .val (.ref location)) (by simp)
   apply SimEAt.of_simG
   refine leaf_def P hfield hext (by simp) (fun l => RVal.val (.ref l)) ?_
@@ -2755,41 +2761,41 @@ def TypedArgClaim (n : Nat) (cfg : Cfg) (results : List Ty) (arg : Arg) : Prop :
     ∀ (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerArg arg (lowerEnv cfg.mod env.vars results) ls = (r, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results → GeneratedBuilderState ls →
     SimEAt cx pt fr (evalArg n cfg env arg)
       (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val value)]) state
 
 theorem typedArgClaim_zero (cfg : Cfg) (results : List Ty) (arg : Arg) :
     TypedArgClaim 0 cfg results arg := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   simp only [evalArg]
   exact SimEAt.of_timeout state
 
 theorem typedArgClaim_byVal {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) : TypedArgClaim (n + 1) cfg results (.byVal expr) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   cases source with
   | byVal source =>
     simp only [lowerArg] at hlow
     simp only [evalArg]
-    exact he env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    exact he env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
 
 theorem typedArgClaim_byRef {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) (mutability : Mutability) :
     TypedArgClaim (n + 1) cfg results (.byRef mutability place) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   cases source with
   | byRef _ source target =>
     simp only [lowerArg, bind_eq] at hlow
     obtain ⟨id, middle, hplace, hfreeze⟩ := hlow
     rcases freezeTo_cases hfreeze with ⟨rfl, rfl⟩ | hfreeze
     · simp only [evalArg]
-      refine SimEAt.bind (hp env state source hmetadata ls ls' r pt cx fr hplace hpp hext hrel hgir hresults)
+      refine SimEAt.bind (hp env state source hmetadata ls ls' r pt cx fr hplace hpp hext hrel hgir hresults hgenerated)
         fun location after pt' fr' hdone P => ?_
       exact SimEAt.ret P
     · have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hfreeze)
       simp only [evalArg]
-      refine SimEAt.bind (hp env state source hmetadata ls middle id pt cx fr hplace hpp hextMiddle hrel hgir hresults)
+      refine SimEAt.bind (hp env state source hmetadata ls middle id pt cx fr hplace hpp hextMiddle hrel hgir hresults hgenerated)
         fun location after pt' fr' hdone P => ?_
       have hcell : fr'.vals[id]? = some (.val (.ref location)) := P.has (id, _) (by simp)
       apply SimEAt.of_simG
@@ -2993,7 +2999,7 @@ def TypedArgsClaim (n : Nat) (cfg : Cfg) (results : List Ty) (args : List Arg) :
     ∀ (ls ls' : LS) (ids : List ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerArgs args (lowerEnv cfg.mod env.vars results) ls = (ids, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results → GeneratedBuilderState ls →
     SimEAt cx pt fr (mapList (evalArg n cfg env) args)
       (fun values pt' fr' => ids.length = values.length ∧
         Post cfg env cx ls fr ls' fr' pt' (cellsOf ids values)) state
@@ -3001,12 +3007,12 @@ def TypedArgsClaim (n : Nat) (cfg : Cfg) (results : List Ty) (args : List Arg) :
 theorem typedArgsClaim {n : Nat} {cfg : Cfg} {results : List Ty} : ∀ (args : List Arg),
     (∀ arg ∈ args, TypedArgClaim n cfg results arg) → TypedArgsClaim n cfg results args
   | [], _ => by
-    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults hgenerated
     simp only [lowerArgs, pure_run] at hlow
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
     exact SimEAt.ret ⟨rfl, by simpa [cellsOf] using Post.init hrel hpp⟩
   | arg :: args, ha => by
-    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults hgenerated
     cases source with
     | cons source rest =>
       simp only [lowerArgs, bind_eq] at hlow
@@ -3017,9 +3023,9 @@ theorem typedArgsClaim {n : Nat} {cfg : Cfg} {results : List Ty} : ∀ (args : L
         hext.of_adv (advB_lowerArgs args _ _ _ _ hargs)
       simp only [mapList]
       refine SimEAt.bind (ha arg (by simp) env state source hmetadata.1 ls middle id pt cx fr
-        harg hpp hextMiddle hrel hgir hresults) fun value state1 pt1 fr1 hdone P => ?_
+        harg hpp hextMiddle hrel hgir hresults hgenerated) fun value state1 pt1 fr1 hdone P => ?_
       refine SimEAt.bind (typedArgsClaim args (fun arg harg => ha arg (by simp [harg]))
-        env state1 (rest value state1 hdone) (hmetadata.2 value state1 hdone) middle after restIds pt1 cx fr1 hargs P.pp hext P.rel hgir hresults)
+        env state1 (rest value state1 hdone) (hmetadata.2 value state1 hdone) middle after restIds pt1 cx fr1 hargs P.pp hext P.rel hgir hresults (hgenerated.lowerArg arg harg))
         fun values state2 pt2 fr2 hdoneRest ⟨hlen, Q⟩ => ?_
       exact SimEAt.ret ⟨by simp [hlen], by simpa [cellsOf] using P.comp Q⟩
 
@@ -3048,7 +3054,8 @@ theorem typed_call_sim {n : Nat} {cfg : Cfg} {results : List Ty} {c : ContextId}
     (ls ls' : LS) (r : ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame)
     (hlow : lowerExpr (.call c args org) (lowerEnv cfg.mod env.vars results) ls = (r, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
-    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results) :
+    (hgir : cx.cfg.mod = lower cfg.mod) (hresults : cx.fn.results = results)
+    (hgenerated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (evalExpr (n + 1) cfg env (.call c args org))
       (fun value pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(r, .val value)]) state := by
   let le := lowerEnv cfg.mod env.vars results
@@ -3060,7 +3067,7 @@ theorem typed_call_sim {n : Nat} {cfg : Cfg} {results : List Ty} {c : ContextId}
   have hextMiddle : ExtT middle cx.fn.blocks := hextAfter.of_adv (adv_emitDef hdef)
   simp only [evalExpr]
   refine SimEAt.bind (ha env state source hmetadata ls middle ids pt cx fr
-    hargs hpp hextMiddle hrel hgir hresults) fun values afterArgs pt1 fr1 hdone ⟨hlen, P⟩ => ?_
+    hargs hpp hextMiddle hrel hgir hresults hgenerated) fun values afterArgs pt1 fr1 hdone ⟨hlen, P⟩ => ?_
   have hread := mapList_getVal_cells hlen P.has
   have hi := (Post.def_leaf P hdef hextAfter (.val .unit)).2
   have hcfg : cx.cfg = ⟨cfg.profile, lower cfg.mod⟩ := by
@@ -3093,10 +3100,10 @@ theorem typedExprClaim_call {n : Nat} {cfg : Cfg} {results : List Ty} {c : Conte
         (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ env.depth
           c values) after) :
     TypedExprClaim (n + 1) cfg results (.call c args origin) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨argsSource, argsMetadata⟩ := source.callArgs n results hmetadata
   exact typed_call_sim ha env state argsSource argsMetadata (hc env state source hmetadata)
-    ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+    ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
 
 inductive ExprsSource (n : Nat) (cfg : Cfg) (env : Env) : List Expr → St → Type
   | nil (state : St) : ExprsSource n cfg env [] state
@@ -3356,7 +3363,7 @@ def TypedExprsClaim (n : Nat) (cfg : Cfg) (results : List Ty) (exprs : List Expr
     ∀ (ls ls' : LS) (ids : List ValueId) (pt : Pt) (cx : FnCtx) (fr : GIR.Frame),
     lowerExprs exprs (lowerEnv cfg.mod env.vars results) ls = (ids, ls') →
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
-    cx.cfg.mod = lower cfg.mod → cx.fn.results = results →
+    cx.cfg.mod = lower cfg.mod → cx.fn.results = results → GeneratedBuilderState ls →
     SimEAt cx pt fr (mapList (evalExpr n cfg env) exprs)
       (fun values pt' fr' => ids.length = values.length ∧
         Post cfg env cx ls fr ls' fr' pt' (cellsOf ids values)) state
@@ -3364,12 +3371,12 @@ def TypedExprsClaim (n : Nat) (cfg : Cfg) (results : List Ty) (exprs : List Expr
 theorem typedExprsClaim {n : Nat} {cfg : Cfg} {results : List Ty} : ∀ (exprs : List Expr),
     (∀ expr ∈ exprs, TypedExprClaim n cfg results expr) → TypedExprsClaim n cfg results exprs
   | [], _ => by
-    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults hgenerated
     simp only [lowerExprs, pure_run] at hlow
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
     exact SimEAt.ret ⟨rfl, by simpa [cellsOf] using Post.init hrel hpp⟩
   | expr :: exprs, ha => by
-    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults
+    intro env state source hmetadata ls ls' ids pt cx fr hlow hpp hext hrel hgir hresults hgenerated
     cases source with
     | cons source rest =>
       simp only [lowerExprs, bind_eq] at hlow
@@ -3380,24 +3387,24 @@ theorem typedExprsClaim {n : Nat} {cfg : Cfg} {results : List Ty} : ∀ (exprs :
         hext.of_adv (advB_lowerExprs exprs _ _ _ _ htail)
       simp only [mapList]
       refine SimEAt.bind (ha expr (by simp) env state source hmetadata.1 ls middle id pt cx fr
-        hhead hpp hextMiddle hrel hgir hresults) fun value state1 pt1 fr1 hdone P => ?_
+        hhead hpp hextMiddle hrel hgir hresults hgenerated) fun value state1 pt1 fr1 hdone P => ?_
       refine SimEAt.bind (typedExprsClaim exprs (fun expr h => ha expr (by simp [h]))
         env state1 (rest value state1 hdone) (hmetadata.2 value state1 hdone)
-        middle after restIds pt1 cx fr1 htail P.pp hext P.rel hgir hresults)
+        middle after restIds pt1 cx fr1 htail P.pp hext P.rel hgir hresults (hgenerated.lowerExpr expr hhead))
         fun values state2 pt2 fr2 hdoneRest ⟨hlen, Q⟩ => ?_
       exact SimEAt.ret ⟨by simp [hlen], by simpa [cellsOf] using P.comp Q⟩
 
 theorem typedExprClaim_arrLit {n : Nat} {cfg : Cfg} {results : List Ty} {es : List Expr}
     (children : TypedExprsClaim n cfg results es) (target : Ty) :
     TypedExprClaim (n + 1) cfg results (.arrLit target es) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨sources, hsourceMetadata⟩ := source.arrLitChildren n results hmetadata
   simp only [lowerExpr, bind_eq] at hlow
   obtain ⟨ids, middle, hchildren, hdef⟩ := hlow
   have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
   simp only [evalExpr]
   refine SimEAt.bind (children env state sources hsourceMetadata ls middle ids pt cx fr
-    hchildren hpp hextMiddle hrel hgir hresults) fun values after pt1 fr1 hdone ⟨hlen, P⟩ => ?_
+    hchildren hpp hextMiddle hrel hgir hresults hgenerated) fun values after pt1 fr1 hdone ⟨hlen, P⟩ => ?_
   have hread := mapList_getVal_cells hlen P.has
   apply SimEAt.of_simG
   exact leaf_def P hdef hext (by simp) RVal.val (by simp only [execPure, hread, pure_bind])
@@ -3405,7 +3412,7 @@ theorem typedExprClaim_arrLit {n : Nat} {cfg : Cfg} {results : List Ty} {es : Li
 theorem typedExprClaim_structLit {n : Nat} {cfg : Cfg} {results : List Ty} {es : List Expr}
     (children : TypedExprsClaim n cfg results es) (target : Ty) :
     TypedExprClaim (n + 1) cfg results (.structLit target es) := by
-  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults
+  intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
   obtain ⟨sources, hsourceMetadata⟩ := source.structLitChildren n results hmetadata
   have typing := source.typed
   simp only [tyExpr] at typing
@@ -3417,7 +3424,7 @@ theorem typedExprClaim_structLit {n : Nat} {cfg : Cfg} {results : List Ty} {es :
   have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hdef)
   simp only [evalExpr]
   refine SimEAt.bind (children env state sources hsourceMetadata ls middle ids pt cx fr
-    hchildren hpp hextMiddle hrel hgir hresults) fun values after pt1 fr1 hdone ⟨hlen, P⟩ => ?_
+    hchildren hpp hextMiddle hrel hgir hresults hgenerated) fun values after pt1 fr1 hdone ⟨hlen, P⟩ => ?_
   have hread := mapList_getVal_cells hlen P.has
   apply SimEAt.of_simG
   exact leaf_def P hdef hext (by simp) RVal.val (by simp only [execPure, hread, pure_bind])

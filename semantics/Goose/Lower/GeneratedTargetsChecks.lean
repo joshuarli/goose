@@ -1,4 +1,4 @@
-import Goose.Lower.GeneratedTargetsSource
+import Goose.Lower.GeneratedBuilder
 
 namespace Goose.Lower.GeneratedTargetsChecks
 
@@ -16,6 +16,18 @@ example : ¬ TargetsBounded futureEdge := by
 
 example : ¬ LoopBuilderTargets (some ⟨0, 1, .jump 1⟩) entry := by
   simp [LoopBuilderTargets, entry]
+
+example : futureEdge.DenseDefinitions ∧ LiveBound futureEdge ∧
+    ¬ GeneratedBuilderState futureEdge := by
+  refine ⟨?_, ?_, ?_⟩
+  · simp [futureEdge, LS.DenseDefinitions, LS.defs, BlockB.defs]
+  · intro block current
+    change some 0 = some block at current
+    cases current
+    decide
+  · intro generated
+    have invalid := generated.targets 0 ⟨[], #[.term (.br 1 [])]⟩ rfl 1 (by decide)
+    exact Nat.lt_irrefl 1 invalid
 
 example (env : LEnv) (expr : Expr) (before : LS) (bounded : TargetsBounded before) :
     TargetsBounded (lowerExpr expr env before).2 :=

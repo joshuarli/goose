@@ -156,12 +156,11 @@ def resultRoots (m : Module) (vts : Array (Array (Option VTy))) : Array (List Ro
       if ch then go k res' else res'
   go (nRoots + m.funcs.size + 2) initial
 
-/-- A parameter annotation describes the concrete roots a specialization may
-refer to. An absent or empty row keeps the generic parameter root, so omission
-cannot erase effects while a caller is being analyzed. -/
+/-- A present parameter annotation supplies its concrete roots, including an
+empty set. An absent row retains the generic parameter root. -/
 def Func.parameterRoots (f : Func) (i : Nat) : List RootRef :=
   match f.roots.params.find? (·.1 == i) with
-  | some (_, roots) => if roots.isEmpty then [.param i] else roots
+  | some (_, roots) => roots
   | none => [.param i]
 
 def Func.contentRoots (f : Func) (i : Nat) : List RootRef :=
@@ -234,8 +233,8 @@ def ownerIsLimited (vt : Array (Option VTy)) (v : ValueId) : Bool :=
   | some (.limited ..) => true
   | _ => false
 
-def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
-  let vt := f.valueTypes m
+def Func.effectStep (m : Module) (vt : Array (Option VTy)) (f : Func) (p : Prov)
+    (e : Core.Eff) (i : Inst) : Core.Eff :=
   let call (e : Core.Eff) (g : FnId) (args : List ValueId) : Core.Eff :=
     match m.funcs[g]? with
     | none => { e with unknown := true }
@@ -267,91 +266,94 @@ def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
           shrinks := addTargets e.shrinks (mapTargets sm.shrinks)
           aborts := e.aborts || sm.aborts
           outputs := e.outputs || sm.outputs }
-  f.blocks.foldl (fun acc blk => blk.insts.foldl (fun e i =>
-    match i with
-    | .def _ op =>
-      match op with
-      | .load a | .arrayLen a =>
-        { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
-      | .snapshot _ a => { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
-      | .push a _ _ =>
-        let targets := targetsOf (rootsAt p.vals a)
-        let e := { e with grows := addTargets e.grows targets }
-        if m.profile == .shrink then
-          { e with
-            writes := addTargets e.writes targets
-            aborts := e.aborts || ownerIsLimited vt a }
-        else e
-      | .pop a _ =>
-        let targets := targetsOf (rootsAt p.vals a)
-        { e with
-          reads := addTargets e.reads targets
-          shrinks := addTargets e.shrinks targets
-          aborts := true }
-      | .bin o .. => if o.mayAbort then { e with aborts := true } else e
-      | .un .neg .. => { e with aborts := true }
-      | .conv .as .. => { e with aborts := true }
-      | .viewSlice .. | .indexChecked .. => { e with aborts := true }
-      | .call g args _ => call e g args
-      | _ => e
-    | .eff (.store r _ _) =>
-      let rs := rootsAt p.vals r
-      let e := { e with writes := addTargets e.writes (targetsOf rs) }
-      -- A store through a reference-to-slice parameter replaces the caller's slice.
-      let rebound := rs.filterMap fun
-        | .local s =>
-          match f.slots[s]? with
-          | some sl => if sl.ty.isRefLike && sl.var < f.params.length then some (Target.param sl.var) else none
-          | none => none
-        | .param j =>
-          match f.params[j]? with
-          | some t => if t.isRefSlice then some (Target.param j) else none
-          | none => none
-        | .global _ => none
-      { e with rebinds := addTargets e.rebinds rebound }
-    | .eff (.append r v _) =>
-      let targets := targetsOf (rootsAt p.vals r)
-      let sourceTargets := targetsOf (rootsAt p.vals v)
-      let e := { e with
-        reads := addTargets e.reads sourceTargets
-        grows := addTargets e.grows targets }
+  match i with
+  | .def _ op =>
+    match op with
+    | .load a | .arrayLen a =>
+      { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
+    | .snapshot _ a => { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
+    | .push a _ _ =>
+      let targets := targetsOf (rootsAt p.vals a)
+      let e := { e with grows := addTargets e.grows targets }
       if m.profile == .shrink then
         { e with
           writes := addTargets e.writes targets
-          aborts := e.aborts || ownerIsLimited vt r }
+          aborts := e.aborts || ownerIsLimited vt a }
       else e
-    | .eff (.popN r _ _) =>
-      let targets := targetsOf (rootsAt p.vals r)
+    | .pop a _ =>
+      let targets := targetsOf (rootsAt p.vals a)
       { e with
         reads := addTargets e.reads targets
         shrinks := addTargets e.shrinks targets
         aborts := true }
-    | .eff (.resize r _ fill _) =>
-      let targets := targetsOf (rootsAt p.vals r)
-      let e := { e with
-        reads := addTargets e.reads targets
-        shrinks := addTargets e.shrinks targets
-        aborts := true }
-      match fill with
-      | none => e
-      | some _ => { e with
-          writes := addTargets e.writes targets
-          grows := addTargets e.grows targets }
-    | .eff (.clear r _) =>
-      let targets := targetsOf (rootsAt p.vals r)
+    | .bin o .. => if o.mayAbort then { e with aborts := true } else e
+    | .un .neg .. => { e with aborts := true }
+    | .conv .as .. => { e with aborts := true }
+    | .viewSlice _ _ .omitted .omitted _ => e
+    | .viewSlice .. | .indexChecked .. => { e with aborts := true }
+    | .call g args _ => call e g args
+    | _ => e
+  | .eff (.store r _ _) =>
+    let rs := rootsAt p.vals r
+    let e := { e with writes := addTargets e.writes (targetsOf rs) }
+    let rebound := rs.filterMap fun
+      | .local s =>
+        match f.slots[s]? with
+        | some sl => if sl.ty.isRefLike && sl.var < f.params.length then some (Target.param sl.var) else none
+        | none => none
+      | .param j =>
+        match f.params[j]? with
+        | some t => if t.isRefSlice then some (Target.param j) else none
+        | none => none
+      | .global _ => none
+    { e with rebinds := addTargets e.rebinds rebound }
+  | .eff (.append r v _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    let sourceTargets := targetsOf (rootsAt p.vals v)
+    let e := { e with
+      reads := addTargets e.reads sourceTargets
+      grows := addTargets e.grows targets }
+    if m.profile == .shrink then
       { e with
-        reads := addTargets e.reads targets
-        shrinks := addTargets e.shrinks targets }
-    | .eff (.replace r _ _) =>
-      let targets := targetsOf (rootsAt p.vals r)
-      { e with
-        reads := addTargets e.reads targets
         writes := addTargets e.writes targets
-        grows := addTargets e.grows targets
-        shrinks := addTargets e.shrinks targets }
-    | .eff (.print ..) => { e with outputs := true }
-    | .term (.abort ..) | .term (.exit ..) => { e with aborts := true }
-    | _ => e) acc) {}
+        aborts := e.aborts || ownerIsLimited vt r }
+    else e
+  | .eff (.popN r _ _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    { e with
+      reads := addTargets e.reads targets
+      shrinks := addTargets e.shrinks targets
+      aborts := true }
+  | .eff (.resize r _ fill _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    let e := { e with
+      reads := addTargets e.reads targets
+      shrinks := addTargets e.shrinks targets
+      aborts := true }
+    match fill with
+    | none => e
+    | some _ => { e with
+        writes := addTargets e.writes targets
+        grows := addTargets e.grows targets }
+  | .eff (.clear r _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    { e with
+      reads := addTargets e.reads targets
+      shrinks := addTargets e.shrinks targets }
+  | .eff (.replace r _ _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    { e with
+      reads := addTargets e.reads targets
+      writes := addTargets e.writes targets
+      grows := addTargets e.grows targets
+      shrinks := addTargets e.shrinks targets }
+  | .eff (.print ..) => { e with outputs := true }
+  | .term (.abort ..) | .term (.exit ..) => { e with aborts := true }
+  | _ => e
+
+def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
+  let vt := f.valueTypes m
+  f.blocks.foldl (fun acc block => block.insts.foldl (f.effectStep m vt p) acc) {}
 
 /-- Every found target is declared. -/
 def Func.targetsWithin (f : Func) (what : String) (found declared : List Target) : Except String Unit :=

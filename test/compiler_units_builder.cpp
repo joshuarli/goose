@@ -20,11 +20,13 @@
 #include "../src/typecheck.h"
 #include "../src/typecheck_types.h"
 #include "../src/typecheck_exprs.h"
+#include "../src/typecheck_expansion.h"
 #include "../src/typecheck_flow.h"
 #include "../src/typecheck_calls.h"
 #include "../src/typecheck_builtins.h"
 #include "../src/typecheck_nodes.h"
 #include "../src/optimize.h"
+#include "../src/optimize_reassoc.h"
 #include "../src/optimize_basecase.h"
 #include "../src/optimize_tre.h"
 #include "../src/optimize_loops.h"
@@ -49,6 +51,7 @@
 #include "../src/process.h"
 #include "../src/buildfile.h"
 #include "../src/toolchain.h"
+#include "../src/builtin.h"
 #include "../src/build.h"
 #include "../src/json.h"
 #include "../src/units/build.h"
@@ -205,6 +208,31 @@ static void TestNativeUnitBuilderContractDimensions() {
     assert(!ec);
 }
 
+static void TestLinkResponseProbes(const string &root) {
+    auto dir = root + "/link-response";
+    std::error_code ec;
+    filesystem::create_directories(filesystem::path(dir), ec);
+    assert(!ec);
+    auto present = dir + "/present.a";
+    auto absent = dir + "/absent.a";
+    auto response = dir + "/link-cc.rsp";
+    assert(UnitWriteFile(present, ""));
+    assert(UnitWriteFile(response, "present.a\nabsent.a\n"));
+
+    RecordedInputs inputs;
+    auto previous = input_recorder;
+    input_recorder = &inputs;
+    auto output = AbsoluteLinkFile(response, "units-builder-probes", "cc");
+    input_recorder = previous;
+
+    auto recorded = inputs.Text();
+    assert(recorded.find(cat("P\t\t", present, "\n")) != string::npos);
+    assert(recorded.find(cat("A\t\t", absent, "\n")) != string::npos);
+    string text;
+    assert(UnitReadFile(output, text));
+    assert(text == cat(present, "\n", "absent.a\n"));
+}
+
 static string RuntimeVersionOf(const string &goose) {
     auto result = RunProcess({ goose, "version" });
     assert(result.started && result.code == 0);
@@ -354,6 +382,7 @@ static void TestEmittedSourceUnitBuilder(const string &goose, const string &sour
     SetEnvVar("GOOSE_HOME", root + "/goose-home");
     filesystem::create_directories(filesystem::path(GooseHome()), ec);
     assert(!ec);
+    TestLinkResponseProbes(root);
 
     Toolchain tc;
     string why;

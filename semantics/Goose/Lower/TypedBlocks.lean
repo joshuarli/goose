@@ -1,3 +1,4 @@
+import Goose.Lower.GeneratedTargetFrames
 import Goose.Lower.SourceContexts
 import Goose.Lower.LoopBlocks
 
@@ -24,7 +25,7 @@ def TypedStatementLoopSimulation (n : Nat) (cfg : Cfg) (results : List Ty)
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
     cx.cfg.mod = lower cfg.mod → cx.fn.results = results → LoopDepthFits env loop →
     (match loop with | none => True | some context => LoopTargets cx.fn context) →
-    LoopCounterAt loop ls fr →
+    LoopCounterAt loop ls fr → GeneratedBuilderState ls → LoopBuilderFrames loop ls →
     SimEAt cx pt fr (execStmt n cfg env stmt >>= prepareLoopFlow env loop)
       (StatementLoopPost cfg env cx ls fr ls' loop) state
 
@@ -37,7 +38,7 @@ def TypedStatementsLoopSimulation (n : Nat) (cfg : Cfg) (results : List Ty)
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls →
     cx.cfg.mod = lower cfg.mod → cx.fn.results = results → LoopDepthFits env loop →
     (match loop with | none => True | some context => LoopTargets cx.fn context) →
-    LoopCounterAt loop ls fr →
+    LoopCounterAt loop ls fr → GeneratedBuilderState ls → LoopBuilderFrames loop ls →
     SimEAt cx pt fr (execStmts n cfg env stmts >>= prepareLoopFlow env loop)
       (StatementLoopPost cfg env cx ls fr ls' loop) state
 
@@ -45,7 +46,7 @@ theorem typedStatementsLoopSimulation_zero (cfg : Cfg) (results : List Ty)
     (loop : Option LoopCtx) (stmts : List Stmt) :
     TypedStatementsLoopSimulation 0 cfg results loop stmts := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   simp only [execStmts]
   exact SimEAt.of_simG SimG.of_timeout_bind state
 
@@ -55,7 +56,7 @@ theorem typedStatementsLoopSimulation_nil (n : Nat) (cfg : Cfg) (results : List 
   | zero => exact typedStatementsLoopSimulation_zero cfg results loop []
   | succ n =>
     intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
-      hgir hresults hdepth htargets hcounter
+      hgir hresults hdepth htargets hcounter hgenerated hframes
     simp only [lowerStmts, pure_run] at hlow
     obtain ⟨rfl, rfl⟩ := Prod.mk.inj hlow
     cases loop <;>
@@ -126,7 +127,7 @@ def TypedBlockLoopSimulation (n : Nat) (cfg : Cfg) (results : List Ty)
     ls.pp = some pt → ExtT ls' cx.fn.blocks → Rel cfg env cx fr ls → PreRel fr pre pre' →
     cx.cfg.mod = lower cfg.mod → cx.fn.results = results → LoopDepthFits env loop →
     (match loop with | none => True | some context => LoopTargets cx.fn context) →
-    LoopCounterAt loop ls fr →
+    LoopCounterAt loop ls fr → GeneratedBuilderState ls → LoopBuilderFrames loop ls →
     SimEAt cx pt fr (execBlock n cfg env pre' block >>= prepareLoopFlow env loop)
       (BlockLoopPost cfg env cx ls fr ls' loop block want result) state
 
@@ -148,13 +149,13 @@ theorem TypedBlockLoopSimulation.function {n : Nat} {cfg : Cfg} {results : List 
     (hlow : lowerBlock none pre want block (lowerEnv cfg.mod env.vars results) ls = (result, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
     (hpre : PreRel fr pre pre') (hgir : cx.cfg.mod = lower cfg.mod)
-    (hresults : cx.fn.results = results) :
+    (hresults : cx.fn.results = results) (hgenerated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (execBlock n cfg env pre' block >>= prepareReturn env)
       (BlockFlowPost cfg env cx ls fr ls' block want result) state := by
   have halign : LoopSourceMatches source.typingEnv none := by
     exact ⟨fun _ => hloops, fun _ => rfl⟩
   have hs := h env state source hmetadata halign ls ls' result pt cx fr hlow hpp hext hrel hpre
-    hgir hresults trivial trivial trivial
+    hgir hresults trivial trivial trivial hgenerated trivial
   rw [prepareLoopFlow_none] at hs
   exact hs.mono fun flow _ pt' fr' _ hp => BlockLoopPost.none.mp hp
 
@@ -163,7 +164,7 @@ theorem typedBlockLoopSimulation_zero (cfg : Cfg) (results : List Ty)
     (pre' : List (VarId × Val)) (want : Bool) (block : Core.Block) :
     TypedBlockLoopSimulation 0 cfg results loop pre pre' want block := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel hpre
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   simp only [execBlock]
   exact SimEAt.of_simG SimG.of_timeout_bind state
 
@@ -175,9 +176,17 @@ theorem typedBlockLoopSimulation_succ (n : Nat) (cfg : Cfg) (results : List Ty)
     (hvalue : match value with | none => True | some expr => TypedExprClaim n cfg results expr) :
     TypedBlockLoopSimulation (n + 1) cfg results loop pre pre' want (.mk scope stmts value) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel hpre
-    hgir hresults hdepth htargets hcounter
+    hgir hresults hdepth htargets hcounter hgenerated hframes
   obtain ⟨ls1, ls_p, ls_s, ls_x, ls_l, u0, u, rx, h1, h2, h3, h4, h5, hls', hr⟩ :=
     prefixBlock_unfold hlow
+  have generated1 := hgenerated.emitEffect (.enter scope) h1
+  have generatedStack : GeneratedBuilderState { ls1 with stack := scope :: ls1.stack } :=
+    ⟨generated1.dense, generated1.live, generated1.targets⟩
+  have generatedP := generatedStack.initSlots pre h2
+  have frames1 : LoopBuilderFrames loop { ls1 with stack := scope :: ls1.stack } :=
+    hframes.mono (adv_emitEffect h1).ext
+  have framesP := frames1.mono (advB_initSlots pre _ _ _ _ h2).ext
+  have generatedS := generatedP.lowerStmts loop stmts framesP.toTargets h3
   rw [prepareLoopFlow_execBlock _ _ _ _ _ _ _ _ hdepth]
   refine preparedLoopBlock_core_at (source.preScopes hpre) h1 h2 h3 h4 h5 hls' hr
     hpp hext hrel hpre hdepth ?_ ?_
@@ -199,7 +208,7 @@ theorem typedBlockLoopSimulation_succ (n : Nat) (cfg : Cfg) (results : List Ty)
       exact source.same.loops
     exact hstmts _ _ statements hmeta halign ls_p ls_s u pt_s cx fr_s h3 hpp_s hext_s hrel_s
       hgir hresults (loopDepthFits_entered scope _ hdepth) htargets
-      (hcounter.sameValues hvalues hfrontier)
+      (hcounter.sameValues hvalues hfrontier) generatedP framesP
   · intro si entered initialized after hfresh hbind hactual pt_x fr_x hpp_x hext_x hrel_x
     change Res.ok state.nextScope { state with nextScope := state.nextScope + 1 } =
       .ok si entered at hfresh
@@ -237,7 +246,7 @@ theorem typedBlockLoopSimulation_succ (n : Nat) (cfg : Cfg) (results : List Ty)
       simp only [lowerBlockValue] at h4
       simp only [valueFlow]
       refine SimEAt.bind (hvalue _ _ child hmeta ls_s ls_x rx pt_x cx fr_x h4 hpp_x hext_x
-        hrel_x hgir hresults) fun v _ pt' fr' _ P => ?_
+        hrel_x hgir hresults generatedS) fun v _ pt' fr' _ P => ?_
       exact SimEAt.ret ⟨v, rfl, (fun h => by cases h), by
         simpa only [blockCells, Core.Block.value, Core.Block.scope, Option.isSome_some, Bool.true_or,
           ↓reduceIte] using P⟩

@@ -155,6 +155,7 @@ theorem stmt_each_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (penv : PEnv) (world : Core.Sound.World) (element : Ty)
     (hsource : ∀ owner view output,
       lowerEachSource source le ls = ((owner, view), output) → ExtT output cx.fn.blocks →
+      GeneratedBuilderState ls →
       SimEAt cx pt fr (evalView n cfg env source)
         (fun vw pt' fr' => Post cfg env cx ls fr output fr' pt' (EachSourceCells owner view vw)) s)
     (hsourceAliases : ∀ vw state, evalView n cfg env source s = .ok vw state →
@@ -178,7 +179,8 @@ theorem stmt_each_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
       EachBlockCallback n cfg env cx le header counter view sampled hb owner vw base
         x idx byRef body org (bodyAllowed vw))
     (hlow : lowerStmt lc (.forEach x idx source byRef body org) le ls = ((), ls'))
-    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) :
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks)
+    (generated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.forEach x idx source byRef body org) >>= prepareReturn env)
       (StmtFlowPost cfg env cx ls fr ls') s := by
   have aAll := advB_lowerStmt lc (.forEach x idx source byRef body org) le ls () ls' hlow
@@ -199,7 +201,7 @@ theorem stmt_each_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
   have hextSampled := hextStart.of_adv (adv_emitDef hStart)
   have hextSource := hextSampled.of_adv (advB_eachSampled regrow view le lsSource sampled lsSampled hSampled)
   simp only [execStmt, bind_assoc]
-  refine SimEAt.bind (hsource owner view lsSource hSource hextSource)
+  refine SimEAt.bind (hsource owner view lsSource hSource hextSource generated)
     fun vw sourceState sourcePoint sourceFrame hSourceRun PSource => ?_
   have hmode : regrow = vw.resizable := by
     have hm := hsourceMode owner view lsSource hSource vw sourceState hSourceRun sourcePoint PSource.pp
@@ -222,10 +224,24 @@ theorem stmt_each_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
     fun _ startState startPoint startFrame hStartRun PStart => ?_
   have hStartState : startState = sourceState := (Res.ok.inj (by simpa only [pure_apply] using hStartRun)).2.symm
   subst startState
+  have generatedSource := generated.lowerEachSource source hSource
+  have generatedRegrow := generatedSource.regrowOf owner hRegrow
+  have generatedSampled := generatedRegrow.eachSampled regrow view hSampled
+  have generatedStart := generatedSampled.emitDef (.constInt .i64 0) hStart
   obtain ⟨_, hcurStart, _, _⟩ := LS.pp_some PStart.pp
   rw [whenLive_some _ _ _ hcurStart] at hLive
   simp only [bind_eq] at hLive
   obtain ⟨⟨hb, params⟩, lsNew, hNew, u1, lsClosed, hTerm, u2, lsHeader, hSet, hEach⟩ := hLive
+  have generatedNew := generatedStart.newBlock [.data (.int .i64)] hNew
+  have generatedClosed := generatedNew.emitTerm (.br hb [start]) (by
+    intro target htarget
+    simp only [Term.successors, List.mem_cons, List.mem_nil_iff, or_false] at htarget
+    subst target
+    exact generatedTargets_newBlock_bound hNew) hTerm
+  have hheaderBound : hb < lsClosed.blocks.size :=
+    Nat.lt_of_lt_of_le (generatedTargets_newBlock_bound hNew) (adv_emitTerm hTerm).ext.1
+  have generatedHeader := generatedClosed.setCur (some hb)
+    (by intro current hcurrent; simp at hcurrent; subst current; exact hheaderBound) hSet
   have aEach := advB_lowerEach regrow owner sampled hb (params.headD 0)
     (fun _ _ => by
       exact AdvB.bind (advB_emitDef _) fun elem =>
@@ -292,8 +308,8 @@ theorem stmt_each_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
   rw [hmode] at hEach
   apply SimEAt.goes hEnter
   refine (lowerEach_flow_sim_at n cfg env cx le lsHeader ls' counter view sampled hb owner vw
-    startFrame x idx byRef body org (allowed vw) (bodyAllowed vw) hEach hPoint hext hHeader
-    hCounterBound hviewBound hownerBound hsampleBound (henter vw) (hretain vw)
+    startFrame x idx byRef body org (allowed vw) (bodyAllowed vw) hEach hPoint hext generatedHeader
+    hHeader hCounterBound hviewBound hownerBound hsampleBound (henter vw) (hretain vw)
     (hblock vw lsHeader startFrame counter view sampled hb owner hscope.1 hscope.2)
     0 headerFrame sourceState hinit (hinitial vw sourceState hSourceRun)).mono ?_
   intro flow state pt' fr' _ hresult
@@ -312,6 +328,7 @@ theorem stmt_each_typed_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCt
     (penv : PEnv) (world : Core.Sound.World) (element : Ty)
     (hsource : ∀ owner view output,
       lowerEachSource source le ls = ((owner, view), output) → ExtT output cx.fn.blocks →
+      GeneratedBuilderState ls →
       SimEAt cx pt fr (evalView n cfg env source)
         (fun vw pt' fr' => Post cfg env cx ls fr output fr' pt' (EachSourceCells owner view vw)) s)
     (hsourceAliases : ∀ vw state, evalView n cfg env source s = .ok vw state →
@@ -335,7 +352,8 @@ theorem stmt_each_typed_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCt
         x idx byRef body org (fun i state => allowed vw i state ∧
           Goose.Proofs.Memory.LocTy state.store ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩ element))
     (hlow : lowerStmt lc (.forEach x idx source byRef body org) le ls = ((), ls'))
-    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) :
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks)
+    (generated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.forEach x idx source byRef body org) >>= prepareReturn env)
       (StmtFlowPost cfg env cx ls fr ls') s := by
   apply stmt_each_flow_sim_at n cfg env cx le ls ls' fr pt s lc x idx source byRef body org
@@ -353,6 +371,7 @@ theorem stmt_each_typed_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCt
   · exact hlow
   · exact hpp
   · exact hext
+  · exact generated
 
 theorem stmt_each_retained_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (le : LEnv) (ls ls' : LS) (fr : Frame) (pt : Pt) (s : St)
@@ -363,6 +382,7 @@ theorem stmt_each_retained_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : F
     (penv : PEnv) (world : Core.Sound.World) (element : Ty)
     (hsource : ∀ owner view output,
       lowerEachSource source le ls = ((owner, view), output) → ExtT output cx.fn.blocks →
+      GeneratedBuilderState ls →
       SimEAt cx pt fr (evalView n cfg env source)
         (fun vw pt' fr' => Post cfg env cx ls fr output fr' pt' (EachSourceCells owner view vw)) s)
     (hsourceAliases : ∀ vw state, evalView n cfg env source s = .ok vw state →
@@ -395,7 +415,8 @@ theorem stmt_each_retained_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : F
           Core.Sound.ViewAliases cfg.mod world penv env state.store source vw element ∧
           Goose.Proofs.Memory.LocTy state.store ⟨vw.loc.root, vw.loc.path ++ [vw.start + i]⟩ element))
     (hlow : lowerStmt lc (.forEach x idx source byRef body org) le ls = ((), ls'))
-    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) :
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks)
+    (generated : GeneratedBuilderState ls) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.forEach x idx source byRef body org) >>= prepareReturn env)
       (StmtFlowPost cfg env cx ls fr ls') s := by
   obtain ⟨alias, hsingle, hquery⟩ := Core.Sound.forEach_retained_query_exists hretained
@@ -433,5 +454,6 @@ theorem stmt_each_retained_flow_sim_at (n : Nat) (cfg : Cfg) (env : Env) (cx : F
   · exact hlow
   · exact hpp
   · exact hext
+  · exact generated
 
 end Goose.Lower

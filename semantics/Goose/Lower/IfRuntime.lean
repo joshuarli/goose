@@ -11,6 +11,7 @@ theorem stmt_if_none_loop_sim_at (n : Nat) (lc : Option LoopCtx)
     (hlow : lowerStmt lc (.ifS c t none org) le ls = (r, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
     (hcounter : LoopCounterAt lc ls fr)
+    (hgenerated : GeneratedBuilderState ls) (hframes : LoopBuilderFrames lc ls)
     (hcond : ∀ cv ls1, lowerExpr c le ls = (cv, ls1) → ls.pp = some pt →
       ExtT ls1 cx.fn.blocks → Rel cfg env cx fr ls →
       SimEAt cx pt fr (evalExpr n cfg env c)
@@ -18,7 +19,7 @@ theorem stmt_if_none_loop_sim_at (n : Nat) (lc : Option LoopCtx)
     (hbody : ∀ after, evalExpr n cfg env c state = .ok (.bool true) after →
       ∀ ls2 vt ls3 pt2 fr2, lowerBlock lc [] false t le ls2 = (vt, ls3) →
       ls2.pp = some pt2 → ExtT ls3 cx.fn.blocks → Rel cfg env cx fr2 ls2 →
-      LoopCounterAt lc ls2 fr2 →
+      LoopCounterAt lc ls2 fr2 → GeneratedBuilderState ls2 → LoopBuilderFrames lc ls2 →
       SimEAt cx pt2 fr2 (execBlock n cfg env [] t >>= prepareLoopFlow env lc)
         (BlockLoopPost cfg env cx ls2 fr2 ls3 lc t false vt) after) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.ifS c t none org) >>= prepareLoopFlow env lc)
@@ -49,6 +50,12 @@ theorem stmt_if_none_loop_sim_at (n : Nat) (lc : Option LoopCtx)
   obtain ⟨htb, hjb, hszf, hvf, hstf, hcf, hinst, hbtb, hbjb⟩ := fork_facts hf P1.pp hextf
   obtain ⟨Ttb, hTtb, hTtbp⟩ := hextf.params hbtb
   obtain ⟨Tjb, hTjb, hTjbp⟩ := hextf.params hbjb
+  have generatedF := (hgenerated.lowerExpr c h1).fork cv hf
+  have framesF := (hframes.mono (advB_lowerExpr c _ _ _ _ h1).ext).mono
+    (advB_fork cv _ _ _ _ hf).ext
+  have generated2 := generatedF.setCur (some tb)
+    (by intro current same; cases same; exact (Array.getElem?_eq_some_iff.mp hbtb).1) hs1
+  have frames2 := framesF.of_blocks (setCur_blocks hs1)
   have hpp2 : ls2.pp = some (tb, 0) := by rw [e2]; exact LS.pp_cur hbtb
   have hst1 : ls1.stack = ls.stack := P1.rel.stack.trans hrel.stack.symm
   have hst2 : ls2.stack = ls.stack := by rw [e2]; show lsf.stack = _; rw [hstf, hst1]
@@ -100,7 +107,7 @@ theorem stmt_if_none_loop_sim_at (n : Nat) (lc : Option LoopCtx)
     have hcounter1 := hcounter.afterPost (P1.sub (cells' := []) (by simp))
     have hcounter2 := hcounter1.sameValues (fr' := fr1) (ls' := ls2) rfl hv2
     refine SimEAt.bind (hbody afterCond hactualCond ls2 vt ls3 (tb, 0) fr1
-      ha1 hpp2 hext3 hrel2 hcounter2) fun flow _ pt3 fr3 _ hpost => ?_
+      ha1 hpp2 hext3 hrel2 hcounter2 generated2 frames2) fun flow _ pt3 fr3 _ hpost => ?_
     rcases hpost with ⟨v, hf, _, P3⟩ | ⟨returned, returnOrg, hf, hsite⟩ | ⟨context, hloop, htransfer⟩
     · subst hf
       obtain ⟨hv4, hst4, hc4, hi3'⟩ := emitTerm_facts ht P3.pp hext4
@@ -127,6 +134,7 @@ theorem stmt_if_some_loop_sim_at (n : Nat) (lc : Option LoopCtx)
     (hlow : lowerStmt lc (.ifS c t (some fb) org) le ls = (r, ls'))
     (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls)
     (hcounter : LoopCounterAt lc ls fr)
+    (hgenerated : GeneratedBuilderState ls) (hframes : LoopBuilderFrames lc ls)
     (hcond : ∀ cv ls1, lowerExpr c le ls = (cv, ls1) → ls.pp = some pt →
       ExtT ls1 cx.fn.blocks → Rel cfg env cx fr ls →
       SimEAt cx pt fr (evalExpr n cfg env c)
@@ -134,13 +142,13 @@ theorem stmt_if_some_loop_sim_at (n : Nat) (lc : Option LoopCtx)
     (hthen : ∀ after, evalExpr n cfg env c state = .ok (.bool true) after →
       ∀ ls2 vt ls3 pt2 fr2, lowerBlock lc [] false t le ls2 = (vt, ls3) →
       ls2.pp = some pt2 → ExtT ls3 cx.fn.blocks → Rel cfg env cx fr2 ls2 →
-      LoopCounterAt lc ls2 fr2 →
+      LoopCounterAt lc ls2 fr2 → GeneratedBuilderState ls2 → LoopBuilderFrames lc ls2 →
       SimEAt cx pt2 fr2 (execBlock n cfg env [] t >>= prepareLoopFlow env lc)
         (BlockLoopPost cfg env cx ls2 fr2 ls3 lc t false vt) after)
     (helse : ∀ after, evalExpr n cfg env c state = .ok (.bool false) after →
       ∀ ls2 vt ls3 pt2 fr2, lowerBlock lc [] false fb le ls2 = (vt, ls3) →
       ls2.pp = some pt2 → ExtT ls3 cx.fn.blocks → Rel cfg env cx fr2 ls2 →
-      LoopCounterAt lc ls2 fr2 →
+      LoopCounterAt lc ls2 fr2 → GeneratedBuilderState ls2 → LoopBuilderFrames lc ls2 →
       SimEAt cx pt2 fr2 (execBlock n cfg env [] fb >>= prepareLoopFlow env lc)
         (BlockLoopPost cfg env cx ls2 fr2 ls3 lc fb false vt) after) :
     SimEAt cx pt fr (execStmt (n + 1) cfg env (.ifS c t (some fb) org) >>= prepareLoopFlow env lc)
@@ -172,6 +180,28 @@ theorem stmt_if_some_loop_sim_at (n : Nat) (lc : Option LoopCtx)
   obtain ⟨htb, heb, hinst, ⟨Ttb, hTtb, hTtbp⟩, ⟨Teb, hTeb, hTebp⟩, hpp2, hpp5, hst2, hv2, hst3, hst6,
     hv16, hv36, hendT, hendF, hkeep, hsz36, hsz6⟩ :=
     branch_facts hf hs1 hadv1 hs2 hadv2 P1.pp hext6
+  have generatedF := (hgenerated.lowerExpr c h1).fork cv hf
+  have framesF := (hframes.mono (advB_lowerExpr c _ _ _ _ h1).ext).mono
+    (advB_fork cv _ _ _ _ hf).ext
+  obtain ⟨forkIds, forkSize⟩ := fork_ids hf
+  have thenBound : tb < lsf.blocks.size := by
+    have id : tb = ls1.blocks.size := congrArg Prod.fst forkIds
+    rw [id, forkSize]
+    nat_omega
+  have elseBound : eb < lsf.blocks.size := by
+    have id : eb = ls1.blocks.size + 1 := congrArg Prod.snd forkIds
+    rw [id, forkSize]
+    nat_omega
+  have generated2 := generatedF.setCur (some tb)
+    (by intro current same; cases same; exact thenBound) hs1
+  have frames2 := framesF.of_blocks (setCur_blocks hs1)
+  have generated4 := generated2.lowerBlock lc [] false t frames2.toTargets ha1
+  have frames4 := frames2.mono hadv1.ext
+  have elseBound4 : eb < ls4.blocks.size := by
+    exact Nat.lt_of_lt_of_le (by rw [setCur_blocks hs1]; exact elseBound) hadv1.ext.1
+  have generated5 := generated4.setCur (some eb)
+    (by intro current same; cases same; exact elseBound4) hs2
+  have frames5 := frames4.of_blocks (setCur_blocks hs2)
   have hpp2' : ls2.pp = some (tb, 0) := hpp2
   have hrel2 : Rel cfg env cx fr1 ls2 := P1.rel.stack_eq hst2
   have hltT : ∀ b, endT = some b → b < ls7.blocks.size := by
@@ -208,7 +238,7 @@ theorem stmt_if_some_loop_sim_at (n : Nat) (lc : Option LoopCtx)
     have P15 : Post cfg env cx ls fr ls5 fr1 (eb, 0) [] :=
       Post.nil hpp5 (by rw [e5]; exact Nat.le_trans P1.mono hmono_all) P1.same hrel5
     refine SimEAt.bind (helse afterCond hactualCond ls5 vf ls7 (eb, 0) fr1 ha2 hpp5 hext6
-      hrel5 (hcounter.afterPost P15)) fun flow _ pt7 fr7 _ hpost => ?_
+      hrel5 (hcounter.afterPost P15) generated5 frames5) fun flow _ pt7 fr7 _ hpost => ?_
     rcases hpost with ⟨v, hf, _, P7⟩ | ⟨returned, returnOrg, hf, hsite⟩ | ⟨context, hloop, htransfer⟩
     · subst hf
       obtain ⟨blk7, hc7', hb7, hp7⟩ := LS.pp_some P7.pp
@@ -238,7 +268,7 @@ theorem stmt_if_some_loop_sim_at (n : Nat) (lc : Option LoopCtx)
     have P12 : Post cfg env cx ls fr ls2 fr1 (tb, 0) [] :=
       Post.nil hpp2' (by rw [hv2]; exact P1.mono) P1.same hrel2
     refine SimEAt.bind (hthen afterCond hactualCond ls2 vt ls4 (tb, 0) fr1 ha1 hpp2' hext4
-      hrel2 (hcounter.afterPost P12)) fun flow _ pt3 fr3 _ hpost => ?_
+      hrel2 (hcounter.afterPost P12) generated2 frames2) fun flow _ pt3 fr3 _ hpost => ?_
     rcases hpost with ⟨v, hf, _, P3⟩ | ⟨returned, returnOrg, hf, hsite⟩ | ⟨context, hloop, htransfer⟩
     · subst hf
       obtain ⟨blk3, hc3, hb3, hp3⟩ := LS.pp_some P3.pp
