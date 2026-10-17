@@ -14,6 +14,7 @@ structure RootUniverse (results : Array (List RootRef)) (func : Func) (roots : L
     RootRef.param param.2 ∈ roots
   addresses : ∀ block ∈ func.blocks.toList, ∀ value op, Inst.def value op ∈ block.insts → AddressBound roots op
   contents : ∀ row ∈ func.roots.contents, row.2 ⊆ roots
+  slotSeeds : ∀ row ∈ func.roots.slots.getD #[], row.2 ⊆ roots
   results : ∀ callee global, RootRef.global global ∈ rootsAt results callee → RootRef.global global ∈ roots
 
 private theorem annotation_subset {func : Func} {roots : List RootRef}
@@ -141,7 +142,20 @@ theorem provStart_bounded {results : Array (List RootRef)} {types : Array (Optio
     {func : Func} {roots : List RootRef} (universeBound : RootUniverse results func roots) :
     Bounded roots (provStart types func) := by
   constructor
-  · exact TableBound.empty _ _
+  · intro slot
+    simp only [provStart, Func.slotRootSeeds, rootsAt, Array.getElem?_mapIdx]
+    cases row : func.slots[slot]? with
+    | none => simp [row]
+    | some descriptor =>
+      simp only [row, Option.map_some, Option.getD_some]
+      rw [← Array.foldl_toList]
+      apply List.foldlRecOn (motive := fun values => values.Nodup ∧ values ⊆ roots) _ _ ⟨by simp, by simp⟩
+      intro values prior annotation member
+      by_cases same : annotation.1 == slot
+      · rw [if_pos same]
+        exact ⟨unionRoots_nodup prior.1,
+          unionRoots_subset prior.2 (universeBound.slotSeeds annotation (Array.mem_toList_iff.mp member))⟩
+      · simpa only [same, Bool.false_eq_true, ite_false] using prior
   · unfold provStart
     cases entry : func.blocks[0]? with
     | none => exact TableBound.empty _ _
