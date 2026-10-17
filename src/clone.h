@@ -616,7 +616,11 @@ inline const VarDef *NamedResultOf(Block *fnbody, SFunction *target, size_t nret
         if (!n) return;
         if (auto r = Is<Return>(n); r && r->target == target) {
             if (r->vals.size() != nrets) stopped("a return forwards several results of a call", r);
-            else consider(r->vals[resultidx]);
+            else {
+                consider(r->vals[resultidx]);
+                for (size_t i = resultidx + 1; i < r->vals.size(); i++)
+                    others.push_back(r->vals[i]);
+            }
         }
         RunChildren(n, walk);
     };
@@ -624,8 +628,11 @@ inline const VarDef *NamedResultOf(Block *fnbody, SFunction *target, size_t nret
     auto tail = fnbody->tail;
     if (tail && nrets == 1 && tail->exprtype && tail->exprtype->kind != TY_VOID) consider(tail);
     if (!cand) return nullptr;
-    for (auto v : others)
+    for (auto v : others) {
+        auto id = Is<Ident>(v);
+        if (id && id->vdef == cand) continue;
         if (MayReachLocal(v, cand)) stopped("another return's value may read or write it", v);
+    }
     if (stop.empty()) return cand;
     if (ns) *ns = { cand, stop, stopat };
     return nullptr;
