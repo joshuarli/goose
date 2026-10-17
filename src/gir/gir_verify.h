@@ -63,6 +63,7 @@ private:
     vector<vector<pair<int, int>>> lowMarkParams;
     vector<bool> lowReturnedOwnerPairs;
     vector<set<int>> constructionNeeds, constructionEscapes;
+    set<pair<int, int>> checkedTargetUnreachable;
 
     [[noreturn]] static void Fail(const char *code, string msg) { throw GirViolation { code, std::move(msg) }; }
 
@@ -253,9 +254,9 @@ private:
         for (auto &fn : fns) ValueTypes(fn);
         for (auto &fn : fns) CheckTypes(fn);
         for (auto &fn : fns) CheckCfg(fn);
+        if (m.low && CoreHasConstruction(m.profile)) CheckLowTargetProtocols();
         CheckUnreachable();
         if (m.low) {
-            if (CoreHasConstruction(m.profile)) CheckLowTargetProtocols();
             lowPassedPairs.assign(m.funcs.size(), {});
             lowStackParams.assign(m.funcs.size(), {});
             lowMarkParams.assign(m.funcs.size(), {});
@@ -409,7 +410,6 @@ private:
 
     void CheckLowTargetTables() {
         auto bad = [&](const string &message) { Fail("GIR-V090", message); };
-        if (!m.lowtargets.empty()) bad("low targets require the complete checked activation protocol");
         set<vector<int>> sets;
         for (size_t target = 0; target < m.lowtargets.size(); target++) {
             auto &table = m.lowtargets[target];
@@ -452,6 +452,18 @@ private:
                         enter = &inst;
                     }
                 if (!enter || enter->vals.size() != table.channels.size()) bad("low target member does not consume every declared channel");
+                auto &entry = function.blocks[0].insts;
+                auto enterPosition = find_if(entry.begin(), entry.end(), [&](const GirInst &inst) { return &inst == enter; });
+                if (enterPosition == entry.end()) bad("low target activation is not in its entry block");
+                int activeStores = 0;
+                for (auto inst = entry.begin(); inst != enterPosition; ++inst) if (inst->op == GirOp::TargetStore && inst->idx == (int)target && inst->idx2 == 0) {
+                    bool active = false;
+                    for (auto &definition : entry)
+                        if (definition.res == inst->a && definition.op == GirOp::Bool && definition.flag) active = true;
+                    if (!active) bad("low target activation does not set its active cell");
+                    activeStores++;
+                }
+                if (activeStores != 1) bad("low target activation does not set its active cell exactly once");
                 vector<int> parameters;
                 for (auto &channel : table.channels) for (auto cell : channel.incoming) {
                     int parameter = -1;
@@ -477,6 +489,7 @@ private:
     void CheckLowTargetProtocols() {
         auto bad = [&](const string &message) { Fail("GIR-V090", message); };
         vector<set<int>> needs(m.funcs.size()), escapes(m.funcs.size());
+        vector<set<int64_t>> returnFlags(m.funcs.size());
         auto member = [&](size_t function, int target) {
             auto &members = m.lowtargets[target].members;
             return find(members.begin(), members.end(), (int)function) != members.end();
@@ -498,6 +511,7 @@ private:
                 if (inst.op == GirOp::ReturnFlagSet) {
                     auto flag = integer(m.funcs[function], inst.a);
                     if (flag < 0 || flag > (int64_t)m.lowtargets.size()) bad("return flag does not name a checked target");
+                    returnFlags[function].insert(flag);
                     if (flag) escapes[function].insert((int)flag - 1);
                 }
             }
@@ -511,6 +525,87 @@ private:
         for (auto initializer : m.initfuncs) if (!needs[initializer].empty()) bad("low global initializer requires an unavailable target activation");
         for (size_t functionIndex = 0; functionIndex < m.funcs.size(); functionIndex++) {
             auto &function = m.funcs[functionIndex];
+            vector<vector<int>> predecessors(function.blocks.size());
+            for (size_t block = 0; block < function.blocks.size(); block++) {
+                auto *term = LastTerm(function.blocks[block]);
+                if (!term) continue;
+                for (auto successor : Successors(*term))
+                    if (successor >= 0 && successor < (int)predecessors.size()) predecessors[successor].push_back((int)block);
+            }
+            auto comparedTag = [&](int value, int flag) -> optional<int64_t> {
+                for (auto &block : function.blocks) for (auto &inst : block.insts)
+                    if (inst.res == value && inst.op == GirOp::Cmp && inst.cmp == CoreCmpOp::Eq) {
+                        if (inst.a == flag) return integer(function, inst.b);
+                        if (inst.b == flag) return integer(function, inst.a);
+                    }
+                return nullopt;
+            };
+            auto singleBranchSentinel = [&](int start, int source) {
+                set<int> seen;
+                auto block = start;
+                auto predecessor = source;
+                while (block >= 0 && block < (int)function.blocks.size() && seen.insert(block).second &&
+                    predecessors[block].size() == 1 && predecessors[block][0] == predecessor) {
+                    auto &candidate = function.blocks[block];
+                    auto *term = LastTerm(candidate);
+                    if (term && term->op == GirOp::Unreachable && candidate.insts.size() == 1) return block;
+                    if (!term || term->op != GirOp::Br) return -1;
+                    predecessor = block;
+                    block = term->idx;
+                }
+                return -1;
+            };
+            for (size_t block = 0; block < function.blocks.size(); block++) {
+                auto &instructions = function.blocks[block].insts;
+                for (size_t position = 0; position < instructions.size(); position++) {
+                    auto &call = instructions[position];
+                    if (call.op != GirOp::Call || escapes[call.idx].empty()) continue;
+                    if (position + 1 >= instructions.size() || instructions[position + 1].op != GirOp::ReturnFlagGet)
+                        bad("escaping low call does not read its return discriminant");
+                    auto flag = instructions[position + 1].res;
+                    auto *first = LastTerm(function.blocks[block]);
+                    if (!first || first->op != GirOp::CondBr) bad("escaping low call has no zero discriminant branch");
+                    auto zero = comparedTag(first->a, flag);
+                    if (!zero || *zero != 0 || first->idx == first->idx2)
+                        bad("escaping low call does not dispatch normal return exactly once");
+                    auto normal = first->idx;
+                    auto next = first->idx2;
+                    auto sentinelPredecessor = (int)block;
+                    set<int64_t> pending;
+                    for (auto target : escapes[call.idx]) pending.insert((int64_t)target + 1);
+                    set<int> handledBlocks;
+                    while (!pending.empty()) {
+                        if (next < 0 || next >= (int)function.blocks.size()) bad("escaping low call dispatch leaves the block table");
+                        auto *term = LastTerm(function.blocks[next]);
+                        if (!term || term->op != GirOp::CondBr) bad("escaping low call omits a handled target case");
+                        auto tag = comparedTag(term->a, flag);
+                        if (!tag || !pending.erase(*tag) || term->idx == term->idx2 || !handledBlocks.insert(term->idx).second)
+                            bad("escaping low call has a duplicate or invalid handled target case");
+                        auto target = (int)*tag - 1;
+                        bool active = member(functionIndex, target) || needs[functionIndex].count(target);
+                        if (!active) bad("escaping low call handles a target without an active receiving protocol");
+                        auto &handler = function.blocks[term->idx];
+                        bool readsTarget = false;
+                        for (auto &inst : handler.insts)
+                            readsTarget |= (inst.op == GirOp::TargetLoad || inst.op == GirOp::TargetStore ||
+                                            inst.op == GirOp::SourceTargetGet || inst.op == GirOp::SourceTargetResult) && inst.idx == target;
+                        if (!readsTarget) bad("escaping low call has a target case without a receiving handler");
+                        sentinelPredecessor = next;
+                        next = term->idx2;
+                    }
+                    if (next < 0 || next >= (int)function.blocks.size()) bad("escaping low call has no invalid-discriminant sentinel");
+                    auto &sentinel = function.blocks[next];
+                    auto *last = LastTerm(sentinel);
+                    if (!last || last->op != GirOp::Unreachable || sentinel.insts.size() != 1 ||
+                        predecessors[next].size() != 1 || predecessors[next][0] != sentinelPredecessor)
+                        bad("escaping low call has no closed invalid-discriminant sentinel");
+                    checkedTargetUnreachable.emplace((int)functionIndex, next);
+                    if (!returnFlags[call.idx].count(0)) {
+                        auto normalSentinel = singleBranchSentinel(normal, (int)block);
+                        if (normalSentinel >= 0) checkedTargetUnreachable.emplace((int)functionIndex, normalSentinel);
+                    }
+                }
+            }
             map<pair<int, int>, int> saved;
             for (size_t target = 0; target < m.lowtargets.size(); target++) if (member(functionIndex, (int)target)) {
                 set<int> installed;
@@ -2477,8 +2572,14 @@ private:
             for (auto &b : fn.f->blocks)
                 for (size_t k = 0; k < b.insts.size(); k++) {
                     if (b.insts[k].op != GirOp::Unreachable) continue;
-                    auto valid = k > 0 && b.insts[k - 1].op == GirOp::Call;
-                    if (valid) {
+                    auto valid = false;
+                    if (m.low && CoreHasConstruction(m.profile)) {
+                        auto function = find_if(m.funcs.begin(), m.funcs.end(), [&](const GirFunc &candidate) { return &candidate == fn.f; });
+                        auto block = find_if(fn.f->blocks.begin(), fn.f->blocks.end(), [&](const GirBlock &candidate) { return &candidate == &b; });
+                        if (function != m.funcs.end() && block != fn.f->blocks.end())
+                            valid = checkedTargetUnreachable.count({ (int)(function - m.funcs.begin()), (int)(block - fn.f->blocks.begin()) });
+                    }
+                    if (!valid && k > 0 && b.insts[k - 1].op == GirOp::Call) {
                         auto callee = b.insts[k - 1].idx;
                         valid = callee >= 0 && callee < (int)mayReturn.size() && !mayReturn[callee];
                     }

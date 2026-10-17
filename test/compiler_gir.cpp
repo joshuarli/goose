@@ -5513,6 +5513,83 @@ void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
     assert(Code(high) == "");
     assert(GirWriter(high).Write().find("t_invoke") != string::npos);
     assert(GirWriter(high).Write().find("t_escape") != string::npos);
+    bool unsupported = false;
+    try {
+        auto low = GirToLow(high).Lower();
+        assert(low.lowtargets.size() == 1);
+        assert(Code(low) == "");
+
+        auto targetFunction = low.lowtargets[0].members[0];
+        auto missingActivation = low;
+        auto &missingEntry = missingActivation.funcs[targetFunction].blocks[0].insts;
+        auto active = find_if(missingEntry.begin(), missingEntry.end(), [](const GirInst &inst) {
+            return inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == 0;
+        });
+        assert(active != missingEntry.end());
+        missingEntry.erase(active);
+        assert(!Code(missingActivation).empty());
+
+        auto duplicateActivation = low;
+        auto &duplicateEntry = duplicateActivation.funcs[targetFunction].blocks[0].insts;
+        auto activeStore = find_if(duplicateEntry.begin(), duplicateEntry.end(), [](const GirInst &inst) {
+            return inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == 0;
+        });
+        assert(activeStore != duplicateEntry.end());
+        duplicateEntry.insert(activeStore, *activeStore);
+        assert(!Code(duplicateActivation).empty());
+
+        auto missingDispatch = low;
+        auto duplicateDispatch = low;
+        auto missingHandler = low;
+        for (auto &block : missingDispatch.funcs[targetFunction].blocks) {
+            auto *term = GirIsTerminator(block.insts.back().op) ? &block.insts.back() : nullptr;
+            if (!term || term->op != GirOp::CondBr) continue;
+            for (auto &inst : block.insts) if (inst.op == GirOp::Call && inst.idx == 2) {
+                auto dispatch = term->idx2;
+                auto *caseTerm = &missingDispatch.funcs[targetFunction].blocks[dispatch].insts.back();
+                assert(caseTerm && caseTerm->op == GirOp::CondBr);
+                caseTerm->op = GirOp::Br;
+                caseTerm->idx2 = -1;
+                goto missing_dispatch_changed;
+            }
+        }
+missing_dispatch_changed:
+        assert(!Code(missingDispatch).empty());
+
+        for (auto &block : duplicateDispatch.funcs[targetFunction].blocks) {
+            auto *term = GirIsTerminator(block.insts.back().op) ? &block.insts.back() : nullptr;
+            if (!term || term->op != GirOp::CondBr) continue;
+            for (auto &inst : block.insts) if (inst.op == GirOp::Call && inst.idx == 2) {
+                auto dispatch = term->idx2;
+                auto &caseBlock = duplicateDispatch.funcs[targetFunction].blocks[dispatch];
+                for (auto &compare : caseBlock.insts) if (compare.op == GirOp::Cmp && compare.cmp == CoreCmpOp::Eq) {
+                    auto tag = compare.b;
+                    for (auto &definition : caseBlock.insts) if (definition.res == tag && definition.op == GirOp::Int)
+                        definition.text = "0";
+                }
+                goto duplicate_dispatch_changed;
+            }
+        }
+duplicate_dispatch_changed:
+        assert(!Code(duplicateDispatch).empty());
+
+        for (auto &block : missingHandler.funcs[targetFunction].blocks) {
+            auto *term = GirIsTerminator(block.insts.back().op) ? &block.insts.back() : nullptr;
+            if (!term || term->op != GirOp::CondBr) continue;
+            for (auto &inst : block.insts) if (inst.op == GirOp::Call && inst.idx == 2) {
+                auto dispatch = term->idx2;
+                auto *caseTerm = &missingHandler.funcs[targetFunction].blocks[dispatch].insts.back();
+                assert(caseTerm && caseTerm->op == GirOp::CondBr);
+                caseTerm->idx = caseTerm->idx2;
+                goto missing_handler_changed;
+            }
+        }
+missing_handler_changed:
+        assert(!Code(missingHandler).empty());
+    } catch (const GirLowerUnsupported &) {
+        unsupported = true;
+    }
+    assert(!unsupported);
     auto forged = high;
     forged.funcs[2].blocks[0].insts.back().op = GirOp::Ret;
     forged.funcs[2].blocks[0].insts.back().vals.clear();
