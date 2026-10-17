@@ -8184,6 +8184,24 @@ CoreModule ConstructionBorrowedWaitingChildLoopModule(bool continueLoop) {
     return core;
 }
 
+CoreModule ConstructionBorrowedWaitingNamedLoopModule(bool continueLoop) {
+    auto core = ConstructionBorrowedWaitingLoopModule(continueLoop);
+    auto &producer = core.impls[1];
+    auto array = producer.results[0].type;
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    producer.vars.insert(producer.vars.begin(), CoreVar { "named", array, CoreVarKind::Var, 0, origin });
+    producer.results[0].namedLocal = 0;
+    CoreStmt initial; initial.kind = CoreStmtKind::Let; initial.var = 0; initial.org = origin;
+    initial.expr = make_unique<CoreExpr>(); initial.expr->kind = CoreExprKind::Bytes;
+    initial.expr->type = array; initial.expr->org = origin; initial.expr->bytes = { 65 };
+    producer.body.stmts.push_back(std::move(initial));
+    producer.body.value->then->stmts[0].var = 1;
+    auto &tail = producer.body.value->then->value;
+    tail = make_unique<CoreExpr>(); tail->kind = CoreExprKind::ResultLocal;
+    tail->var = 0; tail->type = array; tail->org = origin;
+    return core;
+}
+
 CoreModule ConstructionWaitingNamedSupersessionModule() {
     auto core = ConstructionBorrowedWaitingLoopModule(false);
     auto array = core.impls[1].results[0].type;
@@ -8254,6 +8272,14 @@ void ConstructionBorrowedWaitingTokensResumeAfterLoopJumps() {
         }
         error = GirVerifier(backedge).Verify();
         assert(changed && error && error->code == "GIR-V060" && error->message.find("requires its exact receiving refresh") != string::npos);
+    }
+    for (bool continueLoop : { false, true }) {
+        auto core = ConstructionBorrowedWaitingNamedLoopModule(continueLoop);
+        CoreWriter writer(core); writer.Write();
+        auto high = GirLowerer(core, writer.FileTable(), writer.OriginTable(),
+            [&](const CoreOrigin &origin) { return writer.OriginId(origin); }).Lower();
+        assert(Code(high) == "");
+        assert(Code(GirToLow(high).Lower()) == "");
     }
     auto core = ConstructionWaitingNamedSupersessionModule();
     CoreWriter writer(core); writer.Write();
@@ -8408,6 +8434,82 @@ void ConstructionWaitingRearmRequiresTheOriginalCleanedReceipt() {
     alias.insert(alias.end() - 1, stale);
     assert(Code(staleRole) == "GIR-V060");
     assert(Code(GirToLow(staleRole).Lower()) == "GIR-V090");
+    auto aliased = low;
+    auto &aliasedFunction = aliased.funcs[1];
+    auto ticketMember = (int)aliasedFunction.members.size();
+    aliasedFunction.members.push_back(GirMember { .kind = GirMember::Scalar, .ty = aliased.PtrType(), .scope = 0 });
+    int aliasValue = 0;
+    for (auto &block : aliasedFunction.blocks) {
+        for (auto [value, type] : block.params) aliasValue = max(aliasValue, value + 1);
+        for (auto &instruction : block.insts) if (GirDefinesValue(instruction)) aliasValue = max(aliasValue, instruction.res + 1);
+    }
+    changed = false;
+    int aliasedTicket = -1;
+    GirInst selectAlias;
+    for (auto &block : aliasedFunction.blocks) {
+        auto reset = find_if(block.insts.begin(), block.insts.end(), [](auto &instruction) { return instruction.op == GirOp::ControlExitRearm; });
+        if (reset == block.insts.end()) continue;
+        auto ticket = reset->a; aliasedTicket = ticket;
+        GirInst save; save.op = GirOp::LocalSet; save.idx = ticketMember; save.a = ticket;
+        auto reload = Def(GirOp::LocalGet, aliasValue); reload.idx = ticketMember;
+        auto position = reset - block.insts.begin();
+        block.insts.insert(block.insts.begin() + position, save);
+        block.insts.insert(block.insts.begin() + position + 2, reload);
+        for (size_t index = position + 3; index < block.insts.size(); index++) {
+            auto &instruction = block.insts[index];
+            if (instruction.op == GirOp::ControlExitSelect && instruction.a == ticket) {
+                selectAlias = instruction; selectAlias.a = aliasValue;
+                block.insts.erase(block.insts.begin() + index); index--; continue;
+            }
+            if (GirControlOf(instruction.op) && instruction.a == ticket) instruction.a = aliasValue;
+        }
+        changed = true; break;
+    }
+    for (auto &block : aliasedFunction.blocks) for (auto &instruction : block.insts)
+        if ((instruction.op == GirOp::ControlExitPrepare || instruction.op == GirOp::ControlExitCommit ||
+             instruction.op == GirOp::ControlExitRelease) && instruction.a == aliasedTicket) instruction.a = aliasValue;
+    assert(changed && Code(aliased) == "GIR-V090");
+    auto selectedAlias = aliased;
+    changed = false;
+    for (auto &block : selectedAlias.funcs[1].blocks) {
+        auto extraction = find_if(block.insts.begin(), block.insts.end(), [&](auto &instruction) {
+            return instruction.op == GirOp::ControlExitSelected && instruction.a == aliasValue;
+        });
+        if (extraction == block.insts.end()) continue;
+        block.insts.insert(extraction, selectAlias); changed = true; break;
+    }
+    assert(changed && Code(selectedAlias) == "");
+    auto branchAlias = low;
+    auto &branchFunction = branchAlias.funcs[1];
+    changed = false;
+    for (size_t index = 0; index < branchFunction.blocks.size(); index++) {
+        auto &instructions = branchFunction.blocks[index].insts;
+        auto reset = find_if(instructions.begin(), instructions.end(), [](auto &instruction) { return instruction.op == GirOp::ControlExitRearm; });
+        if (reset == instructions.end()) continue;
+        auto ticket = reset->a;
+        GirBlock continuation { { { aliasValue, branchAlias.PtrType() } }, vector<GirInst>(reset, instructions.end()) };
+        instructions.erase(reset, instructions.end());
+        instructions.push_back(Br((int)branchFunction.blocks.size(), { ticket }));
+        erase_if(continuation.insts, [&](auto &instruction) { return instruction.op == GirOp::ControlExitSelect && instruction.a == ticket; });
+        for (auto &instruction : continuation.insts)
+            if (GirControlOf(instruction.op) && instruction.op != GirOp::ControlExitRearm && instruction.a == ticket) instruction.a = aliasValue;
+        branchFunction.blocks.push_back(std::move(continuation));
+        for (auto &block : branchFunction.blocks) for (auto &instruction : block.insts)
+            if ((instruction.op == GirOp::ControlExitPrepare || instruction.op == GirOp::ControlExitCommit ||
+                 instruction.op == GirOp::ControlExitRelease) && instruction.a == ticket) instruction.a = aliasValue;
+        changed = true; break;
+    }
+    assert(changed && Code(branchAlias) == "GIR-V090");
+    auto selectedBranchAlias = branchAlias;
+    changed = false;
+    for (auto &block : selectedBranchAlias.funcs[1].blocks) {
+        auto extraction = find_if(block.insts.begin(), block.insts.end(), [&](auto &instruction) {
+            return instruction.op == GirOp::ControlExitSelected && instruction.a == aliasValue;
+        });
+        if (extraction == block.insts.end()) continue;
+        block.insts.insert(extraction, selectAlias); changed = true; break;
+    }
+    assert(changed && Code(selectedBranchAlias) == "");
     auto originless = module;
     for (auto &instruction : originless.funcs[1].blocks[0].insts)
         if (instruction.op == GirOp::ExitRearm) instruction.org = -1;

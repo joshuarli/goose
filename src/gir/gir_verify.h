@@ -1923,6 +1923,12 @@ private:
             bool terminalWaitingReleased = false;
             bool operator==(const State &) const = default;
         };
+        auto updateTicket = [](State &state, const Fact &ticket) {
+            for (auto facts : { &state.values, &state.locals, &state.targets })
+                for (auto &[value, entry] : *facts)
+                    if (entry.kind == Kind::Ticket && entry.root == ticket.root) entry = ticket;
+            state.values[ticket.root] = ticket;
+        };
         vector<const GirInst *> definitions(fn.nvalues, nullptr);
         for (auto &block : function.blocks) for (auto &inst : block.insts)
             if (GirDefinesValue(inst)) definitions[inst.res] = &inst;
@@ -2054,10 +2060,8 @@ private:
                         if (found == next.values.end() || !next.tickets.count(found->second.root)) bad("exit role branch has no live ticket");
                         auto role = condition->second ? Role::Named : Role::Fresh;
                         if (found->second.role != Role::UnknownAlias && found->second.role != role) return;
-                        for (auto &[id, entry] : next.values) if (entry.kind == Kind::Ticket && entry.root == found->second.root) {
-                            entry.role = role;
-
-                        }
+                        auto ticket = found->second; ticket.role = role;
+                        updateTicket(next, ticket);
                     }
                     if (comparison.kind == Kind::BindingRole) {
                         auto authority = binding(comparison.root);
@@ -2223,10 +2227,10 @@ private:
                         Fact ticket { Kind::Ticket, inst.res }; ticket.owner = handle.root; ticket.role = Role::Waiting;
                         ticket.result = handle.result; ticket.target = handle.target;
                         ticket.waitingOrigin = WaitingReceipt { handle.root, handle.result, handle.target, handle.lineage, handle.parent };
-                        state.values[inst.res] = ticket; state.tickets.insert(inst.res); break;
+                        updateTicket(state, ticket); state.tickets.insert(inst.res); break;
                     }
                     case GirOp::ControlExitReserve: case GirOp::ControlExitSelect: {
-                        auto ticketValue = inst.op == GirOp::ControlExitSelect ? inst.a : inst.res;
+                        auto ticketValue = inst.op == GirOp::ControlExitSelect ? require(inst.a, Kind::Ticket).root : inst.res;
                         auto handle = inst.op == GirOp::ControlExitSelect ? [&] {
                             auto previous = require(inst.a, Kind::Ticket);
                             if (previous.role != Role::Waiting) bad("completion selects a nonwaiting ticket");
@@ -2248,7 +2252,7 @@ private:
                             ticket.role = Role::UnknownAlias; ticket.binding = source.root;
                         }
                         invalidateRoleQueries(ticketValue);
-                        state.values[ticketValue] = ticket; state.tickets.insert(ticketValue); break;
+                        updateTicket(state, ticket); state.tickets.insert(ticketValue); break;
                     }
                     case GirOp::ControlExitIsNamed: {
                         auto ticket = require(inst.a, Kind::Ticket);
@@ -2281,7 +2285,7 @@ private:
                                 (int)(&function - m.funcs.data())) == m.lowtargets[raw.target].members.end())
                             bad("construction landing does not adopt this activation's received payload");
                         Fact ticket { Kind::Ticket, inst.res }; ticket.owner = handle.root; ticket.role = Role::Received;
-                        state.values[inst.res] = ticket; state.tickets.insert(inst.res); state.extracted.insert(inst.res);
+                        updateTicket(state, ticket); state.tickets.insert(inst.res); state.extracted.insert(inst.res);
                         for (auto &[value, entry] : state.values) if (entry.kind == Kind::Attempt && entry.root == raw.root) {
                             entry.ticket = inst.res; entry.selections.insert(inst.res);
                         }
@@ -2325,7 +2329,7 @@ private:
                         waiting.target = ticket.waitingOrigin->target; waiting.role = Role::Waiting;
                         waiting.waitingOrigin = ticket.waitingOrigin;
                         invalidateRoleQueries(ticket.root);
-                        state.values[inst.a] = waiting;
+                        updateTicket(state, waiting);
                         state.extracted.erase(ticket.root); state.prepared.erase(-ticket.root - 1);
                         break;
                     }
