@@ -5,7 +5,7 @@ namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
 
-private theorem forIn_member_invariant {property : σ → Prop} (items : List α) (start : σ)
+theorem list_forIn_member_invariant {property : σ → Prop} (items : List α) (start : σ)
     (body : α → σ → Id (ForInStep σ)) (initial : property start)
     (preserved : ∀ item ∈ items, ∀ state, property state → property (body item state).value) :
     property (forIn items start body) := by
@@ -63,7 +63,7 @@ theorem freshRunRound_progress (func : Func) (flags : Array Bool)
       have bounds := List.mem_range'.mp member
       simp [Std.Legacy.Range.size] at bounds
       omega
-    apply forIn_member_invariant (property := FreshRoundState flags)
+    apply list_forIn_member_invariant (property := FreshRoundState flags)
     · exact checked
     · intro item itemMember state checked
       obtain ⟨⟨value, ty⟩, index⟩ := item
