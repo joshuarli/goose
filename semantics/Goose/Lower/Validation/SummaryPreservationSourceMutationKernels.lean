@@ -1,0 +1,18 @@
+import Goose.Lower.Validation.SummaryPreservationSourceMutationKernelsOwners
+import Goose.Lower.Validation.SummaryPreservationSourceMutationKernelsCounts
+import Goose.Lower.Validation.SummaryPreservationSourceMutationKernelsResize
+import Goose.Lower.Validation.SummaryPreservationSourceMutationKernelsGrowth
+import Goose.Lower.Validation.SummaryPreservationSourceMutationKernelsAssign
+import Goose.Lower.Validation.SummaryPreservationSourceMutationKernelsWhole
+import Goose.Lower.Validation.SummaryPreservationSourceMutationKernelsAssignOp
+
+#print axioms Goose.Lower.Validation.SummaryPreservation.expressionReplay_push
+#print axioms Goose.Lower.Validation.SummaryPreservation.expressionReplay_pop
+#print axioms Goose.Lower.Validation.SummaryPreservation.statementReplay_clear
+#print axioms Goose.Lower.Validation.SummaryPreservation.statementReplay_popN
+#print axioms Goose.Lower.Validation.SummaryPreservation.statementReplay_resizeWithoutFill
+#print axioms Goose.Lower.Validation.SummaryPreservation.statementReplay_resizeWithFill
+#print axioms Goose.Lower.Validation.SummaryPreservation.statementReplay_append
+#print axioms Goose.Lower.Validation.SummaryPreservation.statementReplay_assign
+#print axioms Goose.Lower.Validation.SummaryPreservation.statementReplay_assignWhole
+#print axioms Goose.Lower.Validation.SummaryPreservation.statementReplay_assignOp
