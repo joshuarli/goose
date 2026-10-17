@@ -233,4 +233,25 @@ private def staleLocalContents (emptyInitial : Bool) : GIR.Module :=
 #guard match GIR.validate (staleLocalContents true) with | .error e => e.code == .v060 | _ => false
 #guard match GIR.validate (staleLocalContents false) with | .error e => e.code == .v060 | _ => false
 
+private def trackedLocalContents (emptyInitial safePayload : Bool) : GIR.Module :=
+  let input := staleLocalContents emptyInitial
+  { input with funcs := input.funcs.modify 2 (fun callee =>
+      { callee with roots := { callee.roots with contents := #[(0, [.param 1, .global 1])] } }) |>.modify 1 fun receiver =>
+      if !safePayload then receiver else
+        { receiver with roots := { receiver.roots with
+          params := receiver.roots.params.map fun (parameter, roots) =>
+            (parameter, if parameter == 1 then [.global 1] else roots) } } }
+private def trackedQuery (emptyInitial safePayload : Bool) : GIR.ReplacementRootQuery :=
+  let input := trackedLocalContents emptyInitial safePayload
+  input.funcs[1]?.bind fun receiver =>
+    (GIR.replacementQueries input receiver (receiver.valueTypes input)).value 11
+#guard (trackedQuery true false).any (fun roots => roots.contains (.global 0))
+#guard (trackedQuery false false).any (fun roots => roots.contains (.global 0))
+#guard match GIR.validate (trackedLocalContents true false) with | .error e => e.code == .v060 | _ => false
+#guard match GIR.validate (trackedLocalContents false false) with | .error e => e.code == .v060 | _ => false
+#guard trackedQuery true true == some [.global 1]
+#guard trackedQuery false true == some [.global 1]
+#guard (GIR.validate (trackedLocalContents true true)).toBool
+#guard (GIR.validate (trackedLocalContents false true)).toBool
+
 end Goose.Lower.Validation.ReplacementEmptyContentChecks
