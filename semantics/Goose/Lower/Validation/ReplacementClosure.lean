@@ -64,22 +64,22 @@ theorem provenance_closed_read_slot {results : Array (List RootRef)} {types : Ar
 def ReplacementRootsWithin (query : ReplacementRootQuery) (source : List RootRef) : Prop :=
   ∃ roots, query = some roots ∧ roots ⊆ source
 
-theorem replacementQueries_known_of_member {func : Func} {provenance : Prov} {value : ValueId}
+theorem replacementQueries_known_of_member (module : GIR.Module) (types : Array (Option VTy)) {func : Func} {provenance : Prov} {value : ValueId}
     {root : RootRef} (member : root ∈ rootsAt provenance.vals value) :
-    ∃ roots, (replacementQueries func provenance).value value = some roots := by
+    ∃ roots, (replacementQueries module func types provenance).value value = some roots := by
   cases raw : rootsAt provenance.vals value with
   | nil => simp [raw] at member
   | cons first rest =>
-    exact ⟨(first :: rest).flatMap (replacementQueries func provenance).expand, by
+    exact ⟨(first :: rest).flatMap (replacementQueries module func types provenance).expand, by
       simp only [ReplacementQueries.value, replacementQueries, raw]⟩
 
-theorem replacementRootsWithin_of_member {func : Func} {provenance : Prov} {value : ValueId}
+theorem replacementRootsWithin_of_member (module : GIR.Module) (types : Array (Option VTy)) {func : Func} {provenance : Prov} {value : ValueId}
     {root : RootRef} {source : List RootRef} (member : root ∈ rootsAt provenance.vals value)
     (upper : (rootsAt provenance.vals value).flatMap func.expandParameterRoot ⊆ source) :
-    ReplacementRootsWithin ((replacementQueries func provenance).value value) source := by
-  obtain ⟨roots, known⟩ := replacementQueries_known_of_member member
+    ReplacementRootsWithin ((replacementQueries module func types provenance).value value) source := by
+  obtain ⟨roots, known⟩ := replacementQueries_known_of_member module types member
   refine ⟨roots, known, ?_⟩
-  have normalized := replacementQueries_values func provenance value
+  have normalized := replacementQueries_values module func types provenance value
   rw [known] at normalized
   change roots = _ at normalized
   rw [normalized]
