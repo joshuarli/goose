@@ -246,6 +246,7 @@ struct TypeCheck {
         int scopebase = 0;           // First scope index belonging to this frame.
         int varbase = 0;             // First var index belonging to this frame.
         Line callline;               // Call site, for instantiation chain diagnostics.
+        string_view expansiontrace;  // Structural entry containing the call site.
         bool isfunval = false;
         bool isdefault = false;    // Lexically isolated, but caller values remain live.
         // A parameter default's: the function, which parameter, and
@@ -271,7 +272,7 @@ struct TypeCheck {
         BodyExits *exits = nullptr;
     };
 
-    enum ScopeKind { SK_PLAIN, SK_FN, SK_LOOP, SK_BLOCK };
+    enum ScopeKind { SK_PLAIN, SK_FN, SK_LOOP, SK_BLOCK, SK_EXPANSION };
     // Snapshot of assigned/narrowed for the variables the code between a
     // save and its restore can name (NamedFrames): those of the current
     // frame, of the frames it is lexically nested in, and of the frames the
@@ -346,6 +347,11 @@ struct TypeCheck {
         ~BlockScope() { tc.blockpos.pop_back(); }
     };
     void CheckStmts(Block *b);
+    size_t expansionsize = 0;
+    Node *ExpansionConstant(Node *n, set<VarDecl *> &visiting);
+    void ExpandConstFor(ConstFor *cf, const function<void(ExpansionClone &)> &emit);
+    Block *ExpandStatements(ConstFor *cf);
+    void ExpandInitializers(vector<FieldInit> &inits);
     bool MentionsName(Node *n, string_view name, set<SFunction *> &seen);
     bool EscapingContinue(Node *n);
     enum class ShrinkDemand { Source, Core };
@@ -538,7 +544,14 @@ struct TypeCheck {
 
     static constexpr int MAXCHAIN = 20;
 
-    [[noreturn]] void Error(Line l, const string &msg) { ErrorIn(l, msg, InstantiationChain()); }
+    string_view ActiveExpansionTrace() {
+        for (auto i = cur.nodepath.rbegin(); i != cur.nodepath.rend(); ++i)
+            if (!i->node->expansiontrace.empty()) return i->node->expansiontrace;
+        return {};
+    }
+    [[noreturn]] void Error(Line l, const string &msg) {
+        ErrorIn(l, msg, cat(ActiveExpansionTrace(), InstantiationChain()));
+    }
 
     // An error at code checked earlier, with the instantiation chain taken
     // there: how a check made once the whole program has been reports one.
@@ -563,9 +576,14 @@ struct TypeCheck {
         string s;
         // A long chain shows its innermost and outermost instantiations.
         auto chain = 0, nth = 0;
+        string_view lasttrace;
         for (auto &f : frames) chain += f.sf && !f.isfunval;
         for (auto i = (int)frames.size() - 1; i > 0; i--) {
             auto &f = frames[i];
+            if (!f.expansiontrace.empty() && f.expansiontrace != lasttrace) {
+                s += f.expansiontrace;
+                lasttrace = f.expansiontrace;
+            }
             if (f.defaultfn) {
                 Append(s, "\n  in the default of parameter ",
                        f.defaultfn->params[f.defaultparam].name, " of ", f.defaultfn->qname,
@@ -646,7 +664,10 @@ struct TypeCheck {
         }
     }
 
-    [[noreturn]] void Error(const Node *n, const string &msg) { Error(n->line, msg); }
+    [[noreturn]] void Error(const Node *n, const string &msg) {
+        ErrorIn(n->line, msg, cat(n->expansiontrace.empty() ? ActiveExpansionTrace() : n->expansiontrace,
+                                 InstantiationChain()));
+    }
 
     // A warning's text, about node `at` as the source has it; or, where
     // `cast` is set, a check's verdict on that explicit cast as the source
@@ -863,7 +884,7 @@ struct TypeCheck {
         if (a == b) return true;
         if (a->kind != b->kind || a->cq != b->cq) return false;
         switch (a->kind) {
-            case TY_INT:  return a->intstorage == b->intstorage;
+            case TY_INT:  return a->intstorage == b->intstorage && SameIndex(a, b);
             case TY_FLT:  return a->fltstorage == b->fltstorage;
             case TY_BOOL: case TY_VOID: case TY_FN: return true;
             case TY_STRUCT: {
@@ -969,6 +990,7 @@ struct TypeCheck {
     TypeExpr *SubstRaw(TypeExpr *t) {
         switch (t->kind) {
             case TY_GENERIC: {
+                if (!t->named->expansionerror.empty()) Error(t->line, string(t->named->expansionerror));
                 auto b = LookupBindingOuter(t->named->name);
                 if (!b) return t;  // Unknown name; ValidateType reports it.
                 if (!t->named->args.empty())
@@ -1043,6 +1065,16 @@ struct TypeCheck {
                 if (!found)
                     Error(t->line, cat("enum ", adt->enu->en->name, " has no variant named ", name));
                 return ast.VariantOf(adt, name, found, t->line);
+            }
+            case TY_FN: {
+                auto args = SubstArgs(t->fn->args), rets = SubstArgs(t->fn->rets);
+                if (!args && !rets) return t;
+                auto n = ast.NewType(TY_FN, t->line);
+                n->fn = ast.NewDetail<TypeFn>();
+                *n->fn = *t->fn;
+                if (args) n->fn->args = std::move(*args);
+                if (rets) n->fn->rets = std::move(*rets);
+                return n;
             }
             default: return t;
         }
@@ -1137,6 +1169,9 @@ struct TypeCheck {
     Node *DefaultValue(TypeExpr *t, Line line);
     SizeClass ClassOf(TypeExpr *t);
     bool IsFlat(TypeExpr *t);
+    bool HoldsIndexT(TypeExpr *t);
+    SFunction *TextFn();
+    void CheckfreeCallee(Node *at, SFunction *callee);
     bool HoldsPlainRef(TypeExpr *t);
     bool HasDefault(TypeExpr *t, string &why);
 
@@ -1541,6 +1576,10 @@ struct TypeCheck {
     // base is that global's, everywhere.
 
     void ResolvePools();
+    void ResolveIndexTypes();
+    void ValidateIndexType(TypeExpr *t);
+    // The globals some index or bound type names: never shrunk (§3.11).
+    set<VarDef *> indexarrays;
 
     // The globals some relative reference type measures offsets from. Empty
     // for a program without the feature, which is what keeps `RootArg::pool`
@@ -1936,9 +1975,15 @@ struct TypeCheck {
     }
     bool InGenericCode();
     bool Converts(const Val &v, TypeExpr *t);
+    // Whether two integer types are alike in being an index or bound type:
+    // both plain, or both of one array and kind (§3.11).
+    static bool SameIndex(const TypeExpr *a, const TypeExpr *b) {
+        if (!a->ix || !b->ix) return !a->ix && !b->ix;
+        return a->ix->arr == b->ix->arr && a->ix->upto == b->ix->upto;
+    }
     static bool SameNum(TypeExpr *a, TypeExpr *b) {
         if (!a || !b || a->kind != b->kind) return false;
-        if (a->kind == TY_INT) return a->intstorage == b->intstorage;
+        if (a->kind == TY_INT) return a->intstorage == b->intstorage && SameIndex(a, b);
         return a->kind == TY_FLT && a->fltstorage == b->fltstorage;
     }
     bool SameNumVal(const Val &a, const Val &b);
@@ -2226,6 +2271,7 @@ struct TypeCheck {
     void NoCopyWrite(Node *at, const LVal &lv);
     bool WholeWritable(const LVal &lv);
     void CheckIncDec(IncDec *x);
+    [[noreturn]] void NoIndexUpdate(Node *at, const char *op, TypeExpr *st);
 
     // ------------------------------------------------------------------
     // Builtins and array members.
@@ -2329,6 +2375,7 @@ struct TypeCheck {
     };
     vector<GlobalShrink> globalshrinks;
     void NoteGlobalShrink(Node *at, const string &prefix, VarDef *vd, TypeExpr *bound);
+    [[noreturn]] void ThreadIndexError(Node *at, TypeExpr *t);
     void CheckGlobalShrinks();
     // Whether what a store record leads to may point into the array `arr`
     // of type `arrtype`: its stores followed through the containers they
@@ -2633,6 +2680,7 @@ struct TypeCheck {
             }
         }
         ResolvePools();
+        ResolveIndexTypes();
         // Validate all non-generic type declarations up front: clearer errors
         // than at first use, and unused decls get checked too.
         for (auto st : ast.structs)
@@ -2656,8 +2704,10 @@ struct TypeCheck {
         }
         // Concrete ones only; a pointee still spelled with a type parameter
         // gets here again once a specialization substitutes it.
-        for (auto t : ast.alltypes)
+        for (auto t : ast.alltypes) {
             if (t->kind == TY_REF && t->ref->pool && !HasGenerics(t->ref->sub)) ValidatePool(t);
+            if (IsIndexT(t)) ValidateIndexType(t);
+        }
         auto mainsf = ast.MainFunction();
         if (!mainsf && !library && !(nomain && !ast.DeclaresMain()))
             throw CompileError { "program needs exactly one global fn main()" };
@@ -2672,8 +2722,10 @@ struct TypeCheck {
         }
         // Thread entry points compile as separate programs; check any
         // that no spawn reached.
-        for (auto sf : ast.functions)
+        for (size_t i = 0; i < ast.functions.size(); i++) {
+            auto sf = ast.functions[i];
             if (sf->isthread) EnsureThreadSpec(sf, sf->line);
+        }
         // Thread programs may not touch globals: that would be shared mutable
         // memory between programs.
         for (auto sf : ast.functions)
@@ -2687,7 +2739,7 @@ struct TypeCheck {
         // reusable where it could be).
         // Errors these produce are real; a lack of errors is weaker than for
         // reached code, since no call-site facts were available.
-        for (auto sf : ast.functions) CheckUnreached(sf);
+        for (size_t i = 0; i < ast.functions.size(); i++) CheckUnreached(ast.functions[i]);
         auto exportcount = 0;
         for (auto sf : ast.functions) {
             if (!sf->isexport) continue;

@@ -95,6 +95,7 @@ theorem preparedLoopBlock_core_at {n : Nat} {cfg : Cfg} {loop : Option LoopCtx}
       ∀ (pt_s : Pt) (fr_s : GIR.Frame), ls_p.pp = some pt_s →
       ExtT ls_s cx.fn.blocks →
       Rel cfg { env with scopes := (scope, si) :: env.scopes } cx fr_s ls_p →
+      fr_s.vals = fr.vals → ls_p.vals.size = ls.vals.size →
       SimEAt cx pt_s fr_s
         (execStmts n cfg { env with scopes := (scope, si) :: env.scopes } stmts >>=
           prepareLoopFlow { env with scopes := (scope, si) :: env.scopes } loop)
@@ -133,7 +134,8 @@ theorem preparedLoopBlock_core_at {n : Nat} {cfg : Cfg} {loop : Option LoopCtx}
   subst fr1'
   have hrel1' : Rel cfg { env with scopes := (scope, si) :: env.scopes } cx fr1 ls_p :=
     hrel1.stack_eq hst1'
-  refine SimEAt.bind (hS si entered initialized hfresh hbind pt1' fr1 hpp1' hext_s hrel1')
+  refine SimEAt.bind (hS si entered initialized hfresh hbind pt1' fr1 hpp1' hext_s hrel1'
+    hfr1 (by rw [hvl1']; exact hv1))
     fun flow after pt2 fr2 hactual hpost => ?_
   rcases hpost with ⟨rfl, P2⟩ | hreturned | ⟨context, hloop, htransfer⟩
   · refine SimEAt.bind (hX si entered initialized after hfresh hbind hactual pt2 fr2

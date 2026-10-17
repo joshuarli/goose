@@ -6,7 +6,7 @@ Goose is a memory-safe systems language with no heap allocator or garbage
 collector. Dynamic values live inline on compiler-managed data stacks, and
 scope exit reclaims them.
 
-[Tutorial](docs/tutorial.md) · [Language specification](docs/goose_spec.md) ·
+[Tutorial](docs/tutorial.md) · [Reference](docs/reference.md) · [Language specification](docs/goose_spec.md) ·
 [Standard library](docs/stdlib.md) · [Packages](docs/packages.md) ·
 [Samples](samples/README.md) · [Benchmarks](bench/summary.md)
 

@@ -61,7 +61,9 @@ inline void TypeExpr::Dump(string &s, size_t limit) const {
     };
     if (cq) s += "const ";
     auto SubDump = [&](const TypeExpr *inner) {
-        auto parens = inner->kind == TY_FN || inner->cq || (cq && chainhasrs(inner));
+        // An index type takes no postfix of its own: `(u32 in a)[>..]`.
+        auto parens = inner->kind == TY_FN || inner->cq || inner->ix ||
+                      (cq && chainhasrs(inner));
         if (parens) s += "(";
         inner->Dump(s, limit);
         if (parens) s += ")";
@@ -76,7 +78,10 @@ inline void TypeExpr::Dump(string &s, size_t limit) const {
         s += ">";
     };
     switch (kind) {
-        case TY_INT:  s += IntStorageName(intstorage); break;
+        case TY_INT:
+            s += IntStorageName(intstorage);
+            if (ix) Append(s, ix->upto ? " upto " : " in ", ix->name);
+            break;
         case TY_FLT:  s += FltStorageName(fltstorage); break;
         case TY_BOOL: s += "bool"; break;
         case TY_STRUCT: s += struc->st->qname; ArgsDump(struc->args); break;
@@ -177,7 +182,7 @@ inline bool EndsInBlock(const Node *n) {
     if (auto b = Is<Block>(n); b && MultiAssignOf(b)) return false;
     if (Is<IfExpr>(n) || Is<MatchExpr>(n) || Is<EarlyBlock>(n) || Is<While>(n) ||
         Is<LoopExpr>(n) || Is<ForLoop>(n) || Is<FnDecl>(n) || Is<Block>(n) ||
-        Is<InlineBlock>(n)) return true;
+        Is<InlineBlock>(n) || Is<ConstFor>(n)) return true;
     if (auto c = Is<Call>(n)) return c->trailing != nullptr;
     return false;
 }
@@ -289,6 +294,43 @@ inline void StructLit::Dump(string &s, int ind) const {
     }
     if (defaultall) s += inits.empty() ? ".." : ", ..";
     s += inits.empty() && !defaultall ? "}" : " }";
+}
+
+inline void ConstFor::Dump(string &s, int ind) const {
+    s += "const for <";
+    for (size_t i = 0; i < names.size(); i++) {
+        if (i) s += ", ";
+        s += names[i];
+    }
+    s += "> in ";
+    if (source == ES_CONSTANTS) {
+        s += "[";
+        for (size_t i = 0; i < constants.size(); i++) {
+            if (i) s += ", ";
+            constants[i]->Dump(s, ind);
+        }
+        s += "]";
+    } else {
+        s += source == ES_FIELDS ? "fields<" : "types<";
+        for (size_t i = 0; i < types.size(); i++) {
+            if (i) s += ", ";
+            types[i]->Dump(s);
+        }
+        s += ">";
+    }
+    s += " ";
+    if (body) body->Dump(s, ind);
+    else {
+        s += "{";
+        for (auto &fi : inits) {
+            NL(s, ind + 1);
+            if (!fi.name.empty()) Append(s, fi.name, ": ");
+            fi.val->Dump(s, ind + 1);
+            s += ",";
+        }
+        NL(s, ind);
+        s += "}";
+    }
 }
 
 inline void Unary::Dump(string &s, int ind) const {
@@ -458,15 +500,17 @@ inline void ForLoop::Dump(string &s, int ind) const {
     s += "for ";
     if (byref) s += "&";
     s += var;
-    if (vartype) {
+    // The loop's own `in` follows a binder's type, so an index type there
+    // takes parentheses.
+    auto binder = [&](TypeExpr *t) {
         s += ": ";
-        vartype->Dump(s);
-    }
+        if (t->ix) s += "(";
+        t->Dump(s);
+        if (t->ix) s += ")";
+    };
+    if (vartype) binder(vartype);
     if (!idxvar.empty()) Append(s, ", ", idxvar);
-    if (idxtype) {
-        s += ": ";
-        idxtype->Dump(s);
-    }
+    if (idxtype) binder(idxtype);
     s += " in ";
     DumpOperand(s, iter, ind);
     s += " ";
@@ -581,6 +625,9 @@ inline void FnDecl::Dump(string &s, int ind) const {
         s += "extern ";
         if (sf->cname != sf->name) { s += "\""; s += sf->cname; s += "\" "; }
     }
+    // A nested function takes its enclosing function's checkfree.
+    if (sf->checkfree && !(sf->isnested && sf->outer && sf->outer->checkfree))
+        s += "checkfree ";
     if (sf->issimd) s += "simd ";
     if (sf->isinline) s += "inline ";
     if (sf->isrec) s += "recursive ";

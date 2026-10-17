@@ -10,14 +10,38 @@
    data stack budget holds beside the main program (gs_rt_start), so a pool
    sized by it never runs the program out of address space. */
 #ifdef _WIN32
+/* The CPUs the process may run on, which `start /affinity` or a job object
+   can make fewer than the machine has. */
 static int64_t gs_os_threads(void) {
+    DWORD_PTR proc, sys;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) && proc) {
+        int64_t n = 0;
+        for (; proc; proc &= proc - 1) n++;
+        return n;
+    }
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     return (int64_t)si.dwNumberOfProcessors;
 }
 #else
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
+/* The CPUs the process may run on, which taskset or a cgroup cpuset can make
+   fewer than the machine has. Linux asks the system call itself: glibc
+   declares sched_getaffinity and CPU_COUNT only under _GNU_SOURCE. */
 static int64_t gs_os_threads(void) {
+    #ifdef __linux__
+        unsigned long mask[1024 / (8 * sizeof(unsigned long))];
+        long len = syscall(SYS_sched_getaffinity, 0, sizeof mask, mask);
+        if (len > 0) {
+            int64_t n = 0;
+            for (long i = 0; i < len / (long)sizeof(unsigned long); i++)
+                for (unsigned long w = mask[i]; w; w &= w - 1) n++;
+            if (n > 0) return n;
+        }
+    #endif
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     return n > 0 ? (int64_t)n : 1;
 }

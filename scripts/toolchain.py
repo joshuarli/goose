@@ -162,10 +162,11 @@ def native_imports(text):
 
 # What the compiler says when asked for the link inputs of a package it was
 # not built with (the runners then skip that module's fixtures, rather than
-# have the compiler build the package), and what a gfx test prints when
-# there is no GPU device to run on.
+# have the compiler build the package), and what the gfx package reports
+# when there is no GPU device to run on, whatever a program prefixes it with
+# (Mini Doom's "mini doom: ").
 GFX_UNAVAILABLE = "built without the package gfx"
-GFX_NO_DEVICE = "gfx: no GPU device"
+GFX_NO_DEVICE = "no GPU device"
 PHYSICS_UNAVAILABLE = "built without the package physics"
 UI_UNAVAILABLE = "built without the package gfx"
 AUDIO_UNAVAILABLE = "built without the package gfx"

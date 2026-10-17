@@ -7,10 +7,12 @@
 // only be a declaration, so an unknown one is an error here. After this pass
 // no TY_UNRESOLVED remains and aliases do not exist as types.
 #pragma once
+#include "expansion_bind.h"
 
 namespace goose {
 
 inline void ResolveTypeNames(Ast &ast) {
+    BindExpansionNames(ast);
     auto ErrorAt = [&](const TypeExpr *t, const string &msg) {
         throw CompileError {
             cat(ast.sources[t->line.fileidx].first, ":", t->line.line, ": error: ", msg)
