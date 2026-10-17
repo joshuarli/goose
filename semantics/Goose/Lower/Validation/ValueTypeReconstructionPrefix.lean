@@ -127,4 +127,29 @@ theorem readonly_snapshot_contents_retained
   · simpa only [Func.permissions, permissionsFromTables_size] using newBound
   · simpa only [Func.permissions, globals, structs] using retained
 
+theorem tyEnv_contentsWritable_present (le : LEnv) {state : LS}
+    (dense : state.DenseDefinitions) {value : ValueId} (bound : value < state.vals.size) :
+    ∃ writable, (tyEnv le state).contentsWritable value = some writable := by
+  rw [tyEnv_contentsWritable_prefix]
+  have permissionBound : value < ((reconstructionPrefixFunction le state).permissionsFromTables
+      (le.globals.map (·.2)) le.mod.structs state.vals).size := by
+    rwa [permissionsFromTables_size, reconstructionPrefixFunction_numValues le dense]
+  cases row : ((reconstructionPrefixFunction le state).permissionsFromTables
+      (le.globals.map (·.2)) le.mod.structs state.vals)[value]? with
+  | none => exact (Nat.not_le_of_gt permissionBound (Array.getElem?_eq_none_iff.mp row)).elim
+  | some capability => exact ⟨capability.2, rfl⟩
+
+theorem permissionContents_option_true {globalKinds : Array VarKind} {structs : Array StructDef}
+    {func : Func} {types : Array (Option VTy)} {authorized : ValueId → Prop}
+    (closed : ContentsClosed globalKinds structs func types authorized)
+    {value : ValueId} (member : authorized value) :
+    (func.permissionsFromTables globalKinds structs types)[value]?.map (·.2) = some true := by
+  have present := closed.permissions value member
+  have bound := closed.permissions.bound member
+  cases row : (func.permissionsFromTables globalKinds structs types)[value]? with
+  | none => exact (Nat.not_le_of_gt bound (Array.getElem?_eq_none_iff.mp row)).elim
+  | some capability =>
+    simp only [permissionsAt, row, Option.getD_some] at present
+    simp only [Option.map_some, present]
+
 end Goose.Lower.Validation

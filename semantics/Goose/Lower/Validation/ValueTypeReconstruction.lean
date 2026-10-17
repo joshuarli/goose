@@ -606,4 +606,55 @@ theorem valueTypes_ranked_agrees
   rw [retained.2 v t typed]
   exact valueTypes_ranked_reconstructs ranked v bound
 
+private theorem reconstructionStart_size (func : Func) :
+    (reconstructionStart func).size = func.numValues := by
+  unfold reconstructionStart
+  apply fold_preserves func.blocks.toList _ (fun (values : Array (Option VTy)) => values.size = func.numValues) _ (by simp)
+  intro block member vals size
+  apply fold_preserves block.params _ (fun (values : Array (Option VTy)) => values.size = func.numValues) vals size
+  intro pair pairMember acc established
+  dsimp
+  split
+  · simpa using established
+  · exact established
+
+private theorem reconstructionRound_size (module : GIR.Module) (func : Func)
+    (vals : Array (Option VTy)) : (reconstructionRound module func vals).1.size = vals.size := by
+  apply fold_preserves (reconstructionInstructions func) (reconstructionInstruction module func vals)
+    (fun acc => acc.1.size = vals.size) (vals, false) rfl
+  intro inst member acc size
+  exact (instruction_size module func vals acc inst).trans size
+
+private theorem reconstructionGo_size (module : GIR.Module) (func : Func)
+    (fuel : Nat) (vals : Array (Option VTy)) :
+    (Func.valueTypes.go (reconstructionRound module func) fuel vals).size = vals.size := by
+  induction fuel generalizing vals with
+  | zero => rfl
+  | succ fuel ih =>
+    rw [Func.valueTypes.go.eq_2]
+    change (if (reconstructionRound module func vals).2 = true then
+      Func.valueTypes.go (reconstructionRound module func) fuel (reconstructionRound module func vals).1
+      else (reconstructionRound module func vals).1).size = vals.size
+    split
+    · exact (ih _).trans (reconstructionRound_size module func vals)
+    · exact reconstructionRound_size module func vals
+
+theorem valueTypes_size (module : GIR.Module) (func : Func) :
+    (func.valueTypes module).size = func.numValues := by
+  rw [valueTypes_eq_reconstruction, reconstructionGo_size, reconstructionStart_size]
+
+theorem valueTypes_ranked_eq_recorded
+    {module : GIR.Module} {func : Func} {types : ValueId → VTy} {rank : ValueId → Nat}
+    (ranked : RankedReconstruction module func types rank)
+    {recorded : Array (Option VTy)} (size : recorded.size = func.numValues)
+    (typed : ∀ value, value < recorded.size → recorded[value]? = some (some (types value))) :
+    func.valueTypes module = recorded := by
+  apply Array.ext_getElem?
+  intro value
+  by_cases bound : value < func.numValues
+  · exact (valueTypes_ranked_reconstructs ranked value bound).trans
+      (typed value (by rwa [size])).symm
+  · have outside : func.numValues ≤ value := Nat.le_of_not_gt bound
+    rw [Array.getElem?_eq_none (by rwa [valueTypes_size]), Array.getElem?_eq_none (by rwa [size])]
+
 end Goose.Lower.Validation
