@@ -50,7 +50,7 @@ theorem native_eachSource_view_row {typingEnv : TEnv} {env : PEnv} {view : View}
   have environment : lowerEnv typingEnv.mod typingEnv.vars env.impl.results.toList = le := by
     rw [← tables.moduleEq, ← tables.variablesEq]
   have viewRun : lowerView view le initial = (produced.1.2, produced.2) := by cases view <;> rfl
-  apply lowerView_generated_typed view source
+  apply lowerView_generated_typed view source (generated := generated)
   · rw [environment]
     exact viewRun
   · exact live
