@@ -32,6 +32,7 @@ structure CallSiteFacts (module : Module) (func : Func) (vt : Array (Option VTy)
       vt[argument]? = some (some (.data (.ref actualMutability payload))) ∧ argument < func.numValues
   observed : ∀ (index : Nat) (argument : ValueId), args[index]? = some argument →
     (callee.params[index]?).any Ty.isRefSlice = true →
+    (callee.roots.contents.find? (·.1 == index)).isSome = true →
     ∀ receiver, RootRef.param receiver ∈ rootsAt provenance.vals argument →
       (func.params[receiver]?).any Ty.isRefSlice = true →
       (func.roots.contents.find? (·.1 == receiver)).isSome = true
@@ -115,6 +116,7 @@ structure ModuleCanonicalFacts (module : Module) (types : Array (Array (Option V
     FunctionCanonicalFacts module func (types[index]?.getD #[])
       (provenances[index]?.getD ⟨#[],#[]⟩) results
   resultFloors : ∀ (index : Nat) (func : Func), module.funcs[index]? = some func →
+    (func.results[0]?).any Ty.isRefLike = true →
     func.roots.results[0]?.getD [] ⊆ rootsAt results index
 
 def ModuleCanonicalWithin (module : Module) (types : Array (Array (Option VTy)))

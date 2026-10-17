@@ -125,6 +125,7 @@ theorem State.CanonicalWithin.callContentArguments {module : Module} {func calle
         vt[argument]? = some (some (.data (.ref actualMutability payload))) ∧ argument < func.numValues)
     (observed : ∀ (index : Nat) (argument : ValueId), args[index]? = some argument →
       (callee.params[index]?).any Ty.isRefSlice = true →
+      (callee.roots.contents.find? (·.1 == index)).isSome = true →
       ∀ receiver, RootRef.param receiver ∈ rootsAt provenance.vals argument →
         (func.params[receiver]?).any Ty.isRefSlice = true →
         (func.roots.contents.find? (·.1 == receiver)).isSome = true)
@@ -149,7 +150,7 @@ theorem State.CanonicalWithin.callContentArguments {module : Module} {func calle
       have physical := before.holderValues argument bound actualMutability (.slice inner element) canonical rfl
       refine ⟨argument,argumentRow,?_⟩
       apply before.memory.call_content before.shape physical closed parameters rfl
-        (observed index argument argumentRow slice)
+        (observed index argument argumentRow slice (by simp [annotation]))
       intro receiver member
       have selection := Array.mem_of_find?_eq_some annotation
       have receiverMember : receiver ∈ rootsAt provenance.vals args[index]! := by
@@ -182,6 +183,7 @@ theorem State.CanonicalWithin.callState_closed {module : Module} {states : Array
         vt[argument]? = some (some (.data (.ref actualMutability payload))) ∧ argument < func.numValues)
     (observed : ∀ (index : Nat) (argument : ValueId), args[index]? = some argument →
       (callee.params[index]?).any Ty.isRefSlice = true →
+      (callee.roots.contents.find? (·.1 == index)).isSome = true →
       ∀ receiver, RootRef.param receiver ∈ rootsAt provenance.vals argument →
         (func.params[receiver]?).any Ty.isRefSlice = true →
         (func.roots.contents.find? (·.1 == receiver)).isSome = true)
@@ -238,7 +240,8 @@ theorem State.CanonicalWithin.callState_closed {module : Module} {states : Array
       (by simpa using Array.mem_of_find?_eq_some annotation)
       (by simp [formal,Ty.isRefSlice,flat]) mappedMember
   · intro receiver actualMutability receiverType receiverMember
-    exact observed index argument argumentRow (by simp [formal,Ty.isRefSlice,flat]) receiver
+    exact observed index argument argumentRow (by simp [formal,Ty.isRefSlice,flat])
+      (by simp [annotation]) receiver
       receiverMember (by simp [receiverType,Ty.isRefSlice,flat])
 
 
@@ -269,13 +272,14 @@ theorem State.CanonicalWithin.call {module : Module} {states : Array State}
         vt[argument]? = some (some (.data (.ref actualMutability payload))) ∧ argument < func.numValues)
     (observed : ∀ (index : Nat) (argument : ValueId), args[index]? = some argument →
       (callee.params[index]?).any Ty.isRefSlice = true →
+      (callee.roots.contents.find? (·.1 == index)).isSome = true →
       ∀ receiver, RootRef.param receiver ∈ rootsAt provenance.vals argument →
         (func.params[receiver]?).any Ty.isRefSlice = true →
         (func.roots.contents.find? (·.1 == receiver)).isSome = true)
     (resultType : callee.results = [type])
     (canonical : vt[value]? = some (some (.data type)))
     (notHolder : ∀ mutability payload, type = .ref mutability payload → payload.isRefLike = false)
-    (resultFloor : callee.roots.results[0]?.getD [] ⊆ rootsAt results fn)
+    (resultFloor : type.isRefLike = true → callee.roots.results[0]?.getD [] ⊆ rootsAt results fn)
     (valueBounded : value < provenance.vals.size)
     (quiet : func.provStep results vt (provenance,false) (.def value (.call fn args origin)) = (provenance,false))
     (admitted : func.checkAdmittedRegions module vt provenance = .ok ())
@@ -299,24 +303,24 @@ theorem State.CanonicalWithin.call {module : Module} {states : Array State}
     simpa [mapRawContentRoots,argumentRow] using member
   have contentBounds := initial.callContentArguments calleeAt closed parameters contentTypes
     references observed admitted blockMember called
-  have ceiling : mapRawContentRoots provenance args (callee.roots.results[0]?.getD []) ⊆
-      rootsAt provenance.vals value := by
-    intro root member
-    have mapped : root ∈ rootsOfDef results vt func provenance value (.call fn args origin) := by
-      obtain ⟨original,originalMember,mapped⟩ := (mapRawContentRoots_member _ _ _ _).mp member
-      apply List.mem_flatMap.mpr
-      refine ⟨original,resultFloor originalMember,?_⟩
-      cases original with
-      | «local» slot => simpa [mapRawContentRoots] using mapped
-      | global global => simpa [mapRawContentRoots] using mapped
-      | param index =>
-          cases argument : args[index]? <;> simpa [mapRawContentRoots,argument] using mapped
-    exact provStep_def_roots valueBounded quiet mapped
   have produced : SymbolicRootsRefine func
       (if valRefLike vt value then (Model.callState module states func exposed fn args).1 else .known [])
       (rootsAt provenance.vals value) := by
     by_cases reference : type.isRefLike = true
     · have like : valRefLike vt value = true := by simp [valRefLike,canonical,VTy.refLike,reference]
+      have ceiling : mapRawContentRoots provenance args (callee.roots.results[0]?.getD []) ⊆
+          rootsAt provenance.vals value := by
+        intro root member
+        have mapped : root ∈ rootsOfDef results vt func provenance value (.call fn args origin) := by
+          obtain ⟨original,originalMember,mapped⟩ := (mapRawContentRoots_member _ _ _ _).mp member
+          apply List.mem_flatMap.mpr
+          refine ⟨original,resultFloor reference originalMember,?_⟩
+          cases original with
+          | «local» slot => simpa [mapRawContentRoots] using mapped
+          | global global => simpa [mapRawContentRoots] using mapped
+          | param index =>
+              cases argument : args[index]? <;> simpa [mapRawContentRoots,argument] using mapped
+        exact provStep_def_roots valueBounded quiet mapped
       simp only [like,ite_true]
       exact (call_result_symbolic calleeAt effectsAt closed
         (calleeBounded.returned type resultType reference) supported.returned resultExternal

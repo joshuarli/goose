@@ -94,7 +94,8 @@ theorem State.CanonicalWithin.step_closed {module : Module} {states : Array Stat
             facts.roots.closed facts.roots.parameters calleeFacts.roots.contentExternal calleeFacts.roots.resultExternal
             site.contracts calleeFacts.roots.contentTypes site.arguments site.references site.observed
             resultType canonicalResult (calleeFacts.roots.resultNotHolder result (by simp [resultType]))
-            (moduleFacts.resultFloors fn site.callee site.calleeAt) bound quiet facts.admitted blockMember member
+            (fun reference => moduleFacts.resultFloors fn site.callee site.calleeAt
+              (by simp [resultType,reference])) bound quiet facts.admitted blockMember member
       · have classified := DefinitionTyping.of_resultTy (env := {module.tyEnv func with vals := vt}) facts.valuesShape facts.globalStorage facts.fields op typed
         apply before.noncallDefinition classified canonical rfl rfl
           (fun fn args origin same => called ⟨fn,args,origin,same⟩) facts.roots.unique facts.roots.parameters
