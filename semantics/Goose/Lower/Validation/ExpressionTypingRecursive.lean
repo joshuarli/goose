@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ExpressionTypingCallOps
+import Goose.Lower.Validation.ExpressionTypingAggregateOps
 
 namespace Goose.Lower.Validation
 
@@ -12,6 +12,8 @@ def RecursiveExpression : Expr → Prop
   | .bin _ a b _ => RecursiveExpression a ∧ RecursiveExpression b
   | .len v => RecursiveView v
   | .call _ args _ => RecursiveArguments args
+  | .arrLit _ exprs | .structLit _ exprs => RecursiveExpressions exprs
+  | .fill _ expr => RecursiveExpression expr
   | .and _ _ | .or _ _ => True
   | .blockE b => RecursiveBlock b
   | .ifE _ t f => RecursiveBlock t ∧ RecursiveBlock f
@@ -30,6 +32,10 @@ def RecursiveView : View → Prop
 def RecursiveBlock : Core.Block → Prop
   | .mk _ _ none => True
   | .mk _ _ (some e) => RecursiveExpression e
+
+def RecursiveExpressions : List Expr → Prop
+  | [] => True
+  | expr :: rest => RecursiveExpression expr ∧ RecursiveExpressions rest
 
 def RecursiveArguments : List Arg → Prop
   | [] => True
@@ -155,6 +161,55 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
     | some block =>
       have operation : (Op.viewLen view).resultTy (tyEnv (lowerEnv env.mod env.vars results) mid) = .ok (.data (.int .i64)) := by
         simp [Op.resultTy, TyEnv.viewTy, TyEnv.valTy, tyEnv, typed, pure, Except.pure, bind, Except.bind]
+      have recorded := emitDef_recorded current operation
+      rw [emitted] at recorded
+      exact recorded.2.2.1
+  | arrLit arrayTy exprs =>
+    obtain ⟨shape, element, childStart, childFinish, arrayShape, count, childrenSource⟩ := tyExpr_arrayLiteral_children source
+    subst ty
+    have structSource := tyExprsAs_structExprs childrenSource
+    simp only [lowerExpr] at run
+    obtain ⟨values, middle, childrenRun, emitted⟩ := bind_eq.mp run
+    have middleLive := (dead_emitDef (.arrLit arrayTy values)).live_before emitted live
+    have typed := lowerExprs_recursive_typed exprs supported structSource childrenRun middleLive
+    have length : exprs.length = values.length := by simpa only [List.length_replicate] using typed.length_eq
+    cases current : middle.cur with
+    | none => simp [current] at middleLive
+    | some block =>
+      have operation := arrayLiteral_resultTy (le := lowerEnv env.mod env.vars results)
+        arrayShape (by simpa only [← length] using count) typed.replicate
+      have recorded := emitDef_recorded current operation
+      rw [emitted] at recorded
+      exact recorded.2.2.1
+  | structLit structTy exprs =>
+    obtain ⟨shape, descriptor, definitionFinish, childStart, childFinish, definition, childrenSource⟩ :=
+      tyExpr_structLiteral_children source
+    subst ty
+    simp only [lowerExpr] at run
+    obtain ⟨values, middle, childrenRun, emitted⟩ := bind_eq.mp run
+    have middleLive := (dead_emitDef (.structLit structTy values)).live_before emitted live
+    have typed := lowerExprs_recursive_typed exprs supported childrenSource childrenRun middleLive
+    cases current : middle.cur with
+    | none => simp [current] at middleLive
+    | some block =>
+      have operation := structLiteral_resultTy (vars := env.vars) (results := results) definition typed
+      have recorded := emitDef_recorded current operation
+      rw [emitted] at recorded
+      exact recorded.2.2.1
+  | fill arrayTy expr =>
+    obtain ⟨shape, element, size, childStart, childFinish, arrayShape, childSource⟩ := tyExpr_fill_child source
+    subst ty
+    subst arrayTy
+    simp only [lowerExpr] at run
+    obtain ⟨value, middle, childRun, emitted⟩ := bind_eq.mp run
+    have middleLive := (dead_emitDef (.arrFill (.arr element size) value)).live_before emitted live
+    have typed := lowerExpr_recursive_typed expr supported childSource childRun middleLive
+    cases current : middle.cur with
+    | none => simp [current] at middleLive
+    | some block =>
+      have operation : (Op.arrFill (.arr element size) value).resultTy
+          (tyEnv (lowerEnv env.mod env.vars results) middle) = .ok (.data (.arr element size)) := by
+        simp [Op.resultTy, TyEnv.dataTy, TyEnv.valTy, tyEnv, typed, pure, Except.pure, bind, Except.bind]
       have recorded := emitDef_recorded current operation
       rw [emitted] at recorded
       exact recorded.2.2.1
@@ -347,6 +402,41 @@ theorem lowerView_recursive_typed (v : View) (supported : RecursiveView v)
         rw [run] at lowered
         exact ⟨mu, lowered.2⟩
     | _ => exact (rej_ok _ _ _ _).mp tail |>.elim
+
+theorem lowerExprs_recursive_typed (exprs : List Expr) (supported : RecursiveExpressions exprs)
+    {env : Core.TEnv} {types : List Ty} {start finish : Nat}
+    (source : Core.tyStructExprs env types exprs start = .ok ((), finish))
+    {results : List Ty} {before after : LS} {values : List ValueId}
+    (run : lowerExprs exprs (lowerEnv env.mod env.vars results) before = (values, after))
+    (live : after.cur.isSome = true) : TypedValues after types values := by
+  cases exprs with
+  | nil =>
+    cases types with
+    | nil =>
+      obtain ⟨rfl, rfl⟩ := pure_eq.mp run
+      exact .nil
+    | cons _ _ => exact (rej_ok _ _ _ _).mp source |>.elim
+  | cons expr rest =>
+    cases types with
+    | nil => exact (rej_ok _ _ _ _).mp source |>.elim
+    | cons expected types =>
+      obtain ⟨exprSupported, restSupported⟩ := supported
+      simp only [Core.tyStructExprs] at source
+      obtain ⟨ty, next, childSource, source⟩ := (st_bind_ok _ _ _ _).mp source
+      by_cases equal : (ty == expected) = true
+      · simp only [equal, ite_true] at source
+        have same := eq_of_beq equal
+        subst ty
+        simp only [lowerExprs] at run
+        obtain ⟨value, middle, childRun, run⟩ := bind_eq.mp run
+        obtain ⟨restValues, restAfter, restRun, run⟩ := bind_eq.mp run
+        obtain ⟨rfl, rfl⟩ := pure_eq.mp run
+        have restTyped := lowerExprs_recursive_typed rest restSupported source restRun live
+        have middleLive := (dead_lowerExprs rest).live_before restRun live
+        have childTyped := lowerExpr_recursive_typed expr exprSupported childSource childRun middleLive
+        have retained := types_lowerExprs rest _ _ _ _ restRun value (.data expected) childTyped
+        exact .cons retained restTyped
+      · simp [equal, chk] at source
 
 theorem lowerArgs_recursive_typed (args : List Arg) (supported : RecursiveArguments args)
     {env : Core.TEnv} {callee : Core.Impl} {params : List Param} {start finish : Nat}

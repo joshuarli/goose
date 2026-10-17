@@ -66,6 +66,39 @@ theorem call_element_typed {before after : LS} {value : ValueId}
 #guard let (_, after) := lowerPlace callElement (lowerEnv callModule env.vars []) initial
        after.cur.isSome
 
+def arrayExpression : Expr :=
+  .arrLit (.arr (.int .i64) 2)
+    [.blockE (.mk 1 [] (some (.lit .i64 1))), .call 1 [.byVal (.lit .i64 2)] 0]
+
+theorem array_source : Core.tyExpr callEnv arrayExpression 2 = .ok (.arr (.int .i64) 2, 2) := by rfl
+
+theorem array_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr arrayExpression (lowerEnv callModule env.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data (.arr (.int .i64) 2))) := by
+  exact lowerExpr_recursive_typed arrayExpression (by trivial) array_source run live
+
+def descriptor : StructDef :=
+  ⟨16, #[⟨.int .i64, .immutable, .readOnly, 0⟩, ⟨.bool, .mutable, .mutable, 8⟩]⟩
+
+def structTy : Ty := .structT 0 (.cons (.int .i64) (.cons .bool .nil))
+
+def structModule : Core.Module := { callModule with profile := .shrink, structs := #[descriptor] }
+def structEnv : Core.TEnv := { env with mod := structModule }
+def structExpression : Expr := .structLit structTy [.call 1 [.byVal (.lit .i64 3)] 0, .and (.bool true) (.bool false)]
+
+theorem struct_source : Core.tyExpr structEnv structExpression 2 = .ok (structTy, 2) := by rfl
+
+theorem struct_typed {before after : LS} {value : ValueId}
+    (run : lowerExpr structExpression (lowerEnv structModule env.vars []) before = (value, after))
+    (live : after.cur.isSome = true) : after.vals[value]? = some (some (.data structTy)) := by
+  exact lowerExpr_recursive_typed structExpression (by trivial) struct_source run live
+
+#guard let (_, after) := lowerExpr structExpression (lowerEnv structModule env.vars []) initial
+       after.cur.isSome
+
+#print axioms lowerExprs_recursive_typed
+#print axioms structLiteral_resultTy
+#print axioms arrayLiteral_resultTy
 #print axioms lowerArgs_recursive_typed
 #print axioms call_resultTy_of_passable
 #print axioms lowerExpr_recursive_typed
