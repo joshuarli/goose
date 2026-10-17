@@ -104,7 +104,7 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
         have lowering := run
         simp only [lowerExpr] at lowering
         obtain ⟨address, mid, placeRun, frozenRun⟩ := bind_eq.mp lowering
-        have midLive := (dead_freezeTo .mutable address).live_before frozenRun live
+        have midLive := (dead_borrowTo .mutable address).live_before frozenRun live
         have placeLowering := placeRun
         simp only [lowerPlace] at placeLowering
         obtain ⟨ownerValue, ownerState, ownerRun, emitted⟩ := bind_eq.mp placeLowering
@@ -119,7 +119,7 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
           | none => simp [midCurrent] at midLive
           | some midBlock =>
             rw [shape] at typed
-            have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed.2 (by rfl) midCurrent
+            have frozen := borrowTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed.2 (by rfl) midCurrent
             rw [frozenRun] at frozen
             simpa only [shape] using frozen.2
       | deref expr =>
@@ -129,13 +129,13 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
         have lowering := run
         simp only [lowerExpr] at lowering
         obtain ⟨address, mid, placeRun, frozenRun⟩ := bind_eq.mp lowering
-        have midLive := (dead_freezeTo .mutable address).live_before frozenRun live
+        have midLive := (dead_borrowTo .mutable address).live_before frozenRun live
         have typed := lowerPlace_deref_writable_typed_of_child placeSource writable placeRun midLive
           (fun childFinish childSource => lowerExpr_recursive_typed expr supported childSource placeRun midLive)
         cases current : mid.cur with
         | none => simp [current] at midLive
         | some block =>
-          have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed (by rfl) current
+          have frozen := borrowTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed (by rfl) current
           rw [frozenRun] at frozen
           simpa only [shape] using frozen.2
       | elem view index origin =>
@@ -149,14 +149,14 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
           have lowering := run
           simp only [lowerExpr] at lowering
           obtain ⟨address, mid, placeRun, frozenRun⟩ := bind_eq.mp lowering
-          have midLive := (dead_freezeTo .mutable address).live_before frozenRun live
+          have midLive := (dead_borrowTo .mutable address).live_before frozenRun live
           have typed := lowerPlace_elem_val_writable_typed_of_children placeSource writable placeRun midLive
             (fun _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed expr exprSupported childSource childRun childLive)
             (fun _ _ _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed index indexSupported childSource childRun childLive)
           cases current : mid.cur with
           | none => simp [current] at midLive
           | some block =>
-            have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed (by rfl) current
+            have frozen := borrowTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed (by rfl) current
             rw [frozenRun] at frozen
             simpa only [shape] using frozen.2
       | var _ | global _ =>
@@ -173,13 +173,13 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
       have lowering := run
       simp only [lowerExpr] at lowering
       obtain ⟨address, mid, placeRun, frozenRun⟩ := bind_eq.mp lowering
-      have midLive := (dead_freezeTo .readOnly address).live_before frozenRun live
+      have midLive := (dead_borrowTo .readOnly address).live_before frozenRun live
       obtain ⟨actual, typed⟩ := lowerPlace_recursive_typed p supported placeSource placeRun midLive
       cases current : mid.cur with
       | none => simp [current] at midLive
       | some block =>
         have permission : actual.atLeast .readOnly = true := by cases actual <;> rfl
-        have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) typed permission current
+        have frozen := borrowTo_typed (le := lowerEnv env.mod env.vars results) typed permission current
         rw [frozenRun] at frozen
         exact frozen.2
   | un op e origin =>
@@ -731,7 +731,7 @@ theorem lowerArgs_recursive_typed (args : List Arg) (supported : RecursiveArgume
         have lowering := childRun
         simp only [lowerArg] at lowering
         obtain ⟨address, placeAfter, placeRun, freezeRun⟩ := bind_eq.mp lowering
-        have placeLive := (dead_freezeTo mu address).live_before freezeRun middleLive
+        have placeLive := (dead_borrowTo mu address).live_before freezeRun middleLive
         have childTyped : middle.vals[value]? = some (some (.data (.ref mu info.ty))) := by
           cases mu with
           | readOnly =>
