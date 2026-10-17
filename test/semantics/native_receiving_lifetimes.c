@@ -664,14 +664,172 @@ static void waiting_rejection(int kind) {
     exit(99);
 }
 
+static void physical_layout(int backing_prefix, int local_prefix) {
+    uint8_t bytes[128] = {0};
+    gs_stack stack = {0};
+    stack.top = bytes;
+    uint8_t *scope = gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&stack, bytes, 171, backing_prefix);
+    uint8_t *raw = gir_control_receiving_current(receiver);
+    stack.top += backing_prefix;
+    gir_control_receiving_open(raw);
+    raw = gir_control_receiving_renew(receiver);
+    gir_control_attempt_prepare_named(raw, local_prefix);
+    int prefix = backing_prefix || local_prefix ? 4 : 0;
+    gir_control_require(gir_control_attempt_prefix(raw) == prefix);
+    *stack.top++ = 65;
+    ((gir_control_metadata *)raw)->count = 1;
+    if (prefix) { uint32_t count = 1; memcpy(bytes, &count, 4); }
+    gir_control_attempt_finish(raw);
+    gir_control_attempt_normalize(raw);
+    gir_control_require(gir_control_attempt_prefix(raw) == backing_prefix &&
+        stack.top == bytes + backing_prefix + 1 && bytes[backing_prefix] == 65);
+    gir_control_attempt_publish(raw);
+    gir_control_leave(scope);
+    gir_control_require(gir_control_live_attempts == NULL);
+}
+
+static void explicit_prefix_adapters(void) {
+    uint8_t bytes[128] = {0};
+    gs_stack stack = {0};
+    stack.top = bytes;
+    uint8_t *scope = gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&stack, bytes, 175, 0);
+    uint8_t *raw = gir_control_receiving_current(receiver);
+    gir_control_attempt_pack(raw);
+    gir_control_require(gir_control_attempt_prefix(raw) == 4 && stack.top == bytes + 4);
+    *stack.top++ = 65;
+    ((gir_control_metadata *)raw)->count = 1;
+    gir_control_attempt_finish(raw);
+    gir_control_attempt_remove_header(raw);
+    gir_control_require(gir_control_attempt_prefix(raw) == 0 && stack.top == bytes + 1 && bytes[0] == 65);
+    gir_control_attempt_normalize(raw);
+    gir_control_attempt_publish(raw);
+    gir_control_leave(scope);
+}
+
+static void immutable_named_views(void) {
+    uint8_t bytes[128] = {0};
+    gs_stack stack = {0};
+    stack.top = bytes;
+    uint8_t *scope = gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&stack, bytes, 191, 0);
+    uint8_t *raw = gir_control_receiving_current(receiver);
+    gir_control_attempt_pack(raw);
+    *stack.top++ = 65;
+    ((gir_control_metadata *)raw)->count = 1;
+    gir_control_attempt_finish(raw);
+    uint8_t *binding = gir_control_named_bind(raw);
+    gir_control_require(gir_control_owner_is_named(binding) && !gir_control_owner_is_named(NULL));
+    gir_control_require(gir_control_named_base(binding, bytes) == bytes + 4 && gir_control_named_count(binding, bytes) == 1);
+    gir_control_attempt_remove_header(raw);
+    gir_control_require(gir_control_named_base(binding, bytes) == bytes && gir_control_named_count(binding, bytes) == 1);
+    gir_control_require(*gir_control_named_base(binding, bytes) == 65);
+    gir_control_attempt_publish(raw);
+    gir_control_leave(scope);
+}
+
+static void physical_rejection(int kind) {
+    uint8_t bytes[128] = {0};
+    gs_stack stack = {0};
+    stack.top = bytes;
+    uint8_t *scope = gir_control_enter();
+    uint8_t *receiver = gir_control_receiving_new((uint8_t *)&stack, bytes, 181, 0);
+    uint8_t *raw = gir_control_receiving_current(receiver);
+    switch (kind) {
+        case 1:
+            *stack.top++ = 65;
+            ((gir_control_metadata *)raw)->count = 1;
+            gir_control_attempt_prepare_named(raw, 4);
+            break;
+        case 2: gir_control_attempt_prepare_named(raw, 2); break;
+        case 3: gir_control_attempt_normalize(raw); break;
+        case 4:
+            raw = gir_control_receiving_cancel(receiver, 0, NULL);
+            gir_control_attempt_normalize(raw);
+            break;
+        case 5:
+            gir_control_attempt_prepare_named(raw, 4);
+            *stack.top++ = 65;
+            ((gir_control_metadata *)raw)->count = 1;
+            gir_control_attempt_finish(raw);
+            stack.top++;
+            gir_control_attempt_normalize(raw);
+            break;
+        case 6:
+            gir_control_drop_lease(raw);
+            gir_control_enter();
+            raw = gir_control_receiving_current(receiver);
+            gir_control_attempt_prepare_named(raw, 4);
+            break;
+        case 7:
+            *stack.top++ = 65;
+            ((gir_control_metadata *)raw)->count = 1;
+            gir_control_attempt_finish(raw);
+            gir_control_attempt_return(raw);
+            gir_control_attempt_normalize(raw);
+            break;
+        case 8:
+            *stack.top++ = 65;
+            ((gir_control_metadata *)raw)->count = 1;
+            gir_control_attempt_pack(raw);
+            break;
+        case 9:
+            gir_control_attempt_pack(raw);
+            gir_control_attempt_pack(raw);
+            break;
+        case 10: gir_control_attempt_remove_header(raw); break;
+        case 11:
+            *stack.top++ = 65;
+            ((gir_control_metadata *)raw)->count = 1;
+            gir_control_attempt_finish(raw);
+            gir_control_attempt_remove_header(raw);
+            break;
+        case 12:
+            gir_control_attempt_pack(raw);
+            *stack.top++ = 65;
+            ((gir_control_metadata *)raw)->count = 1;
+            gir_control_attempt_finish(raw);
+            stack.top++;
+            gir_control_attempt_remove_header(raw);
+            break;
+        case 13:
+            gir_control_attempt_return(raw);
+            gir_control_attempt_prefix(raw);
+            break;
+        case 14: gir_control_named_base(NULL, bytes); break;
+        case 15:
+        case 16:
+        case 17: {
+            *stack.top++ = 65;
+            ((gir_control_metadata *)raw)->count = 1;
+            gir_control_attempt_finish(raw);
+            uint8_t *binding = gir_control_named_bind(raw);
+            if (kind == 15) gir_control_named_base(binding, bytes + 1);
+            if (kind == 16) gir_control_named_count(binding, bytes + 32);
+            raw = gir_control_receiving_cancel(receiver, 0, NULL);
+            gir_control_named_count(binding, bytes);
+            break;
+        }
+    }
+    (void)scope;
+    exit(99);
+}
+
 int main(int argc, char **argv) {
-    if (argc == 2) waiting_rejection(atoi(argv[1]));
+    if (argc == 2) {
+        int kind = atoi(argv[1]);
+        if (kind <= 10) waiting_rejection(kind);
+        else physical_rejection(kind - 10);
+    }
     normal_call(); cancelled_retries(); bounded_call(); target_handoff(); completed_aliases(); named_owner_bindings();
     cancellation_certificate(); historical_named_source(); displaced_child_cleanup();
     for (int outcome = 0; outcome < 5; outcome++) owner_extension(outcome);
     cancelled_owner_extensions(); owner_target_handoff(); borrowed_target_cancellation();
     waiting_calls(0); waiting_calls(1); waiting_selection(0); waiting_selection(1);
     waiting_terminal_release(); waiting_supersession(); cancellation_without_wait(0); cancellation_without_wait(1);
+    physical_layout(0, 0); physical_layout(0, 4); physical_layout(4, 0); physical_layout(4, 4);
+    explicit_prefix_adapters(); immutable_named_views();
     gir_control_require(gir_control_live_attempts == NULL);
     return 0;
 }

@@ -1247,7 +1247,8 @@ private:
         auto contract = GirControlOf(op);
         if (!contract) throw CompileError { "unknown construction control operation" };
         if (!contract->result) { EmitE(std::move(instruction)); return -1; }
-        return Emit(std::move(instruction), *contract->result == CoreType::Bool ? l.BoolType() : Ptr());
+        return Emit(std::move(instruction), *contract->result == CoreType::Bool ? l.BoolType() :
+            *contract->result == CoreType::Int ? I64() : Ptr());
     }
 
     vector<int> Raw(int metadata) {
@@ -1276,9 +1277,9 @@ private:
         negate.a = Simple(GirOp::PtrEq, l.BoolType(), target, start);
         When(Emit(std::move(negate), l.BoolType()), [&] {
             auto &carrier = HT(hvt[instruction.b]);
-            auto prefix = Prefix(carrier.elem, carrier.request);
-            auto bytes = WalkElements(HT(carrier.elem).elem, PtrAt(start, ConstI(I64(), prefix), 1), DestinationCount(instruction.b));
-            bytes = BinW(CoreBinOp::Add, I64(), bytes, ConstI(I64(), prefix));
+            auto prefix = ActualPrefix(instruction.b);
+            auto bytes = WalkElements(HT(carrier.elem).elem, PtrAt(start, prefix, 1), DestinationCount(instruction.b));
+            bytes = BinW(CoreBinOp::Add, I64(), bytes, prefix);
             auto end = PtrAt(start, bytes, 1);
             CheckThen(Simple(GirOp::PtrEq, l.BoolType(), Simple(GirOp::StackMark, Ptr(), shape[instruction.b].w[0]), end),
                 AbortBlock(GirAbortKind::Assert, {}, instruction.org));
@@ -1358,6 +1359,7 @@ private:
         cur = done;
     }
 
+    int ActualPrefix(int value) { return Control(GirOp::ControlAttemptPrefix, shape[value].w[2]); }
     int DestinationCount(int value) { return PLoadV(I64(), shape[value].w[2]); }
     int DestinationId(int value) { return PLoadV(I64(), PtrAt(shape[value].w[2], ConstI(I64(), GirConstructionIdentityOffset), 1)); }
     int Prefix(GirTypeId type, CoreRequest request) const {
@@ -1371,14 +1373,13 @@ private:
     }
 
     void PatchPrefix(int value, int org) {
-        auto &carrier = HT(hvt[value]);
-        if (Prefix(carrier.elem, carrier.request)) {
+        When(CmpI(CoreCmpOp::Eq, I64(), ActualPrefix(value), ConstI(I64(), 4)), [&] {
             auto count = DestinationCount(value);
             CheckThen(CmpI(CoreCmpOp::Le, U64(), Conv(count, I64(), U64()), ConstI(U64(), UINT32_MAX)),
                       AbortBlock(GirAbortKind::Capacity, {}, org));
             StoreScalarBytes(l.IntType(CoreIntTy::U32), shape[value].w[1],
                              Conv(count, I64(), l.IntType(CoreIntTy::U32)));
-        }
+        });
     }
 
     void IncrementDestination(int value) {
@@ -1525,8 +1526,39 @@ private:
         auto &array = HT(owner);
         if (array.kind == CoreType::Slice)
             return { PLoadV(Ptr(), address), PLoadV(I64(), WordAt(address, 1)) };
-        if (array.kind == CoreType::VarArr)
-            return { PtrAt(address, ConstI(I64(), 4), 1), Conv(LoadScalarBytes(l.IntType(CoreIntTy::U32), address), l.IntType(CoreIntTy::U32), I64()) };
+        if (array.kind == CoreType::VarArr) {
+            auto packed = [&] {
+                return pair { PtrAt(address, ConstI(I64(), 4), 1),
+                    Conv(LoadScalarBytes(l.IntType(CoreIntTy::U32), address), l.IntType(CoreIntTy::U32), I64()) };
+            };
+            if (!CoreHasConstruction(h.profile) || shape[value].binding < 0) return packed();
+            auto binding = shape[value].binding;
+            auto named = NewBlockL({});
+            auto ordinary = NewBlockL({});
+            vector<int> sampled;
+            auto done = NewBlockL({ Ptr(), I64() }, &sampled);
+            GirInst branch;
+            branch.op = GirOp::CondBr;
+            branch.a = Control(GirOp::ControlOwnerIsNamed, binding);
+            branch.idx = named;
+            branch.idx2 = ordinary;
+            Term(std::move(branch));
+            cur = named;
+            GirInst selected;
+            selected.op = GirOp::Br;
+            selected.idx = done;
+            selected.vals = { Control(GirOp::ControlNamedBase, binding, address), Control(GirOp::ControlNamedCount, binding, address) };
+            Term(std::move(selected));
+            cur = ordinary;
+            auto [base, count] = packed();
+            GirInst fallback;
+            fallback.op = GirOp::Br;
+            fallback.idx = done;
+            fallback.vals = { base, count };
+            Term(std::move(fallback));
+            cur = done;
+            return { sampled[0], sampled[1] };
+        }
         if (array.kind == CoreType::Arr) return { address, ConstI(I64(), array.count) };
         if (array.kind == CoreType::Limited) return { LimitedData(address, owner), LimitedLength(address, owner) };
         return { Simple(GirOp::HdrBase, Ptr(), address), Simple(GirOp::HdrLen, I64(), address) };
@@ -1586,64 +1618,20 @@ private:
 
     void AdaptDestination(const GirInst &inst) {
         shape[inst.res] = shape[inst.a];
-        auto &before = HT(hvt[inst.a]);
-        auto &after = HT(hvt[inst.res]);
-        if (inst.op == GirOp::DestAdapt) {
-            auto receivingPrefix = Prefix(before.elem, before.request);
-            auto producerPrefix = Prefix(after.elem, after.request);
-            if (receivingPrefix > producerPrefix)
-                shape[inst.res].w[1] = PtrAt(shape[inst.a].w[1], ConstI(I64(), receivingPrefix - producerPrefix), 1);
-            if (producerPrefix > receivingPrefix)
-                SimpleE(GirOp::StackBump, shape[inst.a].w[0], ConstI(I64(), producerPrefix - receivingPrefix));
-            Control(GirOp::ControlAttemptView, shape[inst.res].w[2], shape[inst.res].w[1], { ConstI(I64(), producerPrefix) });
-            return;
-        }
-        if (inst.op == GirOp::DestAdaptFinish) {
-            auto producerPrefix = Prefix(before.elem, before.request);
-            auto receivingPrefix = Prefix(after.elem, after.request);
-            if (receivingPrefix > producerPrefix)
-                shape[inst.res].w[1] = PtrAt(shape[inst.a].w[1], ConstI(I64(), producerPrefix - receivingPrefix), 1);
-            if (before.kind == CoreType::Cancelled) return;
-            if (producerPrefix > receivingPrefix) {
-                auto start = shape[inst.a].w[1];
-                auto source = PtrAt(start, ConstI(I64(), producerPrefix - receivingPrefix), 1);
-                auto bytes = WalkElements(HT(before.elem).elem, source, DestinationCount(inst.a));
-                GirInst move;
-                move.op = GirOp::BytesMove;
-                move.a = start;
-                move.b = source;
-                move.vals = { bytes };
-                EmitE(std::move(move));
-                SimpleE(GirOp::StackRelease, shape[inst.a].w[0], PtrAt(start, bytes, 1));
-                Event(GirEventKind::Relocate, { DestinationId(inst.a) }, GirEventReason::HeaderRemoval);
-            }
-            Control(GirOp::ControlAttemptView, shape[inst.res].w[2], shape[inst.res].w[1], { ConstI(I64(), receivingPrefix) });
-            PatchPrefix(inst.res, inst.org);
-            return;
-        }
+        if (inst.op == GirOp::DestAdapt || inst.op == GirOp::DestAdaptFinish) return;
         if (inst.op == GirOp::DestValue) {
-            if (Prefix(after.elem, after.request)) StartPrefix(inst.res);
+            When(CmpI(CoreCmpOp::Eq, I64(), ActualPrefix(inst.a), ConstI(I64(), 0)), [&] {
+                Control(GirOp::ControlAttemptPack, shape[inst.res].w[2]);
+            });
             return;
         }
         if (inst.op == GirOp::DestStage || inst.op == GirOp::DestFit)
             throw GirLowerUnsupported { "limited-stage", hf->name, inst.org };
         if (inst.op == GirOp::DestRelocate && inst.reason == GirEventReason::HeaderRemoval) {
-            auto prefix = Prefix(before.elem, before.request);
-            if (prefix) {
-                auto count = DestinationCount(inst.a);
-                auto start = shape[inst.a].w[1];
-                auto source = PtrAt(start, ConstI(I64(), prefix), 1);
-                auto bytes = WalkElements(HT(before.elem).elem, source, count);
-                GirInst move;
-                move.op = GirOp::BytesMove;
-                move.a = start;
-                move.b = source;
-                move.vals = { bytes };
-                EmitE(std::move(move));
-                SimpleE(GirOp::StackRelease, shape[inst.a].w[0], PtrAt(start, bytes, 1));
-            }
+            Control(GirOp::ControlAttemptRemoveHeader, shape[inst.a].w[2]);
+            return;
         }
-        Event(GirEventKind::Relocate, { DestinationId(inst.a) }, inst.reason);
+        throw CompileError { "unsupported construction adapter" };
     }
 
     void LowerAppendValue(const GirInst &inst) {
@@ -1972,8 +1960,7 @@ private:
                 auto reference = shape[i.a].w[1];
                 if (IsResizableKind(HT(hf->slots[i.idx].ty).kind)) {
                     reference = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(16));
-                    auto prefix = Prefix(HT(hvt[i.a]).elem, HT(hvt[i.a]).request);
-                    auto elements = prefix ? PtrAt(shape[i.a].w[1], ConstI(I64(), prefix), 1) : shape[i.a].w[1];
+                    auto elements = PtrAt(shape[i.a].w[1], ActualPrefix(i.a), 1);
                     SimpleE(GirOp::HdrInit, reference, elements);
                     SimpleE(GirOp::HdrSetLen, reference, DestinationCount(i.a));
                 }
@@ -2008,7 +1995,7 @@ private:
                 Define(i, Raw(Control(GirOp::ControlReceivingRenew, W0(i.a)))); return;
             case GirOp::DestRefresh:
                 Define(i, Raw(Control(GirOp::ControlReceivingRefresh, W0(i.a), shape[i.b].w[2],
-                    { shape[i.b].w[1], ConstI(I64(), Prefix(HT(hvt[i.b]).elem, HT(hvt[i.b]).request)) }))); return;
+                    { shape[i.b].w[1], ActualPrefix(i.b) }))); return;
             case GirOp::ExitWait:
                 Define(i, { Control(GirOp::ControlExitWait, W0(i.a)) }); return;
             case GirOp::ExitSelect: {
@@ -2032,10 +2019,8 @@ private:
                 Define(i, Raw(Control(GirOp::ControlExitSelected, W0(i.a)))); return;
             case GirOp::ReservedNamed:
                 Define(i, Raw(Control(GirOp::ControlExitSelected, W0(i.a))));
-                if (Prefix(HT(hvt[i.res]).elem, HT(hvt[i.res]).request)) {
-                    if (i.org < 0) throw CompileError { "named exit prefix has no source origin" };
-                    PatchPrefix(i.res, i.org);
-                }
+                if (i.org < 0) throw CompileError { "named exit prefix has no source origin" };
+                PatchPrefix(i.res, i.org);
                 return;
             case GirOp::ExitAdopt:
                 Define(i, { Control(GirOp::ControlExitAdopt, W0(i.a), shape[i.b].w[2]) }); return;
@@ -2049,6 +2034,10 @@ private:
                 Define(i, Raw(Control(GirOp::ControlAttemptAbandon, shape[i.a].w[2]))); return;
             case GirOp::DestCancel:
                 Control(GirOp::ControlAttemptCancel, shape[i.a].w[2]); return;
+            case GirOp::DestPrepareNamed:
+                Control(GirOp::ControlAttemptPrepareNamed, shape[i.a].w[2], ConstI(I64(), Prefix(hf->slots[i.idx].ty, CoreRequest::Value)));
+                shape[i.res] = shape[i.a];
+                return;
             case GirOp::DestValue: case GirOp::DestRelocate: case GirOp::DestStage: case GirOp::DestFit:
             case GirOp::DestAdapt: case GirOp::DestAdaptFinish:
                 return AdaptDestination(i);
@@ -2172,7 +2161,8 @@ private:
     void LowerSlot(const GirInst &i) {
         if (CoreHasConstruction(h.profile)) shape[i.res].source = Simple(GirOp::LocalGet, Ptr(), -1, -1, sourceMembers[i.idx]);
         auto &p = places[i.idx];
-        if (CoreHasConstruction(h.profile) && IsResizableKind(HT(hf->slots[i.idx].ty).kind))
+        if (CoreHasConstruction(h.profile) &&
+            (IsResizableKind(HT(hf->slots[i.idx].ty).kind) || HT(hf->slots[i.idx].ty).kind == CoreType::VarArr))
             shape[i.res].binding = Simple(GirOp::LocalGet, Ptr(), -1, -1, ownerMembers[i.idx]);
         switch (p.kind) {
             case Place::Alias:
@@ -3122,6 +3112,7 @@ private:
                 auto &value = shape[i.vals[result]];
                 auto type = hf->results[result];
                 if (GirNonfixed(h, type)) {
+                    Control(GirOp::ControlAttemptNormalize, shape[i.vals[result]].w[2]);
                     PStoreV(I64(), resultOutputs[result][2], DestinationCount(i.vals[result]));
                     PStoreV(I64(), PtrAt(resultOutputs[result][2], ConstI(I64(), GirConstructionIdentityOffset), 1), DestinationId(i.vals[result]));
                     PStoreV(I64(), resultOutputs[result][3], ConstI(I64(), (int64_t)GirConstructionProgress::Built));

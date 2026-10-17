@@ -33,12 +33,12 @@ def main():
                                     stderr=subprocess.PIPE, env=environment)
             if result.returncode or result.stdout or result.stderr:
                 raise RuntimeError(f"receiving failure {result.returncode}: {result.stdout!r} {result.stderr!r}")
-            for rejected in range(1, 11):
+            for rejected in range(1, 28):
                 result = subprocess.run([str(executable), str(rejected)], stdout=subprocess.PIPE,
                                         stderr=subprocess.PIPE, env=environment)
                 if (result.returncode != 1 or result.stdout or
                         result.stderr != b"goose runtime error: invalid construction receiver protocol\n"):
-                    raise RuntimeError(f"waiting guard {rejected}: {result.returncode} "
+                    raise RuntimeError(f"receiving guard {rejected}: {result.returncode} "
                                        f"{result.stdout!r} {result.stderr!r}")
             print(f"receiving lifetime invariants: GS_DEBUG={debug} {optimization} pass")
 

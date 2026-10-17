@@ -235,9 +235,11 @@ private:
         if (constructionTrace) {
             out += "static int64_t gir_control_identity(void) { return gir_trace_destination++; }\n";
             out += "static void gir_control_event(const char *name, int64_t identity) { gir_trace_record(name, \"\", 1, &identity); }\n";
+            out += "static void gir_control_header_removal(int64_t identity) { gir_trace_record(\"relocate\", \"header-removal\", 1, &identity); }\n";
         } else {
             out += "static int64_t gir_control_identity(void) { return 0; }\n";
             out += "static void gir_control_event(const char *name, int64_t identity) { (void)name; (void)identity; }\n";
+            out += "static void gir_control_header_removal(int64_t identity) { (void)identity; }\n";
         }
         out += R"GIRCONTROL(
 typedef struct gir_control_graph gir_control_graph;
@@ -588,7 +590,9 @@ static uint8_t *gir_control_add_lease_view(gir_control_receiving *receiving, gir
     return (uint8_t *)&lease->metadata;
 }
 static uint8_t *gir_control_add_lease(gir_control_receiving *receiving, gir_control_attempt *attempt, uint8_t mode) {
-    return gir_control_add_lease_view(receiving, attempt, mode, receiving->view_offset, receiving->view_prefix);
+    gir_control_capture(attempt);
+    return gir_control_add_lease_view(receiving, attempt, mode,
+        attempt->start - attempt->receiving_start, attempt->prefix);
 }
 static gir_control_lease *gir_control_take_lease(uint8_t *metadata) {
     gir_control_require(gir_control_scope_top != NULL);
@@ -654,6 +658,28 @@ static uint8_t *gir_control_named_bind(uint8_t *metadata) {
     gir_control_graph_retain(binding->graph);
     gir_control_node_retain(attempt);
     return gir_control_owner_hold(binding);
+}
+static uint8_t gir_control_owner_is_named(uint8_t *token) {
+    gir_control_owner *binding = (gir_control_owner *)token;
+    return binding && binding->kind == GIR_CONTROL_NAMED_VALUE;
+}
+static gir_control_owner *gir_control_named_value(uint8_t *token, uint8_t *reference) {
+    gir_control_owner *binding = (gir_control_owner *)token;
+    gir_control_require(binding && binding->kind == GIR_CONTROL_NAMED_VALUE && reference == binding->base);
+    gir_control_attempt *attempt = binding->boundary;
+    gir_control_capture(attempt);
+    gir_control_require(attempt->progress != GIR_CONTROL_ABANDONED && attempt->progress != GIR_CONTROL_CANCELLED &&
+        attempt->progress != GIR_CONTROL_RETIRED && attempt->start == binding->base &&
+        attempt->metadata.count == binding->value_count && (attempt->prefix == 0 || attempt->prefix == 4) &&
+        binding->base + attempt->prefix <= attempt->write_end);
+    return binding;
+}
+static uint8_t *gir_control_named_base(uint8_t *token, uint8_t *reference) {
+    gir_control_owner *binding = gir_control_named_value(token, reference);
+    return binding->base + binding->boundary->prefix;
+}
+static int64_t gir_control_named_count(uint8_t *token, uint8_t *reference) {
+    return gir_control_named_value(token, reference)->value_count;
 }
 static uint8_t *gir_control_owner_bind(uint8_t *control, uint8_t *header, uint8_t *stack) {
     gir_control_receiving *receiving = (gir_control_receiving *)control;
@@ -843,8 +869,7 @@ static uint8_t *gir_control_call_get(uint8_t *token, size_t position) {
     gir_control_call *call = (gir_control_call *)token;
     gir_control_require(call == gir_control_call_top && position < call->count && call->outputs[position].claimed);
     gir_control_call_output *output = &call->outputs[position];
-    uint8_t *metadata = gir_control_add_lease_view(output->receiving, gir_control_resolve(output->attempt), output->mode,
-        output->view_offset, output->view_prefix);
+    uint8_t *metadata = gir_control_add_lease(output->receiving, gir_control_resolve(output->attempt), output->mode);
     gir_control_lease *lease = gir_control_find_lease(metadata);
     if (output->completion == GIR_CONTROL_UNSELECTED_COMPLETION) {
         lease->attempt->active = NULL;
@@ -943,17 +968,62 @@ static uint8_t *gir_control_attempt_receiving(uint8_t *metadata) {
     return (uint8_t *)gir_control_find_lease(metadata)->receiving;
 }
 static uint8_t gir_control_attempt_mode(uint8_t *metadata) { return gir_control_find_lease(metadata)->mode; }
-static uint8_t *gir_control_attempt_view(uint8_t *metadata, uint8_t *start, int64_t prefix) {
-    gir_control_attempt *attempt = gir_control_node(metadata);
-    gir_control_require((prefix == 0 || prefix == 4) && start >= attempt->receiving_start);
+static int64_t gir_control_attempt_prefix(uint8_t *metadata) {
+    int64_t prefix = gir_control_find_lease(metadata)->prefix;
+    gir_control_require(prefix == 0 || prefix == 4);
+    return prefix;
+}
+static void gir_control_pack_lease(gir_control_lease *lease) {
+    gir_control_attempt *attempt = lease->attempt;
+    gir_control_capture(attempt);
+    gir_control_require(attempt->active == lease && lease->progress == GIR_CONTROL_OPEN &&
+        lease->metadata.count == 0 && lease->prefix == 0 && attempt->stack->top == lease->start);
+    memset(attempt->stack->top, 0, 4);
+    attempt->stack->top += 4;
+    lease->prefix = 4;
+    lease->end = attempt->stack->top;
+    gir_control_capture(attempt);
+}
+static void gir_control_remove_header_lease(gir_control_lease *lease) {
+    gir_control_attempt *attempt = lease->attempt;
+    gir_control_capture(attempt);
+    gir_control_require(attempt->active == lease && lease->progress == GIR_CONTROL_BUILT &&
+        lease->prefix == 4 && lease->start + 4 <= lease->end && attempt->stack->top == lease->end);
+    size_t bytes = (size_t)(lease->end - (lease->start + 4));
+    memmove(lease->start, lease->start + 4, bytes);
+    lease->end -= 4;
+    lease->prefix = 0;
+    attempt->stack->top = lease->end;
+    attempt->write_end = lease->end;
+    gir_control_capture(attempt);
+    gir_control_header_removal(attempt->metadata.identity);
+}
+static void gir_control_attempt_pack(uint8_t *metadata) {
+    gir_control_pack_lease(gir_control_find_lease(metadata));
+}
+static void gir_control_attempt_remove_header(uint8_t *metadata) {
+    gir_control_remove_header_lease(gir_control_find_lease(metadata));
+}
+static void gir_control_attempt_prepare_named(uint8_t *metadata, int64_t prefix) {
     gir_control_lease *lease = gir_control_find_lease(metadata);
-    lease->start = start;
-    lease->prefix = prefix;
-    if (attempt->active == lease) {
-        gir_control_capture(attempt);
-        if (attempt->progress == GIR_CONTROL_BUILT) attempt->write_end = lease->end = attempt->stack->top;
-    }
-    return metadata;
+    gir_control_attempt *attempt = lease->attempt;
+    gir_control_capture(attempt);
+    gir_control_require((prefix == 0 || prefix == 4) && attempt->active == lease &&
+        lease->receiving && lease->receiving->scope == gir_control_scope_top &&
+        lease->progress == GIR_CONTROL_OPEN && lease->metadata.count == 0 &&
+        attempt->stack->top == lease->start + lease->prefix);
+    if (prefix == 4 && lease->prefix == 0) gir_control_pack_lease(lease);
+}
+static void gir_control_attempt_normalize(uint8_t *metadata) {
+    gir_control_lease *lease = gir_control_find_lease(metadata);
+    gir_control_attempt *attempt = lease->attempt;
+    gir_control_capture(attempt);
+    gir_control_require(attempt->active == lease && lease->progress == GIR_CONTROL_BUILT &&
+        (lease->prefix == 0 || lease->prefix == 4) &&
+        (attempt->receiving_prefix == 0 || attempt->receiving_prefix == 4));
+    if (lease->prefix == attempt->receiving_prefix) return;
+    gir_control_require(attempt->receiving_prefix == 0);
+    gir_control_remove_header_lease(lease);
 }
 static void gir_control_receiving_transfer(uint8_t *control, uint8_t *metadata, uint8_t mode) {
     gir_control_receiving *receiving = (gir_control_receiving *)control;
@@ -1021,6 +1091,8 @@ static gir_control_attempt *gir_control_renew_node(gir_control_receiving *receiv
     if (attempt->progress != GIR_CONTROL_ABANDONED && attempt->progress != GIR_CONTROL_CANCELLED) return attempt;
     gir_control_require(attempt->resumable && offset >= 0 && offset <= 4 && (prefix == 0 || prefix == 4));
     gir_control_snapshot snapshot = attempt->resumption;
+    offset = snapshot.start - snapshot.receiving_start;
+    prefix = snapshot.prefix;
     gir_control_require(attempt->stack->top == snapshot.receiving_start);
     gir_control_attempt *renewed = gir_control_new_attempt(attempt->graph, attempt->stack,
         snapshot.receiving_start + offset, gir_control_identity(), prefix);
@@ -1209,7 +1281,7 @@ static void gir_control_exit_select(uint8_t *token, uint8_t alias, uint8_t *bind
         gir_control_require(gir_control_active(frontier));
         uint8_t *start = frontier->stack->top;
         selected = gir_control_new_attempt(frontier->graph, frontier->stack, start,
-            gir_control_identity(), receiving->view_prefix);
+            gir_control_identity(), frontier->prefix);
         selected->receiving_start = start - receiving->view_offset;
         selected->receiving_prefix = frontier->receiving_prefix;
         gir_control_set_parent(selected, frontier, GIR_CONTROL_REPLACEMENT);
@@ -1430,6 +1502,7 @@ static uint8_t *gir_control_exit_commit(uint8_t *token, uint8_t *metadata, uint8
     lease->start = start;
     lease->end = payload->write_end;
     lease->mode = ticket->outward_mode;
+    payload->active = lease;
     return metadata;
 }
 static uint8_t *gir_control_receiving_cancel(uint8_t *control, size_t count, uint8_t *const *carried) {

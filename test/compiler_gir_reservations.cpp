@@ -864,7 +864,242 @@ CoreModule WaitingArgument(bool guarded) {
     return core;
 }
 
+enum class AdaptedCase { Open, Built, Nested };
+
+CoreModule AdaptedCall(AdaptedCase mode) {
+    bool built = mode == AdaptedCase::Built;
+    bool nested = mode == AdaptedCase::Nested;
+    CoreModule core;
+    core.profile = CoreProfile::Construction;
+    core.files = { "adapted-call.goose" };
+    auto u8 = core.IntType(CoreIntTy::U8);
+    auto bytes = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = u8 });
+    auto element = nested ? bytes : u8;
+    auto producerType = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = element });
+    auto receivingType = core.Intern(CoreType { .kind = CoreType::Grow, .elem = element });
+    CoreImpl entry;
+    entry.name = "entry";
+    entry.body.scope = 0;
+    entry.vars = { CoreVar { "output", receivingType, CoreVarKind::Var, 0, origin } };
+    entry.summary.aborts = true;
+    entry.summary.outputs = true;
+    CoreStmt received;
+    received.kind = CoreStmtKind::Let;
+    received.var = 0;
+    received.org = origin;
+    received.expr = make_unique<CoreExpr>();
+    received.expr->kind = CoreExprKind::Call;
+    received.expr->type = receivingType;
+    received.expr->ctx = 1;
+    received.expr->org = origin;
+    entry.body.stmts.push_back(std::move(received));
+    CoreStmt printed;
+    printed.kind = CoreStmtKind::Print;
+    printed.org = origin;
+    CorePrintArg viewed;
+    viewed.kind = CorePrintArg::View;
+    viewed.view = make_unique<CoreView>();
+    viewed.view->place = make_unique<CorePlace>();
+    viewed.view->place->index = 0;
+    printed.print.push_back(std::move(viewed));
+    entry.body.stmts.push_back(std::move(printed));
+    CoreImpl receiver;
+    receiver.name = "receiver";
+    receiver.body.scope = 0;
+    receiver.results = {{receivingType, CoreRequest::Value}};
+    receiver.summary.constructs = {0};
+    receiver.summary.aborts = true;
+    receiver.body.value = make_unique<CoreExpr>();
+    receiver.body.value->kind = CoreExprKind::Call;
+    receiver.body.value->type = producerType;
+    receiver.body.value->ctx = 2;
+    receiver.body.value->org = origin;
+    CoreImpl producer;
+    producer.name = "producer";
+    producer.body.scope = 0;
+    producer.results = {{producerType, CoreRequest::Value}};
+    producer.summary.constructs = {0};
+    producer.summary.aborts = true;
+    if (nested) {
+        producer.body.value = make_unique<CoreExpr>();
+        producer.body.value->kind = CoreExprKind::Arr;
+        producer.body.value->type = producerType;
+        producer.body.value->org = origin;
+        producer.body.value->elems.push_back(Bytes(bytes, 65));
+        auto second = Bytes(bytes, 66);
+        second->bytes.push_back(67);
+        producer.body.value->elems.push_back(std::move(second));
+    } else {
+        producer.summary.needs = {0};
+        producer.summary.escapes = {0};
+        if (built) {
+            producer.results[0].namedLocal = 0;
+            producer.vars = { CoreVar { "named", producerType, CoreVarKind::Var, 0, origin } };
+            CoreStmt initialized;
+            initialized.kind = CoreStmtKind::Let;
+            initialized.var = 0;
+            initialized.org = origin;
+            initialized.expr = Bytes(producerType, 70);
+            producer.body.stmts.push_back(std::move(initialized));
+        }
+        producer.body.value = make_unique<CoreExpr>();
+        producer.body.value->kind = CoreExprKind::Block;
+        producer.body.value->type = producerType;
+        producer.body.value->org = origin;
+        producer.body.value->then = make_unique<CoreBlock>();
+        producer.body.value->then->scope = 1;
+        CoreStmt escaped;
+        escaped.kind = CoreStmtKind::ReturnFrom;
+        escaped.target = 0;
+        escaped.org = origin;
+        auto value = make_unique<CoreExpr>();
+        value->kind = CoreExprKind::Arr;
+        value->type = receivingType;
+        value->org = origin;
+        value->elems.push_back(Integer(u8, "65"));
+        escaped.values.push_back(std::move(value));
+        producer.body.value->then->stmts.push_back(std::move(escaped));
+        if (built) {
+            producer.body.value->then->value = make_unique<CoreExpr>();
+            producer.body.value->then->value->kind = CoreExprKind::ResultLocal;
+            producer.body.value->then->value->var = 0;
+            producer.body.value->then->value->type = producerType;
+            producer.body.value->then->value->org = origin;
+        } else producer.body.value->then->value = Bytes(producerType, 66);
+    }
+    core.impls.push_back(std::move(entry));
+    core.impls.push_back(std::move(receiver));
+    core.impls.push_back(std::move(producer));
+    core.contexts = { CoreContext { .impl = 0 }, CoreContext { .impl = 1, .resultroots = {{}} }, CoreContext { .impl = 2, .resultroots = {{}} } };
+    if (!nested) core.targets = { CoreTargetSet {{1}} };
+    return core;
+}
+
+CoreModule NamedLayout(bool packedLocal) {
+    auto core = AdaptedCall(AdaptedCase::Open);
+    core.impls.resize(2);
+    core.contexts.resize(2);
+    core.targets.clear();
+    auto u8 = core.IntType(CoreIntTy::U8);
+    auto packed = core.Intern(CoreType { .kind = CoreType::VarArr, .elem = u8 });
+    auto grow = core.Intern(CoreType { .kind = CoreType::Grow, .elem = u8 });
+    auto localType = packedLocal ? packed : grow;
+    auto resultType = packedLocal ? grow : packed;
+    auto &entry = core.impls[0];
+    entry.vars[0].type = resultType;
+    entry.body.stmts[0].expr->type = resultType;
+    auto &producer = core.impls[1];
+    producer.results = {{resultType, CoreRequest::Value, 0}};
+    producer.vars = {CoreVar {"named", localType, CoreVarKind::Var, 0, origin}};
+    producer.body.value.reset();
+    CoreStmt initialized;
+    initialized.kind = CoreStmtKind::Let;
+    initialized.var = 0;
+    initialized.org = origin;
+    if (packedLocal) initialized.expr = Bytes(localType, 65);
+    else {
+        initialized.expr = make_unique<CoreExpr>();
+        initialized.expr->kind = CoreExprKind::Arr;
+        initialized.expr->type = localType;
+        initialized.expr->org = origin;
+        initialized.expr->elems.push_back(Integer(u8, "65"));
+    }
+    producer.body.stmts.push_back(std::move(initialized));
+    producer.body.value = make_unique<CoreExpr>();
+    producer.body.value->kind = CoreExprKind::ResultLocal;
+    producer.body.value->var = 0;
+    producer.body.value->type = localType;
+    producer.body.value->org = origin;
+    return core;
+}
+
+CoreModule NamedNestedRead() {
+    auto core = NamedLayout(true);
+    auto packed = core.impls[1].vars[0].type;
+    core.impls[1].results[0].type = packed;
+    core.impls[0].body.stmts[0].expr->type = packed;
+    auto &initialized = core.impls[1].body.stmts[0];
+    initialized.expr = make_unique<CoreExpr>();
+    initialized.expr->kind = CoreExprKind::Call;
+    initialized.expr->type = packed;
+    initialized.expr->ctx = 2;
+    initialized.expr->org = origin;
+    CoreStmt printed;
+    printed.kind = CoreStmtKind::Print;
+    printed.org = origin;
+    CorePrintArg viewed;
+    viewed.kind = CorePrintArg::View;
+    viewed.view = make_unique<CoreView>();
+    viewed.view->place = make_unique<CorePlace>();
+    printed.print.push_back(std::move(viewed));
+    core.impls[1].body.stmts.push_back(std::move(printed));
+    core.impls[1].summary.outputs = true;
+    CoreImpl helper;
+    helper.name = "initialize_named";
+    helper.body.scope = 0;
+    helper.results = {{packed, CoreRequest::Value}};
+    helper.summary.constructs = {0};
+    helper.summary.aborts = true;
+    helper.body.value = Bytes(packed, 65);
+    core.impls.push_back(std::move(helper));
+    core.contexts.push_back(CoreContext {.impl = 2, .resultroots = {{}}});
+    return core;
+}
+
+CoreModule NamedHelperRead() {
+    auto core = NamedNestedRead();
+    auto packed = core.impls[1].vars[0].type;
+    auto reference = core.Intern(CoreType { .kind = CoreType::Ref, .mut = CoreMut::Const, .elem = packed });
+    auto unit = core.Intern(CoreType { .kind = CoreType::Unit });
+    CoreImpl helper;
+    helper.name = "read_named";
+    helper.body.scope = 0;
+    helper.vars = {{"value", reference, CoreVarKind::Let, 0, origin}};
+    helper.params = {{0, true}};
+    helper.summary.outputs = true;
+    helper.summary.reads = {{false, 0}};
+    CoreStmt printed;
+    printed.kind = CoreStmtKind::Print;
+    printed.org = origin;
+    CorePrintArg viewed;
+    viewed.kind = CorePrintArg::View;
+    viewed.view = make_unique<CoreView>();
+    viewed.view->place = make_unique<CorePlace>();
+    viewed.view->place->kind = CorePlace::Deref;
+    viewed.view->place->expr = make_unique<CoreExpr>();
+    viewed.view->place->expr->kind = CoreExprKind::Read;
+    viewed.view->place->expr->type = reference;
+    viewed.view->place->expr->place = make_unique<CorePlace>();
+    printed.print.push_back(std::move(viewed));
+    helper.body.stmts.push_back(std::move(printed));
+    core.impls.push_back(std::move(helper));
+    CoreContext context;
+    context.impl = 3;
+    context.varroots = {{0, {{CoreRootRef::Param, 0}}}};
+    core.contexts.push_back(std::move(context));
+    auto &called = core.impls[1].body.stmts[1];
+    called = CoreStmt {};
+    called.kind = CoreStmtKind::Expr;
+    called.org = origin;
+    called.expr = make_unique<CoreExpr>();
+    called.expr->kind = CoreExprKind::Call;
+    called.expr->type = unit;
+    called.expr->ctx = 3;
+    called.expr->org = origin;
+    CoreArgReference argument;
+    argument.mut = CoreMut::Const;
+    argument.place = make_unique<CorePlace>();
+    called.expr->args.push_back(std::move(argument));
+    return core;
+}
+
 CoreModule Fixture(string_view name) {
+    if (name == "named-layout-helper-read") return NamedHelperRead();
+    if (name == "named-layout-nested-read") return NamedNestedRead();
+    if (name == "named-layout-result") return NamedLayout(false);
+    if (name == "adapted-open") return AdaptedCall(AdaptedCase::Open);
+    if (name == "adapted-built") return AdaptedCall(AdaptedCase::Built);
+    if (name == "adapted-nested") return AdaptedCall(AdaptedCase::Nested);
     if (name == "waiting-delegated-argument") return WaitingArgument(false);
     if (name == "waiting-guarded-argument") return WaitingArgument(true);
     if (name == "waiting-guarded-call") {
@@ -1002,6 +1237,13 @@ void Valid(GirModule module) {
 }
 
 int main(int argc, char **argv) try {
+    if (argc == 3 && string_view(argv[1]) == "--high") {
+        auto core = Fixture(argv[2]);
+        auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+        Valid(high);
+        printf("%s\n", GirWriter(high).Write().c_str());
+        return 0;
+    }
     if (argc == 3) {
         auto core = Fixture(argv[1]);
         auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
@@ -1035,7 +1277,7 @@ int main(int argc, char **argv) try {
         return 0;
     }
     assert(argc == 1);
-    for (auto name : { "break", "continue", "call", "named-borrow", "owner-child", "owner-named", "cross-same", "cross-different", "deferred-cleanup", "own-deferred-cleanup", "value-break-cleanup", "nested-break", "nested-continue", "waiting-implicit", "waiting-explicit", "waiting-nested-return", "waiting-stop", "waiting-built-before-tail", "waiting-own-catch", "waiting-guarded-call", "waiting-delegated-argument", "waiting-guarded-argument" }) {
+    for (auto name : { "break", "continue", "call", "named-borrow", "owner-child", "owner-named", "cross-same", "cross-different", "deferred-cleanup", "own-deferred-cleanup", "value-break-cleanup", "nested-break", "nested-continue", "waiting-implicit", "waiting-explicit", "waiting-nested-return", "waiting-stop", "waiting-built-before-tail", "waiting-own-catch", "waiting-guarded-call", "waiting-delegated-argument", "waiting-guarded-argument", "adapted-open", "adapted-built", "adapted-nested", "named-layout-result", "named-layout-nested-read", "named-layout-helper-read" }) {
         auto core = Fixture(name);
         auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
         Valid(high);
