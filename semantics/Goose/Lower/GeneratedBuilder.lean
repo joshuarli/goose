@@ -90,6 +90,13 @@ theorem GeneratedBuilderState.freezeTo {before after : LS} (generated : Generate
     (run : freezeTo mu value env before = (result, after)) : GeneratedBuilderState after :=
   generated.of_runs (dense_freezeTo mu value) (generatedTargets_freezeTo none mu value) trivial run
 
+theorem GeneratedBuilderState.borrowTo {before after : LS} (generated : GeneratedBuilderState before)
+    (mu : Mutability) (value : ValueId) {env : LEnv} {result : _}
+    (run : borrowTo mu value env before = (result, after)) : GeneratedBuilderState after := by
+  rcases borrowTo_cases run with freeze | owner
+  · exact generated.freezeTo mu value freeze
+  · exact generated.emitDef (.ownerBorrow value) owner
+
 theorem GeneratedBuilderState.coerceTo {before after : LS} (generated : GeneratedBuilderState before)
     (ty : Ty) (value : ValueId) (origin : OriginId) {env : LEnv} {result : _}
     (run : coerceTo ty value origin env before = (result, after)) : GeneratedBuilderState after :=
