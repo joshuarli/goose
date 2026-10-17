@@ -146,4 +146,49 @@ theorem EmitsOnlyRun.inScope {property : Inst → Prop} (scope : ScopeId) {actio
   intro _
   exact .pure _ _
 
+theorem ReplacementInstApart.refFreeze {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner value address : ValueId} :
+    ReplacementInstApart module types queries owner (.def value (.refFreeze address)) := by
+  constructor
+  · intro operand member _
+    simp [emptyFactSourceOperands, ReplacementContentFlow.Model.accessOperands] at member
+  · intro operand member _
+    simp [ReplacementContentFlow.Model.loadedResults] at member
+  · intro result fn args origin same
+    cases same
+
+theorem ReplacementInstApart.ownerBorrow {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner value address : ValueId} :
+    ReplacementInstApart module types queries owner (.def value (.ownerBorrow address)) := by
+  constructor
+  · intro operand member _
+    simp [emptyFactSourceOperands, ReplacementContentFlow.Model.accessOperands] at member
+  · intro operand member _
+    simp [ReplacementContentFlow.Model.loadedResults] at member
+  · intro result fn args origin same
+    cases same
+
+theorem emitsOnly_freezeTo {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner : ValueId} (mutability : Mutability) (address : ValueId) :
+    EmitsOnlyRun (ReplacementInstApart module types queries owner) (freezeTo mutability address) := by
+  intro env before value after run
+  rcases freezeTo_cases run with same | frozen
+  · exact same.2.symm ▸ .refl _ _
+  · exact emitsOnly_emitDef frozen .refFreeze
+
+theorem emitsOnly_borrowTo {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner : ValueId} (mutability : Mutability) (address : ValueId) :
+    EmitsOnlyRun (ReplacementInstApart module types queries owner) (borrowTo mutability address) := by
+  intro env before value after run
+  rcases borrowTo_cases run with frozen | borrowed
+  · exact emitsOnly_freezeTo mutability address env before value after frozen
+  · exact emitsOnly_emitDef borrowed .ownerBorrow
+
+theorem emitsOnly_lowerExpr_ref {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner : ValueId} (mutability : Mutability) (place : Place)
+    (emitted : EmitsOnlyRun (ReplacementInstApart module types queries owner) (lowerPlace place)) :
+    EmitsOnlyRun (ReplacementInstApart module types queries owner) (lowerExpr (.ref mutability place)) := by
+  change EmitsOnlyRun _ (lowerPlace place >>= fun address => borrowTo mutability address)
+  exact emitted.bind (emitsOnly_borrowTo mutability)
+
 end Goose.Lower.Validation
