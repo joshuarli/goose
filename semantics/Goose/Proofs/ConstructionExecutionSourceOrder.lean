@@ -185,6 +185,48 @@ theorem buildExpr_arrayLiteral_success_trace (fuel : Nat) (config : EvalConfig)
   | escape address carriers before => simp only [bind, pendingResult] at bodyResult; cases bodyResult
   | jump target kind before => simp only [bind, pendingResult] at bodyResult; cases bodyResult
 
+theorem evalValue_nonfixedArray_success_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
+    (origin : Goose.Core.OriginId) (initial final : ExecutionState) (value : Value)
+    (nonfixed : ty.nonfixed = true)
+    (result : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+      .ok value final) :
+    ∃ elementFuel destination opened pending before element values after buildFinal,
+      fuel = elementFuel + 1 ∧
+      newDestination (LayoutEnv.ofModule config.module) environment.act ty .value origin none
+        (producerCount? ⟨config.module, environment.vars⟩ (.arrLit ty operands origin)) initial =
+        .ok destination opened ∧
+      getDestination destination opened = .ok pending before ∧
+      elementType pending.capability.logicalType = some element ∧
+      ListMapMLoopSuccess
+        (fun operand => buildElement elementFuel config environment destination element operand)
+        operands [] before values after ∧
+      values.length = operands.length ∧
+      liftConstruction origin (finishDestination destination) after = .ok () buildFinal := by
+  simp only [evalValue] at result
+  simp [nonfixed] at result
+  simp only [constructLocal] at result
+  cases opened : newDestination (LayoutEnv.ofModule config.module) environment.act ty .value origin none
+      (producerCount? ⟨config.module, environment.vars⟩ (.arrLit ty operands origin)) initial with
+  | ok destination before =>
+      simp only [bind, opened] at result
+      cases built : buildExpr fuel config environment destination (.arrLit ty operands origin) before with
+      | ok _ buildFinal =>
+          cases fuel with
+          | zero => simp only [buildExpr] at built; cases built
+          | succ elementFuel =>
+              obtain ⟨pending, before', element, values, after, openedDestination, elementResult,
+                trace, count, finish⟩ := buildExpr_arrayLiteral_success_trace elementFuel config
+                  environment destination ty operands origin before buildFinal built
+              exact ⟨elementFuel, destination, before, pending, before', element, values, after,
+                buildFinal, rfl, rfl, openedDestination, elementResult, trace, count, finish⟩
+      | stop reason after => simp only [built] at result; cases result
+      | escape address carriers after => simp only [built] at result; cases result
+      | jump target kind after => simp only [built] at result; cases result
+  | stop reason before => simp only [bind, opened] at result; cases result
+  | escape address carriers before => simp only [bind, opened] at result; cases result
+  | jump target kind before => simp only [bind, opened] at result; cases result
+
 theorem listMapMLoop_stopped_trace (action : α → EvalM β) (inputs : List α)
     (accumulator : List β) (initial : ExecutionState) (reason : Goose.Core.Stop)
     (final : ExecutionState)
