@@ -55,8 +55,6 @@ public:
         l.filemodules = h.filemodules;
         l.origins = h.origins;
         l.entry = h.entry;
-        if (CoreHasConstruction(h.profile) && !h.targets.empty())
-            throw GirLowerUnsupported { "nonlocal-target", "module", -1 };
         // Signatures first: a call needs its callee's before its body exists.
         for (auto &f : h.funcs) lsigs.push_back(Signature(f));
         for (auto &target : h.targets) {

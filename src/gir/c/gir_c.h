@@ -53,8 +53,6 @@ public:
         if (constructionTrace && (!CoreHasConstruction(m.profile) || constructionTrace->empty() ||
                                   constructionTrace->find('\0') != string::npos))
             throw CompileError { "construction trace requires the construction profile and a valid file path" };
-        if (!m.lowtargets.empty())
-            throw CompileError { "GIR-L target emission requires the complete checked target protocol" };
         Names();
         GirCProgram out;
         for (size_t f = 0; f < m.funcs.size(); f++) out.pieces.push_back(Piece((int)f));
@@ -170,7 +168,10 @@ static gir_source *gir_source_target_get(uint8_t *token, size_t position) { gir_
                 Append(t, "    gir_global_sources = (gir_source **)gir_source_alloc(", max<size_t>(1, m.lowglobals.size()), " * sizeof(gir_source *));\n");
             }
             if (CoreHasConstruction(m.profile)) t += "    if (atexit(gir_stack_cells_close) != 0) gs_panic(\"cannot register construction stack cleanup\");\n";
-            Append(t, "    gs_rt_init(argc, argv, ", (CoreHasConstruction(m.profile) ? 0 : m.mainstacks), ", ", m.mainstacks + m.globalstacks, ", 0);\n");
+            if (CoreHasConstruction(m.profile))
+                t += "    gs_rt_init(argc, argv, 0, GS_STACK_BUDGET / (GS_STACK_RESERVE + GS_STACK_GAP), 0);\n";
+            else
+                Append(t, "    gs_rt_init(argc, argv, ", m.mainstacks, ", ", m.mainstacks + m.globalstacks, ", 0);\n");
             if (units) {
                 set<string> modules;
                 for (auto &lg : m.lowglobals) modules.insert(lg.module);
