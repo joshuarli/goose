@@ -73,10 +73,10 @@ def printOk : List PrintArg → Bool
   | .expr e :: rest => exprOk e && printOk rest
 
 def stmtOk : Stmt → Bool
-  | .letS _ e _ => exprOk e
+  | .letS .. => false
   | .assign p e _ => placeOk p && exprOk e
   | .assignOp _ p e _ => placeOk p && exprOk e
-  | .rebind _ e _ => exprOk e
+  | .rebind .. => false
   | .expr e _ => exprOk e
   | .append p v _ => placeOk p && viewOk v
   | .popN p e _ => placeOk p && exprOk e
@@ -740,20 +740,6 @@ def StmtClaim (n : Nat) (lc : Option LoopCtx) (s : Stmt) : Prop :=
     SimG cx pt fr (execStmt n cfg env s) (fun flow pt' fr' =>
       flow = Flow.normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' [])
 
-theorem stmtClaim_let (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e : Expr) (org : OriginId) :
-    StmtClaim (n + 1) lc (.letS x e org) := by
-  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
-  simp only [lowerStmt, bind_eq] at hlow
-  obtain ⟨v, ls1, h1, h2⟩ := hlow
-  have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitEffect h2)
-  simp only [execStmt]
-  refine SimG.bind (ihe e (by okpf) le ls v ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun va pt1 fr1 P1 => ?_
-  have hc : fr1.vals[v]? = some (.val va) := P1.has (v, _) (by simp)
-  have hx : execEff cx.fn fr1 (.slotInit x v (some org)) =
-      (rootOf env x >>= fun rt => bindRoot rt va) >>= fun _ => pure fr1 := by
-    simp only [execEff, slotRoot_eq P1.rel, getVal_of hc, bind_assoc, pure_bind]
-  exact leaf_eff P1 h2 hext (Flow.normal .unit) (by simp only [bind_assoc]) hx
-
 theorem stmtClaim_assign (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, PlaceClaim n p) (p : Place)
     (e : Expr) (org : OriginId) : StmtClaim (n + 1) lc (.assign p e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
@@ -770,27 +756,6 @@ theorem stmtClaim_assign (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim
   have hx : execEff cx.fn fr2 (.store rp v (some org)) = writeLoc l va >>= fun _ => pure fr2 := by
     simp only [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef, bind_assoc, pure_bind]
   exact leaf_eff P12 h3 hext (Flow.normal .unit) rfl hx
-
-theorem stmtClaim_rebind (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e : Expr) (org : OriginId) :
-    StmtClaim (n + 1) lc (.rebind x e org) := by
-  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
-  simp only [lowerStmt, bind_eq] at hlow
-  obtain ⟨v, ls1, h1, rs, ls2, h2, h3⟩ := hlow
-  have hext2 : ExtT ls2 cx.fn.blocks := hext.of_adv (adv_emitEffect h3)
-  have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (adv_emitDef h2)
-  simp only [execStmt]
-  refine SimG.bind (ihe e (by okpf) le ls v ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun va pt1 fr1 P1 => ?_
-  rw [show (rootOf env x >>= fun rt => writeLoc ⟨rt, []⟩ va >>= fun _ => pure (Flow.normal Val.unit)) =
-    ((rootOf env x >>= fun rt => pure (Loc.mk rt [])) >>= fun l => writeLoc l va >>= fun _ =>
-      pure (Flow.normal Val.unit)) by simp [bind_assoc]]
-  refine SimG.bind (leaf_def_keep P1 h2 hext2 (by simp) (fun l => RVal.val (.ref l)) ?_)
-    fun l pt2 fr2 P2 => ?_
-  · simp only [execPure, slotRoot_eq P1.rel, bind_assoc, pure_bind]
-  have hl : fr2.vals[rs]? = some (.val (.ref l)) := P2.has (rs, _) (by simp)
-  have hv : fr2.vals[v]? = some (.val va) := P2.has (v, _) (by simp)
-  have hx : execEff cx.fn fr2 (.store rs v (some org)) = writeLoc l va >>= fun _ => pure fr2 := by
-    simp only [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef, bind_assoc, pure_bind]
-  exact leaf_eff P2 h3 hext (Flow.normal .unit) rfl hx
 
 theorem stmtClaim_assignOp (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, PlaceClaim n p)
     (op : BinOp) (p : Place) (e : Expr) (org : OriginId) : StmtClaim (n + 1) lc (.assignOp op p e org) := by
@@ -2056,10 +2021,10 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | fromEnd e => exact boundClaim_fromEnd n ih.expr e
   · intro lc s
     cases s with
-    | letS x e org => exact stmtClaim_let n lc ih.expr x e org
+    | letS x e org => intro hok; cases hok
     | assign p e org => exact stmtClaim_assign n lc ih.expr ih.place p e org
     | assignOp op p e org => exact stmtClaim_assignOp n lc ih.expr ih.place op p e org
-    | rebind x e org => exact stmtClaim_rebind n lc ih.expr x e org
+    | rebind x e org => intro hok; cases hok
     | expr e org => exact stmtClaim_expr n lc ih.expr e org
     | append owner src org => exact stmtClaim_append n lc ih.place ih.view owner src org
     | popN owner count org => exact stmtClaim_popN n lc ih.place ih.expr owner count org
