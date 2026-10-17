@@ -952,6 +952,9 @@ void RejectsParameterRootUnderapproximationAtCall() {
     m.funcs.push_back(touch);
 
     assert(Code(m) == "");
+    auto absent = m;
+    absent.funcs[1].roots.params.clear();
+    assert(Code(absent) == "");
     m.funcs[1].roots.params[0].second.clear();
     assert(Code(m) == "GIR-V050");
     m.funcs[1].roots.params[0].second = {
@@ -4201,6 +4204,8 @@ void FieldCallArgumentsKeepTheirOwnerRoot() {
     call.vals = { 4 };
     call.org = 0;
     Main(m).blocks[0].insts = { Enter(0), one, two, make, init, owner, field, call, Leave(0), Ret() };
+    assert(Code(m) == "");
+    m.funcs[1].roots.params = { { 0, {} } };
     assert(Code(m) == "GIR-V050");
 }
 
@@ -5766,6 +5771,7 @@ void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
         assert(savedStart != targetBody.blocks[0].insts.end());
         payloadUse->vals[1] = savedStart->res;
         assert(Code(unusedPayload) == "GIR-V090");
+
 
         auto missingPosition = low;
         missingPosition.lowtargets[0].channels[0].position = -1;
