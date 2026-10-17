@@ -167,9 +167,189 @@ void RequiresRebind(GirModule module) {
     assert(Code(module).empty());
 }
 
+GirModule EmptyContentReplacement() {
+    auto module = Module();
+    module.profile = CoreProfile::Shrink;
+    auto integer = module.IntType(CoreIntTy::I64);
+    auto slice = module.SliceType(CoreMut::Const, integer);
+    auto reference = module.RefType(CoreMut::Const, slice);
+    auto owner = module.Intern(CoreType { .kind = CoreType::GrowShrink, .elem = integer });
+    GirFunc function;
+    function.name = "replace_after_empty_content_length";
+    function.params = { reference };
+    function.slots = { { reference, CoreVarKind::Let, 0, 0 }, { owner, CoreVarKind::Var, 0, 1 } };
+    function.scopes = { -1 };
+    function.summary.unknown = true;
+    function.roots.params = { { 0, { { CoreRootRef::Param, 0 } } } };
+    function.roots.contents = { { 0, {} } };
+    auto enter = Inst(GirOp::Enter);
+    enter.idx = 0;
+    auto empty = Inst(GirOp::Arr, 1);
+    empty.ty = owner;
+    auto init = Inst(GirOp::Init, -1, 1);
+    init.idx = 1;
+    auto address = Inst(GirOp::Slot, 2);
+    address.idx = 1;
+    auto run = Inst(GirOp::Arr, 6);
+    run.ty = owner;
+    run.vals = { 5 };
+    auto leave = Inst(GirOp::Leave);
+    leave.idx = 0;
+    function.blocks = { { { { 0, reference } },
+        { enter, empty, init, address, Inst(GirOp::Clear, -1, 2), Inst(GirOp::Load, 3, 0),
+          Inst(GirOp::SliceView, 4, 3), Inst(GirOp::ViewLen, 5, 4), run,
+          Inst(GirOp::Replace, -1, 2, 6), leave, Inst(GirOp::Ret) } } };
+    module.funcs.push_back(function);
+    return module;
+}
+
+void AcceptsReplacementAfterKnownEmptyContentRead() {
+    auto module = EmptyContentReplacement();
+    assert(Code(module).empty());
+    module.funcs[1].roots.contents.clear();
+    assert(Code(module) == "GIR-V050");
+}
+
+GirModule LocalEmptyContentReplacement(bool initialize = true) {
+    auto module = EmptyContentReplacement();
+    auto slice = module.Type(module.funcs[1].params[0]).elem;
+    auto &function = module.funcs[1];
+    function.slots.push_back({ slice, CoreVarKind::Let, 0, 2 });
+    auto &instructions = function.blocks[0].insts;
+    auto address = Inst(GirOp::Slot, 7);
+    address.idx = 2;
+    instructions.insert(instructions.begin() + 6, { address, Inst(GirOp::Load, 8, 7) });
+    if (initialize) {
+        auto init = Inst(GirOp::Init, -1, 3);
+        init.idx = 2;
+        instructions.insert(instructions.begin() + 6, init);
+    }
+    for (auto &instruction : instructions)
+        if (instruction.op == GirOp::SliceView) instruction.a = 8;
+    return module;
+}
+
+void PreservesKnownEmptyLocalCopies() {
+    assert(Code(LocalEmptyContentReplacement()).empty());
+    assert(Code(LocalEmptyContentReplacement(false)) == "GIR-V060");
+}
+
+void RequiresEveryJoinInputKnownEmpty() {
+    auto module = EmptyContentReplacement();
+    auto slice = module.Type(module.funcs[1].params[0]).elem;
+    auto &function = module.funcs[1];
+    auto &instructions = function.blocks[0].insts;
+    GirBlock join;
+    join.params = { { 7, slice } };
+    join.insts.assign(instructions.begin() + 6, instructions.end());
+    join.insts[0].a = 7;
+    instructions.erase(instructions.begin() + 6, instructions.end());
+    auto branch = Inst(GirOp::Br);
+    branch.idx = 1;
+    branch.vals = { 3 };
+    instructions.push_back(branch);
+    function.blocks.push_back(join);
+    assert(Code(module).empty());
+
+    function.slots.push_back({ slice, CoreVarKind::Let, 0, 2 });
+    auto unknownAddress = Inst(GirOp::Slot, 8);
+    unknownAddress.idx = 2;
+    auto &entry = function.blocks[0].insts;
+    entry.insert(entry.begin() + 4, { unknownAddress, Inst(GirOp::Load, 9, 8) });
+    auto condition = Inst(GirOp::Bool, 10);
+    entry.insert(entry.end() - 1, condition);
+    auto &choice = entry.back();
+    choice.op = GirOp::CondBr;
+    choice.a = 10;
+    choice.idx2 = 1;
+    choice.vals2 = { 9 };
+    assert(Code(module) == "GIR-V060");
+}
+
+void RetainsNonemptyContentAliases() {
+    auto module = EmptyContentReplacement();
+    auto owner = module.funcs[1].slots[1].ty;
+    GirGlobal global;
+    global.name = "owner";
+    global.ty = owner;
+    global.kind = CoreVarKind::Var;
+    global.init.name = "owner_init";
+    global.init.results = { owner };
+    global.init.scopes = { -1 };
+    auto empty = Inst(GirOp::Arr, 0);
+    empty.ty = owner;
+    auto ret = Inst(GirOp::Ret);
+    ret.vals = { 0 };
+    global.init.blocks = { { {}, { empty, ret } } };
+    module.globals.push_back(global);
+    auto &function = module.funcs[1];
+    swap(function.blocks[0].insts[4], function.blocks[0].insts[5]);
+    for (auto &instruction : function.blocks[0].insts)
+        if (instruction.res == 2) {
+            instruction.op = GirOp::Global;
+            instruction.idx = 0;
+        }
+    assert(Code(module).empty());
+    function.roots.contents[0].second = { { CoreRootRef::Global, 0 } };
+    assert(Code(module) == "GIR-V060");
+}
+
+void PreservesConservativeCallDependencies() {
+    auto local = LocalEmptyContentReplacement();
+    auto slice = local.Type(local.funcs[1].params[0]).elem;
+    auto reference = local.funcs[1].params[0];
+    auto integer = local.IntType(CoreIntTy::I64);
+    auto addCall = [&](GirModule module, vector<int> arguments, vector<int> types) {
+        GirFunc callee;
+        callee.name = "unused_arguments";
+        callee.params = types;
+        callee.scopes = { -1 };
+        GirBlock entry;
+        for (int index = 0; index < (int)types.size(); index++) entry.params.push_back({ index, types[index] });
+        entry.insts = { Inst(GirOp::Ret) };
+        callee.blocks = { entry };
+        module.funcs.push_back(callee);
+        auto call = Inst(GirOp::Call);
+        call.idx = 2;
+        call.vals = arguments;
+        auto &instructions = module.funcs[1].blocks[0].insts;
+        auto position = find_if(instructions.begin(), instructions.end(), [](const GirInst &instruction) {
+            return instruction.op == GirOp::Replace;
+        });
+        instructions.insert(position, call);
+        return module;
+    };
+    assert(Code(addCall(local, { 5 }, { integer })).empty());
+    assert(Code(addCall(local, { 3 }, { slice })).empty());
+    assert(Code(addCall(local, { 7 }, { reference })) == "GIR-V060");
+    assert(Code(addCall(local, { 7, 3 }, { reference, slice })).empty());
+
+    auto opaque = EmptyContentReplacement();
+    GirFunc callee;
+    callee.name = "opaque_slice";
+    callee.results = { slice };
+    callee.roots.results = { {} };
+    callee.scopes = { -1 };
+    callee.summary.aborts = true;
+    callee.blocks = { { {}, { Inst(GirOp::Abort) } } };
+    opaque.funcs.push_back(callee);
+    auto call = Inst(GirOp::Call, 7);
+    call.idx = 2;
+    auto &instructions = opaque.funcs[1].blocks[0].insts;
+    instructions.insert(instructions.begin() + 6, call);
+    for (auto &instruction : instructions)
+        if (instruction.op == GirOp::SliceView) instruction.a = 7;
+    assert(Code(opaque) == "GIR-V060");
+}
+
 }
 
 int main() {
+    AcceptsReplacementAfterKnownEmptyContentRead();
+    PreservesKnownEmptyLocalCopies();
+    RequiresEveryJoinInputKnownEmpty();
+    RetainsNonemptyContentAliases();
+    PreservesConservativeCallDependencies();
     assert(Code(ContentAliasStore()).empty());
     assert(Code(ParameterContentStore()).empty());
     RequiresRebind(LocalBindingStore(false));
