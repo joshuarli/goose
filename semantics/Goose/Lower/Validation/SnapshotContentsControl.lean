@@ -107,4 +107,17 @@ theorem snapshot_definition_lt {state : LS} {snapshot owner : ValueId} {mode : S
   simp only [BlockB.defs, List.mem_append]
   exact Or.inr (List.mem_filterMap.mpr ⟨.def snapshot (.snapshot mode owner), defined, rfl⟩)
 
+theorem snapshot_instruction_before {before after : LS} {snapshot owner : ValueId} {mode : SnapshotMode}
+    (beforeDense : before.DenseDefinitions) (afterDense : after.DenseDefinitions)
+    (extension : before.Ext after) (bounded : snapshot < before.vals.size)
+    (member : .def snapshot (.snapshot mode owner) ∈ after.insts) :
+    .def snapshot (.snapshot mode owner) ∈ before.insts := by
+  obtain ⟨block, blockMember, defined⟩ := List.mem_flatMap.mp member
+  obtain ⟨index, row⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp blockMember)
+  obtain ⟨position, instruction⟩ := List.mem_iff_getElem?.mp defined
+  obtain ⟨prior, priorRow, priorInstruction⟩ :=
+    old_instruction_site beforeDense afterDense extension row instruction bounded
+  exact List.mem_flatMap.mpr ⟨prior, Array.mem_toList_iff.mpr (Array.mem_of_getElem? priorRow),
+    List.mem_iff_getElem?.mpr ⟨position, priorInstruction⟩⟩
+
 end Goose.Lower.Validation

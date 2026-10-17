@@ -67,4 +67,34 @@ theorem SnapshotSourceTrace.recapture {le : LEnv} {first : ValueId} {captured af
   intro snapshot mode owner member bound
   exact trace snapshot mode owner (unchanged snapshot mode owner member) bound
 
+theorem NoNewSnapshots.refl (state : LS) : NoNewSnapshots state state := fun _ _ _ member => member
+
+theorem NoNewSnapshots.trans {before middle after : LS}
+    (first : NoNewSnapshots before middle) (second : NoNewSnapshots middle after) :
+    NoNewSnapshots before after := fun snapshot mode owner member =>
+  first snapshot mode owner (second snapshot mode owner member)
+
+theorem NoNewSnapshots.of_same_values {before after : LS}
+    (beforeDense : before.DenseDefinitions) (afterDense : after.DenseDefinitions)
+    (extension : before.Ext after) (same : after.vals.size = before.vals.size) :
+    NoNewSnapshots before after := by
+  intro snapshot mode owner member
+  have bound := snapshot_definition_lt afterDense member
+  rw [same] at bound
+  exact snapshot_instruction_before beforeDense afterDense extension bound member
+
+theorem SnapshotSourceTrace.extend_same_values {α : Type} {action : B α} {le : LEnv}
+    {first : ValueId} {before after : LS} {result : α} {loop : Option LoopCtx}
+    (trace : SnapshotSourceTrace le first before before)
+    (run : action le before = (result, after))
+    (dense : DenseRun action) (advances : AdvB action) (typed : TypeRun action)
+    (frameRun : GeneratedTargetFrameRun loop action)
+    (generated : GeneratedBuilderState before) (frames : LoopBuilderFrames loop before)
+    (same : after.vals.size = before.vals.size) :
+    SnapshotSourceTrace le first after after := by
+  apply (trace.extend_framed run dense advances typed frameRun generated frames).recapture
+  exact NoNewSnapshots.of_same_values generated.dense
+    (dense le before result after run generated.dense generated.live).1
+    (advances le before result after run).ext same
+
 end Goose.Lower.Validation

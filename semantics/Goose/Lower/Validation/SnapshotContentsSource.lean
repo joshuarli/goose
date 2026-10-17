@@ -65,18 +65,10 @@ theorem SnapshotSourceTrace.extend_framed {α : Type} {action : B α} {le : LEnv
     prefixTypes.trans (typed le before result after run),
     prior.trans (snapshotContentsRetention_of_framed_run run dense advances typed frameRun generated frames)⟩
 
-private theorem snapshot_definition_blocks {le : LEnv} {state : LS} {snapshot owner : ValueId}
-    {mode : SnapshotMode} (member : .def snapshot (.snapshot mode owner) ∈ state.insts) :
-    ∃ block, block ∈ (permissionFunc le state).blocks.toList ∧
-      .def snapshot (.snapshot mode owner) ∈ block.insts := by
-  apply List.mem_flatMap.mp
-  simpa only [permissionFunc, LS.insts, Array.toList_map, List.flatMap_map] using member
-
 theorem SnapshotSourceTrace.empty (le : LEnv) (state : LS) (checked : state.DenseDefinitions) :
     SnapshotSourceTrace le state.vals.size state state := by
   intro snapshot mode owner member bound
-  obtain ⟨block, belongs, defined⟩ := snapshot_definition_blocks (le := le) member
-  exact (Nat.not_lt_of_ge bound (permissionFunc_def_bound checked belongs defined)).elim
+  exact (Nat.not_lt_of_ge bound (snapshot_definition_lt checked member)).elim
 
 theorem SnapshotSourceTrace.seq {le : LEnv} {first : ValueId} {middle after : LS}
     (prior : SnapshotSourceTrace le first middle after)
@@ -86,15 +78,8 @@ theorem SnapshotSourceTrace.seq {le : LEnv} {first : ValueId} {middle after : LS
     (extension : middle.Ext after) : SnapshotSourceTrace le first after after := by
   intro snapshot mode owner member bound
   by_cases old : snapshot < middle.vals.size
-  · obtain ⟨block, belongs, defined⟩ := snapshot_definition_blocks (le := le) member
-    obtain ⟨priorBlock, priorMember, priorDefined⟩ :=
-      permissionFunc_old_definition middleDense afterDense extension belongs defined old
-    have priorFlat : .def snapshot (.snapshot mode owner) ∈
-        (permissionFunc le middle).blocks.toList.flatMap (·.insts) :=
-      List.mem_flatMap.mpr ⟨priorBlock, priorMember, priorDefined⟩
-    have priorInstructions : .def snapshot (.snapshot mode owner) ∈ middle.insts := by
-      simpa only [permissionFunc, LS.insts, Array.toList_map, List.flatMap_map] using priorFlat
-    exact prior snapshot mode owner priorInstructions bound
+  · exact prior snapshot mode owner
+      (snapshot_instruction_before middleDense afterDense extension old member) bound
   · obtain ⟨site, fresh, extended, types, retained⟩ := suffix snapshot mode owner member (Nat.le_of_not_gt old)
     exact ⟨site, Nat.le_trans firstBound fresh, extended, types, retained⟩
 
