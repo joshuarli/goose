@@ -247,6 +247,101 @@ inductive EvalOperandsSuccess (config : EvalConfig) (environment : RuntimeActiva
       EvalOperandsSuccess config environment (fuel + 1) (channel :: channels)
         (operand :: operands) initial (carrier :: carriers) final
 
+inductive EvalOperandsStopped (config : EvalConfig) (environment : RuntimeActivation) :
+    Nat → List Channel → List Expr → ExecutionState → Goose.Core.Stop → ExecutionState →
+      List Expr → Prop
+  | timeout (channels : List Channel) (operands : List Expr) (initial : ExecutionState) :
+      EvalOperandsStopped config environment 0 channels operands initial .timeout initial []
+  | missingChannel (fuel : Nat) (operand : Expr) (operands : List Expr)
+      (initial : ExecutionState) :
+      EvalOperandsStopped config environment (fuel + 1) [] (operand :: operands) initial
+        (.fault .arity) initial []
+  | missingOperand (fuel : Nat) (channel : Channel) (channels : List Channel)
+      (initial : ExecutionState) :
+      EvalOperandsStopped config environment (fuel + 1) (channel :: channels) [] initial
+        (.fault .arity) initial []
+  | atProduce {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands : List Expr} {initial final : ExecutionState} {reason : Goose.Core.Stop}
+      (head : evalProduce fuel config environment [channel] operand initial = .stop reason final) :
+      EvalOperandsStopped config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial reason final [operand]
+  | atCarrier {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands : List Expr} {initial producedState final : ExecutionState}
+      {produced : List Carrier} {reason : Goose.Core.Stop}
+      (produce : evalProduce fuel config environment [channel] operand initial =
+        .ok produced producedState)
+      (single : singleCarrier produced producedState = .stop reason final) :
+      EvalOperandsStopped config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial reason final [operand]
+  | afterHead {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands visited : List Expr} {initial producedState middle final : ExecutionState}
+      {produced : List Carrier} {carrier : Carrier} {reason : Goose.Core.Stop}
+      (produce : evalProduce fuel config environment [channel] operand initial =
+        .ok produced producedState)
+      (single : singleCarrier produced producedState = .ok carrier middle)
+      (tail : EvalOperandsStopped config environment fuel channels operands middle reason final
+        visited) :
+      EvalOperandsStopped config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial reason final (operand :: visited)
+
+inductive EvalOperandsEscaped (config : EvalConfig) (environment : RuntimeActivation) :
+    Nat → List Channel → List Expr → ExecutionState → ExitAddress → List Carrier →
+      ExecutionState → List Expr → Prop
+  | atProduce {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands : List Expr} {initial final : ExecutionState} {address : ExitAddress}
+      {carriers : List Carrier}
+      (head : evalProduce fuel config environment [channel] operand initial =
+        .escape address carriers final) :
+      EvalOperandsEscaped config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial address carriers final [operand]
+  | atCarrier {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands : List Expr} {initial producedState final : ExecutionState}
+      {produced : List Carrier} {address : ExitAddress} {carriers : List Carrier}
+      (produce : evalProduce fuel config environment [channel] operand initial =
+        .ok produced producedState)
+      (single : singleCarrier produced producedState = .escape address carriers final) :
+      EvalOperandsEscaped config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial address carriers final [operand]
+  | afterHead {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands visited : List Expr} {initial producedState middle final : ExecutionState}
+      {produced : List Carrier} {carrier : Carrier} {address : ExitAddress}
+      {carriers : List Carrier}
+      (produce : evalProduce fuel config environment [channel] operand initial =
+        .ok produced producedState)
+      (single : singleCarrier produced producedState = .ok carrier middle)
+      (tail : EvalOperandsEscaped config environment fuel channels operands middle address
+        carriers final visited) :
+      EvalOperandsEscaped config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial address carriers final (operand :: visited)
+
+inductive EvalOperandsJumped (config : EvalConfig) (environment : RuntimeActivation) :
+    Nat → List Channel → List Expr → ExecutionState → Nat → JumpKind → ExecutionState →
+      List Expr → Prop
+  | atProduce {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands : List Expr} {initial final : ExecutionState} {target : Nat} {kind : JumpKind}
+      (head : evalProduce fuel config environment [channel] operand initial =
+        .jump target kind final) :
+      EvalOperandsJumped config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial target kind final [operand]
+  | atCarrier {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands : List Expr} {initial producedState final : ExecutionState}
+      {produced : List Carrier} {target : Nat} {kind : JumpKind}
+      (produce : evalProduce fuel config environment [channel] operand initial =
+        .ok produced producedState)
+      (single : singleCarrier produced producedState = .jump target kind final) :
+      EvalOperandsJumped config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial target kind final [operand]
+  | afterHead {fuel : Nat} {channel : Channel} {channels : List Channel} {operand : Expr}
+      {operands visited : List Expr} {initial producedState middle final : ExecutionState}
+      {produced : List Carrier} {carrier : Carrier} {target : Nat} {kind : JumpKind}
+      (produce : evalProduce fuel config environment [channel] operand initial =
+        .ok produced producedState)
+      (single : singleCarrier produced producedState = .ok carrier middle)
+      (tail : EvalOperandsJumped config environment fuel channels operands middle target kind final
+        visited) :
+      EvalOperandsJumped config environment (fuel + 1) (channel :: channels)
+        (operand :: operands) initial target kind final (operand :: visited)
+
 theorem evalOperands_success_trace (fuel : Nat) (config : EvalConfig)
     (environment : RuntimeActivation) :
     ∀ {channels : List Channel} {operands : List Expr} {initial final : ExecutionState}
@@ -311,6 +406,230 @@ theorem evalOperands_success_count (fuel : Nat) (config : EvalConfig)
       simp only [List.length_cons] at ih ⊢
       omega
 
+theorem evalOperands_stopped_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) :
+    ∀ {channels : List Channel} {operands : List Expr} {initial final : ExecutionState}
+      {reason : Goose.Core.Stop},
+      evalOperands fuel config environment channels operands initial = .stop reason final →
+      ∃ visited, EvalOperandsStopped config environment fuel channels operands initial reason final
+        visited := by
+  induction fuel with
+  | zero =>
+      intro channels operands initial final reason result
+      simp only [evalOperands, timeout] at result
+      cases result
+      exact ⟨[], .timeout channels operands initial⟩
+  | succ fuel ih =>
+      intro channels operands initial final reason result
+      cases channels with
+      | nil =>
+          cases operands with
+          | nil =>
+              simp only [evalOperands, pure] at result
+              cases result
+          | cons operand operands =>
+              simp only [evalOperands, fault] at result
+              cases result
+              exact ⟨[], .missingChannel fuel operand operands initial⟩
+      | cons channel channels =>
+          cases operands with
+          | nil =>
+              simp only [evalOperands, fault] at result
+              cases result
+              exact ⟨[], .missingOperand fuel channel channels initial⟩
+          | cons operand operands =>
+              simp only [evalOperands] at result
+              cases produce : evalProduce fuel config environment [channel] operand initial with
+              | ok produced producedState =>
+                  simp only [bind, produce] at result
+                  cases single : singleCarrier produced producedState with
+                  | ok carrier middle =>
+                      simp only [single] at result
+                      cases tail : evalOperands fuel config environment channels operands middle with
+                      | ok carriers final' => simp only [tail, pure] at result; cases result
+                      | stop stopped final' =>
+                          simp only [tail] at result
+                          cases result
+                          obtain ⟨visited, trace⟩ := ih tail
+                          exact ⟨operand :: visited, .afterHead produce single trace⟩
+                      | escape address carriers final' => simp only [tail] at result; cases result
+                      | jump target kind final' => simp only [tail] at result; cases result
+                  | stop stopped final' =>
+                      simp only [single] at result
+                      cases result
+                      exact ⟨[operand], .atCarrier produce single⟩
+                  | escape address carriers final' => simp only [single] at result; cases result
+                  | jump target kind final' => simp only [single] at result; cases result
+              | stop stopped final' =>
+                  simp only [bind, produce] at result
+                  cases result
+                  exact ⟨[operand], .atProduce produce⟩
+              | escape address carriers final' => simp only [bind, produce] at result; cases result
+              | jump target kind final' => simp only [bind, produce] at result; cases result
+
+theorem evalOperands_escaped_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) :
+    ∀ {channels : List Channel} {operands : List Expr} {initial final : ExecutionState}
+      {address : ExitAddress} {carriers : List Carrier},
+      evalOperands fuel config environment channels operands initial = .escape address carriers final →
+      ∃ visited, EvalOperandsEscaped config environment fuel channels operands initial address
+        carriers final visited := by
+  induction fuel with
+  | zero =>
+      intro channels operands initial final address carriers result
+      simp only [evalOperands, timeout] at result
+      cases result
+  | succ fuel ih =>
+      intro channels operands initial final address carriers result
+      cases channels with
+      | nil =>
+          cases operands with
+          | nil =>
+              simp only [evalOperands, pure] at result
+              cases result
+          | cons operand operands =>
+              simp only [evalOperands, fault] at result
+              cases result
+      | cons channel channels =>
+          cases operands with
+          | nil =>
+              simp only [evalOperands, fault] at result
+              cases result
+          | cons operand operands =>
+              simp only [evalOperands] at result
+              cases produce : evalProduce fuel config environment [channel] operand initial with
+              | ok produced producedState =>
+                  simp only [bind, produce] at result
+                  cases single : singleCarrier produced producedState with
+                  | ok carrier middle =>
+                      simp only [single] at result
+                      cases tail : evalOperands fuel config environment channels operands middle with
+                      | ok remaining final' => simp only [tail, pure] at result; cases result
+                      | stop reason final' => simp only [tail] at result; cases result
+                      | escape escapedAddress escapedCarriers final' =>
+                          simp only [tail] at result
+                          cases result
+                          obtain ⟨visited, trace⟩ := ih tail
+                          exact ⟨operand :: visited, .afterHead produce single trace⟩
+                      | jump target kind final' => simp only [tail] at result; cases result
+                  | stop reason final' => simp only [single] at result; cases result
+                  | escape escapedAddress escapedCarriers final' =>
+                      simp only [single] at result
+                      cases result
+                      exact ⟨[operand], .atCarrier produce single⟩
+                  | jump target kind final' => simp only [single] at result; cases result
+              | stop reason final' => simp only [bind, produce] at result; cases result
+              | escape escapedAddress escapedCarriers final' =>
+                  simp only [bind, produce] at result
+                  cases result
+                  exact ⟨[operand], .atProduce produce⟩
+              | jump target kind final' => simp only [bind, produce] at result; cases result
+
+theorem evalOperands_jumped_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) :
+    ∀ {channels : List Channel} {operands : List Expr} {initial final : ExecutionState}
+      {target : Nat} {kind : JumpKind},
+      evalOperands fuel config environment channels operands initial = .jump target kind final →
+      ∃ visited, EvalOperandsJumped config environment fuel channels operands initial target kind
+        final visited := by
+  induction fuel with
+  | zero =>
+      intro channels operands initial final target kind result
+      simp only [evalOperands, timeout] at result
+      cases result
+  | succ fuel ih =>
+      intro channels operands initial final target kind result
+      cases channels with
+      | nil =>
+          cases operands with
+          | nil =>
+              simp only [evalOperands, pure] at result
+              cases result
+          | cons operand operands =>
+              simp only [evalOperands, fault] at result
+              cases result
+      | cons channel channels =>
+          cases operands with
+          | nil =>
+              simp only [evalOperands, fault] at result
+              cases result
+          | cons operand operands =>
+              simp only [evalOperands] at result
+              cases produce : evalProduce fuel config environment [channel] operand initial with
+              | ok produced producedState =>
+                  simp only [bind, produce] at result
+                  cases single : singleCarrier produced producedState with
+                  | ok carrier middle =>
+                      simp only [single] at result
+                      cases tail : evalOperands fuel config environment channels operands middle with
+                      | ok remaining final' => simp only [tail, pure] at result; cases result
+                      | stop reason final' => simp only [tail] at result; cases result
+                      | escape address carriers final' => simp only [tail] at result; cases result
+                      | jump jumpedTarget jumpedKind final' =>
+                          simp only [tail] at result
+                          cases result
+                          obtain ⟨visited, trace⟩ := ih tail
+                          exact ⟨operand :: visited, .afterHead produce single trace⟩
+                  | stop reason final' => simp only [single] at result; cases result
+                  | escape address carriers final' => simp only [single] at result; cases result
+                  | jump jumpedTarget jumpedKind final' =>
+                      simp only [single] at result
+                      cases result
+                      exact ⟨[operand], .atCarrier produce single⟩
+              | stop reason final' => simp only [bind, produce] at result; cases result
+              | escape address carriers final' => simp only [bind, produce] at result; cases result
+              | jump jumpedTarget jumpedKind final' =>
+                  simp only [bind, produce] at result
+                  cases result
+                  exact ⟨[operand], .atProduce produce⟩
+
+theorem evalOperands_stopped_source_prefix {config : EvalConfig}
+    {environment : RuntimeActivation} {fuel : Nat} {channels : List Channel}
+    {operands visited : List Expr} {initial final : ExecutionState} {reason : Goose.Core.Stop}
+    (trace : EvalOperandsStopped config environment fuel channels operands initial reason final
+      visited) :
+    SourcePrefix visited operands := by
+  induction trace with
+  | timeout channels operands initial => exact ⟨operands, rfl⟩
+  | missingChannel fuel operand operands initial => exact ⟨operand :: operands, rfl⟩
+  | missingOperand fuel channel channels initial => exact ⟨[], rfl⟩
+  | atProduce head => exact ⟨_, rfl⟩
+  | atCarrier produce single => exact ⟨_, rfl⟩
+  | @afterHead fuel channel channels operand operands visited initial producedState middle final
+      produced carrier reason produce single tail ih =>
+      obtain ⟨suffix, suffixEq⟩ := ih
+      exact ⟨suffix, by simp [suffixEq]⟩
+
+theorem evalOperands_escaped_source_prefix {config : EvalConfig}
+    {environment : RuntimeActivation} {fuel : Nat} {channels : List Channel}
+    {operands visited : List Expr} {initial final : ExecutionState} {address : ExitAddress}
+    {carriers : List Carrier}
+    (trace : EvalOperandsEscaped config environment fuel channels operands initial address
+      carriers final visited) :
+    SourcePrefix visited operands := by
+  induction trace with
+  | atProduce head => exact ⟨_, rfl⟩
+  | atCarrier produce single => exact ⟨_, rfl⟩
+  | @afterHead fuel channel channels operand operands visited initial producedState middle final
+      produced carrier address carriers produce single tail ih =>
+      obtain ⟨suffix, suffixEq⟩ := ih
+      exact ⟨suffix, by simp [suffixEq]⟩
+
+theorem evalOperands_jumped_source_prefix {config : EvalConfig}
+    {environment : RuntimeActivation} {fuel : Nat} {channels : List Channel}
+    {operands visited : List Expr} {initial final : ExecutionState} {target : Nat}
+    {kind : JumpKind}
+    (trace : EvalOperandsJumped config environment fuel channels operands initial target kind
+      final visited) :
+    SourcePrefix visited operands := by
+  induction trace with
+  | atProduce head => exact ⟨_, rfl⟩
+  | atCarrier produce single => exact ⟨_, rfl⟩
+  | @afterHead fuel channel channels operand operands visited initial producedState middle final
+      produced carrier target kind produce single tail ih =>
+      obtain ⟨suffix, suffixEq⟩ := ih
+      exact ⟨suffix, by simp [suffixEq]⟩
+
 theorem evalProduce_values_success_trace (fuel : Nat) (config : EvalConfig)
     (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
     (initial final : ExecutionState) (carriers : List Carrier)
@@ -319,6 +638,66 @@ theorem evalProduce_values_success_trace (fuel : Nat) (config : EvalConfig)
     EvalOperandsSuccess config environment fuel channels operands initial carriers final := by
   apply evalOperands_success_trace fuel config environment
   simpa only [evalProduce] using result
+
+theorem evalProduce_values_stopped_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
+    (initial final : ExecutionState) (reason : Goose.Core.Stop)
+    (result : evalProduce (fuel + 1) config environment channels (.values operands) initial =
+      .stop reason final) :
+    ∃ visited, EvalOperandsStopped config environment fuel channels operands initial reason final
+      visited := by
+  apply evalOperands_stopped_trace fuel config environment
+  simpa only [evalProduce] using result
+
+theorem evalProduce_values_escaped_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (result : evalProduce (fuel + 1) config environment channels (.values operands) initial =
+      .escape address carriers final) :
+    ∃ visited, EvalOperandsEscaped config environment fuel channels operands initial address
+      carriers final visited := by
+  apply evalOperands_escaped_trace fuel config environment
+  simpa only [evalProduce] using result
+
+theorem evalProduce_values_jumped_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
+    (initial final : ExecutionState) (target : Nat) (kind : JumpKind)
+    (result : evalProduce (fuel + 1) config environment channels (.values operands) initial =
+      .jump target kind final) :
+    ∃ visited, EvalOperandsJumped config environment fuel channels operands initial target kind
+      final visited := by
+  apply evalOperands_jumped_trace fuel config environment
+  simpa only [evalProduce] using result
+
+theorem evalProduce_values_stopped_source_prefix (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
+    (initial final : ExecutionState) (reason : Goose.Core.Stop)
+    (result : evalProduce (fuel + 1) config environment channels (.values operands) initial =
+      .stop reason final) :
+    ∃ visited, SourcePrefix visited operands := by
+  obtain ⟨visited, trace⟩ := evalProduce_values_stopped_trace fuel config environment channels
+    operands initial final reason result
+  exact ⟨visited, evalOperands_stopped_source_prefix trace⟩
+
+theorem evalProduce_values_escaped_source_prefix (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (result : evalProduce (fuel + 1) config environment channels (.values operands) initial =
+      .escape address carriers final) :
+    ∃ visited, SourcePrefix visited operands := by
+  obtain ⟨visited, trace⟩ := evalProduce_values_escaped_trace fuel config environment channels
+    operands initial final address carriers result
+  exact ⟨visited, evalOperands_escaped_source_prefix trace⟩
+
+theorem evalProduce_values_jumped_source_prefix (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
+    (initial final : ExecutionState) (target : Nat) (kind : JumpKind)
+    (result : evalProduce (fuel + 1) config environment channels (.values operands) initial =
+      .jump target kind final) :
+    ∃ visited, SourcePrefix visited operands := by
+  obtain ⟨visited, trace⟩ := evalProduce_values_jumped_trace fuel config environment channels
+    operands initial final target kind result
+  exact ⟨visited, evalOperands_jumped_source_prefix trace⟩
 
 theorem evalProduce_values_success_count (fuel : Nat) (config : EvalConfig)
     (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
