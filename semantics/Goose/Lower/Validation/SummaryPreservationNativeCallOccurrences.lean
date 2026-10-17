@@ -47,6 +47,7 @@ theorem typedCallNativeWithOrigins {env : TEnv} {penv : PEnv} {calleeId : Contex
       (∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index) ∧
       ∃ argumentRoots argumentState,
         rpArgs penv syntaxArgs before = .ok (argumentRoots, argumentState) ∧
+        checkContents penv calleeId syntaxArgs argumentRoots = .ok () ∧
         rpCall penv calleeId argumentRoots argumentState = .ok (sourceRoots, after) ∧
         ((lowerArgs syntaxArgs le ls).2.cur.isSome = true →
           ∀ (index : Nat) (value : ValueId), (lowerArgs syntaxArgs le ls).1[index]? = some value →
@@ -86,7 +87,8 @@ theorem typedCallNativeWithOrigins {env : TEnv} {penv : PEnv} {calleeId : Contex
       exact ((argumentValues live).2 index value row).1)
     (fun live index value row => ((argumentValues live).2 index value row).2)
     originBound calleeBound (initial := ls) (syntaxArgs := syntaxArgs) rfl callReplay wholeEffect
-  refine ⟨next, completed, ?_, ?_, argumentRoots, argumentState, argumentReplay, callReplay, origins⟩
+  refine ⟨next, completed, ?_, ?_, argumentRoots, argumentState, argumentReplay,
+    (rpExpr_call_contract argumentReplay replayed).1, callReplay, origins⟩
   · simpa only [resultType] using returned
   · intro index bound
     have growth : upper.vals.size ≤ middle.vals.size := by
