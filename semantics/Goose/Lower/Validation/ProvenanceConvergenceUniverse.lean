@@ -15,6 +15,7 @@ structure RootUniverse (results : Array (List RootRef)) (func : Func) (roots : L
   addresses : ∀ block ∈ func.blocks.toList, ∀ value op, Inst.def value op ∈ block.insts → AddressBound roots op
   contents : ∀ row ∈ func.roots.contents, row.2 ⊆ roots
   slotSeeds : ∀ row ∈ func.roots.slots.getD #[], row.2 ⊆ roots
+  valueSeeds : ∀ row ∈ func.roots.values.getD #[], row.2 ⊆ roots
   results : ∀ callee global, RootRef.global global ∈ rootsAt results callee → RootRef.global global ∈ roots
 
 private theorem annotation_subset {func : Func} {roots : List RootRef}
@@ -138,6 +139,24 @@ theorem TableBound.empty (roots : List RootRef) (count : Nat) :
   simp only [rootsAt, Array.getElem?_replicate]
   split <;> simp
 
+theorem valueRootSeeds_bounded {func : Func} {roots : List RootRef}
+    (bound : ∀ row ∈ func.roots.values.getD #[], row.2 ⊆ roots) :
+    TableBound roots func.valueRootSeeds := by
+  intro value
+  simp only [Func.valueRootSeeds, rootsAt, Array.getElem?_mapIdx]
+  cases row : (Array.replicate func.numValues ([] : List RootRef))[value]? with
+  | none => simp [row]
+  | some cell =>
+    simp only [row, Option.map_some, Option.getD_some]
+    rw [← Array.foldl_toList]
+    apply List.foldlRecOn (motive := fun values => values.Nodup ∧ values ⊆ roots) _ _ ⟨by simp, by simp⟩
+    intro values prior annotation member
+    by_cases same : annotation.1 == value
+    · rw [if_pos same]
+      exact ⟨unionRoots_nodup prior.1,
+        unionRoots_subset prior.2 (bound annotation (Array.mem_toList_iff.mp member))⟩
+    · simpa only [same, Bool.false_eq_true, ite_false] using prior
+
 theorem provStart_bounded {results : Array (List RootRef)} {types : Array (Option VTy)}
     {func : Func} {roots : List RootRef} (universeBound : RootUniverse results func roots) :
     Bounded roots (provStart types func) := by
@@ -158,13 +177,14 @@ theorem provStart_bounded {results : Array (List RootRef)} {types : Array (Optio
       · simpa only [same, Bool.false_eq_true, ite_false] using prior
   · unfold provStart
     cases entry : func.blocks[0]? with
-    | none => exact TableBound.empty _ _
+    | none => exact valueRootSeeds_bounded universeBound.valueSeeds
     | some block =>
-      apply List.foldlRecOn (motive := TableBound roots) block.params.zipIdx _ (TableBound.empty _ _)
+      apply List.foldlRecOn (motive := TableBound roots) block.params.zipIdx _ (valueRootSeeds_bounded universeBound.valueSeeds)
       intro table prior param member
       dsimp only
       split
-      · apply prior.set _ (by simp)
+      · apply prior.set _ (unionRoots_nodup (prior param.1.1).1)
+        apply unionRoots_subset (prior param.1.1).2
         intro root atRoot
         have equal : root = RootRef.param param.2 := by simpa only [List.mem_singleton] using atRoot
         subst root
