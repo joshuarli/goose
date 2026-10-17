@@ -52,7 +52,7 @@ private theorem replace_silent_lifecycle (state : ConstructionState) (id : Desti
     (by
       intro phase matched
       exact ⟨phase, rfl, by simpa only [DestinationTracePhase.matchesDestination,
-        progress, backing] using matched⟩) valid
+        progress, backing, use] using matched⟩) valid
 
 private theorem write_commit_lifecycle (state : ConstructionState) (id : DestinationId)
     (destination : PendingDestination) (count : Nat) (bytes : ByteArray)
@@ -254,5 +254,163 @@ theorem prepareNamedBinding_destination_lifecycle_invariant (id : DestinationId)
                   | protocol_split_if
                   | exact valid
                   | exact prepared _ (by simp) _ _
+
+set_option maxHeartbeats 800000 in
+theorem writeElement_destination_lifecycle_invariant (id : DestinationId) (bytes : ByteArray)
+    (state : ConstructionState) (valid : DestinationLifecycleInvariant state) :
+    DestinationLifecycleInvariant (writeElement id bytes state).finalState := by
+  simp only [writeElement, writableDestination_result, bind]
+  cases present : state.destinations[id]? with
+  | none => exact valid
+  | some destination =>
+      simp only [present]
+      cases allowed : destinationCanWrite state id with
+      | false => exact valid
+      | true =>
+          simp only [allowed]
+          have inside := (Array.getElem?_eq_some_iff.mp present).choose
+          have bound := (valid.2.2.1 id destination present).1
+          cases progress : destination.progress <;> (try simp only [progress]) <;> try exact valid
+          case «open» count =>
+            have committed : ∀ storage : ReceivingStorage,
+                DestinationLifecycleInvariant { state with storage := state.storage.set! destination.storage storage, destinations := state.destinations.set! id { destination with progress := .open (count + 1), writeEnd := destination.writeEnd + bytes.size }, events := state.events ++ [.write id count] } := by
+              intro storage
+              exact write_commit_lifecycle state id destination count bytes _ (by simp) present progress valid
+            cases stored : state.storage[destination.storage]? with
+            | none => simp only [lookupStorage_result, stored, bind]; exact valid
+            | some storage =>
+                simp only [lookupStorage_result, stored, bind]
+                protocol_split_if
+                · exact valid
+                · try simp only [pure, bind, ConstructionM.fail, ConstructionResult.finalState]
+                  cases layout : (destination.adaptation.map (·.layout)).getD destination.layout <;>
+                    simp only [layout]
+                  all_goals
+                    repeat' first
+                      | simp only [pure, bind, ConstructionM.fail, ConstructionResult.finalState]
+                      | protocol_split_if
+                    all_goals try exact valid
+                    all_goals
+                      cases use : destination.use <;> simp only [use]
+                      all_goals
+                        try solve | repeat' first
+                            | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
+                                replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
+                                ConstructionM.fail, emit_result, ConstructionResult.finalState]
+                            | protocol_split_if
+                            | exact valid
+                            | exact committed _
+                      case child parentId =>
+                        cases parentFound : state.destinations[parentId]? <;>
+                          simp only [lookupDestination_result, parentFound, bind]
+                        · repeat' first
+                            | simp_all only [↓reduceIte, pure, bind, ConstructionM.fail, ConstructionResult.finalState]
+                            | protocol_split_if
+                            | exact valid
+                        · rename_i parent
+                          cases parentLayout : parent.layout <;> (try simp only [parentLayout])
+                          all_goals
+                            try solve | repeat' first
+                                | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
+                                    replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
+                                    ConstructionM.fail, emit_result, ConstructionResult.finalState]
+                                | protocol_split_if
+                                | exact valid
+                                | exact committed _
+                          case limited capacity slotBytes =>
+                            cases parentProgress : parent.progress <;> (try simp only [parentProgress])
+                            all_goals
+                              try solve | repeat' first
+                                | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
+                                    replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
+                                    ConstructionM.fail, emit_result, ConstructionResult.finalState]
+                                | protocol_split_if
+                                | exact valid
+                                | exact committed _
+                            case suspended parentCount child =>
+                              cases parentBacking : parent.backing <;> (try simp only [parentBacking])
+                              all_goals
+                                try solve | repeat' first
+                                  | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
+                                      replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
+                                      ConstructionM.fail, emit_result, ConstructionResult.finalState]
+                                  | protocol_split_if
+                                  | exact valid
+                                  | exact committed _
+                              case direct parentStorage =>
+                                cases backing : destination.backing <;> (try simp only [backing])
+                                all_goals
+                                  repeat' first
+                                    | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
+                                        replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
+                                        ConstructionM.fail, emit_result, ConstructionResult.finalState]
+                                    | protocol_split_if
+                                    | exact valid
+                                    | exact committed _
+
+theorem truncateConstructionStorage_destination_lifecycle_invariant (storageId : StorageId)
+    (start finish count : Nat) (owner : Option DestinationId) (retainSlots : Bool)
+    (state : ConstructionState) (valid : DestinationLifecycleInvariant state) :
+    DestinationLifecycleInvariant
+      (truncateConstructionStorage storageId start finish count owner retainSlots state).finalState := by
+  simp only [truncateConstructionStorage, lookupStorage_result, bind]
+  cases stored : state.storage[storageId]? with
+  | none => exact valid
+  | some storage =>
+      simp only [stored]
+      have bound := (Array.getElem?_eq_some_iff.mp stored).choose
+      have storageChanged : ∀ value : ReceivingStorage,
+          DestinationLifecycleInvariant { state with storage := state.storage.set! storageId value } := by
+        intro value
+        exact destinationLifecycleInvariant_storage_frame state _ (by simp) valid
+      cases owner with
+      | none =>
+          repeat' first
+            | simp only [ConstructionM.get, replaceStorage_result, bound, ↓reduceIte,
+                bind, pure, ConstructionM.fail, ConstructionResult.finalState]
+            | protocol_split_if
+            | exact valid
+            | exact storageChanged _
+      | some id =>
+          cases present : state.destinations[id]? with
+          | none =>
+              repeat' first
+                | simp only [ConstructionM.get, writableDestination_result, present,
+                    ↓reduceIte, bind, pure, ConstructionM.fail, ConstructionResult.finalState]
+                | protocol_split_if
+                | exact valid
+          | some destination =>
+              cases allowed : destinationCanWrite state id with
+              | false =>
+                  repeat' first
+                    | simp only [ConstructionM.get, writableDestination_result, present, allowed,
+                        ↓reduceIte, bind, pure, ConstructionM.fail, ConstructionResult.finalState]
+                    | protocol_split_if
+                    | exact valid
+              | true =>
+                  have inside := (Array.getElem?_eq_some_iff.mp present).choose
+                  have capId := valid.2.1 id destination present
+                  cases progress : destination.progress <;> (try simp only [progress])
+                  all_goals
+                    try solve | repeat' first
+                      | simp only [ConstructionM.get, writableDestination_result, present, allowed,
+                          progress, ↓reduceIte, bind, pure, ConstructionM.fail, ConstructionResult.finalState]
+                      | protocol_split_if
+                      | exact valid
+                  case built oldCount =>
+                    have truncated : ∀ value : ReceivingStorage,
+                        DestinationLifecycleInvariant { state with storage := state.storage.set! storageId value, destinations := state.destinations.set! id { destination with progress := .built count, writeEnd := finish } } := by
+                      intro value
+                      exact truncate_commit_lifecycle { state with storage := state.storage.set! storageId value }
+                        id destination oldCount count finish present progress
+                        (storageChanged value)
+                    repeat' first
+                      | simp only [ConstructionM.get, writableDestination_result, present, allowed,
+                          progress, capId, replaceStorage_result, replaceDestination_result,
+                          bound, inside, ↓reduceIte, bind, pure, ConstructionM.fail,
+                          ConstructionResult.finalState]
+                      | protocol_split_if
+                      | exact valid
+                      | exact truncated _
 
 end Goose.Proofs.ConstructionExecutionProtocol
