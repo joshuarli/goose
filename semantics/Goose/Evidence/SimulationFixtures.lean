@@ -80,9 +80,104 @@ def fixture (variant : Variant) (placement : Placement := .immediate) : GIR.Modu
     entry := 0
     origins := #[⟨0, 1, "bounds"⟩] }
 
+private def mainTypes (variant : Variant) (placement : Placement) : Array (Option VTy) :=
+  #[some (.data (.int .i64)), some (.data (.int .i64)),
+    some (.data (.arr (.int .i64) 1)), some (.data (.ref .mutable (.arr (.int .i64) 1))),
+    some (.data (.int .i64)), some (.data .bool), some (.view .mutable (.int .i64)),
+    some (.data (.ref .mutable (.int .i64))), some (.data (.int .i64))] ++
+  (match placement with
+    | .immediate => #[]
+    | .delayed => #[some (.data (.int .i64))]
+    | .predecessor => #[some (.data .unit)]) ++
+  (match variant with
+    | .called | .looping => #[some (.data .unit)]
+    | _ => #[])
+
+private def helperTypes (variant : Variant) : Array (Option VTy) :=
+  #[some (.data (match variant with | .looping => .bool | _ => .int .i64))]
+
+private theorem main_valueTypes (variant : Variant) (placement : Placement) :
+    (mainFunction variant placement).valueTypes (fixture variant placement) = mainTypes variant placement := by
+  cases variant <;> cases placement <;> cbv
+
+private theorem helper_valueTypes (variant : Variant) (placement : Placement) :
+    (helperFunction variant).valueTypes (fixture variant placement) = helperTypes variant := by
+  cases variant <;> cases placement <;> cbv
+
+private theorem main_checkTypes (variant : Variant) (placement : Placement) :
+    checkTypes (fixture variant placement) "function main" (mainFunction variant placement) (mainTypes variant placement) = .ok () := by
+  unfold checkTypes Module.tyEnv
+  rw [main_valueTypes]
+  cases variant <;> cases placement <;> cbv
+
+private theorem fixture_infos (variant : Variant) (placement : Placement) :
+    (fixture variant placement).infos =
+      [FnInfo.mk "function main" (mainFunction variant placement) (mainTypes variant placement),
+       FnInfo.mk "function helper" (helperFunction variant) (helperTypes variant)] := by
+  unfold Module.infos
+  change [FnInfo.mk "function main" (mainFunction variant placement) ((mainFunction variant placement).valueTypes (fixture variant placement)),
+    FnInfo.mk "function helper" (helperFunction variant) ((helperFunction variant).valueTypes (fixture variant placement))] = _
+  rw [main_valueTypes, helper_valueTypes]
+
+private theorem helper_checkTypes (variant : Variant) (placement : Placement) :
+    checkTypes (fixture variant placement) "function helper" (helperFunction variant) (helperTypes variant) = .ok () := by
+  unfold checkTypes Module.tyEnv
+  rw [helper_valueTypes]
+  cases variant <;> cases placement <;> cbv
+
+private theorem validate_of_checks (m : GIR.Module)
+    (entry : checkEntryAndGlobals m = .ok ())
+    (symbols : (checkAll m.labelled fun (l, f) => checkSymbols m l f) = .ok ())
+    (structs : checkStructTypes m = .ok ())
+    (types : (checkAll m.infos fun i => checkTypes m i.label i.f i.vt) = .ok ())
+    (cfg : (checkAll m.infos fun i => checkCfg i.label i.f i.vt) = .ok ())
+    (unreachable : checkUnreachable m = .ok ())
+    (storage : (checkAll (m.infos.zip (m.infos.map fun i => walkScopes i.label i.f)) fun (i, w) => do
+      if let some msg := w.storage then violation .v030 msg
+      checkStorage m i.label i.f i.vt
+      checkPermissions m i.label i.f i.vt) = .ok ())
+    (scopes : (checkAll (m.infos.map fun i => walkScopes i.label i.f) fun w => do
+      if let some msg := w.scopes then violation .v040 msg) = .ok ())
+    (summaries : checkAll (List.range m.funcs.size) (checkSummaryOf m m.implTypes (resultRoots m m.implTypes) m.rootCount) = .ok ())
+    (shrink : (checkAll m.infos fun i =>
+      let p := i.f.provenance (resultRoots m m.implTypes) i.vt m.rootCount
+      checkShrinkReplace m i.label i.f i.vt p) = .ok ())
+    (evidence : (checkAll m.infos fun i => asCheck .v080 i.label (checkEvidence m i.f i.vt)) = .ok ())
+    (origins : (checkAll m.infos fun i => checkOrigins m.profile i.label i.f) = .ok ()) :
+    GIR.validate m = .ok () := by
+  simp only [bind, Except.bind, pure, Except.pure] at storage scopes
+  simp only [GIR.validate, entry, symbols, structs, types, cfg, unreachable,
+    summaries, shrink, evidence, origins, bind, Except.bind, pure, Except.pure]
+  unfold GIR.validate.match_1 validate_of_checks.match_3 at *
+  simp only [storage, scopes]
+
+private theorem fixture_checks (variant : Variant) (placement : Placement) : GIR.validate (fixture variant placement) = .ok () := by
+  apply validate_of_checks
+  · cases variant <;> cases placement <;> cbv
+  · cases variant <;> cases placement <;> cbv
+  · cases variant <;> cases placement <;> cbv
+  · rw [fixture_infos]
+    simp only [checkAll, main_checkTypes, helper_checkTypes, bind, Except.bind, pure, Except.pure]
+  · rw [fixture_infos]
+    cases variant <;> cases placement <;> cbv
+  · cases variant <;> cases placement <;> cbv
+  · rw [fixture_infos]
+    cases variant <;> cases placement <;> cbv
+  · rw [fixture_infos]
+    cases variant <;> cases placement <;> cbv
+  · unfold Module.implTypes
+    rw [fixture_infos]
+    cases variant <;> cases placement <;> cbv
+  · rw [fixture_infos]
+    cases variant <;> cases placement <;> cbv
+  · rw [fixture_infos]
+    cases variant <;> cases placement <;> cbv
+  · rw [fixture_infos]
+    cases variant <;> cases placement <;> cbv
+
 theorem fixture_accepts (variant : Variant) (placement : Placement := .immediate) :
     (match validate (fixture variant placement) with | .ok _ => true | .error _ => false) = true := by
-  cases variant <;> cases placement <;> decide +kernel
+  rw [fixture_checks]
 
 theorem fixture_accepted (variant : Variant) (placement : Placement := .immediate) :
     validate (fixture variant placement) = .ok () := by
