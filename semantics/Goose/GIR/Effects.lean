@@ -156,12 +156,11 @@ def resultRoots (m : Module) (vts : Array (Array (Option VTy))) : Array (List Ro
       if ch then go k res' else res'
   go (nRoots + m.funcs.size + 2) initial
 
-/-- A parameter annotation describes the concrete roots a specialization may
-refer to. An absent or empty row keeps the generic parameter root, so omission
-cannot erase effects while a caller is being analyzed. -/
+/-- A present parameter annotation supplies its concrete roots, including an
+empty set. An absent row retains the generic parameter root. -/
 def Func.parameterRoots (f : Func) (i : Nat) : List RootRef :=
   match f.roots.params.find? (·.1 == i) with
-  | some (_, roots) => if roots.isEmpty then [.param i] else roots
+  | some (_, roots) => roots
   | none => [.param i]
 
 def Func.contentRoots (f : Func) (i : Nat) : List RootRef :=
