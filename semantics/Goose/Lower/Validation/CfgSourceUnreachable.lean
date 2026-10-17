@@ -64,7 +64,8 @@ theorem unreachable_lowerExpr : ∀ e : Expr, UnreachableRun (lowerExpr e)
   | .ifE c t f => by
     simp only [lowerExpr]
     exact UnreachableRun.bind (unreachable_lowerExpr c) fun cv =>
-      unreachable_ifE_core cv (unreachable_lowerBlock none [] true t) (unreachable_lowerBlock none [] true f)
+      unreachable_ifE_core cv (sourceBlockScope t)
+        (unreachable_lowerBlock none [] true t) (unreachable_lowerBlock none [] true f)
   | .blockE b => by
     simp only [lowerExpr]
     exact unreachable_lowerBlock none [] true b
