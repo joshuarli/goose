@@ -1,3 +1,4 @@
+import Goose.Lower.Validation.SummaryPreservationSourceEnvironments
 import Goose.Lower.Validation.SummaryPreservationReplayTypedStatements
 import Goose.Lower.Validation.SummaryPreservationReplayNativeTypes
 import Goose.Lower.Validation.SummaryPreservationReturnTransfer
@@ -18,7 +19,7 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
     (generatedState : GeneratedBuilderState ls)
     (loopBounds : LoopBuilderTargets loop ls)
     (native : NativeRows vt (lowerStmts loop statements le ls).2)
-    (scopes : ∀ entered ∈ ls.stack, entered < scopeCount)
+    (scopes : env.inExpr = false → ∀ entered ∈ ls.stack, entered < scopeCount)
     (step : ∀ statement, statement ∈ statements → ∀ env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance,
       env1.mod = env.mod → env1.vars = env.vars →
       tyStmt env1 scope statement tn1 = .ok (env2, tn2) →
@@ -28,7 +29,7 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
       state.cur.isSome = true →
       GeneratedBuilderState state → LoopBuilderTargets loop state →
       NativeRows vt (lowerStmt loop statement le state).2 →
-      (∀ entered ∈ state.stack, entered < scopeCount) →
+      (env1.inExpr = false → ∀ entered ∈ state.stack, entered < scopeCount) →
       ∃ next, ReplayBuilder module results vt func target le scopeCount slots
           (lowerStmt loop statement le state).2 next ∧
         (∀ index, index < provenance.vals.size → rootsAt next.vals index = rootsAt provenance.vals index) ∧
@@ -67,9 +68,11 @@ theorem typedStatementsTrackedNative {module : GIR.Module} {results : Array (Lis
         generatedState.lowerStmt loop statement loopBounds (rfl : lowerStmt loop statement le ls =
           ((lowerStmt loop statement le ls).1, (lowerStmt loop statement le ls).2))
       have middleLoopBounds := loopBounds.mono advance.ext.1
-      have middleScopes : ∀ entered ∈ (lowerStmt loop statement le ls).2.stack, entered < scopeCount := by
+      have middleScopes : middleEnv.inExpr = false →
+          ∀ entered ∈ (lowerStmt loop statement le ls).2.stack, entered < scopeCount := by
+        intro outside
         rw [advance.stack]
-        exact scopes
+        exact scopes ((source_statement_inExpr statement firstTyped).symm.trans outside)
       obtain ⟨next, completed, nextRoots, nextTransfer⟩ := ih middleReady restTyped restReplay
         middleGenerated middleLoopBounds restNative middleScopes
         (fun child member env1 env2 tn1 tn2 sourceBefore sourceAfter state provenance moduleEq variablesEq =>

@@ -22,6 +22,7 @@ def BlockReplayAt (typingEnv : TEnv) (env : PEnv) (results : Array (List RootRef
     (initial.cur.isSome = true → ∀ binding ∈ bindings, binding.2.1 < initial.vals.size) →
     (∀ binding ∈ bindings, ∀ root ∈ rootsAt upper.vals binding.2.1,
       root ∈ rootsAt (typedContextSlotUpper env.mod env.ctx env.impl) binding.1) →
+    (typingEnv.inExpr = false → ∀ entered ∈ initial.stack, entered < scopeCount) →
     ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
       (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
       (typedContextSlotUpper env.mod env.ctx env.impl) initial upper →
@@ -49,7 +50,7 @@ def StatementReplayAt (typingEnv : TEnv) (env : PEnv) (results : Array (List Roo
     rpStmt env statement before = .ok ((), after) →
     EffectRefinement (lowerContextAt env.mod env.ctx env.impl) after.eff target →
     SourceScopesWithin scopeCount (Core.stmtScopes none statement) →
-    (∀ entered ∈ initial.stack, entered < scopeCount) →
+    (typingEnv.inExpr = false → ∀ entered ∈ initial.stack, entered < scopeCount) →
     ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
       (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
       (typedContextSlotUpper env.mod env.ctx env.impl) initial upper →
@@ -62,5 +63,27 @@ def StatementReplayAt (typingEnv : TEnv) (env : PEnv) (results : Array (List Roo
       (∀ old, old < upper.vals.size → rootsAt next.vals old = rootsAt upper.vals old) ∧
       ReturnBoundsPreserved (contextTypedResultUpper env.mod env.ctx) initial upper
         (lowerStmt loop statement (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 next
+
+def StatementsReplayAt (typingEnv : TEnv) (env : PEnv) (results : Array (List RootRef))
+    (vt : Array (Option VTy)) (target : Core.Eff) (scopeCount : Nat) (loop : Option LoopCtx)
+    (scope : ScopeId) (statements : List Stmt) (initial : LS) (upper : Prov) : Prop :=
+  ∀ output start finish before after,
+    Core.tyStmts typingEnv scope statements start = .ok (output, finish) →
+    rpStmts env statements before = .ok ((), after) →
+    EffectRefinement (lowerContextAt env.mod env.ctx env.impl) after.eff target →
+    SourceScopesWithin scopeCount (Core.stmtsScopes none statements) →
+    (typingEnv.inExpr = false → ∀ entered ∈ initial.stack, entered < scopeCount) →
+    ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
+      (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
+      (typedContextSlotUpper env.mod env.ctx env.impl) initial upper →
+    GeneratedBuilderState initial → LoopBuilderTargets loop initial →
+    NativeRows vt (lowerStmts loop statements (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 →
+    ∃ next, ReplayBuilder (lower env.mod) results vt (lowerContextAt env.mod env.ctx env.impl) target
+        (lowerEnv env.mod env.impl.vars env.impl.results.toList) scopeCount
+        (typedContextSlotUpper env.mod env.ctx env.impl)
+        (lowerStmts loop statements (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 next ∧
+      (∀ old, old < upper.vals.size → rootsAt next.vals old = rootsAt upper.vals old) ∧
+      ReturnBoundsPreserved (contextTypedResultUpper env.mod env.ctx) initial upper
+        (lowerStmts loop statements (lowerEnv env.mod env.impl.vars env.impl.results.toList) initial).2 next
 
 end Goose.Lower.Validation.SummaryPreservation
