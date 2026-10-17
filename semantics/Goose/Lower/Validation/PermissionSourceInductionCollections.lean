@@ -26,6 +26,28 @@ theorem permission_source_bound_children (bound : Bound) {env : Core.TEnv} {func
     (fun expr member intTy next typed middle result lowered =>
       children expr member typed generated lowered) run
 
+theorem permission_source_bound_omitted (env : Core.TEnv) (func : Func) (results : List Ty) :
+    PermissionSourceBound env func results .omitted := by
+  exact permission_source_bound_children .omitted (by intro expr selected; rcases selected with h | h <;> cases h)
+
+theorem permission_source_bound_expr {env : Core.TEnv} {func : Func} {results : List Ty}
+    (expr : Expr) (child : PermissionStorageExprChild env func results expr) :
+    PermissionSourceBound env func results (.expr expr) := by
+  apply permission_source_bound_children
+  intro value selected
+  rcases selected with same | impossible
+  · cases same; exact child
+  · cases impossible
+
+theorem permission_source_bound_fromEnd {env : Core.TEnv} {func : Func} {results : List Ty}
+    (expr : Expr) (child : PermissionStorageExprChild env func results expr) :
+    PermissionSourceBound env func results (.fromEnd expr) := by
+  apply permission_source_bound_children
+  intro value selected
+  rcases selected with impossible | same
+  · cases impossible
+  · cases same; exact child
+
 theorem permission_source_slice {env : Core.TEnv} {func : Func} {results : List Ty}
     (requested : Mutability) (view : View) (lo hi : Bound) (origin : OriginId)
     (viewChild : PermissionStorageViewChild env func results view)
@@ -115,5 +137,9 @@ theorem permission_source_call {env : Core.TEnv} {func : Func} {results : List T
 #print axioms permission_source_pop
 #print axioms permission_source_push
 #print axioms permission_source_call
+
+#print axioms permission_source_bound_omitted
+#print axioms permission_source_bound_expr
+#print axioms permission_source_bound_fromEnd
 
 end Goose.Lower.Validation
