@@ -452,10 +452,6 @@ theorem advB_coerceResult (value : ValueId) (org : OriginId) :
   | none => exact AdvB.pure _
   | some destination => exact advB_coerceTo _ _ _
 
-theorem advB_implOfContext (c : ContextId) : AdvB (implOfContext c) := by
-  unfold implOfContext
-  exact AdvB.bind advB_read fun _ => AdvB.pure _
-
 theorem advB_growOwner (r : ValueId) : AdvB (growOwner r) := by
   unfold growOwner
   refine AdvB.bind (advB_valTy r) fun t => ?_
@@ -1200,8 +1196,7 @@ theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
     exact AdvB.bind (advB_lowerExpr e) fun a => AdvB.bind (advB_intTyOf a) fun _ => advB_emitDef _
   | .call c args org => by
     simp only [lowerExpr]
-    exact AdvB.bind (advB_lowerArgs args) fun _ => AdvB.bind (advB_implOfContext c) fun _ =>
-      AdvB.bind (advB_emitDef _) fun r => AdvB.bind advB_read fun le => by
+    exact AdvB.bind (advB_lowerArgs args) fun _ => AdvB.bind (advB_emitDef _) fun r => AdvB.bind advB_read fun le => by
         cases hnr : le.mod.noReturn c <;> simp only [hnr, Bool.false_eq_true, ↓reduceIte] <;>
           first | exact AdvB.pure _ | exact AdvB.bind (advB_emitTerm _) fun _ => AdvB.pure _
   | .push owner e org => by

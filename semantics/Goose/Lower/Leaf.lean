@@ -149,22 +149,17 @@ theorem mapList_getVal_cells {fr : Frame} : ∀ {rs : List ValueId} {vs : List V
   | _ :: _, [], hl, _ => absurd hl (by simp)
 
 
-theorem implOfContext_run (c : ContextId) (le : LEnv) (ls : LS) :
-    implOfContext c le ls = (((le.mod.contexts[c]?).map (·.impl)).getD 0, ls) := rfl
-
 theorem lowerExpr_call_split {c : ContextId} {args : List Arg} {org : OriginId}
     {le : LEnv} {ls ls' : LS} {r : ValueId}
     (h : lowerExpr (.call c args org) le ls = (r, ls')) :
     ∃ ids middle after,
       lowerArgs args le ls = (ids, middle) ∧
-      emitDef (.call (((le.mod.contexts[c]?).map (·.impl)).getD 0) ids (some org)) le middle =
+      emitDef (.call c ids (some org)) le middle =
         (r, after) ∧
       ((le.mod.noReturn c = true ∧ emitTerm .unreachable le after = ((), ls')) ∨
         (le.mod.noReturn c = false ∧ ls' = after)) := by
   simp only [lowerExpr, bind_eq] at h
-  obtain ⟨ids, middle, ha, f, middle', hf, id, after, hd, reader, same, hr, ht⟩ := h
-  rw [implOfContext_run] at hf
-  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hf
+  obtain ⟨ids, middle, ha, id, after, hd, reader, same, hr, ht⟩ := h
   rw [read_apply] at hr
   obtain ⟨rfl, rfl⟩ := Prod.mk.inj hr
   by_cases hn : le.mod.noReturn c = true
