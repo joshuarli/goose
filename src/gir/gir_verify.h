@@ -440,7 +440,8 @@ private:
             vector<bool> covered(table.cells.size(), false);
             covered[0] = true;
             for (auto &channel : table.channels) {
-                if (channel.incoming.empty() || channel.escaped.empty() || channel.incoming.size() != channel.escaped.size())
+                if (channel.incoming.empty() || channel.escaped.empty() ||
+                    (channel.incoming.size() == 4 ? channel.escaped.size() != 5 : channel.incoming.size() != channel.escaped.size()))
                     bad("low target channel omits incoming or escaped ABI words");
                 for (auto *cells : { &channel.incoming, &channel.escaped })
                     for (auto cell : *cells) {
@@ -452,12 +453,15 @@ private:
                         if (kind != CoreType::Int && kind != CoreType::Bool && kind != CoreType::Ptr) bad("low target cell retains an unresolved layout");
                         if (cells == &channel.incoming && kind != CoreType::Ptr) bad("low target incoming output channel is not an address");
                     }
-                if (channel.incoming.size() == 3 &&
+                if (channel.incoming.size() == 4 &&
                     (m.Type(table.cells[channel.escaped[0]]).kind != CoreType::Ptr ||
                      m.Type(table.cells[channel.escaped[1]]).kind != CoreType::Ptr ||
                      m.Type(table.cells[channel.escaped[2]]).kind != CoreType::Int ||
-                     m.Type(table.cells[channel.escaped[2]]).ity != CoreIntTy::I64))
-                    bad("low target construction payload is not start, end, and count");
+                     m.Type(table.cells[channel.escaped[2]]).ity != CoreIntTy::I64 ||
+                     m.Type(table.cells[channel.escaped[3]]).kind != CoreType::Int ||
+                     m.Type(table.cells[channel.escaped[3]]).ity != CoreIntTy::I64 ||
+                     m.Type(table.cells[channel.escaped[4]]).kind != CoreType::Bool))
+                    bad("low target construction payload is not start, end, count, identity, and replacement mode");
             }
             if (find(covered.begin(), covered.end(), false) != covered.end()) bad("low target table has an unconsumed cell");
             for (auto member : table.members) {
@@ -584,9 +588,11 @@ private:
     }
 
     struct LowResultWord {
+        enum class Role { Scalar, Stack, Payload, Metadata, Progress };
         int parameter;
         GirTypeId type;
         int64_t bytes;
+        Role role = Role::Scalar;
         bool operator==(const LowResultWord &) const = default;
     };
 
@@ -606,7 +612,34 @@ private:
         if (auto slice = get_if<GirLowSliceResult>(&result.layout))
             return { { slice->data, pointer, m.pointerBytes }, { slice->count, integer, 8 } };
         auto &nonfixed = get<GirLowNonfixedResult>(result.layout);
-        return { { nonfixed.stack, pointer, 0 }, { nonfixed.start, pointer, 0 }, { nonfixed.count, integer, 8 } };
+        return { { nonfixed.stack, pointer, 0, LowResultWord::Role::Stack },
+            { nonfixed.start, pointer, 0, LowResultWord::Role::Payload },
+            { nonfixed.count, integer, GirConstructionMetadataBytes, LowResultWord::Role::Metadata },
+            { nonfixed.progress, integer, GirConstructionProgressBytes, LowResultWord::Role::Progress } };
+    }
+
+    struct LowEscapedWord {
+        enum class Role { Scalar, PayloadStart, PayloadEnd, Count, Identity, Replacement };
+        Role role;
+        GirTypeId type;
+        optional<size_t> outputWord;
+        int64_t offset, bytes;
+    };
+
+    vector<LowEscapedWord> LowEscapedWords(const GirLowResult &result) const {
+        auto words = LowResultWords(result);
+        if (holds_alternative<GirLowNonfixedResult>(result.layout)) {
+            auto boolean = find_if(m.types.begin(), m.types.end(), [](const CoreType &type) { return type.kind == CoreType::Bool; });
+            return { { LowEscapedWord::Role::PayloadStart, words[1].type, 1, 0, 0 },
+                { LowEscapedWord::Role::PayloadEnd, words[1].type, nullopt, 0, 0 },
+                { LowEscapedWord::Role::Count, words[2].type, 2, 0, 8 },
+                { LowEscapedWord::Role::Identity, words[2].type, 2, GirConstructionIdentityOffset, 8 },
+                { LowEscapedWord::Role::Replacement, boolean == m.types.end() ? -1 : (int)(boolean - m.types.begin()), nullopt, 0, 0 } };
+        }
+        vector<LowEscapedWord> escaped;
+        for (size_t position = 0; position < words.size(); position++)
+            escaped.push_back({ LowEscapedWord::Role::Scalar, words[position].type, position, 0, words[position].bytes });
+        return escaped;
     }
 
     void CheckLowResultTables() {
@@ -666,11 +699,13 @@ private:
                 auto words = LowResultWords((*function.lowResults)[result]);
                 if (words.size() != channel.incoming.size()) bad("low target incoming words disagree with its member result ABI");
                 bool nonfixed = holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout);
-                if (nonfixed != (channel.incoming.size() == 3)) bad("low target result kind disagrees with its member result ABI");
+                if (nonfixed != (channel.incoming.size() == 4)) bad("low target result kind disagrees with its member result ABI");
+                auto escaped = LowEscapedWords(actual);
+                if (escaped.size() != channel.escaped.size()) bad("low target escaped words disagree with its member result ABI");
+                for (size_t word = 0; word < escaped.size(); word++)
+                    if (target.cells[channel.escaped[word]] != escaped[word].type)
+                        bad("low target escaped word disagrees with its member result ABI");
                 for (size_t word = 0; word < words.size(); word++) {
-                    auto expected = nonfixed && word < 2 ? m.Type(target.cells[channel.escaped[word]]).kind == CoreType::Ptr :
-                        target.cells[channel.escaped[word]] == words[word].type;
-                    if (!expected) bad("low target escaped word disagrees with its member result ABI");
                     bool installed = false;
                     auto parameter = function.blocks[0].params[words[word].parameter].first;
                     for (auto &inst : function.blocks[0].insts)
@@ -793,7 +828,7 @@ private:
                         if (!readsTarget) bad("escaping low call has a target case without a receiving handler");
                         for (auto &channel : m.lowtargets[target].channels) {
                             vector<int> required = channel.escaped;
-                            if (channel.incoming.size() == 3) required = { channel.escaped[0], channel.escaped[2] };
+                            if (channel.incoming.size() == 4) required = { channel.escaped[0], channel.escaped[2], channel.escaped[3], channel.escaped[4] };
                             for (auto cell : required) {
                                 const GirInst *load = nullptr;
                                 for (auto &inst : handler.insts)
@@ -1228,7 +1263,7 @@ private:
                             if (i.idx < 0 || i.idx >= (int)m.lowtargets.size()) break;
                             for (size_t channel = 0; channel < m.lowtargets[i.idx].channels.size(); channel++) {
                                 auto &cells = m.lowtargets[i.idx].channels[channel];
-                                if (cells.incoming.size() != 3) continue;
+                                if (cells.incoming.size() != 4) continue;
                                 StackId token { 7, i.idx * 65536 + (int)channel };
                                 for (auto &entryInst : f.blocks[0].insts)
                                     if (entryInst.op == GirOp::TargetStore && entryInst.idx == i.idx && entryInst.idx2 == cells.incoming[0])
@@ -1725,6 +1760,7 @@ private:
         struct Value {
             Address address;
             int target = -1, cell = -1, sourceResult = -1;
+            uint16_t progressStates = 0;
             bool operator==(const Value &) const = default;
         };
         struct Blocked {
@@ -1741,6 +1777,8 @@ private:
             set<tuple<int, int, int>> extents;
             set<Blocked> blocked;
             set<pair<Address, int64_t>> initialized;
+            set<Address> borrowedRecords;
+            set<Address> progressRecords;
             set<pair<int, int>> receiving, sourceReceiving;
             map<pair<int, int>, Value> payload;
             map<pair<int, int>, int> moves;
@@ -1793,20 +1831,58 @@ private:
                 bad("normal output is read before its call completed or its target payload landed");
         };
         auto initialize = [&](State &state, Address address, int64_t bytes) {
+            vector<Blocked> remaining;
             for (auto iterator = state.blocked.begin(); iterator != state.blocked.end();) {
                 auto &blocked = *iterator;
                 bool covered = address.kind != Address::Kind::Unknown && address.SameBase(blocked.address) &&
                     address.offset != INT64_MAX && blocked.address.offset != INT64_MAX && address.offset <= blocked.address.offset &&
                     (bytes == INT64_MAX || (blocked.bytes != INT64_MAX && bytes >= blocked.bytes &&
                         (uint64_t)blocked.address.offset - (uint64_t)address.offset <= (uint64_t)(bytes - blocked.bytes)));
-                if (covered) iterator = state.blocked.erase(iterator); else ++iterator;
+                if (covered) iterator = state.blocked.erase(iterator);
+                else if (address.kind != Address::Kind::Unknown && address.SameBase(blocked.address) &&
+                    address.offset != INT64_MAX && blocked.address.offset != INT64_MAX &&
+                    bytes != INT64_MAX && blocked.bytes != INT64_MAX && bytes > 0 && blocked.bytes > 0 &&
+                    address.offset <= INT64_MAX - bytes && blocked.address.offset <= INT64_MAX - blocked.bytes &&
+                    overlaps(address, bytes, blocked)) {
+                    auto finish = blocked.address.offset + blocked.bytes;
+                    if (blocked.address.offset < address.offset)
+                        remaining.push_back({ blocked.address, address.offset - blocked.address.offset, blocked.call });
+                    if (address.offset + bytes < finish) {
+                        auto suffix = blocked.address;
+                        suffix.offset = address.offset + bytes;
+                        remaining.push_back({ suffix, finish - suffix.offset, blocked.call });
+                    }
+                    iterator = state.blocked.erase(iterator);
+                } else ++iterator;
             }
+            state.blocked.insert(remaining.begin(), remaining.end());
+        };
+        auto initialized = [&](const State &state, Address address, int64_t bytes) {
+            if (address.kind == Address::Kind::Unknown || address.offset == INT64_MAX || bytes < 0) return false;
+            return any_of(state.initialized.begin(), state.initialized.end(), [&](const auto &range) {
+                return address.SameBase(range.first) && range.first.offset != INT64_MAX && range.first.offset <= address.offset &&
+                    (range.second == INT64_MAX || (range.second >= bytes &&
+                        (uint64_t)address.offset - (uint64_t)range.first.offset <= (uint64_t)(range.second - bytes)));
+            });
+        };
+        auto frameContains = [&](Address address, int64_t bytes) {
+            if (address.kind != Address::Kind::Frame) return true;
+            auto &member = function.members[address.root];
+            auto extent = member.kind == GirMember::Bytes ? member.size : member.kind == GirMember::Header ? 16 :
+                member.kind == GirMember::Scalar ? (m.Type(member.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(member.ty)) : 0;
+            return address.offset >= 0 && address.offset <= extent && bytes <= extent - address.offset;
         };
         auto output = [&](const State &state, int target, size_t result, size_t word) {
             auto words = LowResultWords((*function.lowResults)[result]);
             auto parameter = function.blocks[0].params[words[word].parameter].first;
             (void)target;
             return value(state, parameter).address;
+        };
+        auto escapedOutput = [&](const State &state, int target, size_t result, const LowEscapedWord &word) {
+            auto address = output(state, target, result, *word.outputWord);
+            if (address.offset == INT64_MAX || address.offset > INT64_MAX - word.offset) address.offset = INT64_MAX;
+            else address.offset += word.offset;
+            return address;
         };
         State entry;
         for (auto &parameter : function.blocks[0].params)
@@ -1817,14 +1893,56 @@ private:
         for (auto &result : *function.lowResults) if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout)) {
             auto address = value(entry, function.blocks[0].params[nonfixed->count].first).address;
             entry.initialized.insert({ address, 8 });
-            address.offset += 8;
+            address.offset += GirConstructionIdentityOffset;
             entry.initialized.insert({ address, 8 });
+            auto progress = value(entry, function.blocks[0].params[nonfixed->progress].first).address;
+            entry.progressRecords.insert(progress);
+            entry.initialized.insert({ progress, GirConstructionProgressBytes });
+            Value validProgress;
+            validProgress.progressStates = (1 << ((int)GirConstructionProgress::Retired + 1)) - 1;
+            entry.memory[progress] = { validProgress, GirConstructionProgressBytes };
         }
-        vector<map<int, State>> incoming(function.blocks.size());
-        incoming[0].emplace(-1, entry);
-        vector<pair<int, int>> work { { 0, -1 } };
+        struct Partition {
+            int inFlight;
+            vector<pair<int, Address>> pointers;
+            auto operator<=>(const Partition &) const = default;
+        };
+        vector<set<int>> livePointers(function.blocks.size()), definedPointers(function.blocks.size()), usedPointers(function.blocks.size());
+        for (size_t block = 0; block < function.blocks.size(); block++) {
+            for (auto &parameter : function.blocks[block].params)
+                if (m.Type(parameter.second).kind == CoreType::Ptr) definedPointers[block].insert(parameter.first);
+            for (auto &inst : function.blocks[block].insts) {
+                if (GirDefinesValue(inst) && m.Type(fn.vt[inst.res]).kind == CoreType::Ptr) definedPointers[block].insert(inst.res);
+                vector<int> used;
+                Uses(inst, used);
+                for (auto id : used) if (m.Type(fn.vt[id]).kind == CoreType::Ptr) usedPointers[block].insert(id);
+            }
+        }
+        bool livenessChanged = true;
+        while (livenessChanged) {
+            livenessChanged = false;
+            for (size_t block = 0; block < function.blocks.size(); block++) {
+                auto next = usedPointers[block];
+                for (auto successor : BlockSuccessors(function.blocks[block]))
+                    next.insert(livePointers[successor].begin(), livePointers[successor].end());
+                for (auto id : definedPointers[block]) next.erase(id);
+                if (next != livePointers[block]) { livePointers[block] = std::move(next); livenessChanged = true; }
+            }
+        }
+        auto partitionFor = [&](int block, const State &state) {
+            Partition partition { state.inFlight, {} };
+            for (auto id : livePointers[block]) partition.pointers.push_back({ id, value(state, id).address });
+            for (auto &parameter : function.blocks[block].params)
+                if (m.Type(parameter.second).kind == CoreType::Ptr)
+                    partition.pointers.push_back({ parameter.first, value(state, parameter.first).address });
+            return partition;
+        };
+        vector<map<Partition, State>> incoming(function.blocks.size());
+        auto initialPartition = partitionFor(0, entry);
+        incoming[0].emplace(initialPartition, entry);
+        vector<pair<int, Partition>> work { { 0, initialPartition } };
         auto merge = [&](int block, State state) {
-            auto partition = state.inFlight;
+            auto partition = partitionFor(block, state);
             auto found = incoming[block].find(partition);
             if (found == incoming[block].end()) {
                 incoming[block].emplace(partition, std::move(state));
@@ -1832,16 +1950,24 @@ private:
                 return;
             }
             auto next = found->second;
+            auto mergeValue = [](Value &left, const Value &right) {
+                auto leftStates = left.progressStates, rightStates = right.progressStates;
+                left.progressStates = right.progressStates;
+                if (left != right) return false;
+                left.progressStates = leftStates && rightStates ? leftStates | rightStates : 0;
+                return true;
+            };
             for (auto *facts : { &next.values, &next.members }) {
                 auto &other = facts == &next.values ? state.values : state.members;
                 for (auto iterator = facts->begin(); iterator != facts->end();) {
                     auto found = other.find(iterator->first);
-                    if (found == other.end() || found->second != iterator->second) iterator = facts->erase(iterator); else ++iterator;
+                    if (found == other.end() || !mergeValue(iterator->second, found->second)) iterator = facts->erase(iterator); else ++iterator;
                 }
             }
             for (auto iterator = next.memory.begin(); iterator != next.memory.end();) {
                 auto found = state.memory.find(iterator->first);
-                if (found == state.memory.end() || found->second != iterator->second) iterator = next.memory.erase(iterator); else ++iterator;
+                if (found == state.memory.end() || found->second.second != iterator->second.second ||
+                    !mergeValue(iterator->second.first, found->second.first)) iterator = next.memory.erase(iterator); else ++iterator;
             }
             for (auto iterator = next.bytePayloads.begin(); iterator != next.bytePayloads.end();) {
                 auto found = state.bytePayloads.find(iterator->first);
@@ -1866,6 +1992,8 @@ private:
             set_intersection(next.initialized.begin(), next.initialized.end(), state.initialized.begin(), state.initialized.end(), inserter(initialized, initialized.end()));
             next.initialized = std::move(initialized);
             next.blocked.insert(state.blocked.begin(), state.blocked.end());
+            next.borrowedRecords.insert(state.borrowedRecords.begin(), state.borrowedRecords.end());
+            next.progressRecords.insert(state.progressRecords.begin(), state.progressRecords.end());
             next.receiving.insert(state.receiving.begin(), state.receiving.end());
             next.sourceReceiving.insert(state.sourceReceiving.begin(), state.sourceReceiving.end());
             if (next.flag != state.flag) next.flag = -1;
@@ -1878,18 +2006,19 @@ private:
             for (size_t result = 0; result < target.channels.size(); result++) {
                 auto &channel = target.channels[result];
                 bool nonfixed = holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout);
+                auto escaped = LowEscapedWords((*function.lowResults)[result]);
                 for (size_t word = 0; word < channel.escaped.size(); word++) if (channel.escaped[word] == stored.cell) {
-                    if (nonfixed && word == 1) continue;
-                    size_t outputWord = nonfixed && word == 0 ? 1 : word;
-                    if (bytes != (nonfixed ? word == 0 : holds_alternative<GirLowSnapshotResult>((*function.lowResults)[result].layout))) continue;
-                    if (destination != output(state, stored.target, result, outputWord)) continue;
+                    auto &physical = escaped[word];
+                    if (!physical.outputWord) continue;
+                    auto payload = physical.role == LowEscapedWord::Role::PayloadStart;
+                    if (bytes != (payload || holds_alternative<GirLowSnapshotResult>((*function.lowResults)[result].layout))) continue;
+                    if (destination != escapedOutput(state, stored.target, result, physical)) continue;
                     if (bytes) {
                         if (nonfixed && !state.extents.count({ stored.target, stored.cell, byteValue })) continue;
                         if (auto snapshot = get_if<GirLowSnapshotResult>(&(*function.lowResults)[result].layout))
                             if (extent != snapshot->bytes) continue;
                     } else {
-                        auto words = LowResultWords((*function.lowResults)[result]);
-                        if (extent != words[outputWord].bytes) continue;
+                        if (extent != physical.bytes) continue;
                     }
                     state.receiving.erase({ stored.target, stored.cell });
                     if (nonfixed && bytes) state.moves[{ stored.target, (int)result }] = byteValue;
@@ -1908,13 +2037,11 @@ private:
             auto target = state.inFlight;
             for (size_t result = 0; result < m.lowtargets[target].channels.size(); result++) {
                 auto &channel = m.lowtargets[target].channels[result];
-                auto words = LowResultWords((*function.lowResults)[result]);
-                bool nonfixed = holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout);
+                auto words = LowEscapedWords((*function.lowResults)[result]);
                 for (size_t word = 0; word < channel.escaped.size(); word++) {
-                    if (nonfixed && word == 1) continue;
-                    auto position = nonfixed && word == 0 ? 1 : word;
-                    auto extent = nonfixed && word == 0 ? INT64_MAX : words[position].bytes;
-                    if (overlaps(address, bytes, { output(state, target, result, position), extent, 0 }))
+                    if (!words[word].outputWord) continue;
+                    auto extent = words[word].role == LowEscapedWord::Role::PayloadStart ? INT64_MAX : words[word].bytes;
+                    if (overlaps(address, bytes, { escapedOutput(state, target, result, words[word]), extent, 0 }))
                         state.receiving.insert({ target, channel.escaped[word] });
                 }
             }
@@ -1949,6 +2076,14 @@ private:
                     bad("pending escaped payload bytes are overwritten before landing");
             }
         };
+        auto checkProgressWrite = [&](const State &state, Address address, int64_t bytes, const Value *stored = nullptr) {
+            if (bytes == 0) return;
+            for (auto &record : state.progressRecords)
+                if (address.kind != Address::Kind::Unknown && address.SameBase(record) &&
+                    overlaps(address, bytes, { record, GirConstructionProgressBytes, 0 }) &&
+                    (address != record || bytes != GirConstructionProgressBytes || !stored || !stored->progressStates))
+                    bad("write corrupts a nonfixed lifecycle progress state");
+        };
         map<Address, int> stackRoots;
         int callOrdinal = 0;
         map<const GirInst *, int> callIds;
@@ -1976,6 +2111,11 @@ private:
                 }
                 if (GirDefinesValue(inst) && m.Type(fn.vt[inst.res]).kind == CoreType::Ptr)
                     state.values[inst.res] = Value { { inst.res, 0 } };
+                if (inst.op == GirOp::Int && m.Type(inst.ty).ity == CoreIntTy::I64) {
+                    auto number = constant(inst.res);
+                    if (number && *number >= (int64_t)GirConstructionProgress::Open && *number <= (int64_t)GirConstructionProgress::Retired)
+                        state.values[inst.res].progressStates = 1 << *number;
+                }
                 if (inst.op == GirOp::StackAt || inst.op == GirOp::GlobalStack) {
                     auto &address = state.values[inst.res].address;
                     address.kind = inst.op == GirOp::StackAt ? Address::Kind::LocalStack : Address::Kind::GlobalStack;
@@ -2001,7 +2141,7 @@ private:
                         auto target = state.inFlight;
                         for (size_t result = 0; result < m.lowtargets[target].channels.size(); result++) {
                             auto &channel = m.lowtargets[target].channels[result];
-                            if (channel.incoming.size() != 3) continue;
+                            if (channel.incoming.size() != 4) continue;
                             auto incoming = state.payload.find({ target, channel.incoming[0] });
                             auto active = incoming == state.payload.end() ? Address::Target(target, channel.incoming[0], false) : incoming->second.address;
                             if (stack.kind != Address::Kind::Unknown && stack != active) continue;
@@ -2033,6 +2173,8 @@ private:
                     state.members[inst.idx] = value(state, inst.a);
                     auto bytes = function.members[inst.idx].kind != GirMember::Scalar || m.Type(function.members[inst.idx].ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(function.members[inst.idx].ty);
                     Address address { -inst.idx - 1, 0 };
+                    auto stored = value(state, inst.a);
+                    checkProgressWrite(state, address, bytes, &stored);
                     protect(state, address, bytes);
                     invalidateLanding(state, address, bytes);
                     initialize(state, address, bytes);
@@ -2064,6 +2206,23 @@ private:
                     auto found = state.payload.find({ inst.idx, inst.idx2 });
                     if (found != state.payload.end()) state.values[inst.res] = found->second;
                     else state.values[inst.res] = Value { Address::Target(inst.idx, inst.idx2, false) };
+                    auto &target = m.lowtargets[inst.idx];
+                    auto &results = *m.funcs[target.members[0]].lowResults;
+                    for (size_t result = 0; result < results.size(); result++) {
+                        auto &channel = target.channels[result];
+                        if (!holds_alternative<GirLowNonfixedResult>(results[result].layout)) continue;
+                        auto progress = channel.incoming[3] == inst.idx2;
+                        if (!progress && channel.incoming[2] != inst.idx2) continue;
+                        auto address = value(state, inst.res).address;
+                        if (address.kind != Address::Kind::SavedTarget || !state.borrowedRecords.insert(address).second) continue;
+                        state.initialized.insert({ address, progress ? GirConstructionProgressBytes : GirConstructionMetadataBytes });
+                        if (progress) {
+                            state.progressRecords.insert(address);
+                            Value valid;
+                            valid.progressStates = (1 << ((int)GirConstructionProgress::Retired + 1)) - 1;
+                            state.memory[address] = { valid, GirConstructionProgressBytes };
+                        }
+                    }
                 }
                 if (inst.op == GirOp::TargetStore) {
                     auto stored = value(state, inst.a);
@@ -2088,6 +2247,8 @@ private:
                 if (inst.op == GirOp::PStore) {
                     auto address = value(state, inst.a).address;
                     auto bytes = m.Type(inst.ty).kind == CoreType::Ptr ? m.pointerBytes : FlatSize(inst.ty);
+                    auto stored = value(state, inst.b);
+                    checkProgressWrite(state, address, bytes, &stored);
                     protect(state, address, bytes);
                     invalidateLanding(state, address, bytes);
                     initialize(state, address, bytes);
@@ -2123,6 +2284,7 @@ private:
                         read(state, source.address, count == 0 ? 0 : inst.idx);
                     } else read(state, source.address, count);
                     auto destination = value(state, inst.a).address;
+                    checkProgressWrite(state, destination, count);
                     protect(state, destination, count, inst.op == GirOp::BytesFill ? nullptr : &source,
                         inst.vals.empty() ? -1 : inst.vals[0]);
                     if (destination.kind == Address::Kind::Frame) state.members.erase(destination.root);
@@ -2155,12 +2317,31 @@ private:
                         if (address.offset == INT64_MAX || address.offset > INT64_MAX - 8) address.offset = INT64_MAX;
                         else address.offset += 8;
                     }
+                    checkProgressWrite(state, address, bytes);
                     protect(state, address, bytes);
                     invalidateLanding(state, address, bytes);
                     invalidateBytes(state, address, bytes);
                 }
                 if (inst.op == GirOp::Call) {
                     if (state.inFlight >= 0 || state.flag > 0) bad("a frame resumes calls while an escaped result is in flight");
+                    auto &callee = m.funcs[inst.idx];
+                    for (auto &result : *callee.lowResults) if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout)) {
+                        auto address = value(state, inst.vals[nonfixed->progress]).address;
+                        if (!frameContains(address, GirConstructionProgressBytes)) bad("nonfixed call progress record exceeds its frame storage");
+                        if (!initialized(state, address, GirConstructionProgressBytes)) bad("nonfixed call progress state is not initialized");
+                        auto stored = state.memory.find(address);
+                        if (stored == state.memory.end() || stored->second.second != 8 || !stored->second.first.progressStates)
+                            bad("nonfixed call progress state is outside its declared lifecycle states");
+                        state.progressRecords.insert(address);
+                    }
+                    map<Address, pair<Value, int64_t>> retainedProgress;
+                    for (auto &[address, stored] : state.memory) if (stored.second == 8 && stored.first.progressStates) {
+                        bool passed = false;
+                        for (size_t parameter = 1; parameter < callee.params.size(); parameter++)
+                            if (m.Type(callee.params[parameter]).kind == CoreType::Ptr)
+                                passed |= overlaps(value(state, inst.vals[parameter]).address, INT64_MAX, { address, 8, 0 });
+                        if (!passed) retainedProgress.emplace(address, stored);
+                    }
                     for (auto *facts : { &state.values, &state.members })
                         for (auto &[id, fact] : *facts) {
                             (void)id;
@@ -2168,13 +2349,12 @@ private:
                             if (fact.address.kind == Address::Kind::EscapedTarget) fact.address = Address {};
                         }
                     state.stackEnds.clear();
-                    state.memory.clear();
+                    state.memory = std::move(retainedProgress);
                     state.bytePayloads.clear();
                     for (size_t target = 0; target < m.lowtargets.size(); target++)
                         for (auto &channel : m.lowtargets[target].channels) for (auto cell : channel.escaped)
                             state.payload.erase({ (int)target, cell });
                     state.extents.clear();
-                    auto &callee = m.funcs[inst.idx];
                     set<int> outputParameters;
                     for (auto &result : *callee.lowResults) for (auto &word : LowResultWords(result)) outputParameters.insert(word.parameter);
                     for (size_t parameter = 1; parameter < callee.params.size(); parameter++)
@@ -2186,15 +2366,15 @@ private:
                         }
                     for (auto &result : *callee.lowResults) if (auto nonfixed = get_if<GirLowNonfixedResult>(&result.layout)) {
                         auto address = value(state, inst.vals[nonfixed->count]).address;
-                        if (address.kind == Address::Kind::Unknown || address.offset == INT64_MAX || !state.initialized.count({ address, 8 })) bad("nonfixed call count metadata is not initialized");
-                        if (address.offset > INT64_MAX - 8) bad("nonfixed call identity metadata address overflows");
-                        address.offset += 8;
-                        if (address.kind == Address::Kind::Unknown || address.offset == INT64_MAX || !state.initialized.count({ address, 8 })) bad("nonfixed call destination identity metadata is not initialized");
+                        if (!frameContains(address, GirConstructionMetadataBytes)) bad("nonfixed call count and identity record exceeds its frame storage");
+                        if (!initialized(state, address, 8)) bad("nonfixed call count metadata is not initialized");
+                        if (address.offset > INT64_MAX - GirConstructionIdentityOffset) bad("nonfixed call identity metadata address overflows");
+                        address.offset += GirConstructionIdentityOffset;
+                        if (!initialized(state, address, 8)) bad("nonfixed call destination identity metadata is not initialized");
                     }
                     vector<Blocked> outputs;
                     for (auto &result : *callee.lowResults) for (auto &word : LowResultWords(result)) if (word.bytes) {
-                        Blocked output { value(state, inst.vals[word.parameter]).address,
-                            holds_alternative<GirLowNonfixedResult>(result.layout) ? 16 : word.bytes, 0 };
+                        Blocked output { value(state, inst.vals[word.parameter]).address, word.bytes, 0 };
                         for (auto &previous : outputs) if (overlaps(output.address, output.bytes, previous))
                             bad("call result output cells overlap or have unknown aliasing");
                         outputs.push_back(output);
@@ -2206,7 +2386,7 @@ private:
                     for (auto &result : *callee.lowResults) {
                         auto words = LowResultWords(result);
                         for (size_t word = 0; word < words.size(); word++) if (words[word].bytes ||
-                            (holds_alternative<GirLowNonfixedResult>(result.layout) && word == 1)) {
+                            words[word].role == LowResultWord::Role::Payload) {
                             auto address = value(state, inst.vals[words[word].parameter]).address;
                             auto bytes = words[word].bytes ? words[word].bytes : INT64_MAX;
                             initialize(state, address, bytes);
@@ -2217,6 +2397,11 @@ private:
                                     if (overlaps(iterator->first, iterator->second, { address, bytes, 0 })) iterator = state.initialized.erase(iterator); else ++iterator;
                             } else if (address.kind != Address::Kind::Unknown && address.offset != INT64_MAX)
                                 state.initialized.insert({ address, bytes });
+                            if (words[word].role == LowResultWord::Role::Progress) {
+                                Value built;
+                                built.progressStates = 1 << (int)GirConstructionProgress::Built;
+                                state.memory[address] = { built, GirConstructionProgressBytes };
+                            }
                         }
                     }
                     state.pending = escaping ? callIds.at(&inst) : -1;
@@ -2263,6 +2448,12 @@ private:
                             auto address = value(state, function.blocks[0].params[word.parameter].first).address;
                             for (auto &blocked : state.blocked) if (overlaps(address, word.bytes, blocked))
                                 bad("normal return omits a declared primitive result output");
+                            if (word.role == LowResultWord::Role::Progress) {
+                                auto stored = state.memory.find(address);
+                                if (stored == state.memory.end() || stored->second.second != 8 ||
+                                    stored->second.first.progressStates != (1 << (int)GirConstructionProgress::Built))
+                                    bad("normal nonfixed return does not transfer a built progress state");
+                            }
                         }
                     }
                 }
@@ -2273,6 +2464,38 @@ private:
                 auto next = state;
                 if (term->op == GirOp::CondBr) {
                     auto condition = definitions[term->a];
+                    auto mode = value(state, term->a);
+                    if (mode.target == state.inFlight && mode.target >= 0 && member(mode.target)) {
+                        auto &target = m.lowtargets[mode.target];
+                        for (size_t result = 0; result < target.channels.size(); result++) {
+                            auto escaped = LowEscapedWords((*function.lowResults)[result]);
+                            auto &channel = target.channels[result];
+                            for (size_t word = 0; word < escaped.size(); word++)
+                                if (escaped[word].role == LowEscapedWord::Role::Replacement && channel.escaped[word] == mode.cell) {
+                                    next.receiving.erase({ mode.target, mode.cell });
+                                }
+                        }
+                    }
+                    auto equality = condition;
+                    bool equal = positive;
+                    if (equality && equality->op == GirOp::Not) {
+                        equality = definitions[equality->a];
+                        equal = !equal;
+                    }
+                    if (equal && equality && equality->op == GirOp::PtrEq && state.inFlight >= 0 && member(state.inFlight)) {
+                        auto target = state.inFlight;
+                        auto left = value(state, equality->a), right = value(state, equality->b);
+                        for (size_t result = 0; result < m.lowtargets[target].channels.size(); result++) {
+                            auto &channel = m.lowtargets[target].channels[result];
+                            if (!holds_alternative<GirLowNonfixedResult>((*function.lowResults)[result].layout)) continue;
+                            auto destination = output(state, target, result, 1);
+                            if ((left.target == target && left.cell == channel.escaped[0] && right.address == destination) ||
+                                (right.target == target && right.cell == channel.escaped[0] && left.address == destination)) {
+                                next.receiving.erase({ target, channel.escaped[0] });
+                                initialize(next, destination, INT64_MAX);
+                            }
+                        }
+                    }
                     if (condition && condition->op == GirOp::PtrEq) {
                         auto left = value(state, condition->a).address, right = value(state, condition->b).address;
                         if (!positive && left.kind != Address::Kind::Unknown && left == right && left.offset != INT64_MAX) return;
@@ -2284,7 +2507,7 @@ private:
                             auto source = value(state, offset->a), end = value(state, endpoint);
                             if (source.target < 0 || source.target != end.target) return;
                             for (auto &channel : m.lowtargets[source.target].channels)
-                                if (channel.incoming.size() == 3 && source.cell == channel.escaped[0] && end.cell == channel.escaped[1])
+                                if (channel.incoming.size() == 4 && source.cell == channel.escaped[0] && end.cell == channel.escaped[1])
                                     next.extents.insert({ source.target, source.cell, offset->b });
                         };
                         prove(condition->a, condition->b);
@@ -2318,7 +2541,7 @@ private:
                                         auto payload = next.payload.at({ target, channel.escaped[0] });
                                         next.bytePayloads[payload.address] = { payload, snapshot->bytes };
                                     }
-                                    if (channel.incoming.size() == 3) {
+                                    if (channel.incoming.size() == 4) {
                                         auto stack = next.payload.find({ target, channel.incoming[0] });
                                         auto address = stack == next.payload.end() ? Address::Target(target, channel.incoming[0], false) : stack->second.address;
                                         next.stackEnds[address] = next.payload.at({ target, channel.escaped[1] });
@@ -2330,7 +2553,8 @@ private:
                                             next.sourceReceiving.insert({ target, (int)result });
                                     }
                                     for (size_t word = 0; word < channel.escaped.size(); word++) {
-                                        if (channel.incoming.size() == 3 && word == 1) continue;
+                                        auto escaped = LowEscapedWords((*m.funcs[m.lowtargets[target].members[0]].lowResults)[result]);
+                                        if (escaped[word].role == LowEscapedWord::Role::PayloadEnd) continue;
                                         if (member(target)) next.receiving.insert({ target, channel.escaped[word] });
                                     }
                                 }
