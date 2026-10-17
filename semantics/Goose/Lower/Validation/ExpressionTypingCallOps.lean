@@ -179,7 +179,7 @@ theorem lowerArg_byRef_typed_of_place {le : LEnv} {before middle : LS}
     let (value, after) := lowerArg (.byRef requested place) le before
     after.vals[value]? = some (some (.data (.ref requested ty))) := by
   simp only [lowerArg, bind_run, placeRun]
-  exact (freezeTo_typed placeTyped permission live).2
+  exact (borrowTo_typed placeTyped permission live).2
 
 theorem call_result_tail_run (le : LEnv) (state : LS) (context : ContextId) (value : ValueId) :
     ((do

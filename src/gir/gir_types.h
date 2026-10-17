@@ -289,6 +289,14 @@ public:
                 if (!r.ok()) return r;
                 return GirTyOk(m.RefType(CoreMut::Const, m.Type(r.ty).elem));
             }
+            case GirOp::OwnerBorrow: {
+                auto r = Ref(i.a);
+                if (!r.ok()) return r;
+                auto &reference = m.Type(r.ty);
+                if (reference.mut != CoreMut::Mut || !GirResizableKind(m.Type(reference.elem).kind))
+                    return GirTyErr("owner borrow requires a mutable grow or growshrink reference");
+                return r;
+            }
             case GirOp::Load: {
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;

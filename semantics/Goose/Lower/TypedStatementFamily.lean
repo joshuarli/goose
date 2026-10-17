@@ -1,3 +1,4 @@
+import Goose.Lower.TypedEntry
 import Goose.Lower.TypedExpressionFamily
 import Goose.Lower.TypedIf
 import Goose.Lower.TypedWhile
@@ -128,5 +129,42 @@ private theorem typedStatementFamily_succ {n : Nat} {cfg : Cfg}
     exact typedWhileSimulation_succ (smaller.expressions.expr results condition)
       (fun context => smaller.block results (some context) [] [] false body)
       (smaller.whileLoop results condition body origin)
+
+private theorem typedStatementFamily_all (cfg : Cfg)
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+    ∀ n, TypedStatementFamily n cfg := by
+  intro n
+  induction n using Nat.strongRecOn with
+  | ind n earlier =>
+    cases n with
+    | zero => exact typedStatementFamily_zero cfg
+    | succ n =>
+      exact typedStatementFamily_succ
+        (fun fuel bound => earlier fuel (Nat.lt_succ_of_le bound)) shapes
+
+private theorem typedModule_of_ownerShapes {cfg : Cfg} (n : Nat)
+    (accepted : Core.validate cfg.mod = .ok ())
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+    EventualM (Core.runModule (n + 1) cfg)
+      (fun fuel => GIR.runModule fuel ⟨cfg.profile, lower cfg.mod⟩) St.initial := by
+  have family := typedStatementFamily_all cfg shapes
+  exact typedModule_simulation_succ n accepted
+    (fun _ global _ => (family (n + 1)).expressions.expr [global.ty] global.init)
+    (fun _ impl _ _ => (family n).block impl.results.toList none (callPre impl) [] false impl.body)
+
+private theorem typedModule_allFuel_of_ownerShapes {cfg : Cfg} (fuel : Nat)
+    (accepted : Core.validate cfg.mod = .ok ())
+    (shapes : ∀ results place, PlaceOwnerShape cfg results place) :
+    EventualM (Core.runModule fuel cfg)
+      (fun targetFuel => GIR.runModule targetFuel ⟨cfg.profile, lower cfg.mod⟩) St.initial := by
+  have next := typedModule_of_ownerShapes fuel accepted shapes
+  have mono := Goose.Proofs.Fuel.MonoM.runModule fuel (fuel + 1) (Nat.le_succ fuel) cfg St.initial
+  constructor
+  · intro value after completed
+    exact next.1 value after (mono.1 value after completed)
+  · intro stop after completed final
+    have completedNext := (mono.2 stop after completed).resolve_left (by
+      cases stop <;> simp_all [Goose.Proofs.Fuel.isTimeout, IsFinal])
+    exact next.2 stop after completedNext final
 
 end Goose.Lower

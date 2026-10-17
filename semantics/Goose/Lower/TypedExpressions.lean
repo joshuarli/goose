@@ -2171,12 +2171,13 @@ theorem typedExprClaim_ref {n : Nat} {cfg : Cfg} {results : List Ty} {place : Pl
     exact hmetadata
   simp only [lowerExpr, bind_eq] at hlow
   obtain ⟨id, middle, hchild, hfreeze⟩ := hlow
-  rcases freezeTo_cases hfreeze with ⟨rfl, rfl⟩ | hfreeze
+  rcases borrowTo_ref_cases hfreeze with ⟨rfl, rfl⟩ | hfreeze | hfreeze
   · simp only [evalExpr]
     refine SimEAt.bind (hp env state child hchildMetadata ls ls' r pt cx fr hchild hpp
       hext hrel hgir hresults hgenerated) fun location after pt1 fr1 hdone P => ?_
     exact SimEAt.ret P
-  · have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hfreeze)
+  all_goals
+    have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hfreeze)
     simp only [evalExpr]
     refine SimEAt.bind (hp env state child hchildMetadata ls middle id pt cx fr hchild hpp
       hextMiddle hrel hgir hresults hgenerated) fun location after pt1 fr1 hdone P => ?_
@@ -2788,12 +2789,13 @@ theorem typedArgClaim_byRef {n : Nat} {cfg : Cfg} {results : List Ty} {place : P
   | byRef _ source target =>
     simp only [lowerArg, bind_eq] at hlow
     obtain ⟨id, middle, hplace, hfreeze⟩ := hlow
-    rcases freezeTo_cases hfreeze with ⟨rfl, rfl⟩ | hfreeze
+    rcases borrowTo_ref_cases hfreeze with ⟨rfl, rfl⟩ | hfreeze | hfreeze
     · simp only [evalArg]
       refine SimEAt.bind (hp env state source hmetadata ls ls' r pt cx fr hplace hpp hext hrel hgir hresults hgenerated)
         fun location after pt' fr' hdone P => ?_
       exact SimEAt.ret P
-    · have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hfreeze)
+    all_goals
+      have hextMiddle : ExtT middle cx.fn.blocks := hext.of_adv (adv_emitDef hfreeze)
       simp only [evalArg]
       refine SimEAt.bind (hp env state source hmetadata ls middle id pt cx fr hplace hpp hextMiddle hrel hgir hresults hgenerated)
         fun location after pt' fr' hdone P => ?_

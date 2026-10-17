@@ -284,6 +284,7 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     def_ (.globalAddr (← checkIndex (← asNat fs[1]! "global") tb.nGlobals "global"))
   | "i_elem" => do arity tag fs 3; def_ (.refElem (← v 1) (← v 2))
   | "i_freeze" => do arity tag fs 2; def_ (.refFreeze (← v 1))
+  | "i_owner_borrow" => do arity tag fs 2; def_ (.ownerBorrow (← v 1))
   | "i_load" => do arity tag fs 2; def_ (.load (← v 1))
   | "i_snap" => do
     arity tag fs 3
@@ -652,6 +653,7 @@ def wOp (r : ValueId) : Op → W String
   | .globalAddr g => pure (wRec "i_global" [toString r, toString g])
   | .refElem v i => pure (wRec "i_elem" [toString r, toString v, toString i])
   | .refFreeze a => pure (wRec "i_freeze" [toString r, toString a])
+  | .ownerBorrow a => pure (wRec "i_owner_borrow" [toString r, toString a])
   | .load a => pure (wRec "i_load" [toString r, toString a])
   | .snapshot mode a => pure (wRec "i_snap" [toString r, quote (if mode == .owner then "owner" else "borrowed"), toString a])
   | .sliceView a => pure (wRec "i_sview" [toString r, toString a])

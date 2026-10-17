@@ -483,7 +483,7 @@ private:
                     auto &nonfixed = get<GirLowNonfixedResult>(result.layout);
                     Append(out, "[\"lresult_nonfixed\",", result.sourceType, ",");
                     Str(out, CoreRequestName(nonfixed.request));
-                    Append(out, ",", nonfixed.stack, ",", nonfixed.start, ",", nonfixed.count, "]");
+                    Append(out, ",", nonfixed.stack, ",", nonfixed.start, ",", nonfixed.count, ",", nonfixed.progress, "]");
                 }
             }
         }
@@ -724,6 +724,7 @@ private:
             case GirOp::Global: def("i_global"); Append(out, ",", i.idx, "]"); return;
             case GirOp::Elem: def("i_elem"); Append(out, ",", i.a, ",", i.b, "]"); return;
             case GirOp::Freeze: def("i_freeze"); Append(out, ",", i.a, "]"); return;
+            case GirOp::OwnerBorrow: def("i_owner_borrow"); Append(out, ",", i.a, "]"); return;
             case GirOp::Load: def("i_load"); Append(out, ",", i.a, "]"); return;
             case GirOp::Snap:
                 def("i_snap");

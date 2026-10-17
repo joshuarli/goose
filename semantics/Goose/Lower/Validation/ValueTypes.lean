@@ -138,6 +138,12 @@ theorem types_freezeTo (m : Mutability) (r : ValueId) : TypeRun (freezeTo m r) :
     | exact TypeRun.pure _
     | (rename_i t; cases t <;> first | exact TypeRun.pure _ | (rename_i m' _; cases m' <;> first | exact TypeRun.pure _ | exact types_emitDef _))
 
+theorem types_borrowTo (m : Mutability) (r : ValueId) : TypeRun (borrowTo m r) := by
+  intro le before result after run
+  rcases borrowTo_cases run with frozen | borrowed
+  · exact types_freezeTo m r le before result after frozen
+  · exact types_emitDef _ le before result after borrowed
+
 theorem types_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : TypeRun (coerceTo target r org) := by
   unfold coerceTo
   refine TypeRun.bind (types_valTy r) fun source => ?_
@@ -200,7 +206,7 @@ theorem types_eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) :
     | some lv =>
       dsimp only
       cases lv.ty with
-      | ref m t => exact types_freezeTo m elem
+      | ref m t => exact types_borrowTo m elem
       | _ => exact TypeRun.pure _
 
 theorem types_regrowOf (o : Option ValueId) : TypeRun (regrowOf o) := by
@@ -395,7 +401,7 @@ theorem types_lowerExpr : ∀ e : Expr, TypeRun (lowerExpr e)
     exact TypeRun.bind (types_lowerPlace p) fun _ => types_emitDef _
   | .ref m p => by
     simp only [lowerExpr]
-    exact TypeRun.bind (types_lowerPlace p) fun r => types_freezeTo m r
+    exact TypeRun.bind (types_lowerPlace p) fun r => types_borrowTo m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact TypeRun.bind (types_lowerView v) fun _ => TypeRun.bind (types_lowerBound lo) fun _ =>
@@ -466,7 +472,7 @@ theorem types_lowerArg : ∀ a : Arg, TypeRun (lowerArg a)
   | .byVal e => by simp only [lowerArg]; exact types_lowerExpr e
   | .byRef m p => by
     simp only [lowerArg]
-    exact TypeRun.bind (types_lowerPlace p) fun r => types_freezeTo m r
+    exact TypeRun.bind (types_lowerPlace p) fun r => types_borrowTo m r
 
 theorem types_lowerArgs : ∀ as : List Arg, TypeRun (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact TypeRun.pure _

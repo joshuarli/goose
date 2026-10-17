@@ -33,12 +33,12 @@ theorem emitted_lowerPlace_global {env : Core.TEnv} {globalId : GlobalId} {info 
 theorem emitted_lowerExpr_ref {le : LEnv} {before : LS} (requested : Mutability) (place : Place)
     (child : EmittedAt le before (lowerPlace place)) :
     EmittedAt le before (lowerExpr (.ref requested place)) := by
-  exact child.bind (emitted_freezeTo le _ requested _)
+  exact child.bind (emitted_borrowTo le _ requested _)
 
 theorem emitted_lowerArg_byRef {le : LEnv} {before : LS} (requested : Mutability) (place : Place)
     (child : EmittedAt le before (lowerPlace place)) :
     EmittedAt le before (lowerArg (.byRef requested place)) := by
-  exact child.bind (emitted_freezeTo le _ requested _)
+  exact child.bind (emitted_borrowTo le _ requested _)
 
 theorem emitted_lowerExpr_read {le : LEnv} {before : LS} (place : Place)
     (child : EmittedAt le before (lowerPlace place))

@@ -1644,7 +1644,16 @@ GirModule ShrinkReplaceBindingModule(bool throughPhi, bool throughCall) {
 
 void RejectsReplacementThroughALetOwnerPhi() {
     assert(Code(ShrinkReplaceBindingModule(true, false)) == "GIR-V030");
-    assert(Code(ShrinkReplaceBindingModule(false, true)) == "");
+    auto raw = ShrinkReplaceBindingModule(false, true);
+    assert(Code(raw) == "GIR-V030");
+    auto borrow = Def(GirOp::OwnerBorrow, 3);
+    borrow.a = 1;
+    auto &instructions = Main(raw).blocks[0].insts;
+    auto call = find_if(instructions.begin(), instructions.end(), [](auto &inst) { return inst.op == GirOp::Call; });
+    assert(call != instructions.end());
+    call->vals[0] = borrow.res;
+    instructions.insert(call, borrow);
+    assert(Code(raw) == "");
 }
 
 GirModule ShrinkReplaceRunThroughPhi() {
@@ -2709,6 +2718,101 @@ void AcceptsEmptyOwnerFactsThroughBlockParameters() {
     if (violation) fprintf(stderr, "%s: %s\n", violation->code.c_str(), violation->message.c_str());
     assert(!violation);
     assert(Code(ShrinkReplaceAfterMixedClearJoin()) == "GIR-V060");
+}
+
+void SpecializedReplacementRootsUseCheckedGlobalIdentities() {
+    CoreModule core;
+    core.profile = CoreProfile::Shrink;
+    core.files = { "specialized-replacement.goose" };
+    core.types = { CoreType { .kind = CoreType::Int, .ity = CoreIntTy::I64 },
+                   CoreType { .kind = CoreType::GrowShrink, .elem = 0 },
+                   CoreType { .kind = CoreType::Ref, .mut = CoreMut::Mut, .elem = 1 },
+                   CoreType { .kind = CoreType::Ref, .mut = CoreMut::Const, .elem = 0 },
+                   CoreType { .kind = CoreType::Unit } };
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto empty = make_unique<CoreExpr>();
+    empty->kind = CoreExprKind::Arr;
+    empty->type = 1;
+    auto one = make_unique<CoreExpr>();
+    one->kind = CoreExprKind::Lit;
+    one->type = 0;
+    one->value = "1";
+    core.globals.push_back(CoreGlobal { "owner", 1, CoreVarKind::Var, std::move(empty), origin });
+    core.globals.push_back(CoreGlobal { "other", 0, CoreVarKind::Let, std::move(one), origin });
+    CoreImpl entry;
+    entry.name = "main";
+    entry.summary.unknown = true;
+    entry.body.scope = 0;
+    CoreStmt invoke;
+    invoke.kind = CoreStmtKind::Expr;
+    invoke.org = origin;
+    invoke.expr = make_unique<CoreExpr>();
+    invoke.expr->kind = CoreExprKind::Call;
+    invoke.expr->ctx = 1;
+    invoke.expr->type = 4;
+    invoke.expr->org = origin;
+    for (int global = 0; global < 2; global++) {
+        auto place = make_unique<CorePlace>();
+        place->kind = CorePlace::Global;
+        place->index = global;
+        invoke.expr->args.push_back(CoreArgReference { global == 0 ? CoreMut::Mut : CoreMut::Const, std::move(place) });
+    }
+    entry.body.stmts.push_back(std::move(invoke));
+    CoreImpl replace;
+    replace.name = "replace";
+    replace.params = { { 0, true }, { 1, true } };
+    replace.vars = { CoreVar { "p", 2, CoreVarKind::Let, 0, origin },
+                     CoreVar { "q", 3, CoreVarKind::Let, 0, origin } };
+    replace.summary.unknown = true;
+    replace.body.scope = 0;
+    auto dereference = [](int variable, CoreTypeId type) {
+        auto place = make_unique<CorePlace>();
+        place->kind = CorePlace::Deref;
+        place->expr = make_unique<CoreExpr>();
+        place->expr->kind = CoreExprKind::Read;
+        place->expr->type = type;
+        place->expr->place = make_unique<CorePlace>();
+        place->expr->place->kind = CorePlace::Local;
+        place->expr->place->index = variable;
+        return place;
+    };
+    CoreStmt assignment;
+    assignment.kind = CoreStmtKind::AssignWhole;
+    assignment.org = origin;
+    assignment.place = dereference(0, 2);
+    assignment.expr = make_unique<CoreExpr>();
+    assignment.expr->kind = CoreExprKind::Arr;
+    assignment.expr->type = 1;
+    auto element = make_unique<CoreExpr>();
+    element->kind = CoreExprKind::Read;
+    element->type = 0;
+    element->place = dereference(1, 3);
+    assignment.expr->elems.push_back(std::move(element));
+    replace.body.stmts.push_back(std::move(assignment));
+    core.impls.push_back(std::move(entry));
+    core.impls.push_back(std::move(replace));
+    core.contexts = { CoreContext { .impl = 0 }, CoreContext { .impl = 1, .varroots = {
+        { 0, { CoreRootRef { CoreRootRef::Global, 0 } } },
+        { 1, { CoreRootRef { CoreRootRef::Global, 1 } } } } } };
+    auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    auto overlapping = high;
+    overlapping.funcs[0].blocks[0].insts.erase(remove_if(overlapping.funcs[0].blocks[0].insts.begin(),
+        overlapping.funcs[0].blocks[0].insts.end(), [](auto &inst) { return inst.op == GirOp::Call; }),
+        overlapping.funcs[0].blocks[0].insts.end());
+    overlapping.funcs[1].roots.params[1].second = { CoreRootRef { CoreRootRef::Global, 0 } };
+    assert(Code(overlapping) == "GIR-V060");
+    auto unknown = high;
+    unknown.funcs[1].roots.params.erase(unknown.funcs[1].roots.params.begin() + 1);
+    assert(Code(unknown) == "GIR-V060");
+    unknown.funcs[1].roots.params.clear();
+    assert(Code(unknown) == "GIR-V060");
+    auto forged = high;
+    forged.funcs[1].roots.params[0].second = { CoreRootRef { CoreRootRef::Global, 1 } };
+    assert(Code(forged) == "GIR-V050");
+    auto emptyAnnotation = high;
+    emptyAnnotation.funcs[1].roots.params[1].second.clear();
+    assert(Code(emptyAnnotation) == "GIR-V050");
 }
 
 void RejectsInvalidShrinkReplacementProofs() {
@@ -5770,7 +5874,7 @@ void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
         });
         assert(payloadUse != handler.insts.end() && payloadUse->vals.size() >= 2);
         auto savedStart = find_if(targetBody.blocks[0].insts.begin(), targetBody.blocks[0].insts.end(),
-            [](const GirInst &inst) { return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == 4; });
+            [&](const GirInst &inst) { return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == low.lowtargets[0].channels[0].escaped[0]; });
         assert(savedStart != targetBody.blocks[0].insts.end());
         payloadUse->vals[1] = savedStart->res;
         assert(Code(unusedPayload) == "GIR-V090");
@@ -5778,8 +5882,8 @@ void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
 
         auto dummyPayload = unusedPayload;
         auto &dummyHandler = dummyPayload.funcs[targetFunction].blocks[hit];
-        auto escapedStart = find_if(dummyHandler.insts.begin(), dummyHandler.insts.end(), [](const GirInst &inst) {
-            return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == 4;
+        auto escapedStart = find_if(dummyHandler.insts.begin(), dummyHandler.insts.end(), [&](const GirInst &inst) {
+            return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == low.lowtargets[0].channels[0].escaped[0];
         });
         assert(escapedStart != dummyHandler.insts.end());
         int dummyResult = 0;
@@ -5827,8 +5931,8 @@ void ConstructionSourceTargetsLowerToCheckedReceivingEdges() {
 
         auto corruptEscapedHeader = low;
         auto &headerHandler = corruptEscapedHeader.funcs[targetFunction].blocks[hit].insts;
-        auto escapedBytes = find_if(headerHandler.begin(), headerHandler.end(), [](auto &inst) {
-            return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == 4;
+        auto escapedBytes = find_if(headerHandler.begin(), headerHandler.end(), [&](auto &inst) {
+            return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == low.lowtargets[0].channels[0].escaped[0];
         });
         assert(escapedBytes != headerHandler.end());
         GirInst corruptHeader;
@@ -5958,12 +6062,16 @@ void ConstructionReturnFlagsFollowCalls() {
     call.idx = 3;
     call.vals = { 0 };
     call.org = 0;
-    auto &escape = low.funcs[2].blocks[0].insts;
-    auto flag = find_if(escape.begin(), escape.end(), [](const GirInst &inst) {
-        return inst.op == GirOp::ReturnFlagSet;
-    });
-    assert(flag != escape.end());
-    escape.insert(flag + 1, call);
+    bool inserted = false;
+    for (auto &block : low.funcs[2].blocks) {
+        auto flag = find_if(block.insts.begin(), block.insts.end(), [](const GirInst &inst) {
+            return inst.op == GirOp::ReturnFlagSet;
+        });
+        if (flag == block.insts.end()) continue;
+        block.insts.insert(flag + 1, call);
+        inserted = true;
+    }
+    assert(inserted);
     assert(!Code(low).empty());
 }
 
@@ -6406,15 +6514,43 @@ void ConstructionForwardingRetainsTheExactPayloadInterval() {
     auto wrongEnd = low;
     bool changed = false;
     for (auto &block : wrongEnd.funcs[3].blocks) for (auto &inst : block.insts)
-        if (inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == 5) {
-            auto start = find_if(block.insts.begin(), block.insts.end(), [](auto &candidate) {
-                return candidate.op == GirOp::TargetStore && candidate.idx == 0 && candidate.idx2 == 4;
+        if (inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == low.lowtargets[0].channels[0].escaped[1]) {
+            auto start = find_if(block.insts.begin(), block.insts.end(), [&](auto &candidate) {
+                return candidate.op == GirOp::TargetStore && candidate.idx == 0 && candidate.idx2 == low.lowtargets[0].channels[0].escaped[0];
             });
             assert(start != block.insts.end());
             inst.a = start->a;
             changed = true;
         }
     assert(changed && Code(wrongEnd) == "GIR-V090");
+    auto wrongIdentity = low;
+    changed = false;
+    for (auto &block : wrongIdentity.funcs[3].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == low.lowtargets[0].channels[0].escaped[3]) {
+            auto count = find_if(block.insts.begin(), block.insts.end(), [&](auto &candidate) {
+                return candidate.op == GirOp::TargetStore && candidate.idx == 0 && candidate.idx2 == low.lowtargets[0].channels[0].escaped[2];
+            });
+            assert(count != block.insts.end());
+            inst.a = count->a;
+            changed = true;
+        }
+    assert(changed && Code(wrongIdentity) == "GIR-V090");
+    auto wrongMode = low;
+    int nextValue = 0;
+    for (auto &block : wrongMode.funcs[3].blocks) {
+        nextValue += (int)block.params.size();
+        for (auto &inst : block.insts) nextValue += GirDefinesValue(inst);
+    }
+    auto direct = Def(GirOp::Bool, nextValue);
+    direct.flag = false;
+    wrongMode.funcs[3].blocks[0].insts.insert(wrongMode.funcs[3].blocks[0].insts.begin(), direct);
+    changed = false;
+    for (auto &block : wrongMode.funcs[3].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == low.lowtargets[0].channels[0].escaped[4]) {
+            inst.a = direct.res;
+            changed = true;
+        }
+    assert(changed && Code(wrongMode) == "GIR-V090");
 }
 
 void ConstructionTargetReferenceSourcesFollowTheirPayloads() {
@@ -6510,7 +6646,379 @@ void ConstructionSnapshotPayloadsSurviveAggregateStaging() {
     assert(changed && Code(low) == "GIR-V090");
 }
 
+void ConstructionNonfixedResultsTransferProgressAndIdentity() {
+    auto low = GirToLow(ConstructionCallModule()).Lower();
+    assert(Code(low) == "");
+    auto descriptor = get<GirLowNonfixedResult>((*low.funcs[1].lowResults)[0].layout);
+    auto wire = cat("[\"lresult_nonfixed\",", (*low.funcs[1].lowResults)[0].sourceType,
+        ",\"value\",", descriptor.stack, ",", descriptor.start, ",", descriptor.count, ",", descriptor.progress, "]");
+    assert(GirWriter(low).WriteLow().find(wire) != string::npos);
+    auto omitted = low;
+    get<GirLowNonfixedResult>((*omitted.funcs[1].lowResults)[0].layout).progress = -1;
+    assert(Code(omitted) == "GIR-V090");
+    auto aliased = low;
+    get<GirLowNonfixedResult>((*aliased.funcs[1].lowResults)[0].layout).progress = descriptor.count;
+    assert(Code(aliased) == "GIR-V090");
+
+    auto missingProgress = low;
+    auto progress = missingProgress.funcs[1].blocks[0].params[descriptor.progress].first;
+    size_t removed = 0;
+    for (auto &block : missingProgress.funcs[1].blocks)
+        removed += erase_if(block.insts, [&](auto &inst) { return inst.op == GirOp::PStore && inst.a == progress; });
+    assert(removed && Code(missingProgress) == "GIR-V090");
+
+    auto openReturn = low;
+    set<int> states;
+    for (auto &block : openReturn.funcs[1].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::PStore && inst.a == progress) states.insert(inst.b);
+    for (auto &block : openReturn.funcs[1].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::Int && states.count(inst.res)) inst.text = "0";
+    auto violation = GirVerifier(openReturn).Verify();
+    assert(violation && violation->code == "GIR-V090" && violation->message.find("built progress state") != string::npos);
+
+    auto missingIdentity = low;
+    auto metadata = missingIdentity.funcs[1].blocks[0].params[descriptor.count].first;
+    set<int> identities;
+    for (auto &block : missingIdentity.funcs[1].blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::PtrOffset && inst.a == metadata) identities.insert(inst.res);
+    removed = 0;
+    for (auto &block : missingIdentity.funcs[1].blocks)
+        removed += erase_if(block.insts, [&](auto &inst) { return inst.op == GirOp::PStore && identities.count(inst.a); });
+    assert(removed && Code(missingIdentity) == "GIR-V090");
+
+    auto call = find_if(Main(low).blocks[0].insts.begin(), Main(low).blocks[0].insts.end(), [](auto &inst) {
+        return inst.op == GirOp::Call && inst.idx == 1;
+    });
+    assert(call != Main(low).blocks[0].insts.end());
+    auto receivingProgress = call->vals[descriptor.progress];
+    auto uninitialized = low;
+    removed = erase_if(Main(uninitialized).blocks[0].insts, [&](auto &inst) {
+        return inst.op == GirOp::PStore && inst.a == receivingProgress;
+    });
+    violation = GirVerifier(uninitialized).Verify();
+    assert(removed && violation && violation->code == "GIR-V090" && violation->message.find("progress state is not initialized") != string::npos);
+    auto invalid = low;
+    states.clear();
+    for (auto &inst : Main(invalid).blocks[0].insts)
+        if (inst.op == GirOp::PStore && inst.a == receivingProgress) states.insert(inst.b);
+    for (auto &inst : Main(invalid).blocks[0].insts)
+        if (inst.op == GirOp::Int && states.count(inst.res)) inst.text = "9";
+    violation = GirVerifier(invalid).Verify();
+    assert(violation && violation->code == "GIR-V090" && violation->message.find("lifecycle states") != string::npos);
+    auto undersized = low;
+    auto address = find_if(Main(undersized).blocks[0].insts.begin(), Main(undersized).blocks[0].insts.end(), [&](auto &inst) {
+        return inst.op == GirOp::FrameAddr && inst.res == receivingProgress;
+    });
+    assert(address != Main(undersized).blocks[0].insts.end());
+    Main(undersized).members[address->idx].size = 4;
+    violation = GirVerifier(undersized).Verify();
+    assert(violation && violation->code == "GIR-V090" && violation->message.find("progress record exceeds") != string::npos);
+}
+
+void ConstructionTargetPayloadsRetainIdentityAndMode() {
+    auto core = ConstructionSourceTargetModule();
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    auto low = GirToLow(high).Lower();
+    assert(Code(low) == "");
+    auto &channel = low.lowtargets[0].channels[0];
+    assert(channel.incoming.size() == 4 && channel.escaped.size() == 5);
+    for (auto cell : { channel.escaped[3], channel.escaped[4] }) {
+        auto missing = low;
+        size_t removed = 0;
+        for (auto &block : missing.funcs[2].blocks)
+            removed += erase_if(block.insts, [&](auto &inst) { return inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == cell; });
+        assert(removed && Code(missing) == "GIR-V090");
+    }
+    auto ignoredMode = low;
+    auto &receiver = ignoredMode.funcs[low.lowtargets[0].members[0]];
+    set<int> modes;
+    int nextValue = 0;
+    for (auto &block : receiver.blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == channel.escaped[4]) modes.insert(inst.res);
+    for (auto &block : receiver.blocks) {
+        nextValue += (int)block.params.size();
+        for (auto &inst : block.insts) nextValue += GirDefinesValue(inst);
+    }
+    bool propagated = true;
+    while (propagated) {
+        propagated = false;
+        for (auto &block : receiver.blocks) for (auto &inst : block.insts) {
+            auto edge = [&](int target, const vector<int> &arguments) {
+                for (size_t position = 0; position < arguments.size(); position++)
+                    if (modes.count(arguments[position]))
+                        propagated |= modes.insert(receiver.blocks[target].params[position].first).second;
+            };
+            if (inst.op == GirOp::Br || inst.op == GirOp::CondBr) edge(inst.idx, inst.vals);
+            if (inst.op == GirOp::CondBr) edge(inst.idx2, inst.vals2);
+        }
+    }
+    auto direct = Def(GirOp::Bool, nextValue);
+    direct.flag = false;
+    receiver.blocks[0].insts.insert(receiver.blocks[0].insts.begin(), direct);
+    bool changed = false;
+    for (auto &block : receiver.blocks) for (auto &inst : block.insts)
+        if (inst.op == GirOp::CondBr && modes.count(inst.a)) {
+            inst.a = direct.res;
+            changed = true;
+        }
+    assert(changed && Code(ignoredMode) == "GIR-V090");
+    auto missingRestoration = low;
+    auto &target = missingRestoration.funcs[low.lowtargets[0].members[0]];
+    auto progressCell = channel.incoming[3];
+    auto savedProgress = find_if(target.blocks[0].insts.begin(), target.blocks[0].insts.end(), [&](auto &inst) {
+        return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == progressCell;
+    });
+    assert(savedProgress != target.blocks[0].insts.end());
+    auto savedValue = savedProgress->res;
+    size_t removed = 0;
+    for (auto &block : target.blocks)
+        removed += erase_if(block.insts, [&](auto &inst) {
+            return inst.op == GirOp::TargetStore && inst.idx == 0 && inst.idx2 == progressCell && inst.a == savedValue;
+        });
+    auto violation = GirVerifier(missingRestoration).Verify();
+    assert(removed && violation && violation->code == "GIR-V090" && violation->message.find("recursive target cell") != string::npos);
+    auto corruptProgress = low;
+    auto &helper = corruptProgress.funcs[2];
+    int invalidValue = 0;
+    for (auto &block : helper.blocks) {
+        invalidValue += (int)block.params.size();
+        for (auto &inst : block.insts) invalidValue += GirDefinesValue(inst);
+    }
+    bool corrupted = false;
+    for (auto &block : helper.blocks) {
+        auto progress = find_if(block.insts.begin(), block.insts.end(), [&](auto &inst) {
+            return inst.op == GirOp::TargetLoad && inst.idx == 0 && inst.idx2 == channel.incoming[3];
+        });
+        if (progress == block.insts.end()) continue;
+        GirInst corrupt;
+        corrupt.op = GirOp::PStore;
+        corrupt.ty = corruptProgress.IntType(CoreIntTy::I64);
+        corrupt.a = progress->res;
+        corrupt.b = invalidValue;
+        block.insts.insert(progress + 1, { Int(corruptProgress, invalidValue, "9"), corrupt });
+        corrupted = true;
+        break;
+    }
+    violation = GirVerifier(corruptProgress).Verify();
+    assert(corrupted && violation && violation->code == "GIR-V090" && violation->message.find("lifecycle progress state") != string::npos);
+}
+
+void ConstructionTargetDestinationsForwardProgressThroughCalls() {
+    auto core = ConstructionSourceTargetModule();
+    CoreImpl producer;
+    producer.name = "producer";
+    producer.body.scope = 0;
+    producer.results = { CoreResultDescriptor { 1, CoreRequest::Value, nullopt } };
+    producer.summary.constructs = { 0 };
+    CoreStmt returned;
+    returned.kind = CoreStmtKind::RetValues;
+    returned.org = { 0, 1, CoreOriginKind::Expr };
+    returned.values.push_back(std::move(core.impls[2].body.stmts[0].values[0]));
+    producer.body.stmts.push_back(std::move(returned));
+    auto call = make_unique<CoreExpr>();
+    call->kind = CoreExprKind::Call;
+    call->ctx = 3;
+    call->type = 1;
+    call->org = { 0, 1, CoreOriginKind::Expr };
+    core.impls[2].body.stmts[0].values[0] = std::move(call);
+    core.impls.push_back(std::move(producer));
+    core.contexts.push_back(CoreContext { .impl = 3 });
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    assert(Code(GirToLow(high).Lower()) == "");
+}
+
+void ConstructionCompletedResultsSurviveLaterEscapingOperands() {
+    for (auto forwarded : { false, true }) for (auto branched : { false, true }) {
+        auto core = ConstructionSourceTargetModule();
+        auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+        auto literal = [&] {
+            auto value = make_unique<CoreExpr>();
+            value->kind = CoreExprKind::Lit;
+            value->type = 0;
+            value->value = "5";
+            return value;
+        };
+        auto empty = [&] {
+            auto value = make_unique<CoreExpr>();
+            value->kind = CoreExprKind::Arr;
+            value->type = 1;
+            value->org = origin;
+            return value;
+        };
+        auto returned = [&](bool escaping) {
+            CoreStmt statement;
+            statement.kind = forwarded ? CoreStmtKind::RetForward : CoreStmtKind::RetValues;
+            statement.org = origin;
+            vector<CoreExprP> values;
+            values.push_back(empty());
+            auto scalar = literal();
+            if (escaping) {
+                scalar->kind = CoreExprKind::Call;
+                scalar->ctx = 3;
+                scalar->org = origin;
+            }
+            values.push_back(std::move(scalar));
+            if (forwarded) {
+                statement.expr = make_unique<CoreExpr>();
+                statement.expr->kind = CoreExprKind::Values;
+                statement.expr->values = std::move(values);
+            } else statement.values = std::move(values);
+            return statement;
+        };
+        core.impls[0].vars.push_back(CoreVar { "code", 0, CoreVarKind::Let, 0, origin });
+        core.impls[0].body.stmts[0].kind = CoreStmtKind::Receive;
+        core.impls[0].body.stmts[0].vars = { 0, 1 };
+        auto &target = core.impls[1];
+        target.results.push_back(CoreResultDescriptor { 0, CoreRequest::Register, nullopt });
+        target.body.stmts.clear();
+        if (branched) {
+            CoreStmt branch;
+            branch.kind = CoreStmtKind::If;
+            branch.expr = make_unique<CoreExpr>();
+            branch.expr->kind = CoreExprKind::Bool;
+            branch.expr->flag = true;
+            branch.then = make_unique<CoreBlock>();
+            branch.then->scope = 1;
+            branch.then->stmts.push_back(returned(true));
+            branch.otherwise = make_unique<CoreBlock>();
+            branch.otherwise->scope = 2;
+            branch.otherwise->stmts.push_back(returned(false));
+            target.body.stmts.push_back(std::move(branch));
+        } else target.body.stmts.push_back(returned(true));
+        auto &escape = core.impls[2].body.stmts[0];
+        escape.values[0] = empty();
+        escape.values.push_back(literal());
+        CoreImpl trigger;
+        trigger.name = "trigger";
+        trigger.body.scope = 0;
+        trigger.results = { CoreResultDescriptor { 0, CoreRequest::Register, nullopt } };
+        trigger.summary.needs = { 0 };
+        trigger.summary.escapes = { 0 };
+        CoreStmt invoke;
+        invoke.kind = CoreStmtKind::Expr;
+        invoke.org = origin;
+        invoke.expr = make_unique<CoreExpr>();
+        invoke.expr->kind = CoreExprKind::Call;
+        invoke.expr->ctx = 2;
+        invoke.expr->type = 2;
+        invoke.expr->org = origin;
+        trigger.body.stmts.push_back(std::move(invoke));
+        core.impls.push_back(std::move(trigger));
+        core.contexts.push_back(CoreContext { .impl = 3 });
+        auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+        assert(Code(high) == "");
+        assert(Code(GirToLow(high).Lower()) == "");
+    }
+}
+
+void OwnerBorrowsMakeMutableOwnerAuthorityExplicit() {
+    for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
+        auto m = Base();
+        m.profile = CoreProfile::Shrink;
+        auto integer = m.IntType(CoreIntTy::I64);
+        auto owner = m.Intern(CoreType { .kind = kind, .elem = integer });
+        auto reference = m.RefType(CoreMut::Mut, owner);
+        Main(m).slots = { { owner, CoreVarKind::Let, 0, 0 }, { reference, CoreVarKind::Let, 0, 1 } };
+        auto empty = Def(GirOp::Arr, 0);
+        empty.ty = owner;
+        auto slot = Def(GirOp::Slot, 1);
+        slot.idx = 0;
+        auto borrow = Def(GirOp::OwnerBorrow, 2);
+        borrow.a = 1;
+        Main(m).blocks[0].insts = { Enter(0), empty, Init(0, 0), slot, borrow, Init(1, 2), Leave(0), Ret() };
+        assert(Code(m) == "");
+        assert(GirWriter(m).Write().find("[\"i_owner_borrow\",2,1]") != string::npos);
+        assert(Code(GirToLow(m).Lower()) == "");
+        auto raw = m;
+        Main(raw).blocks[0].insts[5].a = 1;
+        assert(Code(raw) == "GIR-V030");
+        auto readOnly = m;
+        auto freeze = Def(GirOp::Freeze, 3);
+        freeze.a = 1;
+        Main(readOnly).blocks[0].insts[4].a = freeze.res;
+        Main(readOnly).blocks[0].insts.insert(Main(readOnly).blocks[0].insts.begin() + 4, freeze);
+        assert(Code(readOnly) == "GIR-V010");
+        auto limited = m;
+        limited.types[owner].kind = CoreType::Limited;
+        limited.types[owner].count = 4;
+        Main(limited).slots[0].kind = CoreVarKind::Var;
+        assert(Code(limited) == "GIR-V010");
+    }
+}
+
+void OwnerReferencesLowerThroughExplicitBorrowFormation() {
+    for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
+        auto core = CoreLengthModule(kind);
+        core.profile = CoreProfile::Shrink;
+        auto owner = core.impls[0].vars[0].type;
+        core.impls[0].vars[0].kind = CoreVarKind::Let;
+        auto mutableReference = core.Intern(CoreType { .kind = CoreType::Ref, .mut = CoreMut::Mut, .elem = owner });
+        auto readonlyReference = core.Intern(CoreType { .kind = CoreType::Ref, .mut = CoreMut::Const, .elem = owner });
+        auto origin = CoreOrigin { 0, 1, CoreOriginKind::Let };
+        core.impls[0].vars.push_back(CoreVar { "borrowed", mutableReference, CoreVarKind::Let, 0, origin });
+        core.impls[0].vars.push_back(CoreVar { "readonly", readonlyReference, CoreVarKind::Let, 0, origin });
+        for (int local = 1; local <= 2; local++) {
+            auto reference = make_unique<CoreExpr>();
+            reference->kind = CoreExprKind::Ref;
+            reference->type = local == 1 ? mutableReference : readonlyReference;
+            reference->mut = local == 1 ? CoreMut::Mut : CoreMut::Const;
+            reference->place = CoreLocal(0);
+            reference->org = origin;
+            CoreStmt bind;
+            bind.kind = CoreStmtKind::Let;
+            bind.var = local;
+            bind.expr = std::move(reference);
+            bind.org = origin;
+            core.impls[0].body.stmts.push_back(std::move(bind));
+        }
+        CoreImpl callee;
+        callee.name = "borrow_owner";
+        callee.params = { CoreParam { 0, true } };
+        callee.vars = { CoreVar { "owner", mutableReference, CoreVarKind::Let, 0, origin } };
+        callee.body.scope = 0;
+        core.impls.push_back(std::move(callee));
+        CoreContext context;
+        context.impl = 1;
+        context.varroots = { { 0, { CoreRootRef { CoreRootRef::Param, 0 } } } };
+        core.contexts.push_back(std::move(context));
+        auto call = make_unique<CoreExpr>();
+        call->kind = CoreExprKind::Call;
+        call->ctx = 1;
+        call->type = core.UnitType();
+        call->args.push_back(CoreArgReference { CoreMut::Mut, CoreLocal(0) });
+        call->org = origin;
+        CoreStmt invoke;
+        invoke.kind = CoreStmtKind::Expr;
+        invoke.expr = std::move(call);
+        invoke.org = origin;
+        core.impls[0].body.stmts.push_back(std::move(invoke));
+        auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+        assert(Code(high) == "");
+        int borrowed = 0;
+        for (auto &function : high.funcs) for (auto &block : function.blocks) for (auto &inst : block.insts)
+            borrowed += inst.op == GirOp::OwnerBorrow;
+        assert(borrowed == 2);
+        assert(Code(GirToLow(high).Lower()) == "");
+        if (kind == CoreType::Grow) {
+            core.profile = CoreProfile::Pilot;
+            auto pilot = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+            assert(Code(pilot) == "");
+            for (auto &function : pilot.funcs) for (auto &block : function.blocks) for (auto &inst : block.insts)
+                assert(inst.op != GirOp::OwnerBorrow);
+        }
+    }
+}
+
 int main() {
+    OwnerBorrowsMakeMutableOwnerAuthorityExplicit();
+    OwnerReferencesLowerThroughExplicitBorrowFormation();
+    ConstructionTargetDestinationsForwardProgressThroughCalls();
+    ConstructionCompletedResultsSurviveLaterEscapingOperands();
+    ConstructionNonfixedResultsTransferProgressAndIdentity();
+    ConstructionTargetPayloadsRetainIdentityAndMode();
     ConstructionSnapshotPayloadsSurviveAggregateStaging();
     ConstructionTargetReferenceSourcesFollowTheirPayloads();
     ConstructionForwardingRetainsTheExactPayloadInterval();
@@ -6576,6 +7084,7 @@ int main() {
     RejectsReplacementThroughALetOwnerPhi();
     LowPreservesOwnerLiteralRunsAcrossJoins();
     LowSplitsSameTargetCondBrForOwnerRuns();
+    SpecializedReplacementRootsUseCheckedGlobalIdentities();
     RejectsInvalidShrinkReplacementProofs();
     RejectsUnresolvedLayout();
     RejectsElementsThatDoNotTopTheirStack();

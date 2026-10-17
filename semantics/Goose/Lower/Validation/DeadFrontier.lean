@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ScalarTyping
+import Goose.Lower.Frag
 
 namespace Goose.Lower.Validation
 
@@ -76,6 +76,12 @@ theorem dead_freezeTo (mu : Mutability) (value : ValueId) : DeadRun (freezeTo mu
       | exact DeadRun.pure _
       | (rename_i mu ty; cases mu <;> first | exact DeadRun.pure _ | exact dead_emitDef _))
 
+theorem dead_borrowTo (mu : Mutability) (value : ValueId) : DeadRun (borrowTo mu value) := by
+  intro le before result after run
+  rcases borrowTo_cases run with frozen | borrowed
+  · exact dead_freezeTo mu value le before result after frozen
+  · exact dead_emitDef _ le before result after borrowed
+
 theorem dead_shortCircuit (isAnd : Bool) (value : ValueId) (rhs : B ValueId) :
     DeadRun (shortCircuit isAnd value rhs) := by
   unfold shortCircuit
@@ -125,7 +131,7 @@ theorem dead_lowerExpr : ∀ e : Expr, DeadRun (lowerExpr e)
     exact DeadRun.bind (dead_lowerPlace p) fun _ => dead_emitDef _
   | .ref m p => by
     simp only [lowerExpr]
-    exact DeadRun.bind (dead_lowerPlace p) fun r => dead_freezeTo m r
+    exact DeadRun.bind (dead_lowerPlace p) fun r => dead_borrowTo m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact DeadRun.bind (dead_lowerView v) fun _ => DeadRun.bind (dead_lowerBound lo) fun _ =>
@@ -196,7 +202,7 @@ theorem dead_lowerArg : ∀ a : Arg, DeadRun (lowerArg a)
   | .byVal e => by simp only [lowerArg]; exact dead_lowerExpr e
   | .byRef m p => by
     simp only [lowerArg]
-    exact DeadRun.bind (dead_lowerPlace p) fun r => dead_freezeTo m r
+    exact DeadRun.bind (dead_lowerPlace p) fun r => dead_borrowTo m r
 
 theorem dead_lowerArgs : ∀ as : List Arg, DeadRun (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact DeadRun.pure _

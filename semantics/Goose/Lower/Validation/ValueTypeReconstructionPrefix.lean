@@ -1,34 +1,11 @@
 import Goose.Lower.Validation.ValueTypeReconstructionPermissionExtension
 import Goose.Lower.Validation.DenseDefinitions
 import Goose.Lower.Sim
+import Goose.Lower.Validation.ExpressionTypingFrame
 
 namespace Goose.Lower.Validation
 
 open Goose.Core Goose.GIR
-
-def reconstructionPrefixFunction (le : LEnv) (state : LS) : Func :=
-  { name := ""
-    params := []
-    results := []
-    slots := le.slots
-    scopes := #[]
-    blocks := state.blocks.map fun block => ⟨block.params, block.insts.toList⟩
-    summary := .unknown
-    org := none }
-
-theorem reconstructionPrefixFunction_numValues (le : LEnv) {state : LS}
-    (dense : state.DenseDefinitions) :
-    (reconstructionPrefixFunction le state).numValues = state.vals.size := by
-  rw [Func.numValues_eq_definition_count]
-  change ((state.blocks.map fun block => GIR.Block.mk block.params block.insts.toList).toList.flatMap
-    GIR.Block.defs).length = state.vals.size
-  rw [Array.toList_map, List.flatMap_map]
-  exact dense.length
-
-theorem tyEnv_contentsWritable_prefix (le : LEnv) (state : LS) (value : ValueId) :
-    (tyEnv le state).contentsWritable value =
-      ((reconstructionPrefixFunction le state).permissionsFromTables
-        (le.globals.map (·.2)) le.mod.structs state.vals)[value]?.map (·.2) := rfl
 
 private theorem permissionEdge_argument_uses {term : Term} {edge : BlockId × List ValueId}
     (member : edge ∈ term.permissionEdges) {argument : ValueId} (used : argument ∈ edge.2) :
@@ -48,10 +25,10 @@ theorem permissionGraphExtension_of_prefix
     (dense : state.DenseDefinitions) (extension : ExtT state func.blocks)
     (slots : le.slots = func.slots)
     (operands : ∀ inst ∈ state.insts, ∀ value ∈ inst.uses, value < state.vals.size) :
-    PermissionGraphExtension (reconstructionPrefixFunction le state) func := by
-  have numValues := reconstructionPrefixFunction_numValues le dense
+    PermissionGraphExtension (permissionFunc le state) func := by
+  have numValues := permissionFunc_numValues dense le
   have oldBlock : ∀ (index : BlockId) (block : GIR.Block),
-      (reconstructionPrefixFunction le state).blocks[index]? = some block →
+      (permissionFunc le state).blocks[index]? = some block →
       ∃ builder : BlockB, state.blocks[index]? = some builder ∧
         block = ⟨builder.params, builder.insts.toList⟩ := by
     intro index block row
@@ -116,15 +93,40 @@ theorem readonly_snapshot_contents_retained
     (func.permissions module newTypes)[owner]?.map (·.2) = some false := by
   have graph := permissionGraphExtension_of_prefix dense extension slots operands
   have oldReadOnly :
-      (permissionsAt ((reconstructionPrefixFunction le state).permissionsFromTables
+      (permissionsAt ((permissionFunc le state).permissionsFromTables
         (le.globals.map (·.2)) le.mod.structs state.vals) owner).2 = false := by
-    rw [tyEnv_contentsWritable_prefix] at readonly
+    rw [tyEnv_contentsWritable] at readonly
     exact permissionContents_eq_false_of_option readonly
   have retained := permissionsFromTables_contents_antitone graph
-    (fun value bound => prefixTypes value (by rwa [reconstructionPrefixFunction_numValues le dense] at bound))
-    (by rwa [reconstructionPrefixFunction_numValues le dense]) oldReadOnly
+    (fun value bound => prefixTypes value (by rwa [permissionFunc_numValues dense le] at bound))
+    (by rwa [permissionFunc_numValues dense le]) oldReadOnly
   apply permissionContents_option_false
   · simpa only [Func.permissions, permissionsFromTables_size] using newBound
   · simpa only [Func.permissions, globals, structs] using retained
+
+theorem tyEnv_contentsWritable_present (le : LEnv) {state : LS}
+    (dense : state.DenseDefinitions) {value : ValueId} (bound : value < state.vals.size) :
+    ∃ writable, (tyEnv le state).contentsWritable value = some writable := by
+  rw [tyEnv_contentsWritable]
+  have permissionBound : value < ((permissionFunc le state).permissionsFromTables
+      (le.globals.map (·.2)) le.mod.structs state.vals).size := by
+    rwa [permissionsFromTables_size, permissionFunc_numValues dense le]
+  cases row : ((permissionFunc le state).permissionsFromTables
+      (le.globals.map (·.2)) le.mod.structs state.vals)[value]? with
+  | none => exact (Nat.not_le_of_gt permissionBound (Array.getElem?_eq_none_iff.mp row)).elim
+  | some capability => exact ⟨capability.2, rfl⟩
+
+theorem permissionContents_option_true {globalKinds : Array VarKind} {structs : Array StructDef}
+    {func : Func} {types : Array (Option VTy)} {authorized : ValueId → Prop}
+    (closed : ContentsClosed globalKinds structs func types authorized)
+    {value : ValueId} (member : authorized value) :
+    (func.permissionsFromTables globalKinds structs types)[value]?.map (·.2) = some true := by
+  have present := closed.permissions value member
+  have bound := closed.permissions.bound member
+  cases row : (func.permissionsFromTables globalKinds structs types)[value]? with
+  | none => exact (Nat.not_le_of_gt bound (Array.getElem?_eq_none_iff.mp row)).elim
+  | some capability =>
+    simp only [permissionsAt, row, Option.getD_some] at present
+    simp only [Option.map_some, present]
 
 end Goose.Lower.Validation

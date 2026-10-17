@@ -213,7 +213,7 @@ theorem ContentsOperation.of_permission
           exact ⟨facts.1, mu, id, fields, descriptor, field, typed, descriptorRow,
             fieldRow, beq_iff_eq.mp facts.2⟩
     · contradiction
-  | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ => exact allowed
+  | ownerBorrow owner | snapshot _ owner | refElem owner _ | indexChecked owner _ _ | indexProven owner _ => exact allowed
   | _ => exact allowed
 
 theorem contentsClosed_permissions (globalKinds : Array VarKind) (structs : Array StructDef)
@@ -252,5 +252,30 @@ theorem contentsClosed_permissions (globalKinds : Array VarKind) (structs : Arra
         List.mem_flatMap.mpr ⟨edge, edgeMember, by
           simp only [destinationRow]
           exact List.mem_map.mpr ⟨entry, entryMember, rfl⟩⟩⟩⟩
+
+theorem ContentsOperation.replace_function
+    {globalKinds : Array VarKind} {structs : Array StructDef} {before after : Func}
+    {types : Array (Option VTy)} {authorized : ValueId → Prop} {value : ValueId} {op : Op}
+    (slots : before.slots = after.slots)
+    (operation : ContentsOperation globalKinds structs before types authorized value op) :
+    ContentsOperation globalKinds structs after types authorized value op := by
+  cases op <;> first | exact operation | simpa only [ContentsOperation, slots] using operation
+
+theorem ContentsClosed.replace_function
+    {globalKinds : Array VarKind} {structs : Array StructDef} {before after : Func}
+    {types : Array (Option VTy)} {authorized : ValueId → Prop}
+    (slots : before.slots = after.slots) (blocks : before.blocks = after.blocks)
+    (closed : ContentsClosed globalKinds structs before types authorized) :
+    ContentsClosed globalKinds structs after types authorized := by
+  constructor
+  · intro value member
+    simpa only [Func.numValues, blocks] using closed.bounded value member
+  · intro block row param member allowed
+    exact closed.entry block (by rwa [blocks]) param member allowed
+  · intro block member value op definition allowed
+    exact (closed.definitions block (by rwa [blocks]) value op definition allowed).replace_function slots
+  · intro block member term definition edge edgeMember destination row entry entryMember allowed
+    exact closed.edges block (by rwa [blocks]) term definition edge edgeMember destination
+      (by rwa [blocks]) entry entryMember allowed
 
 end Goose.Lower.Validation

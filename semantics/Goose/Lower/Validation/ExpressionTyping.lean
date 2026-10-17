@@ -1,3 +1,5 @@
+import Goose.Lower.Validation.ScalarTyping
+import Goose.Lower.Validation.ExpressionTypingBorrowOps
 import Goose.Lower.Validation.ViewTyping
 
 namespace Goose.Lower.Validation
@@ -70,7 +72,7 @@ theorem lowerExpr_static_typed (e : Expr) (supported : StaticExpression e)
         rw [childRun] at child
         obtain ⟨actual, same, typed⟩ := child
         have permission : actual.atLeast .readOnly = true := by cases actual <;> rfl
-        have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) typed permission (same.trans live)
+        have frozen := borrowTo_typed (le := lowerEnv env.mod env.vars results) typed permission (same.trans live)
         simpa only [lowerExpr, bind_run, childRun, same] using frozen
   | un op e origin =>
     obtain ⟨childStart, childFinish, intTy, childSource, shape, signed⟩ := tyExpr_un_child source

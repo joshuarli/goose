@@ -10,6 +10,21 @@ def PlaceOwnerShape (cfg : Cfg) (results : List Ty) (place : Place) : Prop :=
     GeneratedBuilderState input → output.cur = some block →
     ∃ mutability, output.vals[address]? = some (some (.data (.ref mutability source.ty)))
 
+theorem PlaceOwnerShape.of_generatedTyping {cfg : Cfg} {results : List Ty} {place : Place}
+    (recorded : ∀ {typingEnv : TEnv} {info : PlaceInfo} {start finish : Nat},
+      tyPlace typingEnv place start = .ok (info, finish) →
+      ∀ {input output : LS} {address : GIR.ValueId},
+      lowerPlace place (lowerEnv typingEnv.mod typingEnv.vars results) input = (address, output) →
+      output.cur.isSome = true → GeneratedBuilderState input →
+      ∃ mutability, output.vals[address]? = some (some (.data (.ref mutability info.ty)))) :
+    PlaceOwnerShape cfg results place := by
+  intro env state source input output address block lowered generated live
+  have sourceRun : lowerPlace place
+      (lowerEnv source.typingEnv.mod source.typingEnv.vars results) input = (address, output) := by
+    rw [source.frame.mod_t, source.frame.vars_t]
+    exact lowered
+  exact recorded source.typed sourceRun (by simp only [live, Option.isSome_some]) generated
+
 theorem eachSourceMode_of_live_place {cfg : Cfg} {env : Env} {state : St} {results : List Ty}
     {place : Place} (source : PlaceSource cfg env place state)
     (shape : PlaceOwnerShape cfg results place) {input output : LS}
