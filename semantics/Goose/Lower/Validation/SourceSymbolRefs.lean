@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.SymbolSourceTables
+import Goose.Lower.Validation.SymbolTables
 import Goose.Lower.Validation.ExpressionTypingCallOps
 import Goose.Lower.Validation.ScopeLexical
 import Goose.Lower.Validation.ScopeBlocks
