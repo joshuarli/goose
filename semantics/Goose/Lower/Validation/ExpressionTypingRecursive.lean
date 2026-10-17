@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ExpressionTypingScalarOps
+import Goose.Lower.Validation.ExpressionTypingSliceOps
 
 namespace Goose.Lower.Validation
 
@@ -13,6 +13,7 @@ def RecursiveExpression : Expr → Prop
   | .push owner expr _ => RecursivePlace owner ∧ RecursiveExpression expr
   | .pop owner _ => RecursivePlace owner
   | .len v => RecursiveView v
+  | .slice .readOnly view lo hi _ => RecursiveView view ∧ RecursiveBound lo ∧ RecursiveBound hi
   | .call _ args _ => RecursiveArguments args
   | .arrLit _ exprs | .structLit _ exprs => RecursiveExpressions exprs
   | .fill _ expr => RecursiveExpression expr
@@ -30,6 +31,10 @@ def RecursivePlace : Place → Prop
 def RecursiveView : View → Prop
   | .of p => RecursivePlace p
   | .val e => RecursiveExpression e
+
+def RecursiveBound : Bound → Prop
+  | .omitted => True
+  | .expr expr | .fromEnd expr => RecursiveExpression expr
 
 def RecursiveBlock : Core.Block → Prop
   | .mk _ _ none => True
@@ -171,6 +176,35 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
       have recorded := emitDef_recorded current operation
       rw [emitted] at recorded
       exact recorded.2.2.1
+  | slice mu view lo hi origin =>
+    cases mu with
+    | mutable => contradiction
+    | readOnly =>
+      obtain ⟨element, writable, viewStart, viewFinish, lowFinish, highFinish,
+        viewSource, lowSource, highSource, shape⟩ := tyExpr_slice_children source
+      subst ty
+      obtain ⟨viewSupported, lowSupported, highSupported⟩ := supported
+      simp only [lowerExpr] at run
+      obtain ⟨viewValue, viewAfter, viewRun, run⟩ := bind_eq.mp run
+      obtain ⟨lowValue, lowAfter, lowRun, run⟩ := bind_eq.mp run
+      obtain ⟨highValue, middle, highRun, emitted⟩ := bind_eq.mp run
+      have middleLive := (dead_emitDef (.viewSlice .readOnly viewValue lowValue highValue (some origin))).live_before emitted live
+      have highTyped := lowerBound_recursive_typed hi highSupported highSource highRun middleLive
+      have lowLive := (dead_lowerBound hi).live_before highRun middleLive
+      have lowTyped := lowerBound_recursive_typed lo lowSupported lowSource lowRun lowLive
+      have viewLive := (dead_lowerBound lo).live_before lowRun lowLive
+      obtain ⟨actual, viewTyped⟩ := lowerView_recursive_typed view viewSupported viewSource viewRun viewLive
+      have retainedLow := lowTyped.retained (types_lowerBound hi _ _ _ _ highRun)
+      have retainedView := types_lowerBound hi _ _ _ _ highRun viewValue (.view actual element)
+        (types_lowerBound lo _ _ _ _ lowRun viewValue (.view actual element) viewTyped)
+      cases current : middle.cur with
+      | none => simp [current] at middleLive
+      | some block =>
+        have operation := readonlySlice_resultTy (le := lowerEnv env.mod env.vars results)
+          retainedView retainedLow highTyped origin
+        have recorded := emitDef_recorded current operation
+        rw [emitted] at recorded
+        exact recorded.2.2.1
   | conv kind target expr origin =>
     obtain ⟨src, dst, childStart, childFinish, childSource, targetShape, shape, range⟩ := tyExpr_conversion_child source
     subst ty
@@ -412,7 +446,6 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
         fun _ => pure thenTy) elseFinish = .ok (ty, finish) at source
       obtain ⟨_, _, rejected, _⟩ := (st_bind_ok _ _ _ _).mp source
       exact (rej_ok _ _ _ _).mp rejected |>.elim
-  | _ => contradiction
 
 theorem lowerPlace_recursive_typed (p : Place) (supported : RecursivePlace p)
     {env : Core.TEnv} {info : PlaceInfo} {start finish : Nat}
@@ -511,6 +544,23 @@ theorem lowerView_recursive_typed (v : View) (supported : RecursiveView v)
         rw [run] at lowered
         exact ⟨mu, lowered.2⟩
     | _ => exact (rej_ok _ _ _ _).mp tail |>.elim
+
+theorem lowerBound_recursive_typed (bound : Bound) (supported : RecursiveBound bound)
+    {env : Core.TEnv} {start finish : Nat}
+    (source : Core.tyBound env bound start = .ok ((), finish))
+    {results : List Ty} {before after : LS} {value : Bnd}
+    (run : lowerBound bound (lowerEnv env.mod env.vars results) before = (value, after))
+    (live : after.cur.isSome = true) : BoundTyped after value := by
+  cases bound with
+  | omitted =>
+    obtain ⟨rfl, rfl⟩ := pure_eq.mp run
+    trivial
+  | expr expr | fromEnd expr =>
+    obtain ⟨intTy, childFinish, childSource⟩ := tyBound_child source
+    simp only [lowerBound] at run
+    obtain ⟨result, middle, childRun, run⟩ := bind_eq.mp run
+    obtain ⟨rfl, rfl⟩ := pure_eq.mp run
+    exact ⟨intTy, lowerExpr_recursive_typed expr supported childSource childRun live⟩
 
 theorem lowerExprs_recursive_typed (exprs : List Expr) (supported : RecursiveExpressions exprs)
     {env : Core.TEnv} {types : List Ty} {start finish : Nat}

@@ -142,6 +142,22 @@ theorem pushed_place_typed {before after : LS} {value : ValueId}
     ∃ mu, after.vals[value]? = some (some (.data (.ref mu (.int .i64)))) := by
   exact lowerPlace_recursive_typed pushedPlace (by trivial) pushed_place_source run live
 
+def slicedElement : Place :=
+  .elem (.val (.slice .readOnly (.of (.var 1)) (.expr convertedIndex)
+    (.fromEnd (.lit .i8 0)) 0)) (.lit .i64 0) 0
+
+theorem sliced_element_source : Core.tyPlace env slicedElement 2 = .ok (⟨.int .i64, false, false⟩, 2) := by rfl
+
+theorem sliced_element_typed {before after : LS} {value : ValueId}
+    (run : lowerPlace slicedElement (lowerEnv module env.vars []) before = (value, after))
+    (live : after.cur.isSome = true) :
+    ∃ mu, after.vals[value]? = some (some (.data (.ref mu (.int .i64)))) := by
+  exact lowerPlace_recursive_typed slicedElement (by trivial) sliced_element_source run live
+
+#guard let (value, after) := lowerPlace slicedElement (lowerEnv module env.vars []) initial
+       after.cur.isSome && after.vals[value]? == some (some (.data (.ref .readOnly (.int .i64))))
+
+#print axioms lowerBound_recursive_typed
 #print axioms lowerExprs_recursive_typed
 #print axioms structLiteral_resultTy
 #print axioms arrayLiteral_resultTy
