@@ -137,6 +137,7 @@ private:
         int depth = 0;
         size_t exitDepth = 0;
         size_t constructionDepth = 0;
+        function<void(const CoreExpr &, int)> complete;
     };
     ValueBoundary *valueBoundary = nullptr;
     vector<GirBlock> blocks;
@@ -157,8 +158,31 @@ private:
     vector<int> exitReservations;
     map<int, int> reservationReceivings, reservationBuilders, rawReservations, receivingReservations;
     set<int> boundNamedSlots;
+    set<int> waitingExits;
+    set<int> delegatedReceivings;
+    struct CompletionBoundary {
+        vector<int> tickets;
+        vector<int> handles;
+    };
+    vector<CompletionBoundary *> completionBoundaries;
+    struct CompletionBranch {
+        vector<int> scopes, active, reservations;
+        set<int> named, waiting, delegated;
+        map<int, int> rawReceiving, rawReservation, parents, reservationReceiving, builders, receivingReservation;
+        vector<vector<int>> handles;
+    };
 
     int Org(const CoreOrigin &o) { return originof(o); }
+
+    int CompletionOrigin(const CoreExpr &expression) {
+        switch (expression.kind) {
+            case CoreExprKind::Bytes: case CoreExprKind::String: case CoreExprKind::Copy: case CoreExprKind::ResultLocal:
+            case CoreExprKind::Call: case CoreExprKind::Un: case CoreExprKind::Bin: case CoreExprKind::Conv:
+            case CoreExprKind::Slice: case CoreExprKind::Pop: case CoreExprKind::Arr: case CoreExprKind::Fill:
+            case CoreExprKind::If: case CoreExprKind::Block: case CoreExprKind::Push: return Org(expression.org);
+            default: return mod.origins.empty() ? -1 : 0;
+        }
+    }
 
     GirTypeId I64() { return mod.IntType(CoreIntTy::I64); }
 
@@ -479,9 +503,11 @@ private:
                 auto [eb, es] = NewBlock({});
                 (void)ts; (void)es;
                 EmitTerm(CondBr(cv, tb, {}, eb, {}));
+                auto saved = SaveCompletionBranch();
                 cur = tb;
                 auto vt = LowerBlock(lexicalLoop, {}, true, *e.then);
                 auto endT = cur;
+                RestoreCompletionBranch(saved);
                 cur = eb;
                 auto vf = LowerBlock(lexicalLoop, {}, true, *e.otherwise);
                 auto endF = cur;
@@ -679,11 +705,8 @@ private:
         }
         int r = 0;
         if (cur >= 0 && &b == functionBody && CoreHasConstruction(core.profile)) {
-            vector<const CoreExpr *> operands;
-            if (b.value && b.value->kind == CoreExprKind::Values)
-                for (auto &value : b.value->values) operands.push_back(value.get());
-            else if (b.value) operands.push_back(b.value.get());
-            LowerFunctionReturn(operands, functionOrigin);
+            if (b.value) LowerImplicitReturn(*b.value);
+            else LowerFunctionReturn({}, functionOrigin);
         } else if (b.value) r = LowerExpr(*b.value);
         else if (want) {
             GirInst i;
@@ -774,6 +797,7 @@ private:
             drop.op = GirOp::ReceivingDrop;
             drop.a = receiver;
             EmitEffect(std::move(drop));
+            delegatedReceivings.erase(receiver);
             receiver = receivingParents.at(receiver);
             found->second = receiver;
         }
@@ -954,17 +978,16 @@ private:
                 (void)thenParams;
                 (void)elseParams;
                 EmitTerm(CondBr(condition, thenBlock, {}, elseBlock, {}));
-                auto saved = activeReceivings;
+                auto saved = SaveCompletionBranch();
                 cur = thenBlock;
                 auto thenValue = LowerConstructBlock(*expression.then, destination, org);
                 if (cur >= 0) DropCompletedReceiving(thenValue, receiving);
                 auto thenEnd = cur;
-                activeReceivings = saved;
+                RestoreCompletionBranch(saved);
                 cur = elseBlock;
                 auto elseValue = LowerConstructBlock(*expression.otherwise, destination, org);
                 if (cur >= 0) DropCompletedReceiving(elseValue, receiving);
                 auto elseEnd = cur;
-                activeReceivings = saved;
                 return done(JoinValue(thenEnd, thenValue, elseEnd, elseValue));
             }
             case CoreExprKind::Call: {
@@ -1041,6 +1064,13 @@ private:
             receivingReservations[receiving] = ticket->second;
             reservationBuilders.try_emplace(ticket->second, receiving);
         }
+        if (auto ticket = rawReservations.find(destination); ticket != rawReservations.end())
+            for (auto boundary = completionBoundaries.rbegin(); boundary != completionBoundaries.rend(); ++boundary)
+                for (size_t position = 0; position < (*boundary)->tickets.size(); position++)
+                    if ((*boundary)->tickets[position] == ticket->second && (*boundary)->handles[position] < 0) {
+                        (*boundary)->handles[position] = receiving;
+                        return receiving;
+                    }
         return receiving;
     }
 
@@ -1069,6 +1099,27 @@ private:
         return current;
     }
 
+    int WaitExit(int receiving) {
+        GirInst wait;
+        wait.op = GirOp::ExitWait;
+        wait.a = receiving;
+        auto ticket = EmitDef(std::move(wait));
+        exitReservations.push_back(ticket);
+        reservationReceivings[ticket] = receiving;
+        waitingExits.insert(ticket);
+        return ticket;
+    }
+
+    void SelectExit(int ticket, GirExitSource source, int org) {
+        GirInst select;
+        select.op = GirOp::ExitSelect;
+        select.a = ticket;
+        select.exitSource = source;
+        select.org = org;
+        EmitEffect(std::move(select));
+        waitingExits.erase(ticket);
+    }
+
     int ReserveExit(int receiving, GirExitSource source, int org) {
         GirInst reserve;
         reserve.op = GirOp::ExitReserve;
@@ -1092,10 +1143,11 @@ private:
         return ticket;
     }
 
-    int ExtractExit(int ticket, GirExitSource source) {
+    int ExtractExit(int ticket, GirExitSource source, int org) {
         GirInst selected;
         selected.op = GirNamedExitBinding(source).has_value() ? GirOp::ReservedNamed : GirOp::ReservedDest;
         selected.a = ticket;
+        if (selected.op == GirOp::ReservedNamed) selected.org = org;
         auto raw = EmitDef(std::move(selected));
         rawReservations[raw] = ticket;
         return raw;
@@ -1188,12 +1240,26 @@ private:
                         tickets[result] = AdoptExit(resultReceivings[result], values[result]);
         }
         auto carried = RawCompletions(values);
-        CancelActiveReceivings(org, carried);
-        DiscardEnclosingExits(first, carried, org);
         for (auto &[original, cancelled] : incomingCancelled) {
             (void)original;
             CancelDestination(cancelled, org);
+            auto receiving = rawReceivings.find(original);
+            if (receiving != rawReceivings.end() && delegatedReceivings.erase(receiving->second)) {
+                GirInst drop;
+                drop.op = GirOp::ReceivingDrop;
+                drop.a = receiving->second;
+                EmitEffect(std::move(drop));
+            }
         }
+        for (auto receiver : delegatedReceivings) {
+            GirInst drop;
+            drop.op = GirOp::ReceivingDrop;
+            drop.a = receiver;
+            EmitEffect(std::move(drop));
+        }
+        delegatedReceivings.clear();
+        CancelActiveReceivings(org, carried);
+        DiscardEnclosingExits(first, carried, org);
         auto cancellations = CancelNormalReceivings(carried, org);
         if (HandlesTarget(target)) {
             for (auto cancelled : cancellations) CancelDestination(cancelled, org);
@@ -1270,11 +1336,15 @@ private:
         auto savedActive = activeReceivings;
         auto savedNamed = boundNamedSlots;
         auto savedReservations = exitReservations;
+        auto savedWaiting = waitingExits;
+        auto savedDelegated = delegatedReceivings;
         for (size_t edge = 0; edge < edges.size(); edge++) {
             stack = savedScopes;
             activeReceivings = savedActive;
             boundNamedSlots = savedNamed;
             exitReservations = savedReservations;
+            waitingExits = savedWaiting;
+            delegatedReceivings = savedDelegated;
             cur = edges[edge].block;
             auto target = edges[edge].target;
             auto resultCount = core.impls[core.targets[target].members[0]].results.size();
@@ -1288,6 +1358,8 @@ private:
         activeReceivings = std::move(savedActive);
         boundNamedSlots = std::move(savedNamed);
         exitReservations = std::move(savedReservations);
+        waitingExits = std::move(savedWaiting);
+        delegatedReceivings = std::move(savedDelegated);
         cur = normalBlock;
         auto canReturn = context >= 0 && context < (int)noReturn.size() && !noReturn[context];
         if (!canReturn) {
@@ -1311,7 +1383,7 @@ private:
         if (position == operands.size()) {
             for (size_t result = 0; result < values.size(); result++)
                 if (values[result] < 0) {
-                    values[result] = ExtractExit(tickets[result], sources[result]);
+                    values[result] = ExtractExit(tickets[result], sources[result], org);
                     boundNamedSlots.erase(*GirNamedExitBinding(sources[result]));
                 }
             finish(std::move(values));
@@ -1328,7 +1400,7 @@ private:
             return;
         }
         auto fresh = [&] {
-            auto selected = ExtractExit(tickets[position], GirExitNewValue {});
+            auto selected = ExtractExit(tickets[position], GirExitNewValue {}, org);
             rawReceivings[selected] = receivings[position];
             auto completed = LowerConstruct(*operands[position], selected, org);
             if (cur >= 0) advance(completed);
@@ -1392,7 +1464,7 @@ private:
         if (statement.kind == CoreStmtKind::ReturnFromForward) {
             for (size_t result = 0; result < tickets.size(); result++)
                 if (tickets[result] >= 0) {
-                    destinations[result] = ExtractExit(tickets[result], sources[result]);
+                    destinations[result] = ExtractExit(tickets[result], sources[result], org);
                     rawReceivings[destinations[result]] = receiving[result];
                 }
             values = LowerProducer(*statement.expr, destinations, org);
@@ -1415,10 +1487,13 @@ private:
         for (size_t position = 0; position < destinations.size(); position++)
             if (destinations[position] >= 0) {
                 receiving[position] = OpenReceiving(destinations[position]);
-                writers[position] = RenewReceiving(receiving[position]);
-                activeReceivings.push_back(receiving[position]);
+                if (expression.kind == CoreExprKind::Call) delegatedReceivings.insert(receiving[position]);
+                else {
+                    writers[position] = RenewReceiving(receiving[position]);
+                    activeReceivings.push_back(receiving[position]);
+                }
             }
-        auto values = LowerProducerValues(expression, writers, org);
+        auto values = LowerProducerValues(expression, writers, receiving, org);
         for (size_t position = 0; cur >= 0 && position < values.size(); position++)
             if (receiving[position] >= 0) {
                 DropCompletedReceiving(values[position], receiving[position]);
@@ -1428,7 +1503,7 @@ private:
         return values;
     }
 
-    vector<int> LowerProducerValues(const CoreExpr &expression, const vector<int> &destinations, int org) {
+    vector<int> LowerProducerValues(const CoreExpr &expression, const vector<int> &destinations, const vector<int> &receiving, int org) {
         vector<int> values;
         if (expression.kind == CoreExprKind::Values) {
             if (expression.values.size() != destinations.size()) throw CompileError { "producer result count differs from its receiving channels" };
@@ -1447,8 +1522,8 @@ private:
         auto arguments = LowerArgs(expression.args, context, org);
         if (cur < 0) return {};
         auto writers = destinations;
-        for (auto &writer : writers)
-            if (writer >= 0) writer = RefreshDestination(writer);
+        for (size_t position = 0; position < writers.size(); position++)
+            if (writers[position] >= 0) writers[position] = RenewReceiving(receiving[position]);
         if (!function.summary.escapes.empty())
             return InvokeValues(context, std::move(arguments), writers, org);
         GirInst call;
@@ -1519,11 +1594,19 @@ private:
                 cancelled.insert(receiving);
             }
         }
+        activeReceivings.erase(remove_if(activeReceivings.begin(), activeReceivings.end(), [&](int receiving) {
+            return any_of(cancelled.begin(), cancelled.end(), [&](int ancestor) { return ReceivingWithin(receiving, ancestor); });
+        }), activeReceivings.end());
         return cancelled;
     }
 
     void CancelActiveReceivings(int org, const vector<int> &carried = {}) {
-        CancelReceivingRoots(activeReceivings, resultReceivings, carried, org);
+        vector<int> protectedBoundaries;
+        for (auto receiver : resultReceivings)
+            if (receiver >= 0 && none_of(waitingExits.begin(), waitingExits.end(), [&](int ticket) {
+                    return reservationReceivings.at(ticket) == receiver;
+                })) protectedBoundaries.push_back(receiver);
+        CancelReceivingRoots(activeReceivings, protectedBoundaries, carried, org);
         activeReceivings.clear();
     }
 
@@ -1554,6 +1637,234 @@ private:
         ret.vals = std::move(values);
         ret.org = org;
         EmitTerm(std::move(ret));
+    }
+
+    using Completion = function<void(vector<int>, vector<GirExitSource>)>;
+
+    CompletionBranch SaveCompletionBranch() {
+        CompletionBranch saved { stack, activeReceivings, exitReservations,
+            boundNamedSlots, waitingExits, delegatedReceivings, rawReceivings, rawReservations,
+            receivingParents, reservationReceivings, reservationBuilders, receivingReservations, {} };
+        for (auto boundary : completionBoundaries) {
+            saved.handles.push_back(boundary->handles);
+        }
+        return saved;
+    }
+
+    void RestoreCompletionBranch(const CompletionBranch &saved) {
+        stack = saved.scopes;
+        activeReceivings = saved.active;
+        exitReservations = saved.reservations;
+        boundNamedSlots = saved.named;
+        waitingExits = saved.waiting;
+        delegatedReceivings = saved.delegated;
+        rawReceivings = saved.rawReceiving;
+        rawReservations = saved.rawReservation;
+        receivingParents = saved.parents;
+        reservationReceivings = saved.reservationReceiving;
+        reservationBuilders = saved.builders;
+        receivingReservations = saved.receivingReservation;
+        for (size_t position = 0; position < saved.handles.size(); position++) {
+            completionBoundaries[position]->handles = saved.handles[position];
+        }
+    }
+
+    void LowerCompletionBlock(const CoreBlock &block, const vector<int> &positions, const vector<int> &tickets,
+                              vector<int> values, vector<GirExitSource> sources, const Completion &finish) {
+        auto depth = stack.size();
+        EmitEffect([&] { GirInst enter; enter.op = GirOp::Enter; enter.idx = block.scope; return enter; }());
+        stack.push_back(block.scope);
+        for (auto &statement : block.stmts) {
+            if (cur < 0) break;
+            LowerStmt(lexicalLoop, statement);
+        }
+        if (cur >= 0 && block.value)
+            LowerCompletionExpression(*block.value, positions, tickets, std::move(values), std::move(sources),
+                [&](vector<int> completed, vector<GirExitSource> selectedSources) {
+                    LeaveTo(depth);
+                    auto saved = stack;
+                    stack.resize(depth);
+                    finish(std::move(completed), std::move(selectedSources));
+                    stack = std::move(saved);
+                });
+        stack.resize(depth);
+    }
+
+    void LowerCompletionExpression(const CoreExpr &expression, const vector<int> &positions, const vector<int> &tickets,
+                                   vector<int> values, vector<GirExitSource> sources, const Completion &finish) {
+        if (cur < 0) return;
+        auto org = CompletionOrigin(expression);
+        if (expression.kind == CoreExprKind::Values) {
+            if (positions.size() != expression.values.size()) throw CompileError { "implicit result tuple has another arity" };
+            function<void(size_t, vector<int>, vector<GirExitSource>)> next;
+            next = [&](size_t position, vector<int> completed, vector<GirExitSource> selectedSources) {
+                if (position == positions.size()) { finish(std::move(completed), std::move(selectedSources)); return; }
+                LowerCompletionExpression(*expression.values[position], { positions[position] }, tickets,
+                    std::move(completed), std::move(selectedSources), [&](vector<int> after, vector<GirExitSource> afterSources) {
+                        next(position + 1, std::move(after), std::move(afterSources));
+                    });
+            };
+            next(0, std::move(values), std::move(sources));
+            return;
+        }
+        if (expression.kind == CoreExprKind::If) {
+            auto condition = LowerExpr(*expression.a);
+            if (cur < 0) return;
+            auto [yes, yesParams] = NewBlock({});
+            auto [no, noParams] = NewBlock({});
+            (void)yesParams; (void)noParams;
+            EmitTerm(CondBr(condition, yes, {}, no, {}));
+            auto saved = SaveCompletionBranch();
+            cur = yes;
+            LowerCompletionBlock(*expression.then, positions, tickets, values, sources, finish);
+            RestoreCompletionBranch(saved);
+            cur = no;
+            LowerCompletionBlock(*expression.otherwise, positions, tickets, std::move(values), std::move(sources), finish);
+            return;
+        }
+        if (expression.kind == CoreExprKind::Block) {
+            CompletionBoundary completion { tickets, vector<int>(tickets.size(), -1) };
+            completionBoundaries.push_back(&completion);
+            auto previous = valueBoundary;
+            ValueBoundary boundary;
+            boundary.depth = (int)stack.size();
+            boundary.exitDepth = exitReservations.size();
+            boundary.constructionDepth = activeReceivings.size();
+            auto complete = [&](vector<int> completed, vector<GirExitSource> selectedSources) {
+                auto carried = RawCompletions([&] { vector<int> raw; for (auto value : completed) if (value >= 0) raw.push_back(value); return raw; }());
+                vector<int> active(activeReceivings.begin() + min(boundary.constructionDepth, activeReceivings.size()), activeReceivings.end());
+                CancelReceivingRoots(active, completion.handles, carried, org);
+                for (auto receiver : completion.handles) if (receiver >= 0)
+                    CancelDestination(CancelReceiving(receiver, carried, org), org);
+                LeaveTo(boundary.depth);
+                auto savedStack = stack;
+                stack.resize(boundary.depth);
+                valueBoundary = previous;
+                completionBoundaries.pop_back();
+                finish(std::move(completed), std::move(selectedSources));
+                completionBoundaries.push_back(&completion);
+                valueBoundary = &boundary;
+                stack = std::move(savedStack);
+            };
+            boundary.complete = [&](const CoreExpr &operand, int breakOrigin) {
+                auto saved = SaveCompletionBranch();
+                auto breakTickets = tickets;
+                auto breakSources = sources;
+                auto first = exitReservations.size();
+                for (size_t index = 0; index < positions.size(); index++) {
+                    auto position = positions[index];
+                    if (tickets[position] < 0 || waitingExits.count(tickets[position])) continue;
+                    auto receiver = completion.handles[position];
+                    if (receiver < 0) throw CompileError { "completed block channel lost its selected receiving view" };
+                    GirExitSource source = GirExitNewValue {};
+                    const CoreExpr *sourceExpression = &operand;
+                    if (operand.kind == CoreExprKind::Values) sourceExpression = operand.values[index].get();
+                    if (sourceExpression->kind == CoreExprKind::ResultLocal && boundNamedSlots.count(sourceExpression->var))
+                        source = GirExitNamedAlias { sourceExpression->var };
+                    breakSources[position] = source;
+                    breakTickets[position] = ReserveExit(receiver, source, breakOrigin);
+                }
+                LowerCompletionExpression(operand, positions, breakTickets, values, breakSources,
+                    [&](vector<int> completed, vector<GirExitSource> selectedSources) {
+                        for (auto position : positions)
+                            if (breakTickets[position] != tickets[position] && completed[position] < 0)
+                                completed[position] = ExtractExit(breakTickets[position], selectedSources[position], breakOrigin);
+                        auto carried = RawCompletions([&] { vector<int> raw; for (auto value : completed) if (value >= 0) raw.push_back(value); return raw; }());
+                        vector<int> active(activeReceivings.begin() + min(boundary.constructionDepth, activeReceivings.size()), activeReceivings.end());
+                        CancelReceivingRoots(active, completion.handles, carried, breakOrigin);
+                        for (auto position : positions) if (breakTickets[position] != tickets[position]) {
+                            auto closed = completion.handles[position];
+                            CancelDestination(CancelReceiving(closed, carried, breakOrigin), breakOrigin);
+                            activeReceivings.erase(remove_if(activeReceivings.begin(), activeReceivings.end(), [&](int receiver) {
+                                return ReceivingWithin(receiver, closed);
+                            }), activeReceivings.end());
+                            completion.handles[position] = -1;
+                            completed[position] = LandExit(breakTickets[position], completed[position], breakOrigin);
+                            ReleaseExit(breakTickets[position], breakOrigin);
+                        }
+                        exitReservations.resize(first);
+                        complete(std::move(completed), std::move(selectedSources));
+                    });
+                RestoreCompletionBranch(saved);
+            };
+            valueBoundary = &boundary;
+            LowerCompletionBlock(*expression.then, positions, tickets, values, sources, complete);
+            valueBoundary = previous;
+            completionBoundaries.pop_back();
+            return;
+        }
+        if (expression.kind == CoreExprKind::Call) {
+            vector<int> destinations(positions.size(), -1);
+            for (size_t index = 0; index < positions.size(); index++) {
+                auto position = positions[index];
+                if (tickets[position] < 0) continue;
+                if (waitingExits.count(tickets[position])) SelectExit(tickets[position], GirExitNewValue {}, org);
+                destinations[index] = ExtractExit(tickets[position], GirExitNewValue {}, org);
+                rawReceivings[destinations[index]] = reservationReceivings.at(tickets[position]);
+            }
+            auto completed = LowerProducer(expression, destinations, org);
+            if (cur >= 0) {
+                for (size_t index = 0; index < positions.size(); index++) values[positions[index]] = completed[index];
+                finish(std::move(values), std::move(sources));
+            }
+            return;
+        }
+        if (positions.size() != 1) throw CompileError { "implicit leaf result count differs from its channels" };
+        auto position = positions[0];
+        if (tickets[position] < 0) {
+            values[position] = LowerExpr(expression);
+            if (cur >= 0) finish(std::move(values), std::move(sources));
+            return;
+        }
+        auto source = sources[position];
+        if (waitingExits.count(tickets[position])) {
+            source = expression.kind == CoreExprKind::ResultLocal && boundNamedSlots.count(expression.var)
+                ? GirExitSource { GirExitNamedAlias { expression.var } } : GirExitSource { GirExitNewValue {} };
+            SelectExit(tickets[position], source, org);
+        }
+        sources[position] = source;
+        auto fresh = [&] {
+            auto destination = ExtractExit(tickets[position], GirExitNewValue {}, org);
+            rawReceivings[destination] = reservationReceivings.at(tickets[position]);
+            values[position] = LowerConstruct(expression, destination, org);
+            if (cur >= 0) finish(values, sources);
+        };
+        if (!GirNamedExitBinding(source)) { fresh(); return; }
+        GirInst role; role.op = GirOp::ExitIsNamed; role.a = tickets[position];
+        auto named = EmitDef(std::move(role));
+        auto [yes, yesParams] = NewBlock({});
+        auto [no, noParams] = NewBlock({});
+        (void)yesParams; (void)noParams;
+        EmitTerm(CondBr(named, yes, {}, no, {}));
+        auto saved = SaveCompletionBranch();
+        cur = yes;
+        MarkNamedExit(tickets[position], org);
+        values[position] = -1;
+        finish(values, sources);
+        RestoreCompletionBranch(saved);
+        cur = no;
+        fresh();
+    }
+
+    void LowerImplicitReturn(const CoreExpr &expression) {
+        auto saved = SaveCompletionBranch();
+        auto first = exitReservations.size();
+        vector<int> tickets(currentResults->size(), -1), positions;
+        for (size_t position = 0; position < currentResults->size(); position++) {
+            positions.push_back((int)position);
+            if (resultReceivings[position] >= 0) tickets[position] = WaitExit(resultReceivings[position]);
+        }
+        auto org = CompletionOrigin(expression);
+        LowerCompletionExpression(expression, positions, tickets, vector<int>(tickets.size(), -2),
+            vector<GirExitSource>(tickets.size(), GirExitNewValue {}),
+            [&](vector<int> values, vector<GirExitSource> sources) {
+                for (size_t position = 0; position < values.size(); position++) if (values[position] < 0) {
+                    values[position] = ExtractExit(tickets[position], sources[position], org);
+                    boundNamedSlots.erase(*GirNamedExitBinding(sources[position]));
+                }
+                FinishFunctionReturn(std::move(values), tickets, first, org);
+            });
+        RestoreCompletionBranch(saved);
     }
 
     void LowerFunctionReturn(const vector<const CoreExpr *> &operands, int org) {
@@ -1740,18 +2051,22 @@ private:
                     auto [jb, js] = NewBlock({});
                     (void)ts; (void)js;
                     EmitTerm(CondBr(cv, tb, {}, jb, {}));
+                    auto saved = SaveCompletionBranch();
                     cur = tb;
                     LowerBlock(lc, {}, false, *s.then);
                     EmitTerm(Br(jb, {}));
+                    RestoreCompletionBranch(saved);
                     cur = jb;
                 } else {
                     auto [tb, ts] = NewBlock({});
                     auto [eb, es] = NewBlock({});
                     (void)ts; (void)es;
                     EmitTerm(CondBr(cv, tb, {}, eb, {}));
+                    auto saved = SaveCompletionBranch();
                     cur = tb;
                     LowerBlock(lc, {}, false, *s.then);
                     auto endT = cur;
+                    RestoreCompletionBranch(saved);
                     cur = eb;
                     LowerBlock(lc, {}, false, *s.otherwise);
                     auto endF = cur;
@@ -1960,7 +2275,7 @@ private:
                         tickets[result] = ReserveExit(resultReceivings[result], GirExitNewValue {}, org);
                 for (size_t result = 0; result < tickets.size(); result++)
                     if (tickets[result] >= 0) {
-                        destinations[result] = ExtractExit(tickets[result], GirExitNewValue {});
+                        destinations[result] = ExtractExit(tickets[result], GirExitNewValue {}, org);
                         rawReceivings[destinations[result]] = resultReceivings[result];
                     }
                 auto values = LowerProducer(*s.expr, destinations, org);
@@ -1975,12 +2290,16 @@ private:
             case CoreStmtKind::BreakValue: {
                 if (!valueBoundary) throw CompileError { "value break has no enclosing value block" };
                 auto &boundary = *valueBoundary;
+                if (boundary.complete) {
+                    boundary.complete(*s.expr, org);
+                    return;
+                }
                 auto savedReservations = exitReservations;
                 auto ticket = boundary.receiving < 0 ? -1 : ReserveExit(boundary.receiving, GirExitNewValue {}, org);
                 int value;
                 if (ticket < 0) value = LowerExpr(*s.expr);
                 else {
-                    auto destination = ExtractExit(ticket, GirExitNewValue {});
+                    auto destination = ExtractExit(ticket, GirExitNewValue {}, org);
                     rawReceivings[destination] = boundary.receiving;
                     value = LowerConstruct(*s.expr, destination, org);
                 }
@@ -2188,6 +2507,9 @@ private:
         rawReservations.clear();
         receivingReservations.clear();
         boundNamedSlots.clear();
+        waitingExits.clear();
+        delegatedReceivings.clear();
+        completionBoundaries.clear();
         if (vs)
             for (size_t i = 0; i < vs->size(); i++)
                 slots.push_back({ (*vs)[i].type, (*vs)[i].kind, (*vs)[i].scope, (int)i });
@@ -2237,7 +2559,7 @@ private:
         currentFunction = contextIndex;
         functionBody = &impl.body;
         functionOrigin = !impl.vars.empty() ? Org(impl.vars[0].org) :
-            !impl.body.stmts.empty() ? Org(impl.body.stmts[0].org) : impl.body.value ? Org(impl.body.value->org) : -1;
+            !impl.body.stmts.empty() ? Org(impl.body.stmts[0].org) : impl.body.value ? CompletionOrigin(*impl.body.value) : -1;
         vector<GirTypeId> ptys;
         for (auto &p : impl.params) ptys.push_back(impl.vars[p.var].type);
         vector<GirTypeId> entryTypes;

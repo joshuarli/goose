@@ -887,10 +887,11 @@ private:
                 def("i_dest_adapt_finish"); Append(out, ",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::DestPublishRef:
                 def("i_dest_publish_ref"); Append(out, ",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
-            case GirOp::ReceivingOpen: case GirOp::DestRenew: case GirOp::ReservedDest: case GirOp::ReservedNamed:
-                def(i.op == GirOp::ReceivingOpen ? "i_receiving_open" : i.op == GirOp::DestRenew ? "i_dest_renew" :
-                    i.op == GirOp::ReservedDest ? "i_reserved_dest" : "i_reserved_named");
+            case GirOp::ReceivingOpen: case GirOp::DestRenew: case GirOp::ReservedDest:
+                def(i.op == GirOp::ReceivingOpen ? "i_receiving_open" : i.op == GirOp::DestRenew ? "i_dest_renew" : "i_reserved_dest");
                 Append(out, ",", i.a, "]"); return;
+            case GirOp::ReservedNamed:
+                def("i_reserved_named"); Append(out, ",", i.a, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::DestRefresh: case GirOp::ExitLand: case GirOp::ExitAdopt:
                 def(i.op == GirOp::DestRefresh ? "i_dest_refresh" : i.op == GirOp::ExitLand ? "i_exit_land" : "i_exit_adopt");
                 Append(out, ",", i.a, ",", i.b);
@@ -901,6 +902,11 @@ private:
             case GirOp::TargetReceiving:
                 def("i_target_receiving"); Append(out, ",", i.idx, ",", i.idx2, ","); OptOrg(out, i.org); out += ']'; return;
             case GirOp::ExitIsNamed: def("i_exit_is_named"); Append(out, ",", i.a, "]"); return;
+            case GirOp::ExitWait:
+                def("i_exit_wait"); Append(out, ",", i.a, "]"); return;
+            case GirOp::ExitSelect:
+                Append(out, "[\"x_exit_select\",", i.a, ","); ExitSource(out, i.exitSource); out += ',';
+                OptOrg(out, i.org); out += ']'; return;
             case GirOp::ExitReserve:
                 def("i_exit_reserve"); Append(out, ",", i.a, ","); ExitSource(out, i.exitSource); out += ',';
                 OptOrg(out, i.org); out += ']'; return;

@@ -502,7 +502,7 @@ public:
                 auto mut = fields[i.idx].binding == CoreVarKind::Var ? CoreMut::Mut : CoreMut::Const;
                 return GirTyOk(m.RefType(mut, fields[i.idx].type));
             }
-            case GirOp::ReceivingOpen: case GirOp::DestRenew: case GirOp::ExitReserve:
+            case GirOp::ReceivingOpen: case GirOp::DestRenew: case GirOp::ExitWait: case GirOp::ExitReserve:
             case GirOp::ExitIsNamed: case GirOp::ReservedDest: case GirOp::ReservedNamed: {
                 if (m.low || !CoreHasConstruction(m.profile))
                     return GirTyErr("receiving ownership operation outside core-construction GIR-H");
@@ -510,7 +510,7 @@ public:
                 if (!input.ok()) return input;
                 auto carrier = m.Type(input.ty);
                 auto expected = i.op == GirOp::ReceivingOpen ? CoreType::Dest :
-                    (i.op == GirOp::DestRenew || i.op == GirOp::ExitReserve) ? CoreType::Receiving : CoreType::ExitReservation;
+                    (i.op == GirOp::DestRenew || i.op == GirOp::ExitWait || i.op == GirOp::ExitReserve) ? CoreType::Receiving : CoreType::ExitReservation;
                 if (carrier.kind != expected) return GirTyErr("receiving ownership operation has another input capability");
                 if (i.op == GirOp::ExitIsNamed) return GirTyOk(m.BoolType());
                 if (i.op == GirOp::ExitReserve) if (auto slot = GirNamedExitBinding(i.exitSource)) {
@@ -521,7 +521,7 @@ public:
                         return GirTyErr("named exit source is not an exact in-scope named result binding");
                 }
                 auto result = i.op == GirOp::ReceivingOpen ? CoreType::Receiving :
-                    i.op == GirOp::ExitReserve ? CoreType::ExitReservation :
+                    (i.op == GirOp::ExitWait || i.op == GirOp::ExitReserve) ? CoreType::ExitReservation :
                     i.op == GirOp::ReservedNamed ? CoreType::Built : CoreType::Dest;
                 return GirTyOk(m.CarrierType(result, carrier.elem, carrier.request));
             }
