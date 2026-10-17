@@ -23,7 +23,9 @@ theorem localRead {env : PEnv} {variableId : VarId} {localVar : LocalVar}
         (lowerExpr (.read (.var variableId)) le ls).2 next ∧
       ((lowerExpr (.read (.var variableId)) le ls).2.cur.isSome = true →
         ReplayValue func next (lowerExpr (.read (.var variableId)) le ls).2
-          (lowerExpr (.read (.var variableId)) le ls).1 sourceRoots (.data localVar.ty)) ∧
+          (lowerExpr (.read (.var variableId)) le ls).1 sourceRoots (.data localVar.ty) ∧
+        rootsAt next.vals (lowerExpr (.read (.var variableId)) le ls).1 =
+          if valRefLike vt (lowerExpr (.read (.var variableId)) le ls).1 then rootsAt slots variableId else []) ∧
       ∀ index, index < upper.vals.size → rootsAt next.vals index = rootsAt upper.vals index := by
   cases current : ls.cur with
   | none =>
@@ -70,15 +72,20 @@ theorem localRead {env : PEnv} {variableId : VarId} {localVar : LocalVar}
     refine ⟨next, nextReady, ?_, ?_⟩
     · intro live
       obtain ⟨bound, exactRoots, refined⟩ := resultInfo live
-      refine ⟨bound, refined, ?_⟩
-      intro nonref
-      rw [exactRoots, rootsOfDef_load_slot addressExact]
-      have scalar : valRefLike vt address.2.vals.size = false := by
-        have tag := scalarType (by simp [current]) nonref
-        rw [addressSize]
-        exact tag
-      change (if valRefLike vt address.2.vals.size then rootsAt middle.slots variableId else []) = []
-      simp only [scalar, Bool.false_eq_true, ite_false]
+      refine ⟨⟨bound, refined, ?_⟩, ?_⟩
+      · intro nonref
+        rw [exactRoots, rootsOfDef_load_slot addressExact]
+        have scalar : valRefLike vt address.2.vals.size = false := by
+          have tag := scalarType (by simp [current]) nonref
+          rw [addressSize]
+          exact tag
+        change (if valRefLike vt address.2.vals.size then rootsAt middle.slots variableId else []) = []
+        simp only [scalar, Bool.false_eq_true, ite_false]
+      · have returnedValue : (Goose.Lower.emitDef (.load address.1) le address.2).1 = address.2.vals.size := by
+          rw [emitDef_run _ _ addressCurrent]
+        rw [exactRoots, rootsOfDef_load_slot addressExact, middleReady.slotsEq]
+        change (if valRefLike vt address.2.vals.size then rootsAt slots variableId else []) = _
+        rw [returnedValue]
     · intro index bound
       have middleSize : upper.vals.size ≤ middle.vals.size := by
         calc
