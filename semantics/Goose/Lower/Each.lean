@@ -365,7 +365,8 @@ theorem eachSampled_sim {cfg : Cfg} {env : Env} {cx : FnCtx} {le : LEnv}
 
 theorem eachElemValue_ref_cases {x : VarId} {elem value : ValueId} {le : LEnv}
     {ls ls' : LS} (h : eachElemValue x true elem le ls = (value, ls')) :
-    (value = elem ∧ ls' = ls) ∨ emitDef (.refFreeze elem) le ls = (value, ls') := by
+    (value = elem ∧ ls' = ls) ∨ emitDef (.refFreeze elem) le ls = (value, ls') ∨
+      emitDef (.ownerBorrow elem) le ls = (value, ls') := by
   simp only [eachElemValue, ite_true, bind_eq] at h
   obtain ⟨le', state, hr, h⟩ := h
   change (le, ls) = (le', state) at hr
@@ -378,7 +379,7 @@ theorem eachElemValue_ref_cases {x : VarId} {elem value : ValueId} {le : LEnv}
     simp only [hv] at h
     cases ht : lv.ty <;> simp only [ht] at h
     all_goals first
-      | exact freezeTo_cases h
+      | exact borrowTo_ref_cases h
       | exact Or.inl ⟨(Prod.mk.inj h).1.symm, (Prod.mk.inj h).2.symm⟩
 
 theorem eachElemValue_sim {cfg : Cfg} {env : Env} {cx : FnCtx}
@@ -397,9 +398,10 @@ theorem eachElemValue_sim {cfg : Cfg} {env : Env} {cx : FnCtx}
     simp [execPure, getVal_of hc, Goose.Core.expectRef]
   | true =>
     simp only [ite_true]
-    rcases eachElemValue_ref_cases h with ⟨rfl, rfl⟩ | hf
+    rcases eachElemValue_ref_cases h with ⟨rfl, rfl⟩ | hf | hf
     · exact SimG.ret P
-    · have hs : SimG cx pt frk (pure () >>= fun _ => pure (Val.ref loc))
+    all_goals
+      have hs : SimG cx pt frk (pure () >>= fun _ => pure (Val.ref loc))
           (fun v pt' fr' => Post cfg env cx ls fr ls' fr' pt' [(value, .val v)]) := by
         refine SimG.bind (leaf_def (c := pure ()) P hf hext (by simp)
           (fun _ => RVal.val (.ref loc)) ?_) fun _ pt' fr' P' => SimG.ret P'
