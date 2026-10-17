@@ -35,6 +35,14 @@ theorem ReplacementRootsWithin.access_expr {query : ReplacementRootQuery} {func 
     ReplacementRootsWithin query (roots.flatMap func.expandParameterRoot) :=
   known.expanded_mono (Core.Sound.rpExpr_accessRoots env expr before actual after roots replayed access)
 
+theorem ReplacementRootsWithin.access_view {query : ReplacementRootQuery} {func : Func}
+    {env : PEnv} {view : View} {before after : RState} {actual roots : List RootRef}
+    (known : ReplacementRootsWithin query (actual.flatMap func.expandParameterRoot))
+    (replayed : rpView env view before = .ok (actual, after))
+    (access : env.access.viewRoots view = .ok roots) :
+    ReplacementRootsWithin query (roots.flatMap func.expandParameterRoot) :=
+  known.expanded_mono (Core.Sound.rpView_accessRoots env view before actual after roots replayed access)
+
 theorem replacementApart_of_expanded_source {func : Func}
     {queries : ReplacementQueries} {owner : ValueId} {query : ReplacementRootQuery}
     {ownerRoots sourceRoots : List RootRef} (closed : ParameterRootsClosed func)
@@ -195,6 +203,7 @@ theorem ReplacementDemandContext.descendant_replay_read_load_apart {module : Cor
 #print axioms replacementApart_of_expanded_source
 #print axioms ReplacementRootsWithin.access_place
 #print axioms ReplacementRootsWithin.access_expr
+#print axioms ReplacementRootsWithin.access_view
 #print axioms ReplacementDemandContext.descendant_read_query_apart
 #print axioms ReplacementDemandContext.descendant_place_query_apart
 #print axioms ReplacementDemandContext.descendant_call_query_apart
