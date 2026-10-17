@@ -1,6 +1,6 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** paused 2026-10-14 at the owner's request. Start no lane until the owner resumes the campaign.
+**Status:** resumed 2026-10-17 at the owner's request. Local implementation and verification are active. Pushes remain unauthorized.
 **Branch:** `master`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
@@ -24,7 +24,7 @@ Production BCE qualification is also red. The seven fixtures on `goose-ir-finish
 
 Recommended construction-only publication, adapter, provenance and target operations are approved. The parked implementation uses `i_dest_publish_ref`, `i_dest_adapt` and `i_dest_adapt_finish`. Adapter finish preserves the built or cancelled kind and restores the original receiving metadata. Document exact wire operands and native target operations before integrating those unfinished changes. No owner decision is pending.
 
-**Open lanes:** No campaign process is running. Incomplete working edits were committed on their lane branches before stopping. The table below names all 37 unmerged local branches. Eleven are current campaign lanes or the performance baseline. Twenty-six are owner-managed refs. A different branch history does not prove its patch is missing from master. Review specific file deltas and dependencies.
+**Open lanes:** Lowering, independent construction GIR, native construction handlers, construction execution proofs, and Core audit registration resumed on 2026-10-17. The paused inventory below records their starting branches. Incomplete working edits were committed on their lane branches before stopping. The table below names all 37 unmerged local branches. Eleven are current campaign lanes or the performance baseline. Twenty-six are owner-managed refs. A different branch history does not prove its patch is missing from master. Review specific file deltas and dependencies.
 
 | Unmerged branch | Tip | Item | State | Next step after resume |
 |---|---|---|---|---|
@@ -566,6 +566,8 @@ The most common exact multi-feature sets are `string-value + struct` (7 programs
 - The checker already groups roots into classes: one helper called with many distinct globals and many locals at different depths gets two specializations, not one per call site. The synthetic family therefore has to vary the dimensions that do multiply specializations; `B1`'s dimension attribution on Aincrad3 says which those are, and `B5` builds its members from that.
 
 ## 13. Campaign log
+
+- **Resumed 2026-10-17 at the owner's request.** Integration starts from `8eb50c00`, which includes upstream updates after the pause. Campaign closeout is inactive. Five lanes resume accepted-state lowering, construction GIR, native handlers, whole-execution proofs, and independent Core audit registration. Retained per-lane Lean caches are empty. Seed focused builds from a copy of the main checkout's `.lake/build`, then let Lake revalidate inputs. The external Aincrad3-owned worktree is preserved. No new gate result or performance claim is made.
 
 *(append-only; one line per gate or phase end. Resumed entries here supersede
 the pending statuses in the paused handoff above.)*
