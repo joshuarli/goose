@@ -191,4 +191,58 @@ theorem emitsOnly_lowerExpr_ref {module : GIR.Module} {types : Array (Option VTy
   change EmitsOnlyRun _ (lowerPlace place >>= fun address => borrowTo mutability address)
   exact emitted.bind (emitsOnly_borrowTo mutability)
 
+theorem ReplacementInstApart.slotAddr {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner value : ValueId} {slot : SlotId} :
+    ReplacementInstApart module types queries owner (.def value (.slotAddr slot)) := by
+  constructor
+  · intro operand member _
+    simp [emptyFactSourceOperands, ReplacementContentFlow.Model.accessOperands] at member
+  · intro operand member _
+    simp [ReplacementContentFlow.Model.loadedResults] at member
+  · intro result fn args origin same
+    cases same
+
+theorem ReplacementInstApart.globalAddr {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner value : ValueId} {global : GlobalId} :
+    ReplacementInstApart module types queries owner (.def value (.globalAddr global)) := by
+  constructor
+  · intro operand member _
+    simp [emptyFactSourceOperands, ReplacementContentFlow.Model.accessOperands] at member
+  · intro operand member _
+    simp [ReplacementContentFlow.Model.loadedResults] at member
+  · intro result fn args origin same
+    cases same
+
+theorem ReplacementInstApart.fieldAddr {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner value address : ValueId} {field : Nat} :
+    ReplacementInstApart module types queries owner (.def value (.fieldAddr address field)) := by
+  constructor
+  · intro operand member _
+    simp [emptyFactSourceOperands, ReplacementContentFlow.Model.accessOperands] at member
+  · intro operand member _
+    simp [ReplacementContentFlow.Model.loadedResults] at member
+  · intro result fn args origin same
+    cases same
+
+theorem emitsOnly_lowerPlace_var {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner : ValueId} (slot : VarId) :
+    EmitsOnlyRun (ReplacementInstApart module types queries owner) (lowerPlace (.var slot)) := by
+  intro env before value after run
+  exact emitsOnly_emitDef run .slotAddr
+
+theorem emitsOnly_lowerPlace_global {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner : ValueId} (global : GlobalId) :
+    EmitsOnlyRun (ReplacementInstApart module types queries owner) (lowerPlace (.global global)) := by
+  intro env before value after run
+  exact emitsOnly_emitDef run .globalAddr
+
+theorem emitsOnly_lowerPlace_field {module : GIR.Module} {types : Array (Option VTy)}
+    {queries : ReplacementQueries} {owner : ValueId} (place : Place) (field : Nat)
+    (emitted : EmitsOnlyRun (ReplacementInstApart module types queries owner) (lowerPlace place)) :
+    EmitsOnlyRun (ReplacementInstApart module types queries owner) (lowerPlace (.field place field)) := by
+  change EmitsOnlyRun _ (lowerPlace place >>= fun address => emitDef (.fieldAddr address field))
+  apply emitted.bind
+  intro address env before value after run
+  exact emitsOnly_emitDef run .fieldAddr
+
 end Goose.Lower.Validation
