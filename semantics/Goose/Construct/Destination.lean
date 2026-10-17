@@ -110,30 +110,55 @@ private def lookupDestination (id : DestinationId) : ConstructionM PendingDestin
   | some destination => pure destination
   | none => ConstructionM.fail .destination
 
+def destinationCanWrite (state : ConstructionState) (id : DestinationId) : Bool := Id.run do
+  let mut current := id
+  for _ in [0:state.destinations.size + 1] do
+    let some owner := state.destinations[current]? | return false
+    match owner.use with
+    | .receiver => return true
+    | .child parentId =>
+        let some parent := state.destinations[parentId]? | return false
+        match parent.progress with
+        | .suspended _ expected =>
+            if expected != current then return false
+            current := parentId
+        | _ => return false
+    | .replacement supersededId =>
+        let some superseded := state.destinations[supersededId]? | return false
+        match superseded.progress with
+        | .exiting _ expected =>
+            if expected != current then return false
+            current := supersededId
+        | _ => return false
+  return false
+
+theorem destinationCanWrite_result (state : ConstructionState) (id : DestinationId) :
+    destinationCanWrite state id = Id.run do
+      let mut current := id
+      for _ in [0:state.destinations.size + 1] do
+        let some owner := state.destinations[current]? | return false
+        match owner.use with
+        | .receiver => return true
+        | .child parentId =>
+            let some parent := state.destinations[parentId]? | return false
+            match parent.progress with
+            | .suspended _ expected =>
+                if expected != current then return false
+                current := parentId
+            | _ => return false
+        | .replacement supersededId =>
+            let some superseded := state.destinations[supersededId]? | return false
+            match superseded.progress with
+            | .exiting _ expected =>
+                if expected != current then return false
+                current := supersededId
+            | _ => return false
+      return false := rfl
+
 private def writableDestination (id : DestinationId) : ConstructionM PendingDestination := do
   let destination ← lookupDestination id
   let state ← ConstructionM.get
-  let valid := Id.run do
-    let mut current := id
-    for _ in [0:state.destinations.size + 1] do
-      let some owner := state.destinations[current]? | return false
-      match owner.use with
-      | .receiver => return true
-      | .child parentId =>
-          let some parent := state.destinations[parentId]? | return false
-          match parent.progress with
-          | .suspended _ expected =>
-              if expected != current then return false
-              current := parentId
-          | _ => return false
-      | .replacement supersededId =>
-          let some superseded := state.destinations[supersededId]? | return false
-          match superseded.progress with
-          | .exiting _ expected =>
-              if expected != current then return false
-              current := supersededId
-          | _ => return false
-    return false
+  let valid := destinationCanWrite state id
   if !valid then ConstructionM.fail .protocol
   pure destination
 
@@ -159,6 +184,64 @@ private def emit (event : ConstructionEvent) : ConstructionM Unit := do
   let state ← ConstructionM.get
   ConstructionM.set { state with events := state.events ++ [event] }
 
+theorem lookupDestination_result (id : DestinationId) (state : ConstructionState) :
+    lookupDestination id state = match state.destinations[id]? with
+      | some destination => .ok destination state
+      | none => .fault .destination state := by
+  simp only [lookupDestination, ConstructionM.get, bind]
+  cases state.destinations[id]? <;> rfl
+
+theorem lookupStorage_result (id : StorageId) (state : ConstructionState) :
+    lookupStorage id state = match state.storage[id]? with
+      | some storage => .ok storage state
+      | none => .fault .storage state := by
+  simp only [lookupStorage, ConstructionM.get, bind]
+  cases state.storage[id]? <;> rfl
+
+theorem replaceDestination_result (id : DestinationId) (destination : PendingDestination)
+    (state : ConstructionState) :
+    replaceDestination id destination state =
+      if id < state.destinations.size then
+        .ok () { state with destinations := state.destinations.set! id destination }
+      else .fault .destination state := by
+  by_cases valid : id < state.destinations.size
+  · simp [replaceDestination, ConstructionM.get, bind, valid, ConstructionM.set]
+  · simp [replaceDestination, ConstructionM.get, bind, valid, ConstructionM.fail]
+
+theorem replaceStorage_result (id : StorageId) (storage : ReceivingStorage) (state : ConstructionState) :
+    replaceStorage id storage state =
+      if id < state.storage.size then
+        .ok () { state with storage := state.storage.set! id storage }
+      else .fault .storage state := by
+  by_cases valid : id < state.storage.size
+  · simp [replaceStorage, ConstructionM.get, bind, valid, ConstructionM.set]
+  · simp [replaceStorage, ConstructionM.get, bind, valid, ConstructionM.fail]
+
+theorem emit_result (event : ConstructionEvent) (state : ConstructionState) :
+    emit event state = .ok () { state with events := state.events ++ [event] } := rfl
+
+theorem writableDestination_result (id : DestinationId) (state : ConstructionState) :
+    writableDestination id state = match state.destinations[id]? with
+      | none => .fault .destination state
+      | some destination =>
+          match destinationCanWrite state id with
+          | true => .ok destination state
+          | false => .fault .protocol state := by
+  simp only [writableDestination, lookupDestination_result, ConstructionM.get, bind]
+  cases present : state.destinations[id]? with
+  | none => simp [present, ConstructionM.fail, pure]
+  | some destination =>
+      cases canWrite : destinationCanWrite state id <;>
+        simp [present, canWrite, ConstructionM.fail, pure]
+
+theorem writableDestination_finalState (id : DestinationId) (state : ConstructionState) :
+    (writableDestination id state).finalState = state := by
+  rw [writableDestination_result]
+  cases state.destinations[id]? with
+  | none => rfl
+  | some destination =>
+      cases destinationCanWrite state id <;> rfl
+
 def reserveStorage (bytes : ByteArray := ByteArray.empty) (publishedCount : Nat := 0) :
     ConstructionM StorageId := do
   let state ← ConstructionM.get
@@ -174,12 +257,22 @@ private def lengthPrefix : ByteArray := ⟨#[0, 0, 0, 0]⟩
 private def hasPrefix (layout : ReceivingLayout) (request : ConstructionRequest) : Bool :=
   layout == .packed && request == .value
 
+theorem hasPrefix_result (layout : ReceivingLayout) (request : ConstructionRequest) :
+    hasPrefix layout request = (layout == .packed && request == .value) := rfl
+
 private def available (layout : ReceivingLayout) (storage : ReceivingStorage) (count : Nat) : Bool :=
   match layout with
   | .limited capacity _ => storage.publishedCount + count ≤ capacity
   | .fixed expected => count ≤ expected
   | .packed => count < 2 ^ 32
   | .elements => true
+
+theorem available_result (layout : ReceivingLayout) (storage : ReceivingStorage) (count : Nat) :
+    available layout storage count = match layout with
+      | .limited capacity _ => storage.publishedCount + count ≤ capacity
+      | .fixed expected => count ≤ expected
+      | .packed => count < 2 ^ 32
+      | .elements => true := rfl
 
 private def writingAvailable (destination : PendingDestination) (storage : ReceivingStorage) (count : Nat) : Bool :=
   match destination.backing with
@@ -188,6 +281,24 @@ private def writingAvailable (destination : PendingDestination) (storage : Recei
       | some receiving => available receiving.layout storage count
       | none => true
   | .staged _ _ => true
+
+theorem writingAvailable_result (destination : PendingDestination) (storage : ReceivingStorage)
+    (count : Nat) :
+    writingAvailable destination storage count = match destination.backing with
+      | .direct _ =>
+          (match destination.layout with
+          | .limited capacity _ => storage.publishedCount + count ≤ capacity
+          | .fixed expected => count ≤ expected
+          | .packed => count < 2 ^ 32
+          | .elements => true) &&
+          (match destination.adaptation with
+          | some receiving => match receiving.layout with
+              | .limited capacity _ => storage.publishedCount + count ≤ capacity
+              | .fixed expected => count ≤ expected
+              | .packed => count < 2 ^ 32
+              | .elements => true
+          | none => true)
+      | .staged _ _ => true := rfl
 
 private def active (destination : PendingDestination) : Bool :=
   match destination.progress with
@@ -239,6 +350,78 @@ def openDestination (storageId : StorageId) (capability : Core.Destination Ty)
 def openDestinationDirect (storageId : StorageId) (capability : Core.Destination Ty)
     (layout : ReceivingLayout) (knownCount : Option Nat) : ConstructionM DestinationId :=
   openDestinationWith .explicit storageId capability layout knownCount
+
+theorem openDestination_transition (storageId : StorageId) (capability : Core.Destination Ty)
+    (layout : ReceivingLayout) (knownCount : Option Nat) :
+    openDestination storageId capability layout knownCount = (do
+      let storage ← lookupStorage storageId
+      let state ← ConstructionM.get
+      if state.destinations.any (fun d => (d.storage == storageId || d.backing.receiverStorage == storageId) && active d) then
+        ConstructionM.fail .ownership
+      if let some count := knownCount then
+        if !available layout storage count then ConstructionM.fail .capacity
+      else
+        pure ()
+      let backing ← match (StagingPolicy.automatic : StagingPolicy), layout, knownCount with
+        | .automatic, .limited _ _, none => do pure (.staged storageId (← reserveStorage))
+        | _, _, _ => pure (DestinationBacking.direct storageId)
+      let state ← ConstructionM.get
+      let storage ← lookupStorage backing.writeStorage
+      let id := state.destinations.size
+      let start := match layout, backing with
+        | .limited _ slotBytes, .direct _ => storage.publishedCount * slotBytes
+        | _, _ => storage.bytes.size
+      if start > storage.bytes.size then ConstructionM.fail .storage
+      let capability := { capability with id := id, start := start }
+      let writeEnd := start + if hasPrefix layout capability.request then 4 else 0
+      let destination : PendingDestination := ⟨capability, backing, layout, .receiver, .open 0, writeEnd,
+        (match layout with | .limited _ _ => storage.bytes.size | _ => start), knownCount, none⟩
+      ConstructionM.set { state with destinations := state.destinations.push destination }
+      if hasPrefix layout capability.request then
+        replaceStorage backing.writeStorage { storage with bytes := storage.bytes ++ lengthPrefix }
+      emit (.begin id)
+      match backing with
+      | .staged _ _ => emit (.stage id)
+      | .direct _ => pure ()
+      pure id) := by
+  unfold openDestination openDestinationWith
+  rfl
+
+theorem openDestinationDirect_transition (storageId : StorageId) (capability : Core.Destination Ty)
+    (layout : ReceivingLayout) (knownCount : Option Nat) :
+    openDestinationDirect storageId capability layout knownCount = (do
+      let storage ← lookupStorage storageId
+      let state ← ConstructionM.get
+      if state.destinations.any (fun d => (d.storage == storageId || d.backing.receiverStorage == storageId) && active d) then
+        ConstructionM.fail .ownership
+      if let some count := knownCount then
+        if !available layout storage count then ConstructionM.fail .capacity
+      else
+        pure ()
+      let backing ← match (StagingPolicy.explicit : StagingPolicy), layout, knownCount with
+        | .automatic, .limited _ _, none => do pure (.staged storageId (← reserveStorage))
+        | _, _, _ => pure (DestinationBacking.direct storageId)
+      let state ← ConstructionM.get
+      let storage ← lookupStorage backing.writeStorage
+      let id := state.destinations.size
+      let start := match layout, backing with
+        | .limited _ slotBytes, .direct _ => storage.publishedCount * slotBytes
+        | _, _ => storage.bytes.size
+      if start > storage.bytes.size then ConstructionM.fail .storage
+      let capability := { capability with id := id, start := start }
+      let writeEnd := start + if hasPrefix layout capability.request then 4 else 0
+      let destination : PendingDestination := ⟨capability, backing, layout, .receiver, .open 0, writeEnd,
+        (match layout with | .limited _ _ => storage.bytes.size | _ => start), knownCount, none⟩
+      ConstructionM.set { state with destinations := state.destinations.push destination }
+      if hasPrefix layout capability.request then
+        replaceStorage backing.writeStorage { storage with bytes := storage.bytes ++ lengthPrefix }
+      emit (.begin id)
+      match backing with
+      | .staged _ _ => emit (.stage id)
+      | .direct _ => pure ()
+      pure id) := by
+  unfold openDestinationDirect openDestinationWith
+  rfl
 
 def stageDestination (id : DestinationId) : ConstructionM Unit := do
   let destination ← writableDestination id
@@ -425,6 +608,42 @@ private def publishReady (id : DestinationId) : ConstructionM Unit := do
       emit (.publish id)
   | _, _ => ConstructionM.fail .protocol
 
+theorem publishReady_transition (id : DestinationId) :
+    publishReady id = (do
+      let destination ← lookupDestination id
+      match destination.progress, destination.use with
+      | .built count, .receiver =>
+          let receiver ← lookupStorage destination.backing.receiverStorage
+          let storage ← match destination.backing with
+            | .direct _ => pure receiver
+            | .staged _ stageId => do
+                let stage ← lookupStorage stageId
+                emit (.copy (.storage stageId []) id)
+                let start := match destination.layout with
+                  | .limited _ slotBytes => receiver.publishedCount * slotBytes
+                  | _ => receiver.bytes.size
+                pure { receiver with bytes := overwriteBytes receiver.bytes start stage.bytes }
+          let publishedCount := match destination.layout with
+            | .elements | .limited _ _ => storage.publishedCount + count
+            | .packed | .fixed _ => count
+          replaceStorage destination.backing.receiverStorage { storage with publishedCount := publishedCount }
+          let publishedStart := match destination.backing, destination.layout with
+            | .staged _ _, .limited _ slotBytes => receiver.publishedCount * slotBytes
+            | .staged _ _, _ => receiver.bytes.size
+            | .direct _, _ => destination.capability.start
+          replaceDestination id { destination with
+            progress := .published count
+            writeEnd := publishedStart + (destination.writeEnd - destination.capability.start)
+            backing := .direct destination.backing.receiverStorage
+            capability := { destination.capability with start := publishedStart } }
+          match destination.backing with
+          | .direct _ => pure ()
+          | .staged _ stageId => replaceStorage stageId ⟨ByteArray.empty, 0⟩
+          emit (.publish id)
+      | _, _ => ConstructionM.fail .protocol) := by
+  unfold publishReady
+  rfl
+
 def publishOperation (ids : List DestinationId) : ConstructionM Unit := do
   match preflightPublication (← ConstructionM.get) ids with
   | .error fault => ConstructionM.fail fault
@@ -452,6 +671,17 @@ private def descendantOf (destinations : Array PendingDestination) (ancestor : D
     | .receiver => return false
     | .replacement parent | .child parent => current := parent
   return false
+
+theorem descendantOf_result (destinations : Array PendingDestination) (ancestor id : DestinationId) :
+    descendantOf destinations ancestor id = Id.run do
+      let mut current := id
+      for _ in [0:destinations.size] do
+        if current == ancestor then return true
+        let some destination := destinations[current]? | return false
+        match destination.use with
+        | .receiver => return false
+        | .replacement parent | .child parent => current := parent
+      return false := rfl
 
 def abandonTree (id : DestinationId) : ConstructionM Unit := do
   let parent ← writableDestination id
@@ -521,6 +751,19 @@ private def protectedAbandonment : List PendingDestination → ConstructionM Uni
           destinations := state.destinations.set! id { destination with progress := .abandoned }
           events := state.events ++ [.abandon id] }
       else .fault .destination state
+
+theorem protectedAbandonment_nil_transition (state : ConstructionState) :
+    protectedAbandonment [] state = .ok () state := rfl
+
+theorem protectedAbandonment_cons_transition (destination : PendingDestination)
+    (rest : List PendingDestination) (state : ConstructionState) :
+    protectedAbandonment (destination :: rest) state =
+      if destination.capability.id < state.destinations.size then
+        protectedAbandonment rest { state with
+          destinations := state.destinations.set! destination.capability.id
+            { destination with progress := .abandoned }
+          events := state.events ++ [.abandon destination.capability.id] }
+      else .fault .destination state := rfl
 
 private theorem protectedAbandonment_storage (discarded : List PendingDestination) (state : ConstructionState) :
     (protectedAbandonment discarded state).finalState.storage = state.storage := by
@@ -624,6 +867,31 @@ private def landCompletedReplacement (replacementId supersededId : DestinationId
     replaceDestination parentId parent
   if superseded.capability.start < replacement.capability.start then
     emit (.relocate replacementId .exitValue)
+
+theorem landCompletedReplacement_transition (replacementId supersededId : DestinationId)
+    (count : Nat) (replacement superseded : PendingDestination)
+    (parentUpdate : Option (DestinationId × PendingDestination)) :
+    landCompletedReplacement replacementId supersededId count replacement superseded parentUpdate = (do
+      let _ ← lookupStorage replacement.storage
+      if replacement.capability.start < superseded.capability.start then ConstructionM.fail .ownership
+      let state ← ConstructionM.get
+      let discarded := state.destinations.toList.reverse.filter fun destination =>
+        destination.capability.id != replacementId &&
+          descendantOf state.destinations supersededId destination.capability.id && active destination
+      protectedAbandonment discarded
+      landReceivingStorage replacement.storage superseded.capability.start replacement.capability.start
+      replaceDestination replacementId { replacement with
+        capability := { replacement.capability with start := superseded.capability.start }
+        use := superseded.use
+        progress := .built count
+        writeEnd := replacement.writeEnd - (replacement.capability.start - superseded.capability.start)
+        rollbackEnd := superseded.rollbackEnd }
+      if let some (parentId, parent) := parentUpdate then
+        replaceDestination parentId parent
+      if superseded.capability.start < replacement.capability.start then
+        emit (.relocate replacementId .exitValue)) := by
+  unfold landCompletedReplacement
+  rfl
 
 def landExitReplacement (replacementId : DestinationId) : ConstructionM Unit := do
   let replacement ← lookupDestination replacementId
@@ -3122,5 +3390,915 @@ theorem DestinationBegins.covers (state : ConstructionState) (valid : Destinatio
     (id : DestinationId) : id ∈ destinationBeginIds state.events ↔ id < state.destinations.size := by
   rw [show destinationBeginIds state.events = List.range state.destinations.size from valid]
   exact List.mem_range
+
+def DestinationCapabilitiesIndexed (state : ConstructionState) : Prop :=
+  ∀ (index : DestinationId) (destination : PendingDestination),
+    state.destinations[index]? = some destination → destination.capability.id = index
+
+abbrev PreservesDestinationCapabilities (action : ConstructionM α) : Prop :=
+  ∀ state, DestinationCapabilitiesIndexed state → DestinationCapabilitiesIndexed (action state).finalState
+
+theorem initial_destination_capabilities : DestinationCapabilitiesIndexed ConstructionState.initial := by
+  intro index destination present
+  simp [ConstructionState.initial] at present
+
+private theorem indexed_set_array (state : ConstructionState) (id : DestinationId)
+    (destination : PendingDestination) (valid : DestinationCapabilitiesIndexed state)
+    (correct : destination.capability.id = id) :
+    DestinationCapabilitiesIndexed { state with destinations := state.destinations.set! id destination } := by
+  intro index stored present
+  simp only [Array.set!_eq_setIfInBounds,Array.getElem?_setIfInBounds] at present
+  by_cases same : id = index
+  · subst index
+    by_cases inside : id < state.destinations.size
+    · simp only [↓reduceIte,inside] at present
+      cases present
+      exact correct
+    · simp [inside] at present
+  · exact valid index stored (by simpa only [same,↓reduceIte] using present)
+
+private theorem indexed_push_array (state : ConstructionState) (destination : PendingDestination)
+    (valid : DestinationCapabilitiesIndexed state)
+    (correct : destination.capability.id = state.destinations.size) :
+    DestinationCapabilitiesIndexed { state with destinations := state.destinations.push destination } := by
+  intro index stored present
+  simp only [Array.getElem?_push] at present
+  by_cases same : index = state.destinations.size
+  · simp only [same,↓reduceIte] at present
+    cases present
+    exact correct.trans same.symm
+  · exact valid index stored (by simpa only [same,↓reduceIte] using present)
+
+private theorem indexed_bind (action : ConstructionM α) (next : α → ConstructionM β)
+    (first : PreservesDestinationCapabilities action)
+    (remaining : ∀ value, PreservesDestinationCapabilities (next value)) :
+    PreservesDestinationCapabilities (action >>= next) := by
+  intro state valid
+  have preserved := first state valid
+  cases result : action state with
+  | ok value after =>
+      simp only [bind,result]
+      exact remaining value after (by simpa only [result,ConstructionResult.finalState] using preserved)
+  | fault kind after => simpa only [bind,result,ConstructionResult.finalState] using preserved
+
+private theorem indexed_pure (value : α) : PreservesDestinationCapabilities (pure value) := fun _ valid => valid
+private theorem indexed_fail (kind : ConstructionFault) :
+    PreservesDestinationCapabilities (ConstructionM.fail (α := α) kind) := fun _ valid => valid
+private theorem indexed_fault_bind (kind : ConstructionFault) (next : α → ConstructionM β) :
+    PreservesDestinationCapabilities (ConstructionM.fail kind >>= next) := fun _ valid => valid
+private theorem indexed_get : PreservesDestinationCapabilities ConstructionM.get := fun _ valid => valid
+
+private theorem indexed_get_bind (next : ConstructionState → ConstructionM α)
+    (safe : ∀ state, DestinationCapabilitiesIndexed state → DestinationCapabilitiesIndexed (next state state).finalState) :
+    PreservesDestinationCapabilities (ConstructionM.get >>= next) := safe
+
+private theorem indexed_set_then (state updated : ConstructionState) (next : Unit → ConstructionM α)
+    (updatedValid : DestinationCapabilitiesIndexed updated)
+    (safe : ∀ value, PreservesDestinationCapabilities (next value)) :
+    DestinationCapabilitiesIndexed ((ConstructionM.set updated >>= next) state).finalState := safe () updated updatedValid
+
+private theorem indexed_if (condition : Prop) [Decidable condition] (yes no : ConstructionM α)
+    (first : PreservesDestinationCapabilities yes) (second : PreservesDestinationCapabilities no) :
+    PreservesDestinationCapabilities (if condition then yes else no) := by
+  by_cases selected : condition
+  · simpa only [selected,↓reduceIte] using first
+  · simpa only [selected,↓reduceIte] using second
+
+private theorem indexed_lookup_destination_bind (id : DestinationId)
+    (next : PendingDestination → ConstructionM α)
+    (safe : ∀ destination, destination.capability.id = id → PreservesDestinationCapabilities (next destination)) :
+    PreservesDestinationCapabilities (lookupDestination id >>= next) := by
+  intro state valid
+  simp only [lookupDestination,ConstructionM.get,bind,pure]
+  cases present : state.destinations[id]? with
+  | none => exact valid
+  | some destination => exact safe destination (valid id destination present) state valid
+
+private theorem indexed_lookup_storage (id : StorageId) : PreservesDestinationCapabilities (lookupStorage id) := by
+  intro state valid
+  simp only [lookupStorage,ConstructionM.get,bind,pure]
+  cases state.storage[id]? <;> exact valid
+
+private theorem indexed_replace_destination (id : DestinationId) (destination : PendingDestination)
+    (correct : destination.capability.id = id) : PreservesDestinationCapabilities (replaceDestination id destination) := by
+  intro state valid
+  simp only [replaceDestination,ConstructionM.get,bind]
+  split
+  · exact indexed_set_array state id destination valid correct
+  · exact valid
+
+private theorem indexed_replace_storage (id : StorageId) (storage : ReceivingStorage) :
+    PreservesDestinationCapabilities (replaceStorage id storage) := by
+  intro state valid
+  simp only [replaceStorage,ConstructionM.get,bind]
+  split <;> exact valid
+
+private theorem indexed_emit (event : ConstructionEvent) : PreservesDestinationCapabilities (emit event) := fun _ valid => valid
+
+private theorem construction_bind_assoc (action : ConstructionM α) (first : α → ConstructionM β)
+    (next : β → ConstructionM γ) :
+    (action >>= first) >>= next = action >>= fun value => first value >>= next := by
+  funext state
+  simp only [bind]
+  cases action state <;> rfl
+
+private theorem construction_pure_bind (value : α) (next : α → ConstructionM β) :
+    pure value >>= next = next value := rfl
+
+private theorem construction_if_bind (condition : Prop) [Decidable condition]
+    (yes no : ConstructionM α) (next : α → ConstructionM β) :
+    (if condition then yes else no) >>= next =
+      if condition then yes >>= next else no >>= next := by
+  by_cases selected : condition <;> simp [selected]
+
+private theorem indexed_writable_bind (id : DestinationId) (next : PendingDestination → ConstructionM α)
+    (safe : ∀ destination, destination.capability.id = id → PreservesDestinationCapabilities (next destination)) :
+    PreservesDestinationCapabilities (writableDestination id >>= next) := by
+  unfold writableDestination
+  simp only [construction_bind_assoc,construction_if_bind,construction_pure_bind]
+  apply indexed_lookup_destination_bind
+  intro destination correct
+  apply indexed_bind ConstructionM.get _ indexed_get
+  intro state
+  try dsimp only
+  try simp only [construction_bind_assoc,construction_if_bind,construction_pure_bind]
+  apply indexed_if
+  · exact indexed_fault_bind _ _
+  · exact safe destination correct
+
+theorem reserveStorage_destination_capabilities (bytes : ByteArray) (count : Nat) :
+    PreservesDestinationCapabilities (reserveStorage bytes count) := fun _ valid => valid
+
+theorem appendStdout_destination_capabilities (bytes : ByteArray) :
+    PreservesDestinationCapabilities (appendStdout bytes) := fun _ valid => valid
+
+theorem recordCopy_destination_capabilities (source : CopySource) (id : DestinationId) :
+    PreservesDestinationCapabilities (recordCopy source id) := by
+  unfold recordCopy
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem writeElement_destination_capabilities (id : DestinationId) (bytes : ByteArray) :
+    PreservesDestinationCapabilities (writeElement id bytes) := by
+  unfold writeElement
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem finishDestination_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (finishDestination id) := by
+  unfold finishDestination
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem attachChild_destination_capabilities (parent child : DestinationId) :
+    PreservesDestinationCapabilities (attachChild parent child) := by
+  unfold attachChild
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem attachExtension_destination_capabilities (parent child : DestinationId) :
+    PreservesDestinationCapabilities (attachExtension parent child) := by
+  unfold attachExtension
+  apply indexed_writable_bind
+  intro parent parentCorrect
+  apply indexed_writable_bind
+  intro child childCorrect
+  cases backing : child.backing
+  all_goals simp only [construction_pure_bind]
+  all_goals repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem attachElementExtension_destination_capabilities (parent child : DestinationId) :
+    PreservesDestinationCapabilities (attachElementExtension parent child) := by
+  unfold attachElementExtension
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem publishElementDestination_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (publishElementDestination id) := by
+  unfold publishElementDestination
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem retireRepeatedSource_destination_capabilities (parent source : DestinationId) :
+    PreservesDestinationCapabilities (retireRepeatedSource parent source) := by
+  unfold retireRepeatedSource
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem truncateConstructionStorage_destination_capabilities (storage : StorageId) (start finish count : Nat) (owner : Option DestinationId) (retainSlots : Bool) :
+    PreservesDestinationCapabilities (truncateConstructionStorage storage start finish count owner retainSlots) := by
+  unfold truncateConstructionStorage
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem prepareNamedBinding_destination_capabilities (id : DestinationId) (ty : Ty) :
+    PreservesDestinationCapabilities (prepareNamedBinding id ty) := by
+  unfold prepareNamedBinding
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem fitStagedDestination_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (fitStagedDestination id) := by
+  unfold fitStagedDestination
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem removeConstructionHeader_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (removeConstructionHeader id) := by
+  unfold removeConstructionHeader
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem adaptDestinationType_destination_capabilities (id : DestinationId) (ty : Ty) :
+    PreservesDestinationCapabilities (adaptDestinationType id ty) := by
+  unfold adaptDestinationType
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem adaptConstructionDestination_destination_capabilities (id : DestinationId) (ty : Ty) (request : ConstructionRequest) :
+    PreservesDestinationCapabilities (adaptConstructionDestination id ty request) := by
+  unfold adaptConstructionDestination
+  apply indexed_writable_bind
+  intro destination correct
+  generalize prefixEq : (match ty with
+    | .varr _ => request == ConstructionRequest.value
+    | _ => false) = producerPrefix
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem finishConstructionAdaptation_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (finishConstructionAdaptation id) := by
+  unfold finishConstructionAdaptation
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible exact removeConstructionHeader_destination_capabilities _
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem normalizeProducerDestination_destination_capabilities (id : DestinationId) (ty : Ty) :
+    PreservesDestinationCapabilities (normalizeProducerDestination id ty) := by
+  unfold normalizeProducerDestination
+  apply indexed_writable_bind
+  intro destination correct
+  generalize prefixEq : (match ty with
+    | .varr _ => destination.capability.request == ConstructionRequest.value
+    | _ => false) = producerPrefix
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible exact removeConstructionHeader_destination_capabilities _
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | dsimp only
+    | split
+    | intro value
+
+theorem restoreReceivingLayout_destination_capabilities (id : DestinationId) (layout : ReceivingLayout) :
+    PreservesDestinationCapabilities (restoreReceivingLayout id layout) := by
+  apply indexed_writable_bind
+  intro destination correct
+  cases destination.progress
+  all_goals try exact indexed_fail _
+  apply indexed_if
+  · exact indexed_fail _
+  · exact indexed_replace_destination _ _ correct
+
+theorem acknowledgeAbandonment_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (acknowledgeAbandonment id) := by
+  apply indexed_lookup_destination_bind
+  intro destination correct
+  cases destination.progress
+  all_goals try exact indexed_fail _
+  exact indexed_replace_destination _ _ correct
+
+private theorem indexed_protectedAbandonment (discarded : List PendingDestination) :
+    PreservesDestinationCapabilities (protectedAbandonment discarded) := by
+  intro state valid
+  induction discarded generalizing state with
+  | nil => exact valid
+  | cons destination rest ih =>
+      simp only [protectedAbandonment]
+      split
+      · apply ih
+        exact indexed_set_array state destination.capability.id _ valid rfl
+      · exact valid
+
+theorem protectedAbandonment_destination_capabilities (discarded : List PendingDestination) :
+    PreservesDestinationCapabilities (protectedAbandonment discarded) :=
+  indexed_protectedAbandonment discarded
+
+theorem abandonPreservingExit_destination_capabilities (id replacement : DestinationId) :
+    PreservesDestinationCapabilities (abandonPreservingExit id replacement) := by
+  intro state valid
+  unfold abandonPreservingExit
+  simp only [ConstructionM.get,bind]
+  cases protectedExitDiscarded state id replacement with
+  | error _ => exact valid
+  | ok discarded => exact indexed_protectedAbandonment discarded state valid
+
+theorem landReceivingStorage_destination_capabilities (storage : StorageId) (receivingStart payloadStart : Nat) :
+    PreservesDestinationCapabilities (landReceivingStorage storage receivingStart payloadStart) := by
+  intro state valid
+  unfold landReceivingStorage
+  cases present : state.storage[storage]? with
+  | none => exact valid
+  | some receiver =>
+      dsimp only
+      split <;> exact valid
+
+private theorem indexed_forInLoop (values : List α)
+    (body : (value : α) → value ∈ values → β → ConstructionM (ForInStep β))
+    (safe : ∀ value member accumulator, PreservesDestinationCapabilities (body value member accumulator))
+    (remaining : List α) (accumulator : β) (inside : ∃ earlier, earlier ++ remaining = values) :
+    PreservesDestinationCapabilities (List.forIn'.loop values body remaining accumulator inside) := by
+  induction remaining generalizing accumulator with
+  | nil => exact indexed_pure _
+  | cons value rest ih =>
+      simp only [List.forIn'.loop]
+      apply indexed_bind
+      · exact safe _ _ _
+      · intro step
+        cases step with
+        | done accumulator => exact indexed_pure _
+        | yield accumulator => exact ih _ _
+
+private theorem indexed_forIn (values : List α) (accumulator : β)
+    (body : α → β → ConstructionM (ForInStep β))
+    (safe : ∀ value accumulator, PreservesDestinationCapabilities (body value accumulator)) :
+    PreservesDestinationCapabilities (forIn values accumulator body) := by
+  apply indexed_forInLoop
+  intro value member accumulator
+  exact safe value accumulator
+
+private theorem indexed_foreach (values : List α) (body : α → ConstructionM Unit)
+    (safe : ∀ value, PreservesDestinationCapabilities (body value)) :
+    PreservesDestinationCapabilities (do for value in values do body value) := by
+  apply indexed_bind
+  · apply indexed_forInLoop
+    intro value member accumulator
+    apply indexed_bind
+    · exact safe value
+    · intro _; exact indexed_pure _
+  · intro _; exact indexed_pure _
+
+
+theorem abandonDestination_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (abandonDestination id) := by
+  unfold abandonDestination
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | with_reducible exact reserveStorage_destination_capabilities _ _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | solve
+      | with_reducible apply indexed_push_array
+        · assumption
+        · rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_get_bind
+    | with_reducible apply indexed_set_then
+    | with_reducible apply indexed_forIn
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | assumption
+    | dsimp only
+    | split
+    | intro value
+
+theorem stageDestination_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (stageDestination id) := by
+  unfold stageDestination
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | with_reducible exact reserveStorage_destination_capabilities _ _
+    | with_reducible exact abandonDestination_destination_capabilities _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | solve
+      | with_reducible apply indexed_push_array
+        · assumption
+        · rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_get_bind
+    | with_reducible apply indexed_set_then
+    | with_reducible apply indexed_forIn
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | assumption
+    | dsimp only
+    | split
+    | intro value
+
+theorem abandonTree_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (abandonTree id) := by
+  unfold abandonTree
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | with_reducible exact reserveStorage_destination_capabilities _ _
+    | with_reducible exact abandonDestination_destination_capabilities _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | solve
+      | with_reducible apply indexed_push_array
+        · assumption
+        · rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | with_reducible apply indexed_get_bind
+    | with_reducible apply indexed_set_then
+    | with_reducible apply indexed_forIn
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | assumption
+    | dsimp only
+    | split
+    | intro value
+
+private theorem indexed_get_push_bind (destination : ConstructionState → PendingDestination)
+    (next : ConstructionState → ConstructionM α)
+    (fresh : ∀ state, (destination state).capability.id = state.destinations.size)
+    (safe : ∀ state, PreservesDestinationCapabilities (next state)) :
+    PreservesDestinationCapabilities (do
+      let state ← ConstructionM.get
+      ConstructionM.set { state with destinations := state.destinations.push (destination state) }
+      next state) := by
+  intro state valid
+  exact safe state _ (indexed_push_array state (destination state) valid (fresh state))
+
+theorem openChild_destination_capabilities (parent : DestinationId) (ty : Ty) (layout : ReceivingLayout) :
+    PreservesDestinationCapabilities (openChild parent ty layout) := by
+  unfold openChild
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | with_reducible exact reserveStorage_destination_capabilities _ _
+    | with_reducible exact abandonDestination_destination_capabilities _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | solve
+      | with_reducible apply indexed_push_array
+        · assumption
+        · rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | solve
+      | with_reducible apply indexed_get_push_bind
+        · intro state; rfl
+        · intro state
+          repeat' first
+            | with_reducible exact indexed_pure _
+            | with_reducible exact indexed_fault_bind _ _
+            | with_reducible exact indexed_fail _
+            | with_reducible exact indexed_lookup_storage _
+            | with_reducible exact indexed_replace_storage _ _
+            | with_reducible exact indexed_emit _
+            | solve
+              | with_reducible apply indexed_replace_destination
+                first | assumption | rfl
+            | with_reducible apply indexed_bind
+            | with_reducible apply indexed_if
+            | dsimp only
+            | split
+            | intro value
+    | with_reducible apply indexed_get_bind
+    | with_reducible apply indexed_set_then
+    | with_reducible apply indexed_forIn
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | assumption
+    | dsimp only
+    | split
+    | intro value
+
+theorem openExtension_destination_capabilities (parent : DestinationId) (request : ConstructionRequest) (count : Option Nat) :
+    PreservesDestinationCapabilities (openExtension parent request count) := by
+  unfold openExtension
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | with_reducible exact reserveStorage_destination_capabilities _ _
+    | with_reducible exact abandonDestination_destination_capabilities _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | solve
+      | with_reducible apply indexed_push_array
+        · assumption
+        · rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | solve
+      | with_reducible apply indexed_get_push_bind
+        · intro state; rfl
+        · intro state
+          repeat' first
+            | with_reducible exact indexed_pure _
+            | with_reducible exact indexed_fault_bind _ _
+            | with_reducible exact indexed_fail _
+            | with_reducible exact indexed_lookup_storage _
+            | with_reducible exact indexed_replace_storage _ _
+            | with_reducible exact indexed_emit _
+            | solve
+              | with_reducible apply indexed_replace_destination
+                first | assumption | rfl
+            | with_reducible apply indexed_bind
+            | with_reducible apply indexed_if
+            | dsimp only
+            | split
+            | intro value
+    | with_reducible apply indexed_get_bind
+    | with_reducible apply indexed_set_then
+    | with_reducible apply indexed_forIn
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | assumption
+    | dsimp only
+    | split
+    | intro value
+
+theorem openElementExtension_destination_capabilities (parent : DestinationId) (ty : Ty) (layout : ReceivingLayout) (count : Option Nat) (receiver : Loc) :
+    PreservesDestinationCapabilities (openElementExtension parent ty layout count receiver) := by
+  unfold openElementExtension
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | with_reducible exact reserveStorage_destination_capabilities _ _
+    | with_reducible exact abandonDestination_destination_capabilities _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | solve
+      | with_reducible apply indexed_push_array
+        · assumption
+        · rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | solve
+      | with_reducible apply indexed_get_push_bind
+        · intro state; rfl
+        · intro state
+          repeat' first
+            | with_reducible exact indexed_pure _
+            | with_reducible exact indexed_fault_bind _ _
+            | with_reducible exact indexed_fail _
+            | with_reducible exact indexed_lookup_storage _
+            | with_reducible exact indexed_replace_storage _ _
+            | with_reducible exact indexed_emit _
+            | solve
+              | with_reducible apply indexed_replace_destination
+                first | assumption | rfl
+            | with_reducible apply indexed_bind
+            | with_reducible apply indexed_if
+            | dsimp only
+            | split
+            | intro value
+    | with_reducible apply indexed_get_bind
+    | with_reducible apply indexed_set_then
+    | with_reducible apply indexed_forIn
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | assumption
+    | dsimp only
+    | split
+    | intro value
+
+theorem openExitReplacement_destination_capabilities (id : DestinationId) :
+    PreservesDestinationCapabilities (openExitReplacement id) := by
+  unfold openExitReplacement
+  repeat' first
+    | with_reducible exact indexed_pure _
+    | with_reducible exact indexed_fault_bind _ _
+    | with_reducible exact indexed_fail _
+    | with_reducible exact indexed_get
+    | with_reducible exact indexed_lookup_storage _
+    | with_reducible exact indexed_replace_storage _ _
+    | with_reducible exact indexed_emit _
+    | with_reducible exact reserveStorage_destination_capabilities _ _
+    | with_reducible exact abandonDestination_destination_capabilities _
+    | solve
+      | with_reducible apply indexed_replace_destination
+        first | assumption | rfl
+    | solve
+      | with_reducible apply indexed_push_array
+        · assumption
+        · rfl
+    | with_reducible apply indexed_writable_bind
+    | with_reducible apply indexed_lookup_destination_bind
+    | solve
+      | with_reducible apply indexed_get_push_bind
+        · intro state; rfl
+        · intro state
+          repeat' first
+            | with_reducible exact indexed_pure _
+            | with_reducible exact indexed_fault_bind _ _
+            | with_reducible exact indexed_fail _
+            | with_reducible exact indexed_lookup_storage _
+            | with_reducible exact indexed_replace_storage _ _
+            | with_reducible exact indexed_emit _
+            | solve
+              | with_reducible apply indexed_replace_destination
+                first | assumption | rfl
+            | with_reducible apply indexed_bind
+            | with_reducible apply indexed_if
+            | dsimp only
+            | split
+            | intro value
+    | with_reducible apply indexed_get_bind
+    | with_reducible apply indexed_set_then
+    | with_reducible apply indexed_forIn
+    | with_reducible apply indexed_bind
+    | with_reducible apply indexed_if
+    | assumption
+    | dsimp only
+    | split
+    | intro value
 
 end Goose.Construct
