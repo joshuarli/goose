@@ -20,7 +20,8 @@ def Func.receiverContentCeiling (f : Func) (p : Prov) (root : RootRef) : List Ro
 def Func.admittedCallReceiver (f : Func) (p : Prov) (value : ValueId)
     (mapped : List RootRef) : Bool :=
   (rootsAt p.vals value).all fun root =>
-    f.rootsWithin mapped (f.receiverContentCeiling p root)
+    f.rootsWithin mapped (f.receiverContentCeiling p root) &&
+      f.rootsWithin (f.receiverContentCeiling p root) mapped
 
 def Func.admittedInstruction (m : Module) (vt : Array (Option VTy))
     (f : Func) (p : Prov) : Inst → Bool
