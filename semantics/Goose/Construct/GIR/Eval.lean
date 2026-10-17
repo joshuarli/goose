@@ -292,7 +292,10 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
         pure (.built (← completedDestination id))
     | .resultExitDest position org =>
         let some (.construct id) := frame.activation.channels[position]? | fault .shape
-        pure (.dest (← liftConstruction (← origin org) (openExitReplacement id)))
+        let destination ← getDestination id
+        match destination.progress with
+        | .open 0 => pure (.dest id)
+        | _ => pure (.dest (← liftConstruction (← origin org) (openExitReplacement id)))
     | .targetDest target position org =>
         let some target := config.module.targets[target]? | fault .unbound
         let some activation := selectTarget? target (← EvalM.get).activations | fault .flow
@@ -311,14 +314,14 @@ def evalOp : Nat → Config → Func → Frame → Op → EvalM RVal
     | .destAbandon carrier org =>
         let cell ← getCell frame carrier
         let id ← getProtocol frame carrier
-        let direct := match cell with
-          | .dest found => found == id && (frame.vals.toList.any fun (_, value) =>
+        let pending ← getDestination id
+        let direct := match cell, pending.progress with
+          | .dest found, .built _ => found == id && (frame.vals.toList.any fun (_, value) =>
               match value with | .built built => built == id | _ => false)
-          | _ => false
+          | _, _ => false
         if direct then
           pure (.directCancelled id)
         else do
-          let pending ← getDestination id
           match pending.progress with
           | .exiting _ replacement => liftConstruction (← origin org) (abandonPreservingExit id replacement)
           | _ => liftConstruction (← origin org) (abandonTree id)
