@@ -5,20 +5,27 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Proofs.Fuel
 
-def ReflectM (source target : Nat → M α) (state : St) : Prop :=
-  ∀ fuel result, NonTimeout result → target fuel state = result →
+def ReflectMFuel (fuel : Nat) (source target : Nat → M α) (state : St) : Prop :=
+  ∀ result, NonTimeout result → target fuel state = result →
     ∃ sourceFuel, source sourceFuel state = result
+
+def ReflectM (source target : Nat → M α) (state : St) : Prop :=
+  ∀ fuel, ReflectMFuel fuel source target state
 
 def FuelMonotone (source : Nat → M α) : Prop :=
   ∀ n k, n ≤ k → MonoM (source n) (source k)
 
-def ReflectAt (cx : FnCtx) (pt : Pt) (fr : GIR.Frame) (source : Nat → M α)
+def ReflectAtFuel (fuel : Nat) (cx : FnCtx) (pt : Pt) (fr : GIR.Frame) (source : Nat → M α)
     (post : α → St → Pt → GIR.Frame → Prop) (state : St) : Prop :=
-  ∀ fuel result, NonTimeout result → runAt cx pt fr fuel state = result →
+  ∀ result, NonTimeout result → runAt cx pt fr fuel state = result →
     (∃ n value after pt' fr' residual,
       source n state = .ok value after ∧ post value after pt' fr' ∧
       residual ≤ fuel ∧ runAt cx pt' fr' residual after = result) ∨
     (∃ n stop after, source n state = .stop stop after ∧ result = .stop stop after)
+
+def ReflectAt (cx : FnCtx) (pt : Pt) (fr : GIR.Frame) (source : Nat → M α)
+    (post : α → St → Pt → GIR.Frame → Prop) (state : St) : Prop :=
+  ∀ fuel, ReflectAtFuel fuel cx pt fr source post state
 
 theorem ReflectM.refl (source : Nat → M α) (state : St) : ReflectM source source state :=
   fun fuel _ _ h => ⟨fuel,h⟩
