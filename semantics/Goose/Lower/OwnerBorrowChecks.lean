@@ -25,6 +25,11 @@ private def function : Func :=
 #guard function.permissionOfOp #[] #[] #[] #[(true, false)] 1 (.ownerBorrow 0) == (false, false)
 #guard function.permissionOfOp #[] #[] #[] #[(true, true)] 1 (.refFreeze 0) == (false, false)
 
+#guard ({ function with slots := #[⟨.grow (.int .i64), .immutable, 0, 0⟩] }).permissionOfOp
+  #[] #[] #[] #[] 0 (.slotAddr 0) == (false, true)
+#guard ({ function with slots := #[⟨.growshrink (.int .i64), .immutable, 0, 0⟩] }).permissionOfOp
+  #[] #[] #[] #[] 0 (.slotAddr 0) == (false, true)
+
 private def wire : String := (Json.wOp 1 (.ownerBorrow 0)).run {} |>.1
 
 private def tables : Json.Tables :=
