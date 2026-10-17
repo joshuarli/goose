@@ -161,7 +161,7 @@ theorem each_sim_at (n : Nat) (cx : FnCtx) (cfg : Cfg) (env : Env)
   | zero =>
     intro i fr s _ _
     simp only [execEach]
-    exact SimE.of_timeout_bind.at_state s
+    exact (SimE.of_simG SimG.of_timeout_bind).at_state s
   | succ n ih =>
     intro i fr s hinv hallowed
     rw [prepareReturn_execEach]
