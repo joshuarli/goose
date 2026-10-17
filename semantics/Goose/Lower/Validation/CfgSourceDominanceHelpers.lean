@@ -30,6 +30,13 @@ theorem ssa_freezeTo (loop : Option LoopCtx) (mu : Mutability) (value : ValueId)
       | exact ssa_value loop value
       | (rename_i mu _; cases mu <;> first | exact ssa_value loop value | exact ssa_emitDef loop _))
 
+theorem ssa_borrowTo (loop : Option LoopCtx) (mu : Mutability) (value : ValueId) :
+    SSARun loop [value] (fun result => [result]) (borrowTo mu value) := by
+  intro env before result after run imports checked ready arguments
+  rcases borrowTo_cases run with frozen | borrowed
+  · exact ssa_freezeTo loop mu value env before result after frozen imports checked ready arguments
+  · exact ssa_emitDef loop (.ownerBorrow value) env before result after borrowed imports checked ready arguments
+
 theorem ssa_coerceTo (loop : Option LoopCtx) (target : Ty) (value : ValueId) (origin : OriginId) :
     SSARun loop [value] (fun result => [result]) (coerceTo target value origin) := by
   unfold coerceTo
@@ -107,7 +114,7 @@ theorem ssa_eachElemValue (loop : Option LoopCtx) (var : VarId) (byRef : Bool) (
     | some localVar =>
       dsimp only
       cases localVar.ty with
-      | ref mu type => exact ssa_freezeTo loop mu elem
+      | ref mu type => exact ssa_borrowTo loop mu elem
       | _ => exact ssa_value loop elem
 
 theorem ssa_whenLive (loop : Option LoopCtx) (default : α) (inputs : List ValueId)
