@@ -129,6 +129,7 @@ theorem destinationTraceProtocol_replace (state : ConstructionState) (id : Desti
 theorem stage_destination_trace_transition (id receiver stage : Nat)
     (destination : PendingDestination) (progress : destination.progress = .open 0)
     (backing : destination.backing = .direct receiver)
+    (receiving : destination.use = .receiver)
     (phase : DestinationTracePhase) (valid : phase.matchesDestination destination) :
     ∃ next, runDestinationTrace id phase [.stage id] = some next ∧
       next.matchesDestination { destination with
@@ -140,13 +141,13 @@ theorem stage_destination_trace_transition (id receiver stage : Nat)
       simp [DestinationTracePhase.matchesDestination, DestinationTracePhase.matchesProgress,
         progress] at valid
   | live staged wrote =>
-      simp only [DestinationTracePhase.matchesDestination, progress, backing,
+      simp only [DestinationTracePhase.matchesDestination, progress, backing, receiving,
         DestinationTracePhase.matchesProgress, true_and] at valid
       obtain ⟨rfl, rfl⟩ := valid
       exact ⟨.live true false, by simp [runDestinationTrace, destinationObservations,
         observeDestination, runDestinationObservations, destinationTraceStep], by
         simp [DestinationTracePhase.matchesDestination,
-          DestinationTracePhase.matchesProgress, progress]⟩
+          DestinationTracePhase.matchesProgress, progress, receiving]⟩
 
 theorem write_destination_trace_transition (id : DestinationId) (count : Nat)
     (destination : PendingDestination) (progress : destination.progress = .open count)

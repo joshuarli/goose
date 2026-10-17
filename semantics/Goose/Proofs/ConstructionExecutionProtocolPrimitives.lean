@@ -95,7 +95,7 @@ private theorem stageDestination_lifecycle_parts (id : DestinationId) (state : C
                             intro phase matched
                             simpa only [progress, layout, known, use] using
                               stage_destination_trace_transition id receiver state.storage.size
-                                destination progress backing phase matched) valid.1
+                                destination progress backing use phase matched) valid.1
                       · apply destinationStorageReferences_replace state id _
                             (state.storage.push ⟨ByteArray.empty, 0⟩)
                         · simp

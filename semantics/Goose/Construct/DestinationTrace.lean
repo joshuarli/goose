@@ -64,10 +64,11 @@ def DestinationTracePhase.matchesProgress : DestinationTracePhase → Destinatio
 def DestinationTracePhase.matchesDestination (phase : DestinationTracePhase)
     (destination : PendingDestination) : Prop :=
   phase.matchesProgress destination.progress ∧
-    match phase, destination.progress, destination.backing with
-    | .live staged wrote, .open 0, .direct _ => staged = false ∧ wrote = false
-    | .live staged wrote, .open 0, .staged _ _ => staged = true ∧ wrote = false
-    | _, _, _ => True
+    match phase, destination.progress, destination.backing, destination.use with
+    | .live _ wrote, .open 0, _, .replacement _ => wrote = false
+    | .live staged wrote, .open 0, .direct _, _ => staged = false ∧ wrote = false
+    | .live staged wrote, .open 0, .staged _ _, _ => staged = true ∧ wrote = false
+    | _, _, _, _ => True
 
 def DestinationTraceProtocol (state : ConstructionState) : Prop :=
   ∀ id, match state.destinations[id]? with
