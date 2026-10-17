@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.EmittedTypingBuilder
+import Goose.Lower.Validation.EmittedTypingParameters
 import Goose.Lower.Validation.DenseDefinitions
 import Goose.Lower.Validation.OperandBounds
 
@@ -10,6 +10,7 @@ structure EmittedCheckpoint (state : LS) : Prop where
   dense : state.DenseDefinitions
   live : LiveBound state
   operands : OperandBounds state
+  parameters : EmittedParametersTyped state
 
 def EmittedCheckedSite (le : LEnv) (initial final : LS) (value : ValueId) (op : Op) : Prop :=
   ∃ site type block, EmittedTrace le initial site ∧ EmittedCheckpoint site ∧ site.Ext final ∧
@@ -47,7 +48,7 @@ theorem EmittedBuilder.emitDef {le : LEnv} {initial before : LS}
   have trace := EmittedAt.emitDef (le := le) (before := before) op success
   have dense := dense_emitDef op le before _ _ rfl builder.checkpoint.dense builder.checkpoint.live
   have checkpoint : EmittedCheckpoint (Goose.Lower.emitDef op le before).2 :=
-    ⟨dense.1, dense.2.1, operands_emitDef rfl builder.checkpoint.operands uses⟩
+    ⟨dense.1, dense.2.1, operands_emitDef rfl builder.checkpoint.operands uses, builder.checkpoint.parameters.emitDef le op⟩
   have extension := (advB_emitDef op le before _ _ rfl).ext
   refine ⟨builder.trace.append trace, checkpoint, ?_⟩
   intro value emitted member
@@ -76,7 +77,7 @@ theorem EmittedBuilder.emitEffect {le : LEnv} {initial before : LS}
   have dense := dense_emitEffect effect le before _ _ rfl builder.checkpoint.dense builder.checkpoint.live
   apply builder.of_preserving (Goose.Lower.emitEffect effect) (EmittedAt.emitEffect le before effect)
     (advB_emitEffect effect le before _ _ rfl).ext
-    ⟨dense.1, dense.2.1, operands_emitEffect rfl builder.checkpoint.operands uses⟩
+    ⟨dense.1, dense.2.1, operands_emitEffect rfl builder.checkpoint.operands uses, builder.checkpoint.parameters.emitEffect le effect⟩
   intro value op member
   cases live : before.cur with
   | none => rw [emitEffect_none effect le live] at member; exact member
@@ -93,7 +94,7 @@ theorem EmittedBuilder.emitTerm {le : LEnv} {initial before : LS}
   have dense := dense_emitTerm term le before _ _ rfl builder.checkpoint.dense builder.checkpoint.live
   apply builder.of_preserving (Goose.Lower.emitTerm term) (EmittedAt.emitTerm le before term)
     (advB_emitTerm term le before _ _ rfl).ext
-    ⟨dense.1, dense.2.1, operands_emitTerm rfl builder.checkpoint.operands uses⟩
+    ⟨dense.1, dense.2.1, operands_emitTerm rfl builder.checkpoint.operands uses, builder.checkpoint.parameters.emitTerm le term⟩
   intro value op member
   cases live : before.cur with
   | none => rw [emitTerm_none term le live] at member; exact member
@@ -112,7 +113,7 @@ theorem EmittedBuilder.newBlock {le : LEnv} {initial before : LS}
     rw [newBlock_run_general]
     exact (LS.Adv.newBlk before _ (by simp [array_size_pushParamTypes])).ext
   apply builder.of_preserving (Goose.Lower.newBlock types) (EmittedAt.newBlock le before types) extension
-    ⟨dense.1, dense.2.1, operands_newBlock types le before _ _ rfl builder.checkpoint.operands⟩
+    ⟨dense.1, dense.2.1, operands_newBlock types le before _ _ rfl builder.checkpoint.operands, builder.checkpoint.parameters.newBlock le types⟩
   intro value op member
   rw [newBlock_run_general] at member
   simpa only [LS.insts, Array.toList_push, List.flatMap_append, List.flatMap_cons,
@@ -149,10 +150,17 @@ theorem EmittedTrace.parameter_types {le : LEnv} {before final : LS} {types : Li
 
 
 theorem EmittedBuilder.initState (le : LEnv) : EmittedBuilder le initState initState := by
-  refine ⟨.refl, ⟨LS.denseDefinitions_initState, liveBound_initState, ?_⟩, ?_⟩
-  · intro inst member
-    change _ ∈ ([] : List Inst) at member
-    cases member
+  refine ⟨.refl, ⟨LS.denseDefinitions_initState, liveBound_initState, ?_, ?_⟩, ?_⟩
+  · constructor
+    · intro inst member
+      change _ ∈ ([] : List Inst) at member
+      cases member
+    · intro value op member
+      change _ ∈ ([] : List Inst) at member
+      cases member
+  · intro block body row
+    change (none : Option BlockB) = some body at row
+    cases row
   · intro value op member
     change _ ∈ ([] : List Inst) at member
     cases member
@@ -164,7 +172,7 @@ theorem EmittedBuilder.setCur {le : LEnv} {initial before : LS}
   have dense := dense_setCur_at (le := le) (before := before) rfl builder.checkpoint.dense bound
   apply builder.of_preserving (Goose.Lower.setCur block) (EmittedAt.setCur le before block)
     (by exact LS.Ext.refl before)
-    ⟨dense.1, dense.2.1, operands_setCur block le before _ _ rfl builder.checkpoint.operands⟩
+    ⟨dense.1, dense.2.1, operands_setCur block le before _ _ rfl builder.checkpoint.operands, builder.checkpoint.parameters⟩
   intro value op member
   exact member
 
@@ -177,7 +185,7 @@ theorem EmittedBuilder.patchTerm {le : LEnv} {initial before : LS}
     rw [patchTerm_run]
     exact (LS.Ext.refl before).modify (appends_push _) block
   apply builder.of_preserving (Goose.Lower.patchTerm block term) (EmittedAt.patchTerm le before block term)
-    extension ⟨dense.1, dense.2.1, operands_patchTerm (le := le) (before := before) (block := block) (term := term) rfl builder.checkpoint.operands uses⟩
+    extension ⟨dense.1, dense.2.1, operands_patchTerm (le := le) (before := before) (block := block) (term := term) rfl builder.checkpoint.operands uses, builder.checkpoint.parameters.patchTerm le block term⟩
   intro value op member
   rw [patchTerm_run] at member
   rcases emittedDef_appendInst member with old | fresh
@@ -201,7 +209,15 @@ theorem EmittedBuilder.of_unchanged {le : LEnv} {initial before : LS}
       rw [current] at live
       rw [blocks]
       exact builder.checkpoint.live block live
-    · simpa only [OperandBounds, LS.insts, blocks, values] using builder.checkpoint.operands
+    · constructor
+      · intro inst member value use
+        have old : inst ∈ before.insts := by simpa only [LS.insts, blocks] using member
+        rw [values]
+        exact builder.checkpoint.operands.uses inst old value use
+      · intro result op member
+        have old : Inst.def result op ∈ before.insts := by simpa only [LS.insts, blocks] using member
+        exact builder.checkpoint.operands.definitions result op old
+    · simpa only [EmittedParametersTyped, blocks, values] using builder.checkpoint.parameters
   · intro value op member
     simpa only [LS.insts, blocks] using member
 
