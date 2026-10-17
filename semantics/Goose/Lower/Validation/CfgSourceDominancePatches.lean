@@ -80,7 +80,7 @@ theorem targets_patchBrs0 (target : BlockId) (incoming : List BlockId)
             exact same.symm ▸ targetBound) env
     · simpa only [patchTerm_run, Array.size_modify] using targetBound
 
-theorem patchBrs_values (target : BlockId) (incoming : List (BlockId × ValueId))
+theorem ssa_patchBrs_values (target : BlockId) (incoming : List (BlockId × ValueId))
     (env : LEnv) (state : LS) : (patchBrs target incoming env state).2.vals = state.vals := by
   induction incoming generalizing state with
   | nil => rfl
@@ -88,7 +88,7 @@ theorem patchBrs_values (target : BlockId) (incoming : List (BlockId × ValueId)
       { state with blocks := state.blocks.modify pair.1 fun body =>
         { body with insts := body.insts.push (.term (.br target [pair.2])) } })
 
-theorem patchBrs0_values (target : BlockId) (incoming : List BlockId)
+theorem ssa_patchBrs0_values (target : BlockId) (incoming : List BlockId)
     (env : LEnv) (state : LS) : (patchBrs0 target incoming env state).2.vals = state.vals := by
   induction incoming generalizing state with
   | nil => rfl
