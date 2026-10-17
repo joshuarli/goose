@@ -95,13 +95,13 @@ theorem lowerImpl_slotTypeChecks {module : Core.Module} {index : ImplId} {impl :
         rw [localLookup] at parameterLookup
         cases parameterLookup
         have parameterType : (lowerImpl module impl).params[position]? = some localVar.ty := by
-          simp [lowerImpl, List.getElem?_map, paramLookup, tyOfVar, aligned, localLookup]
+          simp [lowerImpl, lowerImplFromState, List.getElem?_map, paramLookup, tyOfVar, aligned, localLookup]
         have referenceSlice : localVar.ty.isRefSlice = true := by
           by_cases referenceSlice : localVar.ty.isRefSlice = true
           · exact referenceSlice
           · simp [stored, referenceSlice, paramLookup, chk] at one
         have paramsBound : position < (lowerImpl module impl).params.length := by
-          simpa only [lowerImpl, List.length_map, Array.length_toList] using bound
+          simpa only [lowerImpl, lowerImplFromState, List.length_map, Array.length_toList] using bound
         have parameterValue : (lowerImpl module impl).params[position] = localVar.ty := by
           simpa only [List.getElem?_eq_getElem paramsBound, Option.some.injEq] using parameterType
         simp [stored, referenceSlice, parameterValue, paramsBound, pure, Except.pure]
