@@ -4,7 +4,7 @@ namespace Goose.Lower.Validation.SummaryPreservation
 
 open Goose.Core Goose.GIR
 
-private theorem emitDef_relay_refined_witness {module : GIR.Module}
+theorem emitDef_relay_refined_witness {module : GIR.Module}
     {results : Array (List RootRef)} {vt : Array (Option VTy)} {func : Func} {upper : Prov}
     {source : Core.Eff} {sourceRoots : List RootRef} {ls : LS} {le : LEnv}
     {scopeCount : Nat} {block : BlockId} {operand : ValueId} (op : Op)
