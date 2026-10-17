@@ -221,6 +221,160 @@ void EvidenceProvesFixedIndexAndRejectsForgedProofs() {
     assert(Code(afterCall) == "GIR-V080");
 }
 
+void EvidenceDoesNotMergeDifferentBlockParameters() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType array;
+    array.kind = CoreType::Arr;
+    array.elem = i64;
+    array.count = 1;
+    auto arrayType = m.Intern(array);
+    auto referenceType = m.RefType(CoreMut::Mut, arrayType);
+    Main(m).slots = { { arrayType, CoreVarKind::Var, 0, 0 } };
+    Main(m).summary.unknown = true;
+
+    auto condition = Def(GirOp::Bool, 1);
+    condition.flag = true;
+    auto literal = Def(GirOp::Arr, 2);
+    literal.ty = arrayType;
+    literal.vals = { 0 };
+    GirBlock entry;
+    entry.insts = { Enter(0), Int(m, 0, "0"), condition, literal, Init(0, 2), CondBr(1, 1, 2) };
+    auto firstAddress = Def(GirOp::Slot, 3);
+    firstAddress.idx = 0;
+    GirBlock first;
+    first.insts = { firstAddress, Br(3, { 3, 3 }) };
+    auto secondAddress = Def(GirOp::Slot, 4);
+    secondAddress.idx = 0;
+    GirBlock second;
+    second.insts = { secondAddress, Br(3, { 4, 4 }) };
+    auto length = Def(GirOp::ArrayLen, 7);
+    length.a = 5;
+    auto view = Def(GirOp::Snap, 8);
+    view.snap = GirSnapshotMode::Owner;
+    view.a = 6;
+    auto within = Def(GirOp::Cmp, 9);
+    within.cmp = CoreCmpOp::Lt;
+    within.ty = i64;
+    within.a = 0;
+    within.b = 7;
+    GirBlock joined;
+    joined.params = { { 5, referenceType }, { 6, referenceType } };
+    joined.insts = { length, view, within, CondBr(9, 4, 5) };
+    auto index = Def(GirOp::Index, 10);
+    index.a = 8;
+    index.b = 0;
+    index.org = 0;
+    auto load = Def(GirOp::Load, 11);
+    load.a = 10;
+    GirBlock success;
+    success.insts = { index, load, Leave(0), Ret() };
+    GirBlock failure;
+    failure.insts = { Leave(0), Ret() };
+    Main(m).blocks = { std::move(entry), std::move(first), std::move(second), std::move(joined),
+                       std::move(success), std::move(failure) };
+    assert(Code(m) == "");
+
+    NormalizeGirEvidenceInputs(m);
+    assert(Main(m).blocks[3].insts[0].a == 5);
+    assert(Main(m).blocks[3].insts[1].a == 6);
+    ProposeGirEvidence(m);
+    assert(Main(m).blocks[4].insts[0].op == GirOp::Index);
+    assert(Code(m) == "");
+}
+
+void EvidenceDropsAddressesAcrossScopeReentry() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    CoreType array;
+    array.kind = CoreType::Arr;
+    array.elem = i64;
+    array.count = 1;
+    auto arrayType = m.Intern(array);
+    Main(m).scopes = { -1, 0 };
+    Main(m).slots = { { arrayType, CoreVarKind::Var, 1, 0 } };
+    Main(m).summary.unknown = true;
+    auto firstLiteral = Def(GirOp::Arr, 1);
+    firstLiteral.ty = arrayType;
+    firstLiteral.vals = { 0 };
+    auto firstAddress = Def(GirOp::Slot, 2);
+    firstAddress.idx = 0;
+    auto length = Def(GirOp::ArrayLen, 3);
+    length.a = 2;
+    auto secondLiteral = Def(GirOp::Arr, 5);
+    secondLiteral.ty = arrayType;
+    secondLiteral.vals = { 4 };
+    auto secondAddress = Def(GirOp::Slot, 6);
+    secondAddress.idx = 0;
+    auto view = Def(GirOp::Snap, 7);
+    view.snap = GirSnapshotMode::Owner;
+    view.a = 6;
+    GirBlock entry;
+    entry.insts = { Enter(0), Enter(1), Int(m, 0, "0"), firstLiteral, Init(0, 1), firstAddress,
+                    length, Leave(1), Enter(1), Int(m, 4, "1"), secondLiteral, Init(0, 5),
+                    secondAddress, view, Leave(1), Leave(0), Ret() };
+    Main(m).blocks = { std::move(entry) };
+    assert(Code(m) == "");
+
+    NormalizeGirEvidenceInputs(m);
+    assert(Main(m).blocks[0].insts[13].a == 6);
+    assert(Code(m) == "");
+}
+
+void NonI64ComparisonDoesNotProveIndex() {
+    auto m = Base();
+    auto i64 = m.IntType(CoreIntTy::I64);
+    auto u64 = m.IntType(CoreIntTy::U64);
+    CoreType array;
+    array.kind = CoreType::Arr;
+    array.elem = i64;
+    array.count = 1;
+    auto arrayType = m.Intern(array);
+    Main(m).slots = { { arrayType, CoreVarKind::Var, 0, 0 } };
+    Main(m).summary.unknown = true;
+    auto indexValue = Int(m, 0, "0");
+    auto candidate = Int(m, 1, "0");
+    candidate.ty = u64;
+    auto limit = Int(m, 2, "4");
+    limit.ty = u64;
+    auto literal = Def(GirOp::Arr, 3);
+    literal.ty = arrayType;
+    literal.vals = { 0 };
+    auto owner = Def(GirOp::Slot, 4);
+    owner.idx = 0;
+    auto length = Def(GirOp::ArrayLen, 5);
+    length.a = 4;
+    auto view = Def(GirOp::Snap, 6);
+    view.snap = GirSnapshotMode::Owner;
+    view.a = 4;
+    auto within = Def(GirOp::Cmp, 7);
+    within.cmp = CoreCmpOp::Lt;
+    within.ty = u64;
+    within.a = 1;
+    within.b = 2;
+    GirBlock entry;
+    entry.insts = { Enter(0), indexValue, candidate, limit, literal, Init(0, 3), owner, length, view,
+                    within, CondBr(7, 1, 2) };
+    auto index = Def(GirOp::Index, 8);
+    index.a = 6;
+    index.b = 0;
+    index.org = 0;
+    auto load = Def(GirOp::Load, 9);
+    load.a = 8;
+    GirBlock success;
+    success.insts = { index, load, Leave(0), Ret() };
+    GirBlock failure;
+    failure.insts = { Leave(0), Ret() };
+    Main(m).blocks = { std::move(entry), std::move(success), std::move(failure) };
+    assert(Code(m) == "");
+
+    NormalizeGirEvidenceInputs(m);
+    assert(Main(m).blocks[1].insts[0].b == 0);
+    ProposeGirEvidence(m);
+    assert(Main(m).blocks[1].insts[0].op == GirOp::Index);
+    assert(Code(m) == "");
+}
+
 CoreExprP CoreInt(CoreTypeId ty, const char *text) {
     auto expr = make_unique<CoreExpr>();
     expr->kind = CoreExprKind::Lit;
@@ -5443,6 +5597,9 @@ int main() {
     ConstructionLowFormattingChecksScalarKind();
     Accepts();
     EvidenceProvesFixedIndexAndRejectsForgedProofs();
+    EvidenceDoesNotMergeDifferentBlockParameters();
+    EvidenceDropsAddressesAcrossScopeReentry();
+    NonI64ComparisonDoesNotProveIndex();
     RejectsUseNotDominatedByDefinition();
     RejectsWrongEdgeArgumentType();
     RejectsBlockWithTwoTerminatorsOrNone();

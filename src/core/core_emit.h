@@ -67,6 +67,7 @@ inline void EmitCore(Ast &ast, const string &entry, const string &path, const st
         gir.filemodules = numbering.FileModuleTable();
         if (auto v = GirVerifier(gir).Verify())
             throw CompileError { cat("internal compiler error: ", v->code, ": ", v->message) };
+        NormalizeGirEvidenceInputs(gir);
         ProposeGirEvidence(gir);
         if (auto v = GirVerifier(gir).Verify())
             throw CompileError { cat("internal compiler error: ", v->code, ": ", v->message) };
