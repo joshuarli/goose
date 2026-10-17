@@ -1,4 +1,4 @@
-import Goose.Lower.Validation.ExpressionTypingMutableOps
+import Goose.Lower.Validation.ExpressionTypingMutableElemOps
 
 namespace Goose.Lower.Validation
 
@@ -9,12 +9,15 @@ mutual
 def RecursiveExpression : Expr → Prop
   | .read p | .ref .readOnly p => RecursivePlace p
   | .ref .mutable (.field owner _) => RecursivePlace owner
+  | .ref .mutable (.deref expr) => RecursiveExpression expr
+  | .ref .mutable (.elem (.val expr) index _) => RecursiveExpression expr ∧ RecursiveExpression index
   | .un _ e _ | .not e | .conv _ _ e _ => RecursiveExpression e
   | .bin _ a b _ | .cmp _ a b => RecursiveExpression a ∧ RecursiveExpression b
   | .push owner expr _ => RecursivePlace owner ∧ RecursiveExpression expr
   | .pop owner _ => RecursivePlace owner
   | .len v => RecursiveView v
   | .slice .readOnly view lo hi _ => RecursiveView view ∧ RecursiveBound lo ∧ RecursiveBound hi
+  | .slice .mutable (.val expr) lo hi _ => RecursiveExpression expr ∧ RecursiveBound lo ∧ RecursiveBound hi
   | .call _ args _ => RecursiveArguments args
   | .arrLit _ exprs | .structLit _ exprs => RecursiveExpressions exprs
   | .fill _ expr => RecursiveExpression expr
@@ -48,6 +51,9 @@ def RecursiveExpressions : List Expr → Prop
 def RecursiveArgument : Arg → Prop
   | .byVal expr => RecursiveExpression expr
   | .byRef .readOnly place => RecursivePlace place
+  | .byRef .mutable (.field owner _) => RecursivePlace owner
+  | .byRef .mutable (.deref expr) => RecursiveExpression expr
+  | .byRef .mutable (.elem (.val expr) index _) => RecursiveExpression expr ∧ RecursiveExpression index
   | .byRef .mutable (.var _) | .byRef .mutable (.global _) => True
   | _ => False
 
@@ -116,7 +122,44 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
             have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed.2 (by rfl) midCurrent
             rw [frozenRun] at frozen
             simpa only [shape] using frozen.2
-      | var _ | global _ | deref _ | elem _ _ _ =>
+      | deref expr =>
+        obtain ⟨info, placeFinish, placeSource, shape, permission⟩ := tyExpr_ref_place source
+        have writable : info.referenceWritable env.mod.profile = true := by
+          cases bound : info.referenceWritable env.mod.profile <;> simp_all [Mutability.atLeast]
+        have lowering := run
+        simp only [lowerExpr] at lowering
+        obtain ⟨address, mid, placeRun, frozenRun⟩ := bind_eq.mp lowering
+        have midLive := (dead_freezeTo .mutable address).live_before frozenRun live
+        have typed := lowerPlace_deref_writable_typed_of_child placeSource writable placeRun midLive
+          (fun childFinish childSource => lowerExpr_recursive_typed expr supported childSource placeRun midLive)
+        cases current : mid.cur with
+        | none => simp [current] at midLive
+        | some block =>
+          have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed (by rfl) current
+          rw [frozenRun] at frozen
+          simpa only [shape] using frozen.2
+      | elem view index origin =>
+        cases view with
+        | of owner => contradiction
+        | val expr =>
+          obtain ⟨exprSupported, indexSupported⟩ := supported
+          obtain ⟨info, placeFinish, placeSource, shape, permission⟩ := tyExpr_ref_place source
+          have writable : info.referenceWritable env.mod.profile = true := by
+            cases bound : info.referenceWritable env.mod.profile <;> simp_all [Mutability.atLeast]
+          have lowering := run
+          simp only [lowerExpr] at lowering
+          obtain ⟨address, mid, placeRun, frozenRun⟩ := bind_eq.mp lowering
+          have midLive := (dead_freezeTo .mutable address).live_before frozenRun live
+          have typed := lowerPlace_elem_val_writable_typed_of_children placeSource writable placeRun midLive
+            (fun _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed expr exprSupported childSource childRun childLive)
+            (fun _ _ _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed index indexSupported childSource childRun childLive)
+          cases current : mid.cur with
+          | none => simp [current] at midLive
+          | some block =>
+            have frozen := freezeTo_typed (le := lowerEnv env.mod env.vars results) (requested := .mutable) typed (by rfl) current
+            rw [frozenRun] at frozen
+            simpa only [shape] using frozen.2
+      | var _ | global _ =>
         have initial := (dead_lowerExpr _).live_before run live
         cases current : before.cur with
         | none => simp [current] at initial
@@ -205,7 +248,37 @@ theorem lowerExpr_recursive_typed (e : Expr) (supported : RecursiveExpression e)
       exact recorded.2.2.1
   | slice mu view lo hi origin =>
     cases mu with
-    | mutable => contradiction
+    | mutable =>
+      cases view with
+      | of place => contradiction
+      | val expr =>
+        obtain ⟨element, viewStart, viewFinish, lowFinish, highFinish,
+          viewSource, lowSource, highSource, shape⟩ := tyExpr_slice_mutable_children source
+        subst ty
+        obtain ⟨exprSupported, lowSupported, highSupported⟩ := supported
+        simp only [lowerExpr] at run
+        obtain ⟨viewValue, viewAfter, viewRun, run⟩ := bind_eq.mp run
+        obtain ⟨lowValue, lowAfter, lowRun, run⟩ := bind_eq.mp run
+        obtain ⟨highValue, middle, highRun, emitted⟩ := bind_eq.mp run
+        have middleLive := (dead_emitDef (.viewSlice .mutable viewValue lowValue highValue (some origin))).live_before emitted live
+        have highTyped := lowerBound_recursive_typed hi highSupported highSource highRun middleLive
+        have lowLive := (dead_lowerBound hi).live_before highRun middleLive
+        have lowTyped := lowerBound_recursive_typed lo lowSupported lowSource lowRun lowLive
+        have viewLive := (dead_lowerBound lo).live_before lowRun lowLive
+        have viewTyped := lowerView_val_writable_typed_of_child viewSource viewRun viewLive
+          (fun childFinish childState childValue childSource childRun childLive =>
+            lowerExpr_recursive_typed expr exprSupported childSource childRun childLive)
+        have retainedLow := lowTyped.retained (types_lowerBound hi _ _ _ _ highRun)
+        have retainedView := types_lowerBound hi _ _ _ _ highRun viewValue (.view .mutable element)
+          (types_lowerBound lo _ _ _ _ lowRun viewValue (.view .mutable element) viewTyped)
+        cases current : middle.cur with
+        | none => simp [current] at middleLive
+        | some block =>
+          have operation := mutableSlice_resultTy (le := lowerEnv env.mod env.vars results)
+            retainedView retainedLow highTyped origin
+          have recorded := emitDef_recorded current operation
+          rw [emitted] at recorded
+          exact recorded.2.2.1
     | readOnly =>
       obtain ⟨element, writable, viewStart, viewFinish, lowFinish, highFinish,
         viewSource, lowSource, highSource, shape⟩ := tyExpr_slice_children source
@@ -671,24 +744,76 @@ theorem lowerArgs_recursive_typed (args : List Arg) (supported : RecursiveArgume
               rw [childRun] at typed
               exact typed
           | mutable =>
-            have initial := (dead_lowerPlace place).live_before placeRun placeLive
-            cases current : before.cur with
-            | none => simp [current] at initial
-            | some block =>
-              have placeTyped :
-                  let (address, after) := lowerPlace place (lowerEnv env.mod env.vars results) before
-                  after.cur = before.cur ∧ after.vals[address]? = some (some (referenceType info env.mod.profile)) := by
-                cases place with
-                | var x => exact lowerPlace_var_exact placeSource results before current
-                | global g => exact lowerPlace_global_exact placeSource env.vars results before current
-                | _ => contradiction
-              rw [placeRun] at placeTyped
-              have permission : (if info.referenceWritable env.mod.profile then Mutability.mutable else .readOnly).atLeast .mutable = true := by
-                simp [writable rfl, Mutability.atLeast]
-              have typed := lowerArg_byRef_typed_of_place placeRun
-                (by simpa only [referenceType] using placeTyped.2) permission (placeTyped.1.trans current)
-              rw [childRun] at typed
-              exact typed
+            cases place with
+            | field owner index =>
+              obtain ⟨ownerInfo, ownerFinish, field, fieldFinish, ownerSource, _, _, _⟩ :=
+                tyPlace_field_mutable_binding placeSource (writable rfl)
+              have ownerLowering := placeRun
+              simp only [lowerPlace] at ownerLowering
+              obtain ⟨ownerValue, ownerState, ownerRun, emitted⟩ := bind_eq.mp ownerLowering
+              have ownerLive := (dead_emitDef (.fieldAddr ownerValue index)).live_before emitted placeLive
+              obtain ⟨actual, ownerTyped⟩ := lowerPlace_recursive_typed owner childSupported ownerSource ownerRun ownerLive
+              cases current : ownerState.cur with
+              | none => simp [current] at ownerLive
+              | some block =>
+                have typed := lowerPlace_field_mutable_typed_of_owner placeSource (writable rfl)
+                  ownerSource ownerRun ownerTyped current
+                rw [placeRun] at typed
+                cases placeCurrent : placeAfter.cur with
+                | none => simp [placeCurrent] at placeLive
+                | some placeBlock =>
+                  have frozen := lowerArg_byRef_typed_of_place (requested := .mutable) placeRun typed.2 (by rfl) placeCurrent
+                  rw [childRun] at frozen
+                  exact frozen
+            | var x =>
+              have initial := (dead_lowerPlace (.var x)).live_before placeRun placeLive
+              cases current : before.cur with
+              | none => simp [current] at initial
+              | some block =>
+                have placeTyped := lowerPlace_var_exact placeSource results before current
+                rw [placeRun] at placeTyped
+                have permission : (if info.referenceWritable env.mod.profile then Mutability.mutable else .readOnly).atLeast .mutable = true := by
+                  simp [writable rfl, Mutability.atLeast]
+                have typed := lowerArg_byRef_typed_of_place placeRun
+                  (by simpa only [referenceType] using placeTyped.2) permission (placeTyped.1.trans current)
+                rw [childRun] at typed
+                exact typed
+            | global g =>
+              have initial := (dead_lowerPlace (.global g)).live_before placeRun placeLive
+              cases current : before.cur with
+              | none => simp [current] at initial
+              | some block =>
+                have placeTyped := lowerPlace_global_exact placeSource env.vars results before current
+                rw [placeRun] at placeTyped
+                have permission : (if info.referenceWritable env.mod.profile then Mutability.mutable else .readOnly).atLeast .mutable = true := by
+                  simp [writable rfl, Mutability.atLeast]
+                have typed := lowerArg_byRef_typed_of_place placeRun
+                  (by simpa only [referenceType] using placeTyped.2) permission (placeTyped.1.trans current)
+                rw [childRun] at typed
+                exact typed
+            | deref expr =>
+              have typed := lowerPlace_deref_writable_typed_of_child placeSource (writable rfl) placeRun placeLive
+                (fun childFinish childSource => lowerExpr_recursive_typed expr childSupported childSource placeRun placeLive)
+              cases current : placeAfter.cur with
+              | none => simp [current] at placeLive
+              | some block =>
+                have frozen := lowerArg_byRef_typed_of_place (requested := .mutable) placeRun typed (by rfl) current
+                rw [childRun] at frozen
+                exact frozen
+            | elem view index origin =>
+              cases view with
+              | of owner => contradiction
+              | val expr =>
+                obtain ⟨exprSupported, indexSupported⟩ := childSupported
+                have typed := lowerPlace_elem_val_writable_typed_of_children placeSource (writable rfl) placeRun placeLive
+                  (fun _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed expr exprSupported childSource childRun childLive)
+                  (fun _ _ _ _ _ _ childSource childRun childLive => lowerExpr_recursive_typed index indexSupported childSource childRun childLive)
+                cases current : placeAfter.cur with
+                | none => simp [current] at placeLive
+                | some block =>
+                  have frozen := lowerArg_byRef_typed_of_place (requested := .mutable) placeRun typed (by rfl) current
+                  rw [childRun] at frozen
+                  exact frozen
         have retained := types_lowerArgs args _ _ _ _ restRun value (.data (.ref mu info.ty)) childTyped
         exact .cons ⟨.ref mu info.ty, retained, by simpa [tyOfVar, row] using permission⟩ restTyped
       | byVal expr =>
