@@ -26,6 +26,7 @@ private theorem checkTypes_instructions {m : Module} {fn : Func} {label : String
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, _, h⟩ := bind_ok h
+  obtain ⟨_, _, h⟩ := bind_ok h
   obtain ⟨_, hb, he⟩ := bind_ok h
   refine ⟨fun block hblock inst hinst =>
     checkAll_mem (checkAll_mem hb (Array.mem_toList_iff.mpr hblock)) hinst, ?_⟩
