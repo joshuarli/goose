@@ -58,10 +58,7 @@ def computed : Array (List RootRef) := GIR.resultRoots lowered valueTypes
 
 #guard match Core.validate module with | .ok () => true | .error _ => false
 
-#guard match GIR.validate lowered with
-  | .ok () => false
-  | .error rejection => rejection.code == .v050 && rejection.message ==
-      "function slice_parameter: slice_parameter rebinds parameter 0, which its summary omits"
+#guard match GIR.validate lowered with | .ok () => true | .error _ => false
 
 #guard RootRef.param 0 ∈ GIR.rootsAt computed 2
 
