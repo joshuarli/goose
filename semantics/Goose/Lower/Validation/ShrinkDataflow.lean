@@ -115,7 +115,7 @@ theorem knownStates_set (states : Array (Option (List ValueId))) (index : Nat) (
   · exact ⟨before, present⟩
 
 theorem emptyFactRound_preserves_known (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (states : Array (Option (List ValueId))) :
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (states : Array (Option (List ValueId))) :
     KnownStatesPreserved states (emptyFactRound module func types provenance states).1 := by
   unfold emptyFactRound
   change KnownStatesPreserved states ((forIn' (m := Id) [:func.blocks.size] (states, false) _).1)
@@ -174,7 +174,7 @@ theorem dataflowRounds_invariant {property : σ → Prop} (round : σ → σ × 
       exact ih _ _ (preserved state initial)
 
 theorem emptyFactsAtBlocks_entry_known (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (nonempty : 0 < func.blocks.size) :
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (nonempty : 0 < func.blocks.size) :
     ∃ facts, (emptyFactsAtBlocks module func types provenance)[0]? = some (some facts) := by
   let seed : Array (Option (List ValueId)) := (Array.replicate func.blocks.size none).set! 0 (some [])
   have entry : seed[0]? = some (some []) := by

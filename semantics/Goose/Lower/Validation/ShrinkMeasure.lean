@@ -72,7 +72,7 @@ theorem emptyStateMeasure_intersects {limit : Nat} {states : Array (Option (List
   omega
 
 theorem emptyFactRound_within (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (states : Array (Option (List ValueId)))
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (states : Array (Option (List ValueId)))
     (checked : EmptyStatesWithin func.numValues states)
     (operands : ∀ block ∈ func.blocks.toList, ∀ inst ∈ block.insts,
       ∀ value ∈ inst.uses, value < func.numValues)
@@ -129,7 +129,7 @@ theorem EmptyRoundProgress.update {limit : Nat} {initial : Array (Option (List V
     fun _ => Nat.lt_of_lt_of_le decreases checked.measure, by simp⟩
 
 theorem emptyFactRound_progress (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (states : Array (Option (List ValueId)))
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (states : Array (Option (List ValueId)))
     (checked : EmptyStatesWithin func.numValues states)
     (operands : ∀ block ∈ func.blocks.toList, ∀ inst ∈ block.insts,
       ∀ value ∈ inst.uses, value < func.numValues)
@@ -194,7 +194,7 @@ theorem emptyStateMeasure_bound {limit : Nat} {states : Array (Option (List Valu
     exact Nat.le_trans (checked index facts lookup).length_le (Nat.le_succ _)
 
 theorem emptyFactsAtBlocks_eq_rounds (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (nonempty : 0 < func.blocks.size) :
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (nonempty : 0 < func.blocks.size) :
     emptyFactsAtBlocks module func types provenance =
       dataflowRounds (emptyFactRound module func types provenance)
         ((Array.replicate func.blocks.size none).set! 0 (some [])) true
@@ -206,7 +206,7 @@ theorem emptyFactsAtBlocks_eq_rounds (module : GIR.Module) (func : Func)
   rfl
 
 theorem emptyFactsAtBlocks_stable (module : GIR.Module) (func : Func)
-    (types : Array (Option VTy)) (provenance : Prov) (nonempty : 0 < func.blocks.size)
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) (nonempty : 0 < func.blocks.size)
     (operands : ∀ block ∈ func.blocks.toList, ∀ inst ∈ block.insts,
       ∀ value ∈ inst.uses, value < func.numValues)
     (parameters : ∀ block ∈ func.blocks.toList, ∀ param ∈ block.params, param.1 < func.numValues) :

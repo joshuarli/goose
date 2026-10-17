@@ -930,6 +930,26 @@ theorem dense_finishBlocks {state : LS} (checked : state.DenseDefinitions) {func
   rw [checked.length]
   exact checked
 
+theorem Func.parameter_ids_bounded_of_dense {func : Func}
+    (dense : (func.blocks.toList.flatMap GIR.Block.defs).Perm (List.range func.numValues)) :
+    ∀ block ∈ func.blocks.toList, ∀ param ∈ block.params, param.1 < func.numValues := by
+  intro block member param parameter
+  apply List.mem_range.mp
+  apply dense.mem_iff.mp
+  apply List.mem_flatMap.mpr
+  refine ⟨block, member, ?_⟩
+  simp only [GIR.Block.defs, List.mem_append, List.mem_map]
+  exact Or.inl ⟨param, parameter, rfl⟩
+
+theorem Func.parameter_ids_distinct_of_dense {func : Func}
+    (dense : (func.blocks.toList.flatMap GIR.Block.defs).Perm (List.range func.numValues))
+    {block : GIR.Block} (member : block ∈ func.blocks.toList) :
+    (block.params.map Prod.fst).Nodup := by
+  have sublist : block.defs.Sublist (func.blocks.toList.flatMap GIR.Block.defs) :=
+    List.sublist_flatten_of_mem (List.mem_map.mpr ⟨block, member, rfl⟩)
+  have distinct := sublist.nodup (dense.nodup_iff.mpr List.nodup_range)
+  exact (List.nodup_append.mp distinct).1
+
 theorem lowerImpl_dense_definitions (module : Core.Module) (impl : Core.Impl) :
     ((lowerImpl module impl).blocks.toList.flatMap GIR.Block.defs).Perm
       (List.range (lowerImpl module impl).numValues) := by

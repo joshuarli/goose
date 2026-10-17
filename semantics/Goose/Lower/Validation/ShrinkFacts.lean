@@ -13,15 +13,12 @@ theorem EmptyFactsWithin.subset {limit : Nat} {before after : List ValueId}
     EmptyFactsWithin limit after :=
   ⟨checked.1.sublist subset, fun value member => checked.2 value (subset.subset member)⟩
 
-theorem killEmptyFacts_sublist (facts : List ValueId) (roots : List RootRef) (provenance : Prov) :
+theorem killEmptyFacts_sublist (facts : List ValueId) (roots : ReplacementRootQuery) (provenance : ReplacementQueries) :
     (killEmptyFacts facts roots provenance).Sublist facts := by
-  unfold killEmptyFacts
-  split
-  · exact List.nil_sublist _
-  · exact List.filter_sublist
+  exact List.filter_sublist
 
 theorem killEmptyFactSources_sublist (facts operands : List ValueId)
-    (types : Array (Option VTy)) (provenance : Prov) :
+    (types : Array (Option VTy)) (provenance : ReplacementQueries) :
     (killEmptyFactSources facts operands types provenance).Sublist facts := by
   unfold killEmptyFactSources
   induction operands generalizing facts with
@@ -76,7 +73,7 @@ theorem emptyFactsWithin_transferEmptyEdge (func : Func) (facts : List ValueId) 
       · exact previous
 
 theorem transferEmptyInst_sublist (module : GIR.Module) (types : Array (Option VTy))
-    (provenance : Prov) (facts : List ValueId) (inst : Inst)
+    (provenance : ReplacementQueries) (facts : List ValueId) (inst : Inst)
     (uncleared : ∀ owner origin, inst ≠ .eff (.clear owner origin)) :
     (transferEmptyInst module types provenance facts inst).Sublist facts := by
   cases inst with
@@ -107,7 +104,7 @@ theorem transferEmptyInst_sublist (module : GIR.Module) (types : Array (Option V
     exact killEmptyFactSources_sublist _ _ _ _
 
 theorem emptyFactsWithin_transferEmptyInst (module : GIR.Module) (types : Array (Option VTy))
-    (provenance : Prov) (facts : List ValueId) (inst : Inst) {limit : Nat}
+    (provenance : ReplacementQueries) (facts : List ValueId) (inst : Inst) {limit : Nat}
     (checked : EmptyFactsWithin limit facts) (bounded : ∀ value ∈ inst.uses, value < limit) :
     EmptyFactsWithin limit (transferEmptyInst module types provenance facts inst) := by
   by_cases clear : ∃ owner origin, inst = .eff (.clear owner origin)
@@ -120,7 +117,7 @@ theorem emptyFactsWithin_transferEmptyInst (module : GIR.Module) (types : Array 
       exact clear ⟨owner, origin, equal⟩))
 
 theorem emptyFactsWithin_transferEmptyBlock (module : GIR.Module) (types : Array (Option VTy))
-    (provenance : Prov) (facts : List ValueId) (block : GIR.Block) {limit : Nat}
+    (provenance : ReplacementQueries) (facts : List ValueId) (block : GIR.Block) {limit : Nat}
     (checked : EmptyFactsWithin limit facts)
     (bounded : ∀ inst ∈ block.insts, ∀ value ∈ inst.uses, value < limit) :
     EmptyFactsWithin limit (transferEmptyBlock module types provenance facts block) := by

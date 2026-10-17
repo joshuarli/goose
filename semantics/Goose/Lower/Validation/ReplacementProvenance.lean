@@ -255,34 +255,49 @@ theorem provenance_globalAddr (results : Array (List RootRef)) (types : Array (O
   provenance_static_definition results types func rootCount blockMember definition
     (fun _ => by simp [rootsOfDef]) bounded
 
-theorem replacementProvenance_values (func : Func) (provenance : Prov) (value : ValueId) :
-    rootsAt (replacementProvenance func provenance).vals value =
+theorem replacementQueries_values (func : Func) (provenance : Prov) (value : ValueId) :
+    ((replacementQueries func provenance).value value).getD [] =
       (rootsAt provenance.vals value).flatMap func.expandParameterRoot := by
-  cases row : provenance.vals[value]? <;>
-    simp [replacementProvenance, rootsAt, Array.getElem?_map, row]
+  cases roots : rootsAt provenance.vals value with
+  | nil => simp [ReplacementQueries.value, replacementQueries, roots]
+  | cons root rest =>
+    simp only [ReplacementQueries.value, replacementQueries, roots, Option.getD_some]
+    rfl
 
-theorem replacementProvenance_slots (func : Func) (provenance : Prov) (slot : SlotId) :
-    rootsAt (replacementProvenance func provenance).slots slot =
-      (rootsAt provenance.slots slot).flatMap func.expandParameterRoot := by
-  cases row : provenance.slots[slot]? <;>
-    simp [replacementProvenance, rootsAt, Array.getElem?_map, row]
+theorem replacementQueries_known_empty (func : Func) (provenance : Prov) (value : ValueId)
+    (present : rootsAt provenance.vals value ≠ [])
+    (empty : ∀ root ∈ rootsAt provenance.vals value, func.expandParameterRoot root = []) :
+    (replacementQueries func provenance).value value = some [] := by
+  have normalized := List.flatMap_eq_nil_iff.mpr empty
+  cases roots : rootsAt provenance.vals value with
+  | nil => exact False.elim (present roots)
+  | cons root rest =>
+    simp only [ReplacementQueries.value, replacementQueries, roots]
+    change some ((root :: rest).flatMap (replacementQueries func provenance).expand) = some []
+    change some ((root :: rest).flatMap func.expandParameterRoot) = some []
+    exact congrArg some (roots ▸ normalized)
 
-theorem replacementProvenance_slotAddr (results : Array (List RootRef)) (types : Array (Option VTy))
+theorem replacementQueries_unknown (func : Func) (provenance : Prov) (value : ValueId)
+    (unknown : rootsAt provenance.vals value = []) :
+    (replacementQueries func provenance).value value = none := by
+  simp [ReplacementQueries.value, replacementQueries, unknown]
+
+theorem replacementQueries_slotAddr (results : Array (List RootRef)) (types : Array (Option VTy))
     (func : Func) (rootCount : Nat) {block : GIR.Block} (blockMember : block ∈ func.blocks.toList)
     {result : ValueId} {slot : SlotId} (definition : .def result (.slotAddr slot) ∈ block.insts)
     (bounded : result < func.numValues) :
-    RootRef.local slot ∈ rootsAt (replacementProvenance func (func.provenance results types rootCount)).vals result := by
-  rw [replacementProvenance_values]
+    RootRef.local slot ∈ ((replacementQueries func (func.provenance results types rootCount)).value result).getD [] := by
+  rw [replacementQueries_values]
   exact List.mem_flatMap.mpr ⟨.local slot,
     provenance_slotAddr results types func rootCount blockMember definition bounded,
     by simp [Func.expandParameterRoot]⟩
 
-theorem replacementProvenance_globalAddr (results : Array (List RootRef)) (types : Array (Option VTy))
+theorem replacementQueries_globalAddr (results : Array (List RootRef)) (types : Array (Option VTy))
     (func : Func) (rootCount : Nat) {block : GIR.Block} (blockMember : block ∈ func.blocks.toList)
     {result : ValueId} {global : GlobalId} (definition : .def result (.globalAddr global) ∈ block.insts)
     (bounded : result < func.numValues) :
-    RootRef.global global ∈ rootsAt (replacementProvenance func (func.provenance results types rootCount)).vals result := by
-  rw [replacementProvenance_values]
+    RootRef.global global ∈ ((replacementQueries func (func.provenance results types rootCount)).value result).getD [] := by
+  rw [replacementQueries_values]
   exact List.mem_flatMap.mpr ⟨.global global,
     provenance_globalAddr results types func rootCount blockMember definition bounded,
     by simp [Func.expandParameterRoot]⟩
