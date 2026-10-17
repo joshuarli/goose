@@ -28,10 +28,10 @@ theorem checkImpl_variable_bounds {module : Core.Module} {impl : Core.Impl}
       · exact bound
       · simp [bound, Core.reject] at scope
 
-theorem lowerImplAt_slot_scopes {module : Core.Module} {index : ImplId} {impl : Core.Impl}
+theorem lowerImpl_slot_scopes {module : Core.Module} {index : ImplId} {impl : Core.Impl}
     (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl) :
-    ∀ slot ∈ (lowerImplAt module index impl).slots.toList,
-      slot.scope < (lowerImplAt module index impl).scopes.size := by
+    ∀ slot ∈ (lowerImpl module impl).slots.toList,
+      slot.scope < (lowerImpl module impl).scopes.size := by
   intro slot member
   have checked := validate_implementation_checks accepted
     (Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup))
@@ -46,11 +46,11 @@ theorem lowerImplAt_slot_scopes {module : Core.Module} {index : ImplId} {impl : 
     subst slot
     have bound := (checkImpl_variable_bounds checked localVar
       (Array.mem_toList_iff.mpr (Array.mem_of_getElem? localRow))).2
-    simpa [lowerImplAt, scopeParents] using bound
+    simpa [lowerImpl, scopeParents] using bound
 
-theorem lowerImplAt_function_origin {module : Core.Module} {index : ImplId} {impl : Core.Impl}
+theorem lowerImpl_function_origin {module : Core.Module} {index : ImplId} {impl : Core.Impl}
     (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl)
-    {origin : OriginId} (present : (lowerImplAt module index impl).org = some origin) :
+    {origin : OriginId} (present : (lowerImpl module impl).org = some origin) :
     origin < (lower module).origins.size := by
   have checked := validate_implementation_checks accepted
     (Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup))

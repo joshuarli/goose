@@ -151,10 +151,10 @@ theorem checkStructTables_impl_resolved {module : Core.Module}
     rw [← Array.forIn_toList] at localVars results
     exact ⟨forIn_checks_member localVars, forIn_checks_member results⟩
 
-theorem lowerImplAt_interface_resolved {module : Core.Module} {index : ImplId} {impl : Core.Impl}
+theorem lowerImpl_interface_resolved {module : Core.Module} {index : ImplId} {impl : Core.Impl}
     (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl) :
-    ∀ ty ∈ (lowerImplAt module index impl).params ++ (lowerImplAt module index impl).results ++
-      (lowerImplAt module index impl).slots.toList.map (·.ty),
+    ∀ ty ∈ (lowerImpl module impl).params ++ (lowerImpl module impl).results ++
+      (lowerImpl module impl).slots.toList.map (·.ty),
       Core.checkResolvedType module ty = .ok () := by
   have implMember : impl ∈ module.impls.toList :=
     Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup)

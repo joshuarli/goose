@@ -162,10 +162,6 @@ theorem types_coerceResult (value : ValueId) (org : OriginId) :
   | none => exact TypeRun.pure _
   | some destination => exact types_coerceTo destination value org
 
-theorem types_implOfContext (c : ContextId) : TypeRun (implOfContext c) := by
-  unfold implOfContext
-  exact TypeRun.bind types_read fun _ => TypeRun.pure _
-
 theorem types_growOwner (r : ValueId) : TypeRun (growOwner r) := by
   unfold growOwner
   refine TypeRun.bind (types_valTy r) fun t => ?_
@@ -435,7 +431,7 @@ theorem types_lowerExpr : ∀ e : Expr, TypeRun (lowerExpr e)
     exact TypeRun.bind (types_lowerExpr e) fun a => TypeRun.bind (types_intTyOf a) fun _ => types_emitDef _
   | .call c args org => by
     simp only [lowerExpr]
-    exact TypeRun.bind (types_lowerArgs args) fun _ => TypeRun.bind (types_implOfContext c) fun _ =>
+    exact TypeRun.bind (types_lowerArgs args) fun _ =>
       TypeRun.bind (types_emitDef _) fun r => TypeRun.bind types_read fun le => by
         cases le.mod.noReturn c <;> simp only [Bool.false_eq_true, ↓reduceIte] <;>
           first | exact TypeRun.pure _ | exact TypeRun.bind (types_emitTerm _) fun _ => TypeRun.pure _

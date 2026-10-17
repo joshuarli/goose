@@ -1,4 +1,5 @@
 import Goose.Lower.Validation.OriginPreservation
+import Goose.Lower.ContextLowering
 
 namespace Goose.Lower.Validation
 
@@ -43,11 +44,10 @@ theorem lower_checkEntryAndGlobals {module : Core.Module} (accepted : Core.valid
     apply List.eq_nil_of_length_eq_zero
     simpa only [Array.length_toList] using params
   have entry : (lower module).funcs[(lower module).entry]? =
-      some (lowerImplAt module ctx.impl impl) := by
-    simp only [lower, ctxLookup, Option.map_some, Option.getD_some, Array.getElem?_mapIdx, implLookup]
-  have empty : ((lowerImplAt module ctx.impl impl).params.isEmpty &&
-      (lowerImplAt module ctx.impl impl).results.isEmpty) = true := by
-    simp only [lowerImplAt, noParams, results, List.map_nil, List.isEmpty_nil, Bool.and_true]
+      some (lowerContextAt module ctx impl) := lower_func_at ctxLookup implLookup
+  have empty : ((lowerContextAt module ctx impl).params.isEmpty &&
+      (lowerContextAt module ctx impl).results.isEmpty) = true := by
+    simp only [lowerContextAt, lowerImpl, noParams, results, List.map_nil, List.isEmpty_nil, Bool.and_true]
   unfold checkEntryAndGlobals
   rw [entry]
   simp only [empty, ite_true, pure, Except.pure, bind, Except.bind]

@@ -17,12 +17,12 @@ theorem lower_preserves_entry_origins_evidence {module : Core.Module}
         asCheck .v080 info.label (checkEvidence (lower module) info.f info.vt)) = .ok () :=
   ⟨lower_checkEntryAndGlobals accepted, lower_checkOrigins accepted, lower_checkEvidence module⟩
 
-theorem lowerImplAt_scopeParents_of_accepted {module : Core.Module} {index : ImplId} {impl : Core.Impl}
+theorem lowerImpl_scopeParents_of_accepted {module : Core.Module} {index : ImplId} {impl : Core.Impl}
     (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl)
     (scope parent : Nat)
-    (row : (lowerImplAt module index impl).scopes[scope]? = some (some parent)) :
+    (row : (lowerImpl module impl).scopes[scope]? = some (some parent)) :
     parent < scope :=
-  lowerImplAt_scopeParents_earlier
+  lowerImpl_scopeParents_earlier
     (validate_implementation_checks accepted
       (Array.mem_toList_iff.mpr (Array.mem_of_getElem? lookup))) scope parent row
 

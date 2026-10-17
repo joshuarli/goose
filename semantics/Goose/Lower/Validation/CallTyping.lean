@@ -68,12 +68,8 @@ theorem lowerExpr_call_nil_typed {env : Core.TEnv} {context : ContextId} {origin
   have paramsNil : callee.params.toList = [] := by
     apply List.eq_nil_of_length_eq_zero
     simpa only [Array.length_toList] using noParams
-  have signature : (lowerEnv env.mod vars results).sigs[ctx.impl]? = some ([], callee.results.toList) := by
-    simp [lowerEnv, Array.getElem?_map, calleeRow, paramsNil]
-  have contextRun : implOfContext context (lowerEnv env.mod vars results) before = (ctx.impl, before) := by
-    change (((env.mod.contexts[context]?).map (·.impl)).getD 0, before) = (ctx.impl, before)
-    rw [contextRow]
-    rfl
+  have signature : (lowerEnv env.mod vars results).sigs[context]? = some ([], callee.results.toList) := by
+    simp [lowerEnv, Array.getElem?_map, contextRow, calleeRow, paramsNil]
   cases current : before.cur with
   | none =>
     intro live
@@ -82,7 +78,7 @@ theorem lowerExpr_call_nil_typed {env : Core.TEnv} {context : ContextId} {origin
     simp [stopped] at live
   | some block =>
     have operation := call_nil_resultTy (state := before) signature resultSource origin
-    cases emitted : emitDef (.call ctx.impl [] (some origin)) (lowerEnv env.mod vars results) before with
+    cases emitted : emitDef (.call context [] (some origin)) (lowerEnv env.mod vars results) before with
     | mk value middle =>
       have recorded := emitDef_recorded current operation
       rw [emitted] at recorded
@@ -94,8 +90,6 @@ theorem lowerExpr_call_nil_typed {env : Core.TEnv} {context : ContextId} {origin
         simp only [lowerExpr]
         apply bind_eq.mpr
         refine ⟨[], before, rfl, ?_⟩
-        apply bind_eq.mpr
-        refine ⟨ctx.impl, before, contextRun, ?_⟩
         apply bind_eq.mpr
         exact ⟨value, middle, emitted, rfl⟩
       rw [run, call_tail_run]

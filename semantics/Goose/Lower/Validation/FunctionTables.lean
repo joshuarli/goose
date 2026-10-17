@@ -10,23 +10,25 @@ theorem lower_signatureTables (module : Core.Module) :
   apply Array.ext
   · simp [lower, lowerEnv]
   · intro index leftBound rightBound
-    simp [lower, lowerEnv, lowerImplAt]
+    have bound : index < module.contexts.size := by simpa [lowerEnv] using rightBound
+    simp only [lower, lowerEnv, Array.getElem_map, Array.getElem?_map]
+    cases row : module.impls[(module.contexts[index]'bound).impl]? <;> simp [invalidContextFunction, lowerImpl]
 
 theorem lower_globalTypeTables (module : Core.Module) :
     (lower module).globals.map (fun global => (global.ty, global.kind)) =
       (lowerEnv module #[] []).globals := by
   simp [lower, lowerEnv, lowerGlobal, Array.map_map]
 
-theorem lowerImplAt_typingTables (module : Core.Module) (index : ImplId) (impl : Core.Impl) (state : LS) :
-    ((lower module).tyEnv (lowerImplAt module index impl)).slots =
+theorem lowerImpl_typingTables (module : Core.Module) (impl : Core.Impl) (state : LS) :
+    ((lower module).tyEnv (lowerImpl module impl)).slots =
         (tyEnv (lowerEnv module impl.vars impl.results.toList) state).slots ∧
-      ((lower module).tyEnv (lowerImplAt module index impl)).globals =
+      ((lower module).tyEnv (lowerImpl module impl)).globals =
         (tyEnv (lowerEnv module impl.vars impl.results.toList) state).globals ∧
-      ((lower module).tyEnv (lowerImplAt module index impl)).sigs =
+      ((lower module).tyEnv (lowerImpl module impl)).sigs =
         (tyEnv (lowerEnv module impl.vars impl.results.toList) state).sigs ∧
-      ((lower module).tyEnv (lowerImplAt module index impl)).structs =
+      ((lower module).tyEnv (lowerImpl module impl)).structs =
         (tyEnv (lowerEnv module impl.vars impl.results.toList) state).structs ∧
-      ((lower module).tyEnv (lowerImplAt module index impl)).profile =
+      ((lower module).tyEnv (lowerImpl module impl)).profile =
         (tyEnv (lowerEnv module impl.vars impl.results.toList) state).profile := by
   refine ⟨rfl, ?_, ?_, rfl, rfl⟩
   · exact lower_globalTypeTables module

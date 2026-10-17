@@ -39,9 +39,9 @@ theorem readable_noRefSlice {ty : Ty} (readable : ty.readable = true) : ty.isRef
   | ref mu target => cases target <;> simp_all [Ty.readable, Ty.refTarget, Ty.isRefSlice]
   | _ => rfl
 
-theorem lowerImplAt_resultTypeChecks {module : Core.Module} {index : ImplId} {impl : Core.Impl}
+theorem lowerImpl_resultTypeChecks {module : Core.Module} {index : ImplId} {impl : Core.Impl}
     (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl) :
-    (GIR.checkAll (lowerImplAt module index impl).results fun ty => do
+    (GIR.checkAll (lowerImpl module impl).results fun ty => do
       unless !ty.isRefSlice do throw "a reference-to-slice type is only valid for a parameter") =
       (Except.ok () : Except String Unit) := by
   apply Origins.checkAll_ok_of_forall
@@ -55,14 +55,14 @@ theorem lowerImplAt_resultTypeChecks {module : Core.Module} {index : ImplId} {im
     · simp [readable, chk] at one
   simp [readable_noRefSlice readable, pure, Except.pure]
 
-theorem lowerImplAt_slotTypeChecks {module : Core.Module} {index : ImplId} {impl : Core.Impl}
+theorem lowerImpl_slotTypeChecks {module : Core.Module} {index : ImplId} {impl : Core.Impl}
     (accepted : Core.validate module = .ok ()) (lookup : module.impls[index]? = some impl) :
-    (GIR.checkAll (lowerImplAt module index impl).slots.toList.zipIdx fun (sl, position) => do
+    (GIR.checkAll (lowerImpl module impl).slots.toList.zipIdx fun (sl, position) => do
       unless sl.var == position do
         throw s!"slot {position} must describe variable {position}, found variable {sl.var}"
       let parameterRefSliceSlot :=
-        sl.var < (lowerImplAt module index impl).params.length &&
-          (lowerImplAt module index impl).params[sl.var]? == some sl.ty && sl.ty.isRefSlice
+        sl.var < (lowerImpl module impl).params.length &&
+          (lowerImpl module impl).params[sl.var]? == some sl.ty && sl.ty.isRefSlice
       unless sl.ty.storable || parameterRefSliceSlot do
         throw s!"the slot of variable {sl.var} has a type no variable may have") =
       (Except.ok () : Except String Unit) := by
@@ -94,15 +94,15 @@ theorem lowerImplAt_slotTypeChecks {module : Core.Module} {index : ImplId} {impl
             position param paramLookup
         rw [localLookup] at parameterLookup
         cases parameterLookup
-        have parameterType : (lowerImplAt module index impl).params[position]? = some localVar.ty := by
-          simp [lowerImplAt, List.getElem?_map, paramLookup, tyOfVar, aligned, localLookup]
+        have parameterType : (lowerImpl module impl).params[position]? = some localVar.ty := by
+          simp [lowerImpl, List.getElem?_map, paramLookup, tyOfVar, aligned, localLookup]
         have referenceSlice : localVar.ty.isRefSlice = true := by
           by_cases referenceSlice : localVar.ty.isRefSlice = true
           · exact referenceSlice
           · simp [stored, referenceSlice, paramLookup, chk] at one
-        have paramsBound : position < (lowerImplAt module index impl).params.length := by
-          simpa only [lowerImplAt, List.length_map, Array.length_toList] using bound
-        have parameterValue : (lowerImplAt module index impl).params[position] = localVar.ty := by
+        have paramsBound : position < (lowerImpl module impl).params.length := by
+          simpa only [lowerImpl, List.length_map, Array.length_toList] using bound
+        have parameterValue : (lowerImpl module impl).params[position] = localVar.ty := by
           simpa only [List.getElem?_eq_getElem paramsBound, Option.some.injEq] using parameterType
         simp [stored, referenceSlice, parameterValue, paramsBound, pure, Except.pure]
 

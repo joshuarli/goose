@@ -76,10 +76,6 @@ theorem dead_freezeTo (mu : Mutability) (value : ValueId) : DeadRun (freezeTo mu
       | exact DeadRun.pure _
       | (rename_i mu ty; cases mu <;> first | exact DeadRun.pure _ | exact dead_emitDef _))
 
-theorem dead_implOfContext (context : ContextId) : DeadRun (implOfContext context) := by
-  unfold implOfContext
-  exact DeadRun.bind dead_read fun _ => DeadRun.pure _
-
 theorem dead_shortCircuit (isAnd : Bool) (value : ValueId) (rhs : B ValueId) :
     DeadRun (shortCircuit isAnd value rhs) := by
   unfold shortCircuit
@@ -165,7 +161,7 @@ theorem dead_lowerExpr : ∀ e : Expr, DeadRun (lowerExpr e)
     exact DeadRun.bind (dead_lowerExpr e) fun a => DeadRun.bind (dead_intTyOf a) fun _ => dead_emitDef _
   | .call c args org => by
     simp only [lowerExpr]
-    exact DeadRun.bind (dead_lowerArgs args) fun _ => DeadRun.bind (dead_implOfContext c) fun _ =>
+    exact DeadRun.bind (dead_lowerArgs args) fun _ =>
       DeadRun.bind (dead_emitDef _) fun r => DeadRun.bind dead_read fun le => by
         cases le.mod.noReturn c <;> simp only [Bool.false_eq_true, ↓reduceIte] <;>
           first | exact DeadRun.pure _ | exact DeadRun.bind (dead_emitTerm _) fun _ => DeadRun.pure _

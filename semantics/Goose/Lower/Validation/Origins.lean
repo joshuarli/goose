@@ -212,10 +212,6 @@ theorem origins_coerceResult (value : ValueId) (org : OriginId) :
   | none => exact OriginRun.pure _
   | some destination => exact origins_coerceTo destination value org
 
-theorem origins_implOfContext (c : ContextId) : OriginRun (implOfContext c) := by
-  unfold implOfContext
-  exact OriginRun.bind origins_read fun _ => OriginRun.pure _
-
 theorem origins_growOwner (r : ValueId) : OriginRun (growOwner r) := by
   unfold growOwner
   refine OriginRun.bind (origins_valTy r) fun t => ?_
@@ -485,7 +481,7 @@ theorem origins_lowerExpr : ∀ e : Expr, OriginRun (lowerExpr e)
     exact OriginRun.bind (origins_lowerExpr e) fun a => OriginRun.bind (origins_intTyOf a) fun _ => origins_emitDef _
   | .call c args org => by
     simp only [lowerExpr]
-    exact OriginRun.bind (origins_lowerArgs args) fun _ => OriginRun.bind (origins_implOfContext c) fun _ =>
+    exact OriginRun.bind (origins_lowerArgs args) fun _ =>
       OriginRun.bind (origins_emitDef _) fun r => OriginRun.bind origins_read fun le => by
         cases le.mod.noReturn c <;> simp only [Bool.false_eq_true, ↓reduceIte] <;>
           first | exact OriginRun.pure _ | exact OriginRun.bind (origins_emitTerm _) fun _ => OriginRun.pure _
@@ -755,8 +751,8 @@ theorem origins_finishBlocks {state : LS} (checked : PresentOrigins state) :
 theorem origins_initState : PresentOrigins initState := by
   simp [PresentOrigins, initState, LS.insts]
 
-theorem lowerImplAt_presentOrigins (module : Core.Module) (implId : ImplId) (impl : Impl) :
-    Func.PresentOrigins (lowerImplAt module implId impl) := by
+theorem lowerImpl_presentOrigins (module : Core.Module) (impl : Impl) :
+    Func.PresentOrigins (lowerImpl module impl) := by
   let action : B Unit := do
     let (b0, params) ← newBlock (impl.params.toList.map fun param => .data (tyOfVar impl param.var))
     setCur (some b0)
@@ -792,15 +788,22 @@ theorem lower_presentOrigins (module : Core.Module) (func : Func)
     (member : func ∈ (lower module).funcs.toList ++ (lower module).globals.toList.map (·.init)) :
     Func.PresentOrigins func := by
   rcases List.mem_append.mp member with implementation | initializer
-  · obtain ⟨index, lookup⟩ := Array.mem_iff_getElem?.mp (Array.mem_toList_iff.mp implementation)
-    change (module.impls.mapIdx fun index impl => lowerImplAt module index impl)[index]? = some func at lookup
-    rw [Array.getElem?_mapIdx] at lookup
-    cases source : module.impls[index]? with
-    | none => simp [source] at lookup
-    | some impl =>
-      simp only [source, Option.map_some, Option.some.injEq] at lookup
+  · change func ∈ (module.contexts.map fun ctx =>
+        match (module.impls.map fun impl => (impl, lowerImpl module impl))[ctx.impl]? with
+        | some (impl, body) => { body with roots := lowerContextRootInfo ctx impl }
+        | none => invalidContextFunction ctx).toList at implementation
+    simp only [Array.toList_map, List.mem_map] at implementation
+    obtain ⟨ctx, _, equality⟩ := implementation
+    rw [Array.getElem?_map] at equality
+    cases source : module.impls[ctx.impl]? with
+    | none =>
+      simp only [source, Option.map_none] at equality
       subst func
-      exact lowerImplAt_presentOrigins _ _ _
+      simp [Func.PresentOrigins, invalidContextFunction]
+    | some impl =>
+      simp only [source, Option.map_some] at equality
+      subst func
+      exact lowerImpl_presentOrigins module impl
   · obtain ⟨global, globalMember, rfl⟩ := List.mem_map.mp initializer
     change global ∈ (module.globals.map (lowerGlobal module)).toList at globalMember
     simp only [Array.toList_map, List.mem_map] at globalMember
