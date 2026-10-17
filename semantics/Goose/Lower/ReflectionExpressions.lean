@@ -59,7 +59,7 @@ theorem exprReflection_read {fuel : Nat} {place : Place}
       (fun n => evalPlace n cfg env place >>= readLoc)
       (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId,.val value)]) state := by
     refine first.bind ?_ (fun n k bound => (monoAll n k bound).place cfg env place)
-      (fun _ _ _ _ => MonoM.refl _) 
+      (fun _ _ _ _ => MonoM.refl _)
     intro n location next pt' fr' source post residual bound
     have cell := post.has (address,.val (.ref location)) (by simp)
     refine leaf_def_reflectAtFuel post emit extension (by intro f args org h; cases h)
