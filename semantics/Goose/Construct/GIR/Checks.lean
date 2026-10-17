@@ -178,6 +178,56 @@ private def alternateNamed : Module :=
   [.begin 0,.write 0 0,.begin 1,.write 1 0,.write 1 1,.abandon 0,.relocate 1 .exitValue,.publish 1])
 #guard roundTrip alternateNamed
 
+private def ordinaryOpenResultExit : Module :=
+  let entry := namedResult.funcs[0]
+  let producer := function "ordinary" #[⟨[(0,.dest byteTy .value)],[
+    .eff (.enter 0), .def 1 (.resultExitDest 0 (some 0)), .eff (.destBytes 1 [65,66] (some 0)),
+    .def 2 (.destFinish 1 (some 0)), .def 3 (.destAbandon 0 (some 0)),
+    .eff (.destCancel 3 (some 0)), .def 4 (.destRelocate 2 .exitValue (some 0)),
+    .eff (.leave 0), .term (.ret [4] (some 0))]⟩]
+    #[] [⟨byteTy,.value,none⟩]
+  { namedResult with funcs := #[entry,producer] }
+
+#guard (Validate.validate ordinaryOpenResultExit).isOk
+#guard observation ordinaryOpenResultExit == some ([65,66,10],
+  [.begin 0,.write 0 0,.write 0 1,.publish 0])
+#guard roundTrip ordinaryOpenResultExit
+
+private def ordinaryPartialResultExit : Module :=
+  let entry := ordinaryOpenResultExit.funcs[0]
+  let producer := function "ordinaryPartial" #[⟨[(0,.dest byteTy .value)],[
+    .eff (.enter 0), .eff (.destBytes 0 [65] (some 0)), .def 1 (.resultExitDest 0 (some 0)),
+    .eff (.destBytes 1 [66] (some 0)), .def 2 (.destFinish 1 (some 0)),
+    .def 3 (.destAbandon 0 (some 0)), .eff (.destCancel 3 (some 0)),
+    .def 4 (.destRelocate 2 .exitValue (some 0)), .eff (.leave 0), .term (.ret [4] (some 0))]⟩]
+    #[] [⟨byteTy,.value,none⟩]
+  { ordinaryOpenResultExit with funcs := #[entry,producer] }
+
+#guard (Validate.validate ordinaryPartialResultExit).isOk
+#guard observation ordinaryPartialResultExit == some ([66,10],
+  [.begin 0,.write 0 0,.begin 1,.write 1 0,.abandon 0,.relocate 1 .exitValue,.publish 1])
+#guard roundTrip ordinaryPartialResultExit
+
+private def ordinaryOpenResultExitCapacityFault : Module :=
+  let limitedByte := Ty.limited (.int .u8) 1
+  let entry := function "entry" #[⟨[],[
+    .eff (.enter 0), .def 0 (.destOpen (.slot 0) limitedByte .value none (some 0)),
+    .def 1 (.callConstruct 1 [] [0] (some 0)), .eff (.destPublish 1 (some 0)),
+    .eff (.leave 0), .term (.ret [] (some 0))]⟩] #[⟨limitedByte,.mutable,0,0⟩]
+  let producer := function "ordinaryCapacity" #[⟨[(0,.dest limitedByte .value)],[
+    .eff (.enter 0), .def 1 (.resultExitDest 0 (some 0)),
+    .eff (.destBytes 1 [65,66] (some 0)), .def 2 (.destFinish 1 (some 0)),
+    .def 3 (.destAbandon 0 (some 0)), .eff (.destCancel 3 (some 0)),
+    .def 4 (.destRelocate 2 .exitValue (some 0)), .eff (.leave 0),
+    .term (.ret [4] (some 0))]⟩] #[] [⟨limitedByte,.value,none⟩]
+  { ordinaryOpenResultExit with funcs := #[entry,producer] }
+
+#guard (Validate.validate ordinaryOpenResultExitCapacityFault).isOk
+#guard (match Run.run 1000 .release ordinaryOpenResultExitCapacityFault with
+  | .done (.aborted .capacity 0) stdout events => stdout.isEmpty && events == [.begin 0,.write 0 0]
+  | _ => false)
+#guard roundTrip ordinaryOpenResultExitCapacityFault
+
 end Goose.Construct.GIR.Checks
 
 namespace Goose.Construct.GIR.Checks
