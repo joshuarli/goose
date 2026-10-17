@@ -1,0 +1,45 @@
+import Goose.Lower.Validation.SourceGlobalControlLeaves
+import Goose.Lower.Validation.SourceGlobalControlImpossible
+import Goose.Lower.Validation.SourceGlobalControlIf
+import Goose.Lower.Validation.SourceGlobalControlWhile
+import Goose.Lower.Validation.SourceGlobalControlPrint
+import Goose.Lower.Validation.SourceGlobalControlAbort
+import Goose.Lower.Validation.SourceGlobalControlStatements
+import Goose.Lower.Validation.SourceGlobalControlBlocks
+import Goose.Lower.Validation.SourceGlobalControlMutationAssign
+import Goose.Lower.Validation.SourceGlobalControlAssignOp
+import Goose.Lower.Validation.SourceGlobalControlMutationOwners
+import Goose.Lower.Validation.SourceGlobalControlMutationCounts
+import Goose.Lower.Validation.SourceGlobalControlMutationGrowth
+import Goose.Lower.Validation.SourceGlobalControlMutationResize
+import Goose.Lower.Validation.SourceGlobalControlMutationWhole
+
+namespace Goose.Lower.Validation.SummaryPreservation
+
+#print axioms globalStatementReplay_expression
+#print axioms globalStatementReplay_returnUnit
+#print axioms globalStatementReplay_break
+#print axioms globalStatementReplay_continue
+#print axioms globalStatementReplay_let
+#print axioms globalStatementReplay_rebind
+#print axioms globalStatementReplay_forRange
+#print axioms globalStatementReplay_forEach
+#print axioms globalStatementReplay_return
+#print axioms globalStatementReplay_if
+#print axioms globalStatementReplay_while
+#print axioms globalStatementReplay_print
+#print axioms globalStatementReplay_abort
+#print axioms globalStatementReplay_exit
+#print axioms globalStatementReplay_assert
+#print axioms globalStatementReplay_assign
+#print axioms globalStatementReplay_assignOp
+#print axioms globalStatementReplay_clear
+#print axioms globalStatementReplay_popN
+#print axioms globalStatementReplay_resizeWithoutFill
+#print axioms globalStatementReplay_resizeWithFill
+#print axioms globalStatementReplay_append
+#print axioms globalStatementReplay_assignWhole
+#print axioms globalStatementsReplay_of_statement
+#print axioms globalBlockReplay_of_children
+
+end Goose.Lower.Validation.SummaryPreservation
