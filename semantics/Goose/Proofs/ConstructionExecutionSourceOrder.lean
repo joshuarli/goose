@@ -40,6 +40,19 @@ inductive ListMapMLoopEscaped (action : α → EvalM β) :
       ListMapMLoopEscaped action (item :: rest) accumulator initial address carriers final
         (item :: visited)
 
+inductive ListMapMLoopJumped (action : α → EvalM β) :
+    List α → List β → ExecutionState → Nat → JumpKind → ExecutionState → List α → Prop
+  | atHead {item : α} {rest : List α} {accumulator : List β}
+      {initial final : ExecutionState} {target : Nat} {kind : JumpKind}
+      (head : action item initial = .jump target kind final) :
+      ListMapMLoopJumped action (item :: rest) accumulator initial target kind final [item]
+  | afterHead {item : α} {rest visited : List α} {accumulator : List β}
+      {initial middle final : ExecutionState} {value : β} {target : Nat} {kind : JumpKind}
+      (head : action item initial = .ok value middle)
+      (tail : ListMapMLoopJumped action rest (value :: accumulator) middle target kind final visited) :
+      ListMapMLoopJumped action (item :: rest) accumulator initial target kind final
+        (item :: visited)
+
 def SourcePrefix (visited inputs : List α) : Prop :=
   ∃ suffix, inputs = visited ++ suffix
 
@@ -158,6 +171,50 @@ theorem sourcePrefix_of_escaped {action : α → EvalM β} {inputs : List α}
   | @afterHead item rest visited accumulator initial middle final value address carriers head tail ih =>
       obtain ⟨suffix, suffixEq⟩ := ih
       exact ⟨suffix, by simp [suffixEq]⟩
+
+theorem listMapMLoop_jumped_trace (action : α → EvalM β) (inputs : List α)
+    (accumulator : List β) (initial : ExecutionState) (target : Nat) (kind : JumpKind)
+    (final : ExecutionState)
+    (result : List.mapM.loop action inputs accumulator initial = .jump target kind final) :
+    ∃ visited, ListMapMLoopJumped action inputs accumulator initial target kind final visited := by
+  induction inputs generalizing accumulator initial target kind final with
+  | nil =>
+      rw [List.mapM.loop.eq_1] at result
+      simp only [pure] at result
+      cases result
+  | cons item rest ih =>
+      rw [List.mapM.loop.eq_2] at result
+      cases head : action item initial with
+      | ok value middle =>
+          simp only [bind, head] at result
+          obtain ⟨visited, tail⟩ := ih (value :: accumulator) middle target kind final result
+          exact ⟨item :: visited, .afterHead head tail⟩
+      | stop reason final' => simp only [bind, head] at result; cases result
+      | escape address carriers final' => simp only [bind, head] at result; cases result
+      | jump jumpedTarget jumpedKind final' =>
+          simp only [bind, head] at result
+          cases result
+          exact ⟨[item], .atHead (rest := rest) (accumulator := accumulator) head⟩
+
+theorem sourcePrefix_of_jumped {action : α → EvalM β} {inputs : List α}
+    {accumulator : List β} {initial : ExecutionState} {target : Nat} {kind : JumpKind}
+    {final : ExecutionState} {visited : List α}
+    (trace : ListMapMLoopJumped action inputs accumulator initial target kind final visited) :
+    SourcePrefix visited inputs := by
+  induction trace with
+  | atHead head => exact ⟨_, rfl⟩
+  | @afterHead item rest visited accumulator initial middle final value target kind head tail ih =>
+      obtain ⟨suffix, suffixEq⟩ := ih
+      exact ⟨suffix, by simp [suffixEq]⟩
+
+theorem listMapM_jumped_source_prefix (action : α → EvalM β) (inputs : List α)
+    (initial final : ExecutionState) (target : Nat) (kind : JumpKind)
+    (result : (inputs.mapM action) initial = .jump target kind final) :
+    ∃ visited, SourcePrefix visited inputs := by
+  change List.mapM.loop action inputs [] initial = .jump target kind final at result
+  obtain ⟨visited, trace⟩ :=
+    listMapMLoop_jumped_trace action inputs [] initial target kind final result
+  exact ⟨visited, sourcePrefix_of_jumped trace⟩
 
 theorem listMapM_escaped_source_prefix (action : α → EvalM β) (inputs : List α)
     (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
@@ -430,6 +487,23 @@ theorem evalValue_structLiteral_operands_escaped_trace (fuel : Nat) (config : Ev
       exact listMapMLoop_escaped_trace _ _ [] _ address carriers _ operandsResult
   | jump target kind final' => simp only [operandsResult] at result; cases result
 
+theorem evalValue_structLiteral_operands_jumped_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (id : Goose.Core.StructId) (fields : TyList)
+    (operands : List Expr) (target : Nat) (kind : JumpKind) (initial final : ExecutionState)
+    (result : evalValue (fuel + 1) config environment (.structLit (.structT id fields) operands)
+      initial = .jump target kind final) :
+    ∃ visited, ListMapMLoopJumped (fun operand => evalValue fuel config environment operand)
+      operands [] initial target kind final visited := by
+  simp only [evalValue, bind, pure] at result
+  cases operandsResult : operands.mapM (evalValue fuel config environment) initial with
+  | ok evaluated final' => simp only [operandsResult] at result; cases result
+  | stop reason final' => simp only [operandsResult] at result; cases result
+  | escape address carriers final' => simp only [operandsResult] at result; cases result
+  | jump jumpedTarget jumpedKind final' =>
+      simp only [operandsResult] at result
+      cases result
+      exact listMapMLoop_jumped_trace _ _ [] _ target kind _ operandsResult
+
 theorem evalValue_fixedArray_operands_stopped_trace (fuel : Nat) (config : EvalConfig)
     (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
     (origin : Goose.Core.OriginId) (reason : Goose.Core.Stop) (initial final : ExecutionState)
@@ -482,6 +556,27 @@ theorem evalValue_fixedArray_operands_escaped_trace (fuel : Nat) (config : EvalC
       cases result
       exact listMapMLoop_escaped_trace _ _ [] _ address carriers _ operandsResult
   | jump target kind final' => simp only [operandsResult] at result; cases result
+
+theorem evalValue_fixedArray_operands_jumped_trace (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
+    (origin : Goose.Core.OriginId) (target : Nat) (kind : JumpKind)
+    (initial final : ExecutionState) (fixed : ty.nonfixed = false)
+    (result : evalValue (fuel + 1) config environment (.arrLit ty operands origin) initial =
+      .jump target kind final) :
+    ∃ visited, ListMapMLoopJumped (fun operand => evalValue fuel config environment operand)
+      operands [] initial target kind final visited := by
+  simp only [evalValue] at result
+  have notTrue : ¬ ty.nonfixed = true := by simp [fixed]
+  rw [ite_eq_right notTrue] at result
+  simp only [bind, pure] at result
+  cases operandsResult : operands.mapM (evalValue fuel config environment) initial with
+  | ok evaluated final' => simp only [operandsResult] at result; cases result
+  | stop reason final' => simp only [operandsResult] at result; cases result
+  | escape address carriers final' => simp only [operandsResult] at result; cases result
+  | jump jumpedTarget jumpedKind final' =>
+      simp only [operandsResult] at result
+      cases result
+      exact listMapMLoop_jumped_trace _ _ [] _ target kind _ operandsResult
 
 theorem evalValue_fixedArray_operands_escaped_prefix (fuel : Nat) (config : EvalConfig)
     (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
