@@ -5,6 +5,7 @@
 #include "../src/utils.h"
 #include "../src/core/core_ir.h"
 #include "../src/core/core_json.h"
+#include "../src/core/core_summary.h"
 
 using namespace goose;
 
@@ -303,7 +304,125 @@ static CoreModule ConstructionShape() {
     return module;
 }
 
+static CoreModule ReceivingCapacityLiteral(CoreType::Kind kind, int64_t capacity, vector<uint8_t> bytes) {
+    CoreModule module;
+    module.profile = CoreProfile::Construction;
+    module.files = {"summary-capacity.goose"};
+    const CoreOrigin origin {0, 1, CoreOriginKind::Let};
+    auto u8 = module.IntType(CoreIntTy::U8);
+    auto type = module.Intern(CoreType {.kind = kind, .elem = u8, .count = capacity});
+    CoreImpl entry;
+    entry.name = "entry";
+    entry.vars = {CoreVar {"result", type, CoreVarKind::Let, 0, origin}};
+    CoreStmt initialize;
+    initialize.kind = CoreStmtKind::Let;
+    initialize.org = origin;
+    initialize.expr = make_unique<CoreExpr>();
+    initialize.expr->kind = CoreExprKind::Bytes;
+    initialize.expr->type = type;
+    initialize.expr->org = origin;
+    initialize.expr->bytes = std::move(bytes);
+    entry.body.stmts.push_back(std::move(initialize));
+    module.impls.push_back(std::move(entry));
+    module.contexts = {CoreContext {.impl = 0}};
+    return module;
+}
+
+static CoreModule ReceivingCapacityBreak(CoreModule module) {
+    auto &initialize = module.impls[0].body.stmts[0];
+    CoreStmt valueBreak;
+    valueBreak.kind = CoreStmtKind::BreakValue;
+    valueBreak.org = initialize.org;
+    valueBreak.expr = std::move(initialize.expr);
+    initialize.expr = make_unique<CoreExpr>();
+    initialize.expr->kind = CoreExprKind::Block;
+    initialize.expr->type = module.impls[0].vars[0].type;
+    initialize.expr->org = initialize.org;
+    initialize.expr->then = make_unique<CoreBlock>();
+    initialize.expr->then->scope = 1;
+    initialize.expr->then->stmts.push_back(std::move(valueBreak));
+    return module;
+}
+
+static void ReceivingCapacitySummaries() {
+    auto direct = ReceivingCapacityLiteral(CoreType::VarArr, 0, {65});
+    CoreSummarizer(direct).Run();
+    assert(!direct.impls[0].summary.aborts);
+
+    auto breaking = ReceivingCapacityBreak(ReceivingCapacityLiteral(CoreType::VarArr, 0, {65}));
+    CoreSummarizer(breaking).Run();
+    assert(breaking.impls[0].summary.aborts);
+
+    auto calling = ReceivingCapacityLiteral(CoreType::VarArr, 0, {65});
+    auto type = calling.impls[0].vars[0].type;
+    auto producer = std::move(breaking.impls[0]);
+    producer.name = "producer";
+    producer.results = {CoreResultDescriptor {type, CoreRequest::Value}};
+    producer.body.value = std::move(producer.body.stmts[0].expr);
+    producer.body.stmts.clear();
+    producer.vars.clear();
+    auto &outer = producer.body.value->then->stmts[0];
+    CoreStmt inner;
+    inner.kind = CoreStmtKind::BreakValue;
+    inner.expr = std::move(outer.expr);
+    auto branch = make_unique<CoreExpr>();
+    branch->kind = CoreExprKind::If;
+    branch->type = type;
+    branch->a = make_unique<CoreExpr>();
+    branch->a->kind = CoreExprKind::Bool;
+    branch->a->flag = true;
+    branch->then = make_unique<CoreBlock>();
+    branch->then->scope = 2;
+    branch->then->stmts.push_back(std::move(inner));
+    branch->otherwise = make_unique<CoreBlock>();
+    branch->otherwise->scope = 3;
+    branch->otherwise->value = make_unique<CoreExpr>();
+    branch->otherwise->value->kind = CoreExprKind::Bytes;
+    branch->otherwise->value->type = type;
+    branch->otherwise->value->bytes = {66};
+    outer.expr = make_unique<CoreExpr>();
+    outer.expr->kind = CoreExprKind::Values;
+    outer.expr->values.push_back(std::move(branch));
+    auto &call = *calling.impls[0].body.stmts[0].expr;
+    call.kind = CoreExprKind::Call;
+    call.ctx = 1;
+    calling.impls.push_back(std::move(producer));
+    calling.contexts.push_back(CoreContext {.impl = 1, .resultroots = {{}}});
+    CoreSummarizer(calling).Run();
+    assert(calling.impls[1].summary.aborts);
+    assert(calling.impls[0].summary.aborts);
+    assert(!calling.impls[0].summary.unknown);
+
+    auto fitting = ReceivingCapacityLiteral(CoreType::Limited, 1, {65});
+    CoreSummarizer(fitting).Run();
+    assert(!fitting.impls[0].summary.aborts);
+    auto overflow = ReceivingCapacityLiteral(CoreType::Limited, 1, {65, 66});
+    CoreSummarizer(overflow).Run();
+    assert(overflow.impls[0].summary.aborts);
+
+    auto unlimited = ReceivingCapacityBreak(ReceivingCapacityLiteral(CoreType::Grow, 0, {65}));
+    CoreSummarizer(unlimited).Run();
+    assert(!unlimited.impls[0].summary.aborts);
+    assert(!unlimited.impls[0].summary.unknown);
+
+    auto unknown = ReceivingCapacityLiteral(CoreType::VarArr, 0, {65});
+    auto grow = unknown.Intern(CoreType {.kind = CoreType::Grow, .elem = unknown.IntType(CoreIntTy::U8)});
+    auto initial = make_unique<CoreExpr>();
+    initial->kind = CoreExprKind::Arr;
+    initial->type = grow;
+    unknown.globals.push_back(CoreGlobal {"source", grow, CoreVarKind::Var, std::move(initial)});
+    auto &copy = *unknown.impls[0].body.stmts[0].expr;
+    copy.kind = CoreExprKind::Copy;
+    copy.place = make_unique<CorePlace>();
+    copy.place->kind = CorePlace::Global;
+    CoreSummarizer(unknown).Run();
+    assert(unknown.impls[0].summary.aborts);
+    assert(!unknown.impls[0].summary.unknown);
+    assert(unknown.impls[0].summary.reads == vector<CoreTarget>({{true, 0}}));
+}
+
 int main(int argc, char **argv) {
+    ReceivingCapacitySummaries();
     auto constructionOrigins = ConstructionExpressionOrigins(CoreProfile::Construction);
     for (auto expr : { "[\"e_arr\",1,[[\"e_lit\",0,\"1\"]],0]",
                        "[\"e_fill\",1,[\"e_lit\",0,\"2\"],1]",

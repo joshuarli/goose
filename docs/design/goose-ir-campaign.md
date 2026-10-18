@@ -6,7 +6,7 @@
 
 ## Current checkpoint
 
-The integrated C++ construction packet is `d5861339`. Semantic checkpoint `330a9e17` includes full accepted-Core-to-GIR validation and the carried-named-ticket repair. All 2,630 Goose modules plus Main qualify under Lean 4.35; a fresh native executable passes the 171-claim audit. The 41-case model matrix, 328 sanitized native configurations, and nine standard-source fixtures agree exactly. Whole-evaluation ownership and exit proofs, explicit demand-invariant transfer, and paranoid qualification remain open. A follow-up production capacity-summary repair is under review; it has not qualified the compiler or resource gates.
+The last fully qualified C++ construction packet is `d5861339`. Semantic checkpoint `330a9e17` includes full accepted-Core-to-GIR validation and the carried-named-ticket repair. All 2,630 Goose modules plus Main qualify under Lean 4.35; a fresh native executable passes the 171-claim audit. The 41-case model matrix, 328 sanitized native configurations, and nine standard-source fixtures agree exactly. Whole-evaluation ownership and exit proofs, explicit demand-invariant transfer, and paranoid qualification remain open. The production capacity-summary repair passes focused C++ and Lean controls; fresh compiler and resource qualification remain required.
 
 ### Evidence by scope
 

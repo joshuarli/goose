@@ -196,6 +196,10 @@ The target of an effect is the set of global and parameter roots of the place re
 | rebinds | `rebind` of a variable that is a parameter. A slice assigned through a reference parameter `p` to the slice variable it refers to (`s_assign` to `p_deref(e_read(p_local p))`) is also a rebind of `param p`: one convention for replacing the slice a parameter's variable holds, whether the parameter is the slice or refers to it. |
 | through a call | The callee's declared reads, writes, growth and shrink with each `param j` replaced by the targets of argument `j`'s roots. Where the callee context annotates parameter `j` with globals, those globals are added: the callee's own check lets an entry for `param j` stand for them, so the call must too. A callee whose summary is unknown makes the caller's unknown. |
 
+In `core-construction`, `aborts` also covers receiving-capacity checks. A `Limited` receiver uses its inline capacity. A `VarArr` receiver with a `value` request uses the 32-bit count limit. If analysis cannot bound the producer within that capacity, the summary records possible abort. A bounded value-break block can still require `aborts` when its consuming expression has no inferred maximum. A receiver with no count bound does not acquire an abort effect merely because the producer count is unknown. Unknown count does not make the whole effect summary unknown.
+
+Oversized `Limited` literals contribute possible aborts. `Limited` string and copy construction conservatively contribute possible aborts too. Exporters must include these effects in the implementation summary and propagate them through calls.
+
 ## 5. Numeric and failure semantics
 
 From language spec §6.2 and §6.3; the Euclidean remainder and shift masking rows were confirmed on the baseline compiler (`-5 % 3` is `1`; `(-128 as i8) >> 9` is `-64`).
