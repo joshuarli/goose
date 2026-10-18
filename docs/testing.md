@@ -102,6 +102,62 @@ the emitted C (loop shapes, inline fn C, member parameters, member stores), the
 lexer and shader-compiler probes and the Goose-in-Goose bootstrap run without it, and the log has a line saying so.
 `samples/run_samples.py` takes the same option.
 
+## Linux arena advice regression
+
+`extra/huge_pages` checks every complete anonymous runtime arena immediately
+before its protected guard. Every writable segment of each arena must carry
+`VmFlags: nh`; a protected 2-MB prefix alone fails. The program remains alive
+until the checker finishes reading its mappings.
+
+The direct C regression calls the actual runtime reservation and release
+functions, without generating a Goose program. It requires Linux x86-64,
+4096-byte pages, `/proc/self/{maps,smaps,pagemap}`, and headers/kernel support
+for transparent huge-page advice and `MADV_COLLAPSE` (Linux 6.1 or newer).
+It positions the reservation through an intercepted `mmap`, leaving runtime
+advice and guard protection intact. Five cases cover two sparse terminal windows,
+a fully resident window with a zero stack cursor, advice failure with cleanup,
+and advice failure followed by cleanup failure.
+
+```sh
+mkdir -p .work/tmp
+TMPDIR="$PWD/.work/tmp" clang -O0 -g0 -std=c11 -Wall -Wextra -Werror \
+  -Wno-unused-function -I src/runtime test/runtime/region_nohuge.c \
+  -o .work/tmp/region-nohuge -lm -pthread
+for mode in sparse389 sparse485 resident-zero advice-error cleanup-error; do
+  .work/tmp/region-nohuge "$mode" || exit "$?"
+done
+```
+
+Repeat with `-O2` for the optimized C runtime. To compare an older runtime, compile
+the same C fixture with `-I /path/to/older/goose/src/runtime`; the fixture contains
+no replacement advice policy. Its `smaps` mode also supplies the existing
+`huge_pages.check_program` ready/input protocol for a direct checker control.
+
+On Linux 7.2.9 x86-64 with musl 1.2.6 and Clang 23.1.3, the runtime at `8eb50c00`
+failed all five cases at C `-O0`: its advice covered only 2 MB, and injected advice
+failure returned an arena instead of terminating after cleanup. The whole-region
+runtime passed all five at `-O0` and `-O2`. The existing program checker separately
+rejected the old runtime's partly marked arena and accepted the new runtime at
+both C optimization levels. The same final C fixture was used on both runtimes.
+
+The sparse cases preserve exactly 389 and 485 resident/present pages; the zero
+cursor control preserves 512. New-runtime explicit collapse returns `EINVAL`
+without changing RSS, anonymous/private-dirty backing, or huge-page category.
+In these direct old-runtime runs collapse returned `ENOMEM`, so they establish
+the incomplete advice and ignored-error defects without demonstrating padding
+materialization. The cause of that collapse refusal is not established; it is
+retained as a qualification limit.
+No execution-time benefit, full compiler build, compiler suite, other platform,
+or application memory gate is qualified by this focused check.
+
+After editing a runtime source, regenerate the embedded source with
+`GOOSE_RUNTIME="$PWD/src/runtime" /path/to/pinned/goose --gen-runtime-header`.
+Compare all six embedded payloads to the runtime files; changed raw-string chunk
+boundaries alone do not change their contents. A rebuilt compiler, broader
+runtime qualification, compiler memory/binary-size checks and performance gates
+remain required before release. No performance-neutrality claim follows from
+the direct C regression.
+
 ## Fixture layout
 
 Test fixtures are grouped by category; `run_tests.py` stays at the root of `test/`:

@@ -1410,6 +1410,7 @@ static GS_NORETURN void gs_park(void) {
 
 #include <sys/mman.h>
 #include <sys/resource.h>
+#include <errno.h>
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
@@ -1483,7 +1484,8 @@ static size_t gs_sigstack_size(void) {
 static void gs_native_stack_init(int primordial) {
     stack_t ss;
     uintptr_t lo = 0, hi = 0;
-    if (!sigaltstack(NULL, &ss) && (ss.ss_flags & SS_DISABLE)) {
+)GSRT"
+R"GSRT(    if (!sigaltstack(NULL, &ss) && (ss.ss_flags & SS_DISABLE)) {
         ss.ss_size = gs_sigstack_size();
         ss.ss_sp = malloc(ss.ss_size);
         ss.ss_flags = 0;
@@ -1491,8 +1493,7 @@ static void gs_native_stack_init(int primordial) {
         else free(ss.ss_sp);
     }
     #if defined(__APPLE__)
-)GSRT"
-R"GSRT(        hi = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
+        hi = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
         lo = hi - pthread_get_stacksize_np(pthread_self());
     #elif defined(__linux__)
         pthread_attr_t attr;
@@ -1505,8 +1506,7 @@ R"GSRT(        hi = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
             }
             pthread_attr_destroy(&attr);
         }
-)GSRT"
-R"GSRT(        if (primordial && hi) {
+        if (primordial && hi) {
             struct rlimit rl;
             if (!getrlimit(RLIMIT_STACK, &rl) && rl.rlim_cur != RLIM_INFINITY &&
                 rl.rlim_cur > hi - lo && rl.rlim_cur < hi)
@@ -1548,9 +1548,21 @@ static uint8_t *gs_os_reserve(size_t usable, size_t size) {
         munmap(p, size);
         gs_panic("cannot protect data stack guard gap");
     }
-    /* Most stacks hold a few bytes, which a transparent huge page at the
-       start would commit 2 MB for. */
-    #ifdef MADV_NOHUGEPAGE
+    #ifdef __linux__
+        #ifndef MADV_NOHUGEPAGE
+            #error Linux_runtime_requires_MADV_NOHUGEPAGE
+        #endif
+        if (madvise(p, usable, MADV_NOHUGEPAGE)) {
+            int advice_error = errno;
+            int release_error = munmap(p, size) ? errno : 0;
+            char message[sizeof("cannot disable huge pages for data stack (madvise errno=); cannot release address space (munmap errno=)") + 6 * sizeof(int)];
+            if (release_error)
+                snprintf(message, sizeof(message), "cannot disable huge pages for data stack (madvise errno=%d); cannot release address space (munmap errno=%d)", advice_error, release_error);
+            else
+                snprintf(message, sizeof(message), "cannot disable huge pages for data stack (madvise errno=%d)", advice_error);
+            gs_panic(message);
+        }
+    #elif defined(MADV_NOHUGEPAGE)
         madvise(p, usable < (2u << 20) ? usable : (2u << 20), MADV_NOHUGEPAGE);
     #endif
     return (uint8_t *)p;
@@ -1675,7 +1687,8 @@ static int64_t gs_sp_max(gs_sppath *p, int64_t i, int leaf) {
     int64_t m = 0, k;
     if (leaf) {
         gs_spleaf *l = GS_SPLEAF(p, i);
-        for (k = 0; k < l->n; k++)
+)GSRT"
+R"GSRT(        for (k = 0; k < l->n; k++)
             if (l->cnt[k] > m) m = l->cnt[k];
     } else {
         gs_spinner *in = GS_SPINNER(p, i);
@@ -1711,8 +1724,7 @@ static int64_t gs_sp_find(gs_sppath *p, int64_t idx) {
     gs_spleaf *lf;
     p->h = GS_SPHEAD(p)->height;
     for (l = 0; l < p->h; l++) {
-)GSRT"
-R"GSRT(        gs_spinner *in = GS_SPINNER(p, i);
+        gs_spinner *in = GS_SPINNER(p, i);
         for (k = 1; k < in->n && in->key[k] <= idx; k++) {}
         p->node[l] = i;
         p->pos[l] = k - 1;
@@ -1747,8 +1759,7 @@ static int gs_sp_nextleaf(gs_sppath *p) {
 static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
     int64_t r = gs_sp_newnode(p);
     gs_spinner *rn = GS_SPINNER(p, r);
-)GSRT"
-R"GSRT(    rn->n = 2;
+    rn->n = 2;
     rn->key[0] = gs_sp_key(p, a, leaf);
     rn->max[0] = gs_sp_max(p, a, leaf);
     rn->child[0] = a;
@@ -1908,7 +1919,8 @@ GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t 
        learns which while scanning it. */
     fit = p.h == 0 || gs_sp_max(&p, i, 0) >= cnt;
     for (l = 0; l < p.h; l++) {
-        gs_spinner *in = GS_SPINNER(&p, i);
+)GSRT"
+R"GSRT(        gs_spinner *in = GS_SPINNER(&p, i);
         k = in->n - 1;
         if (fit)
             for (k = 0; in->max[k] < cnt; k++) {}
@@ -1955,8 +1967,7 @@ static void gs_sp_near(gs_sppath *p, gs_sppath *q, int64_t idx, gs_spnear *s) {
     *q = *p;
     if (gs_sp_nextleaf(q)) {
         s->np = q;
-)GSRT"
-R"GSRT(        s->nl = GS_SPLEAF(q, q->node[q->h]);
+        s->nl = GS_SPLEAF(q, q->node[q->h]);
         s->nk = 0;
     }
 }
@@ -1989,8 +2000,7 @@ GS_API void gs_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx,
     p.top = top;
     if (*n == 0) {
         gs_sphead *hd = (gs_sphead *)base;
-)GSRT"
-R"GSRT(        *n = 1;
+        *n = 1;
         *top = base + GS_SPAN_NODE;
         hd->chain = 0;
         hd->height = 0;
@@ -2138,7 +2148,8 @@ static GS_INLINE __m128i gs_bsm_test(const gs_bsm *m, int k, __m128i x) {
     } else if (k == 2) {
         r = _mm_or_si128(_mm_cmpeq_epi8(x, m->a), _mm_cmpeq_epi8(x, m->b));
     } else if (k == 3) {
-        r = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(x, m->a), _mm_cmpeq_epi8(x, m->b)),
+)GSRT"
+R"GSRT(        r = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(x, m->a), _mm_cmpeq_epi8(x, m->b)),
                          _mm_cmpeq_epi8(x, m->c));
     } else {
         t = _mm_sub_epi8(x, m->a);
@@ -2164,8 +2175,7 @@ static GS_SSSE3 GS_INLINE __m128i gs_bsm_tables(const gs_bsm *m, __m128i x) {
 #define GS_ANY_LOOP(TEST)                                                              \
     int64_t i = 0;                                                                     \
     unsigned k;                                                                        \
-)GSRT"
-R"GSRT(    for (; i + 16 <= n; i += 16) {                                                     \
+    for (; i + 16 <= n; i += 16) {                                                     \
         k = (unsigned)_mm_movemask_epi8(TEST(GS_LOAD(p + i)));                         \
         if (k) return i + gs_ctz32(k);                                                 \
     }                                                                                  \
@@ -2178,8 +2188,7 @@ R"GSRT(    for (; i + 16 <= n; i += 16) {                                       
     int64_t i = 0;                                                                     \
     unsigned k;                                                                        \
     for (; i + 16 <= np; i += 16) {                                                    \
-)GSRT"
-R"GSRT(        k = (unsigned)_mm_movemask_epi8(                                               \
+        k = (unsigned)_mm_movemask_epi8(                                               \
             _mm_and_si128(TESTA(GS_LOAD(p + i)), TESTB(GS_LOAD(p + i + d))));          \
         if (k) return i + gs_ctz32(k);                                                 \
     }                                                                                  \
@@ -2305,7 +2314,8 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     #ifdef _WIN32
         // The bytes a program writes are the bytes that come out, '\n' one
         // byte as on every other platform, rather than a "\r\n" the CRT's
-        // text mode makes of it byte by byte.
+)GSRT"
+R"GSRT(        // text mode makes of it byte by byte.
         _setmode(_fileno(stdout), _O_BINARY);
         _setmode(_fileno(stderr), _O_BINARY);
     #endif
@@ -2346,8 +2356,7 @@ GS_API int64_t gs_fmt_u64(uint8_t *dst, uint64_t v) {
         unsigned r = (unsigned)(v % 100);
         v /= 100;
         p -= 2;
-)GSRT"
-R"GSRT(        p[0] = (uint8_t)gs_digit_pairs[2 * r];
+        p[0] = (uint8_t)gs_digit_pairs[2 * r];
         p[1] = (uint8_t)gs_digit_pairs[2 * r + 1];
     }
     if (v >= 10) {
@@ -2377,8 +2386,7 @@ GS_API int64_t gs_fmt_i64(uint8_t *dst, int64_t v) {
 
    The numbers are naturals in 32-bit limbs, least significant first. The
    denominator s stays below 2^1079 (ten times 2^1075, for the smallest
-)GSRT"
-R"GSRT(   doubles), and the others below eleven times s. */
+   doubles), and the others below eleven times s. */
 typedef struct { int n; uint32_t d[36]; } gs_big;
 
 /* a = v << sh, for v > 0. */
@@ -2525,7 +2533,8 @@ static int64_t gs_fmt_float(uint8_t *dst, int neg, uint64_t frac, int bexp, int 
     x = k - 1;
     if (x < -4 || x >= (n > 15 ? n : 15)) {
         *p++ = dig[0];
-        if (n > 1) *p++ = '.';
+)GSRT"
+R"GSRT(        if (n > 1) *p++ = '.';
         for (i = 1; i < n; i++) *p++ = dig[i];
         *p++ = 'e';
         *p++ = x < 0 ? '-' : '+';
@@ -2564,8 +2573,7 @@ GS_API int64_t gs_fmt_f64(uint8_t *dst, double v) {
         return 4;
     }
     memcpy(&b, &v, sizeof b);
-)GSRT"
-R"GSRT(    return gs_fmt_float(dst, (int)(b >> 63), b & (((uint64_t)1 << 52) - 1),
+    return gs_fmt_float(dst, (int)(b >> 63), b & (((uint64_t)1 << 52) - 1),
                         (int)(b >> 52) & 0x7FF, 53, -1074);
 }
 
@@ -2603,8 +2611,7 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n) {
 }
 
 /* stdout is unbuffered (gs_rt_start), so every piece is its own write;
-)GSRT"
-R"GSRT(   revisit if print throughput ever matters. */
+   revisit if print throughput ever matters. */
 
 GS_API void gs_out_int(int64_t v) {
     uint8_t buf[GS_FMT_MAX];
