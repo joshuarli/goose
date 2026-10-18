@@ -1,6 +1,6 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** resumed 2026-10-17 at the owner's request. Local implementation and verification are active. Pushes remain unauthorized.
+**Status:** winding down 2026-10-18 at the owner's request. Start no new campaign work. Finish or park in-flight items, preserve their branches, and leave a committed resume handoff. Pushes remain unauthorized.
 **Branch:** `master`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
