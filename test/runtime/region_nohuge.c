@@ -48,7 +48,7 @@ static int observed_madvise(void *address, size_t size, int advice) {
           "runtime advises its reservation");
     advice_calls++;
     advice_bytes = size;
-    if (fail_advice) { errno = EINVAL; return -1; }
+    if (fail_advice) { errno = EACCES; return -1; }
     return madvise(address, size, advice);
 }
 
@@ -224,7 +224,15 @@ static void advice_error(int release_error) {
           "advice failure names the required policy");
     check(strstr(text, release_error ? "UNMAP_FAILED\n" : "UNMAPPED\n") != NULL,
           "advice failure attempts complete cleanup");
-    if (release_error) check(strstr(text, "cannot release") != NULL, "cleanup failure preserves both errors");
+    char cause[64];
+    snprintf(cause, sizeof cause, "(madvise errno=%d)", EACCES);
+    check(strstr(text, cause) != NULL, "diagnostic preserves the original advice errno");
+    if (release_error) {
+        snprintf(cause, sizeof cause, "(munmap errno=%d)", EBUSY);
+        check(strstr(text, cause) != NULL, "diagnostic preserves the distinct cleanup errno");
+    } else {
+        check(strstr(text, "munmap errno=") == NULL, "successful cleanup reports no cleanup failure");
+    }
     printf("PASS advice-error release_error=%d child_closed=1\n", release_error);
 }
 
@@ -235,9 +243,14 @@ int main(int argc, char **argv) {
     else if (!strcmp(argv[1], "resident-zero")) geometry(argv[1], 753664, 62315764, 512);
     else if (!strcmp(argv[1], "advice-error")) advice_error(0);
     else if (!strcmp(argv[1], "cleanup-error")) advice_error(1);
-    else if (!strcmp(argv[1], "smaps")) {
+    else if (!strcmp(argv[1], "smaps") || !strcmp(argv[1], "smaps-half")) {
         uint8_t *base = gs_os_reserve(usable_bytes, usable_bytes + guard_bytes);
         check(base != NULL, "reserve arena for the existing program checker");
+        if (!strcmp(argv[1], "smaps-half")) {
+            check(!madvise(base, usable_bytes, MADV_HUGEPAGE), "reset advice for partial-half control");
+            check(!madvise(base + usable_bytes / 2, usable_bytes / 2, MADV_NOHUGEPAGE),
+                  "mark only the final half of the actual arena");
+        }
         puts("ready");
         fflush(stdout);
         check(getchar() == '\n', "program checker releases the arena");

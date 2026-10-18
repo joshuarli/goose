@@ -104,10 +104,12 @@ lexer and shader-compiler probes and the Goose-in-Goose bootstrap run without it
 
 ## Linux arena advice regression
 
-`extra/huge_pages` checks every complete anonymous runtime arena immediately
-before its protected guard. Every writable segment of each arena must carry
-`VmFlags: nh`; a protected 2-MB prefix alone fails. The program remains alive
-until the checker finishes reading its mappings.
+`extra/huge_pages` builds its program with an explicit 2-GiB stack reservation
+and checks that entire interval immediately before every protected guard.
+Incomplete coverage fails, including a smaller reservation after an allocation
+retry. Every writable segment must carry `VmFlags: nh`; a protected prefix or
+suffix alone fails. The program remains alive until the checker finishes
+reading its mappings.
 
 The direct C regression calls the actual runtime reservation and release
 functions, without generating a Goose program. It requires Linux x86-64,
@@ -129,16 +131,30 @@ done
 ```
 
 Repeat with `-O2` for the optimized C runtime. To compare an older runtime, compile
-the same C fixture with `-I /path/to/older/goose/src/runtime`; the fixture contains
-no replacement advice policy. Its `smaps` mode also supplies the existing
+the same C fixture with `-I /path/to/older/goose/src/runtime`; those five cases
+use the selected runtime's advice policy. Its `smaps` mode also supplies the existing
 `huge_pages.check_program` ready/input protocol for a direct checker control.
+The `smaps-half` negative control deliberately makes the first 1 GiB eligible
+for huge pages and marks only the last 1 GiB `nh`; the checker must reject it.
+The injected advice failure uses `EACCES`. The fixture checks its exact numeric
+diagnostic even after successful cleanup changes `errno` to `ENOMEM`, and checks
+the distinct `EBUSY` diagnostic when cleanup also fails.
 
-On Linux 7.2.9 x86-64 with musl 1.2.6 and Clang 23.1.3, the runtime at `8eb50c00`
-failed all five cases at C `-O0`: its advice covered only 2 MB, and injected advice
+The earlier v2 comparison on Linux 7.2.9 x86-64 with musl 1.2.6 and Clang 23.1.3
+used the runtime at `8eb50c00`, which failed all five cases at C `-O0`: its advice
+covered only 2 MB, and injected advice
 failure returned an arena instead of terminating after cleanup. The whole-region
 runtime passed all five at `-O0` and `-O2`. The existing program checker separately
 rejected the old runtime's partly marked arena and accepted the new runtime at
-both C optimization levels. The same final C fixture was used on both runtimes.
+both C optimization levels, giving 12 successful candidate checks. That checker
+could still mistake a marked power-of-two suffix for a complete arena.
+
+The v3 comparison used the strengthened checker and one identical final C fixture
+against both runtimes at both `-O0` and `-O2`. The old runtime failed all five
+policy/error cases and the whole-arena checker at each level. The new runtime
+passed those 12 checks, including the exact saved-errno assertions. The partial-half
+negative control was rejected on both runtimes at both levels. These four
+additional checker controls do not qualify a generated Goose program or compiler.
 
 The sparse cases preserve exactly 389 and 485 resident/present pages; the zero
 cursor control preserves 512. New-runtime explicit collapse returns `EINVAL`

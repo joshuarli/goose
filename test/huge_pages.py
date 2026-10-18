@@ -7,6 +7,8 @@ from pathlib import Path
 
 import toolchain as tc
 
+ARENA_BYTES = 2 << 30
+
 PROGRAM = """\
 import os;
 
@@ -52,17 +54,19 @@ def check_program(app):
     for index, (lo, hi, access, name, _) in enumerate(mappings):
         if access != "---p" or name or hi - lo != 1 << 20:
             continue
-        end, size, segments = lo, 0, []
+        begin, end, segments = lo - ARENA_BYTES, lo, []
         for start, stop, access, name, flags in reversed(mappings[:index]):
-            if stop != end or access != "rw-p" or name:
+            if stop != end or start < begin or access != "rw-p" or name:
                 break
-            end, size = start, size + stop - start
+            end = start
             segments.append(flags)
-            if size >= 1 << 20 and size & (size - 1) == 0:
+            if end == begin:
                 regions += 1
                 if not all("nh" in flags for flags in segments):
                     raise RuntimeError("huge pages: a runtime arena is only partly marked nh")
                 break
+        if end != begin:
+            raise RuntimeError("huge pages: incomplete configured runtime arena before guard")
     if not regions:
         raise RuntimeError("huge pages: no complete runtime arena with a protected guard")
 
@@ -81,7 +85,8 @@ def check_huge_pages(exe, base):
         source = root / "waits.goose"
         tc.write_text(source, PROGRAM)
         app = root / "waits"
-        r = subprocess.run([str(exe), "build", "-o", str(app), str(source)], cwd=root,
+        r = subprocess.run([str(exe), "build", "--stack-reserve", str(ARENA_BYTES),
+                            "-o", str(app), str(source)], cwd=root,
                            capture_output=True, text=True, errors="replace", timeout=300)
         if r.returncode != 0:
             raise RuntimeError(f"huge pages: goose build:\n{r.stdout}{r.stderr}")
