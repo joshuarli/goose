@@ -848,6 +848,7 @@ private theorem preservesActivationChannels_ownershipExitCleanup (config : EvalC
   have fresh0 := evaluationPreservesFresh_zero config
   have channels0 := evaluationActivationChannels_zero config
   unfold Goose.Proofs.ConstructionExecutionOwnership.ownershipExitCleanup
+  dsimp only
   construction_channels_eval fresh0 channels0
 
 private theorem activationChannels_finishOwnershipExitChannels (config : EvalConfig)

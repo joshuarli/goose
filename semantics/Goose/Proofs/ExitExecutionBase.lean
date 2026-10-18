@@ -1924,19 +1924,26 @@ def borrowedExitChannelReceipts (activation : RuntimeActivation) (initial : Exec
 def borrowedExitChannelStep (origin : Goose.Core.OriginId) (carriers : List Carrier)
     (receipt : BorrowedWaitingExitReservation) : EvalM (ForInStep PUnit) := do
   let token := receipt.token
-  liftConstruction origin (cancelExitReservation token (carriers.filterMap fun carrier =>
-    match carrier with | .completed id => some id | _ => none))
-  match (← EvalM.get).construction.exitReservations[token]? with
-  | some .restored => liftConstruction origin (rearmExitReservation receipt)
-  | some (.waiting actual) => if actual != receipt.incoming then fault .flow
-  | some (.active ..) => pure ()
-  | _ => fault .flow
-  pure (.yield PUnit.unit)
+  if carriers.any (fun carrier => match carrier with
+      | .pendingNamed actual => actual == token
+      | _ => false) then pure (.yield PUnit.unit)
+  else do
+    liftConstruction origin (cancelExitReservation token (carriers.filterMap fun carrier =>
+      match carrier with | .completed id => some id | _ => none))
+    match (← EvalM.get).construction.exitReservations[token]? with
+    | some .restored => liftConstruction origin (rearmExitReservation receipt)
+    | some (.waiting actual) => if actual != receipt.incoming then fault .flow
+    | some (.active ..) => pure ()
+    | _ => fault .flow
+    pure (.yield PUnit.unit)
+
 
 theorem preservesFresh_borrowedExitChannelStep (origin : Goose.Core.OriginId)
     (carriers : List Carrier) (receipt : BorrowedWaitingExitReservation) :
     PreservesFresh (borrowedExitChannelStep origin carriers receipt) := by
   unfold borrowedExitChannelStep
+  dsimp only
+  split <;> first | exact preservesFresh_pure _ | skip
   apply preservesFresh_bind
   · exact preservesFresh_lift _ _
   · intro _
@@ -1958,6 +1965,7 @@ theorem preservesFresh_borrowedExitChannelStep (origin : Goose.Core.OriginId)
               split
               · exact preservesFresh_stop _
               · exact preservesFresh_pure _
+
 
 def exitChannelCleanupBorrowed (origin : Goose.Core.OriginId)
     (borrowed : List BorrowedWaitingExitReservation) (tokens : List ExitReservationId)

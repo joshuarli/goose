@@ -148,13 +148,17 @@ def withExitChannels (source activation : RuntimeActivation) (operands : List Ex
           if cancel then
             for receipt in borrowed.reverse do
               let token := receipt.token
-              liftConstruction origin (cancelExitReservation token (carriers.filterMap fun carrier =>
-                match carrier with | .completed id => some id | _ => none))
-              match (← EvalM.get).construction.exitReservations[token]? with
-              | some .restored => liftConstruction origin (rearmExitReservation receipt)
-              | some (.waiting actual) => if actual != receipt.incoming then fault .flow
-              | some (.active ..) => pure ()
-              | _ => fault .flow
+              if carriers.any (fun carrier => match carrier with
+                  | .pendingNamed actual => actual == token
+                  | _ => false) then pure ()
+              else do
+                liftConstruction origin (cancelExitReservation token (carriers.filterMap fun carrier =>
+                  match carrier with | .completed id => some id | _ => none))
+                match (← EvalM.get).construction.exitReservations[token]? with
+                | some .restored => liftConstruction origin (rearmExitReservation receipt)
+                | some (.waiting actual) => if actual != receipt.incoming then fault .flow
+                | some (.active ..) => pure ()
+                | _ => fault .flow
           for token in tokens.reverse do
             if cancel then
               liftConstruction origin (cancelExitReservation token (carriers.filterMap fun carrier =>

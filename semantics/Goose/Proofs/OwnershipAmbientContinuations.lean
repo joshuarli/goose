@@ -184,24 +184,34 @@ theorem borrowedOwnershipExitReceipts_bounded (activation : RuntimeActivation) (
 def ownershipBorrowedReceiptCleanup (origin : OriginId) (receipt : BorrowedWaitingExitReservation)
     (carriers : List Construct.Carrier) : EvalM Unit := do
   let token := receipt.token
-  liftConstruction origin (cancelExitReservation token (completedCarrierIds carriers))
-  match (← EvalM.get).construction.exitReservations[token]? with
-  | some .restored => liftConstruction origin (rearmExitReservation receipt)
-  | some (.waiting actual) => if actual != receipt.incoming then fault .flow
-  | some (.active ..) => pure ()
-  | _ => fault .flow
+  if carriers.any (fun carrier => match carrier with
+      | .pendingNamed actual => actual == token
+      | _ => false) then pure ()
+  else do
+    liftConstruction origin (cancelExitReservation token (completedCarrierIds carriers))
+    match (← EvalM.get).construction.exitReservations[token]? with
+    | some .restored => liftConstruction origin (rearmExitReservation receipt)
+    | some (.waiting actual) => if actual != receipt.incoming then fault .flow
+    | some (.active ..) => pure ()
+    | _ => fault .flow
+
 
 def ownershipExitCleanup (origin : OriginId) (borrowed : List BorrowedWaitingExitReservation)
     (tokens : List ExitReservationId) (cancel : Bool) (carriers : List Construct.Carrier) : EvalM Unit := do
   if cancel then
     for receipt in borrowed.reverse do
       let token := receipt.token
-      liftConstruction origin (cancelExitReservation token (completedCarrierIds carriers))
-      match (← EvalM.get).construction.exitReservations[token]? with
-      | some .restored => liftConstruction origin (rearmExitReservation receipt)
-      | some (.waiting actual) => if actual != receipt.incoming then fault .flow
-      | some (.active ..) => pure ()
-      | _ => fault .flow
+      if carriers.any (fun carrier => match carrier with
+          | .pendingNamed actual => actual == token
+          | _ => false) then pure ()
+      else do
+        liftConstruction origin (cancelExitReservation token (completedCarrierIds carriers))
+        match (← EvalM.get).construction.exitReservations[token]? with
+        | some .restored => liftConstruction origin (rearmExitReservation receipt)
+        | some (.waiting actual) => if actual != receipt.incoming then fault .flow
+        | some (.active ..) => pure ()
+        | _ => fault .flow
+
   for token in tokens.reverse do
     if cancel then liftConstruction origin (cancelExitReservation token (completedCarrierIds carriers))
     liftConstruction origin (releaseExitReservation token)
@@ -210,6 +220,7 @@ private theorem ownershipBorrowedReceiptCleanup_straight (origin : OriginId)
     (receipt : BorrowedWaitingExitReservation) (carriers : List Construct.Carrier) (state : ExecutionState) :
     CleanupControl (ownershipBorrowedReceiptCleanup origin receipt carriers state) := by
   unfold ownershipBorrowedReceiptCleanup
+  split <;> first | trivial | skip
   apply cleanupControl_bind _ _ (cleanupControl_lift origin _)
   intro value after
   apply cleanupControl_bind
@@ -224,6 +235,7 @@ private theorem ownershipBorrowedReceiptCleanup_straight (origin : OriginId)
         | active role incoming reserved snapshot => trivial
         | restored => exact cleanupControl_lift origin _ final
         | released => trivial
+
 
 theorem ownershipBorrowedReceiptCleanup_control (origin : OriginId)
     (receipt : BorrowedWaitingExitReservation) (carriers : List Construct.Carrier) (state : ExecutionState) :
@@ -249,6 +261,7 @@ private theorem ownershipExitCleanup_straight (origin : OriginId) (borrowed : Li
       · intro current
         apply cleanupControl_forIn
         intro receipt accumulator now
+        split <;> first | trivial | skip
         apply cleanupControl_bind _ _ (cleanupControl_lift origin _)
         intro value after
         apply cleanupControl_bind

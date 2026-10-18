@@ -120,6 +120,7 @@ private theorem neverEscapes_exitChannelCleanupBorrowed (origin : Goose.Core.Ori
     (borrowed : List BorrowedWaitingExitReservation) (tokens : List Nat) (cancel : Bool)
     (carriers : List Carrier) : NeverEscapes (exitChannelCleanupBorrowed origin borrowed tokens cancel carriers) := by
   unfold exitChannelCleanupBorrowed borrowedExitChannelStep
+  dsimp only
   channels_never_escape
 
 private theorem finishBorrowedExitChannels_escape_result (origin : Goose.Core.OriginId)

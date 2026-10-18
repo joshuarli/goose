@@ -550,6 +550,8 @@ private theorem borrowedExitChannelStep_cleanupFrame (origin : OriginId) (carrie
     (receipt : BorrowedWaitingExitReservation) :
     KeepsCleanupFrame (borrowedExitChannelStep origin carriers receipt) := by
   unfold borrowedExitChannelStep
+  dsimp only
+  split <;> first | (intro state; rfl) | skip
   apply runtime_bind_keepsCleanupFrame
   · intro state
     exact runtime_lift_keepsCleanupFrame origin
@@ -589,6 +591,7 @@ private theorem borrowedExitChannelStep_cleanupFrame (origin : OriginId) (carrie
               | true =>
                   simp [present, mismatch, bind, Goose.Construct.fault, EvalM.stop]
                   rfl
+
 
 private theorem exitChannelCleanupToken_cleanupFrame (origin : OriginId)
     (cancel : Bool) (carriers : List Goose.Construct.Carrier)

@@ -120,6 +120,8 @@ private theorem borrowedExitChannelStep_storage (origin : OriginId) (carriers : 
     (receipt : BorrowedWaitingExitReservation) :
     RuntimeCleanupStorage (borrowedExitChannelStep origin carriers receipt) := by
   unfold borrowedExitChannelStep
+  dsimp only
+  split <;> first | (intro state; exact ⟨[], .refl _⟩) | skip
   apply RuntimeCleanupStorage.bind
   · intro state
     exact RuntimeCleanupStorage.lift origin
@@ -159,6 +161,7 @@ private theorem borrowedExitChannelStep_storage (origin : OriginId) (carriers : 
               | true =>
                   simp [present, mismatch, bind, Goose.Construct.fault, EvalM.stop]
                   exact ⟨[], .refl _⟩
+
 
 private theorem exitChannelCleanupToken_storage (origin : OriginId)
     (cancel : Bool) (carriers : List Goose.Construct.Carrier)
