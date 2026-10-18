@@ -250,6 +250,11 @@ private theorem keepsConstructionStdout_abandonTree (id : DestinationId) :
     | exiting _ _ | published _ | attached _ | abandoned | cancelled | retired =>
         exact keepsConstructionStdout_fail .protocol
 
+theorem abandonTree_stdout (id : DestinationId) (state : ConstructionState) :
+    (abandonTree id state).finalState.stdout = state.stdout :=
+  keepsConstructionStdout_abandonTree id state
+
+
 theorem releaseExitReservation_stdout (token : ExitReservationId) :
     ∀ state, (releaseExitReservation token state).finalState.stdout = state.stdout := by
   intro state

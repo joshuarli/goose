@@ -2125,3 +2125,288 @@ theorem runModule_no_unhandled_nonlocal (fuel : Nat) (config : EvalConfig)
 
 #print axioms runModule_no_unhandled_nonlocal
 end Goose.Proofs.ExitExecution
+
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+open Goose.Proofs.ConstructionExecutionOwnership
+
+private theorem producer_preserve_selected_target (fuel : Nat) (config : EvalConfig)
+    (environment activation : RuntimeActivation)
+    (targetId : Nat) (producer : Expr) (origin : Goose.Core.OriginId)
+    (initial prepared afterOperands : ExecutionState) (channels : List Channel) (raw : List Carrier)
+    (fresh : FreshActivations initial)
+    (selected : targetActivation config targetId initial = .ok activation initial)
+    (setup : exitChannels environment activation (List.replicate activation.channels.length producer) origin initial = .ok channels prepared)
+    (evaluated : evalProduce fuel config environment channels producer prepared = .ok raw afterOperands) :
+    ∃ current, targetActivation config targetId afterOperands = .ok current afterOperands ∧
+      ownershipActivationChannels current = ownershipActivationChannels activation := by
+  have preparedProjection := projection_of_normal _ _ _ _ setup fresh (preservesActivationChannels_exitChannels config _ _ _ _)
+  have preparedFresh := fresh_of_normal _ _ _ _ setup fresh (preservesFresh_exitChannels _ _ _ _)
+  have afterProjection := projection_of_normal _ _ _ _ evaluated preparedFresh ((evaluationActivationChannels fuel config).produce _ _ _)
+  exact targetActivation_projection_transport config targetId initial afterOperands activation
+    (afterProjection.trans preparedProjection) selected
+
+private theorem ExitContextReached.returnFromForward_escape_nearest {rootFuel fuel : Nat} {config : EvalConfig}
+    {context : List ExitLexicalFrame} {environment : RuntimeActivation} {targetId : Nat}
+    {producer : Expr} {origin : Goose.Core.OriginId} {initial final : ExecutionState}
+    {address : ExitAddress} {carriers : List Carrier}
+    (reached : ExitContextReached rootFuel config context
+      (.statement (fuel + 1) environment (.returnFromForward targetId producer origin)) initial)
+    (escaped : execStmt (fuel + 1) config environment (.returnFromForward targetId producer origin) initial =
+      .escape address carriers final) :
+    (∃ channels prepared afterOperands,
+      ExitReached rootFuel config (.produce fuel environment channels producer) prepared ∧
+      evalProduce fuel config environment channels producer prepared = .escape address carriers afterOperands ∧
+      final.construction.stdout = afterOperands.construction.stdout ∧ final.objects = afterOperands.objects) ∨
+    ∃ activation channels prepared raw afterOperands afterMaterialized target handler resultTypes handlerOrigin discarded outer current enteredFuel pre body enteredState implementation emittedCurrent,
+      targetActivation config targetId initial = .ok activation initial ∧
+      exitChannels environment activation (List.replicate activation.channels.length producer) origin initial = .ok channels prepared ∧
+      ExitReached rootFuel config (.produce fuel environment channels producer) prepared ∧
+      evalProduce fuel config environment channels producer prepared = .ok raw afterOperands ∧
+      materializeOwnedCarriers origin (exitChannelReservationTokens initial.construction.exitReservations.size prepared)
+        raw afterOperands = .ok carriers afterMaterialized ∧
+      exitChannelCleanupBorrowed origin (borrowedExitChannelReceipts activation initial)
+        (exitChannelReservationTokens initial.construction.exitReservations.size prepared) false carriers
+        afterMaterialized = .ok () final ∧
+      address = ⟨activation.act, .nonlocal targetId⟩ ∧
+      config.module.targets[targetId]? = some target ∧
+      context = discarded ++ .handler handler resultTypes handlerOrigin :: outer ∧
+      ownershipActivationChannels handler = ownershipActivationChannels activation ∧
+      target.contains handler.implementation = true ∧
+      (∀ earlier ∈ discarded,
+        earlier.projectedHandler.any (fun candidate => target.contains candidate.implementation) = false) ∧
+      targetActivation config targetId afterOperands = .ok current afterOperands ∧
+      ownershipActivationChannels current = ownershipActivationChannels handler ∧
+      (∀ frame ∈ discarded, ∀ earlier, frame.projectedHandler = some earlier → earlier.act ≠ handler.act) ∧
+      ExitReached rootFuel config (.activation (enteredFuel + 1) handler pre body handlerOrigin) enteredState ∧
+      config.module.impls[handler.implementation]? = some implementation ∧
+      resultTypes = implementation.results.toList.map (·.ty) ∧
+      final.construction.stdout = afterOperands.construction.stdout ∧ final.objects = afterOperands.objects ∧
+      targetActivation config targetId final = .ok emittedCurrent final ∧
+      ownershipActivationChannels emittedCurrent = ownershipActivationChannels handler ∧
+      address.activation = handler.act := by
+  obtain ⟨activation, sourceTarget, sourceDiscarded, sourceOuter, selected,
+      sourceDeclared, sourceStack, sourceIncluded, sourceExcluded, occurrence⟩ :=
+    returnFromForward_escape_produce_origin fuel config environment targetId producer origin initial final address carriers escaped
+  rcases occurrence with ⟨channels, prepared, afterOperands, setup, evaluated, canceled⟩ |
+    ⟨channels, prepared, raw, afterOperands, afterMaterialized, setup, evaluated, materialized, cleaned, emitted⟩
+  ·
+    have childReached : ExitReached rootFuel config (.produce fuel environment channels producer) prepared :=
+      .call reached.reached (.returnFromForwardProduce fuel environment activation targetId producer origin initial prepared channels selected setup)
+    obtain ⟨stdout, objects⟩ := exitCleanup_normal_frame origin (borrowedExitChannelReceipts activation initial)
+      (exitChannelReservationTokens initial.construction.exitReservations.size prepared) true carriers afterOperands final canceled
+    exact Or.inl ⟨channels, prepared, afterOperands, childReached, evaluated, stdout, objects⟩
+  ·
+    have childReached : ExitReached rootFuel config (.produce fuel environment channels producer) prepared :=
+      .call reached.reached (.returnFromForwardProduce fuel environment activation targetId producer origin initial prepared channels selected setup)
+    obtain ⟨target, handler, resultTypes, handlerOrigin, discarded, outer,
+        unchanged, declared, shape, same, included, excluded⟩ := reached.selected_handler targetId activation initial selected
+    obtain ⟨current, selectedAfter, sameAfter⟩ := producer_preserve_selected_target fuel config environment activation
+      targetId producer origin initial prepared afterOperands channels raw reached.reached.fresh selected setup evaluated
+    have distinct := reached.handler_ids
+    rw [shape] at distinct
+    have apart := lexical_handler_prefix_distinct discarded outer handler resultTypes handlerOrigin distinct
+    have handlerMember : ExitLexicalFrame.handler handler resultTypes handlerOrigin ∈ context := by
+      rw [shape]
+      simp only [List.mem_append, List.mem_cons, true_or, or_true]
+    obtain ⟨enteredFuel, pre, body, enteredState, implementation, entered, lookup, results⟩ :=
+      reached.handler_entered handler resultTypes handlerOrigin handlerMember
+    obtain ⟨stdout, objects⟩ := exitDelivery_normal_frame origin (borrowedExitChannelReceipts activation initial)
+      (exitChannelReservationTokens initial.construction.exitReservations.size prepared) raw carriers
+      afterOperands afterMaterialized final materialized cleaned
+    have emittedProjection := (evaluationActivationChannels (fuel + 1) config).statement environment
+      (.returnFromForward targetId producer origin) initial reached.reached.fresh
+    rw [escaped] at emittedProjection
+    change ActivationChannelsProjection final = ActivationChannelsProjection initial at emittedProjection
+    obtain ⟨emittedCurrent, emittedSelected, emittedSame⟩ :=
+      targetActivation_projection_transport config targetId initial final activation emittedProjection selected
+    have sameId : handler.act = activation.act := congrArg (fun current : OwnershipActivationChannels => current.act) same
+    have addressId : address.activation = handler.act := by
+      rw [emitted]
+      exact sameId.symm
+    exact Or.inr ⟨activation, channels, prepared, raw, afterOperands, afterMaterialized,
+      target, handler, resultTypes, handlerOrigin, discarded, outer, current, enteredFuel, pre, body, enteredState, implementation, emittedCurrent, selected, setup,
+      childReached, evaluated, materialized, cleaned, emitted, declared, shape, same, included, excluded,
+      selectedAfter, sameAfter.trans same.symm, apart, entered, lookup, results, stdout, objects, emittedSelected, emittedSame.trans same.symm, addressId⟩
+
+#print axioms ExitContextReached.returnFromForward_escape_nearest
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+open Goose.Proofs.ConstructionExecutionOwnership
+
+theorem ExitReached.returnFrom_escape_nearest {rootFuel fuel : Nat} {config : EvalConfig}
+    {environment : RuntimeActivation} {targetId : Nat}
+    {operands : List Expr} {origin : Goose.Core.OriginId} {initial final : ExecutionState}
+    {address : ExitAddress} {carriers : List Carrier}
+    (reached : ExitReached rootFuel config
+      (.statement (fuel + 1) environment (.returnFrom targetId operands origin)) initial)
+    (escaped : execStmt (fuel + 1) config environment (.returnFrom targetId operands origin) initial =
+      .escape address carriers final) :
+    ∃ context, ExitContextReached rootFuel config context
+      (.statement (fuel + 1) environment (.returnFrom targetId operands origin)) initial ∧
+    ((∃ channels prepared afterOperands,
+      ExitReached rootFuel config (.operands fuel environment channels operands) prepared ∧
+      evalOperands fuel config environment channels operands prepared = .escape address carriers afterOperands ∧
+      final.construction.stdout = afterOperands.construction.stdout ∧ final.objects = afterOperands.objects) ∨
+    ∃ activation channels prepared raw afterOperands afterMaterialized target handler resultTypes handlerOrigin discarded outer current enteredFuel pre body enteredState implementation emittedCurrent,
+      targetActivation config targetId initial = .ok activation initial ∧
+      exitChannels environment activation operands origin initial = .ok channels prepared ∧
+      ExitReached rootFuel config (.operands fuel environment channels operands) prepared ∧
+      evalOperands fuel config environment channels operands prepared = .ok raw afterOperands ∧
+      materializeOwnedCarriers origin (exitChannelReservationTokens initial.construction.exitReservations.size prepared)
+        raw afterOperands = .ok carriers afterMaterialized ∧
+      exitChannelCleanupBorrowed origin (borrowedExitChannelReceipts activation initial)
+        (exitChannelReservationTokens initial.construction.exitReservations.size prepared) false carriers
+        afterMaterialized = .ok () final ∧
+      address = ⟨activation.act, .nonlocal targetId⟩ ∧
+      config.module.targets[targetId]? = some target ∧
+      context = discarded ++ .handler handler resultTypes handlerOrigin :: outer ∧
+      ownershipActivationChannels handler = ownershipActivationChannels activation ∧
+      target.contains handler.implementation = true ∧
+      (∀ earlier ∈ discarded,
+        earlier.projectedHandler.any (fun candidate => target.contains candidate.implementation) = false) ∧
+      targetActivation config targetId afterOperands = .ok current afterOperands ∧
+      ownershipActivationChannels current = ownershipActivationChannels handler ∧
+      (∀ frame ∈ discarded, ∀ earlier, frame.projectedHandler = some earlier → earlier.act ≠ handler.act) ∧
+      ExitReached rootFuel config (.activation (enteredFuel + 1) handler pre body handlerOrigin) enteredState ∧
+      config.module.impls[handler.implementation]? = some implementation ∧
+      resultTypes = implementation.results.toList.map (·.ty) ∧
+      final.construction.stdout = afterOperands.construction.stdout ∧ final.objects = afterOperands.objects ∧
+      targetActivation config targetId final = .ok emittedCurrent final ∧
+      ownershipActivationChannels emittedCurrent = ownershipActivationChannels handler ∧
+      address.activation = handler.act) := by
+  obtain ⟨context, path⟩ := reached.context
+  exact ⟨context, path, path.returnFrom_escape_nearest escaped⟩
+
+#print axioms ExitReached.returnFrom_escape_nearest
+
+theorem ExitReached.returnFromForward_escape_nearest {rootFuel fuel : Nat} {config : EvalConfig}
+    {environment : RuntimeActivation} {targetId : Nat}
+    {producer : Expr} {origin : Goose.Core.OriginId} {initial final : ExecutionState}
+    {address : ExitAddress} {carriers : List Carrier}
+    (reached : ExitReached rootFuel config
+      (.statement (fuel + 1) environment (.returnFromForward targetId producer origin)) initial)
+    (escaped : execStmt (fuel + 1) config environment (.returnFromForward targetId producer origin) initial =
+      .escape address carriers final) :
+    ∃ context, ExitContextReached rootFuel config context
+      (.statement (fuel + 1) environment (.returnFromForward targetId producer origin)) initial ∧
+    ((∃ channels prepared afterOperands,
+      ExitReached rootFuel config (.produce fuel environment channels producer) prepared ∧
+      evalProduce fuel config environment channels producer prepared = .escape address carriers afterOperands ∧
+      final.construction.stdout = afterOperands.construction.stdout ∧ final.objects = afterOperands.objects) ∨
+    ∃ activation channels prepared raw afterOperands afterMaterialized target handler resultTypes handlerOrigin discarded outer current enteredFuel pre body enteredState implementation emittedCurrent,
+      targetActivation config targetId initial = .ok activation initial ∧
+      exitChannels environment activation (List.replicate activation.channels.length producer) origin initial = .ok channels prepared ∧
+      ExitReached rootFuel config (.produce fuel environment channels producer) prepared ∧
+      evalProduce fuel config environment channels producer prepared = .ok raw afterOperands ∧
+      materializeOwnedCarriers origin (exitChannelReservationTokens initial.construction.exitReservations.size prepared)
+        raw afterOperands = .ok carriers afterMaterialized ∧
+      exitChannelCleanupBorrowed origin (borrowedExitChannelReceipts activation initial)
+        (exitChannelReservationTokens initial.construction.exitReservations.size prepared) false carriers
+        afterMaterialized = .ok () final ∧
+      address = ⟨activation.act, .nonlocal targetId⟩ ∧
+      config.module.targets[targetId]? = some target ∧
+      context = discarded ++ .handler handler resultTypes handlerOrigin :: outer ∧
+      ownershipActivationChannels handler = ownershipActivationChannels activation ∧
+      target.contains handler.implementation = true ∧
+      (∀ earlier ∈ discarded,
+        earlier.projectedHandler.any (fun candidate => target.contains candidate.implementation) = false) ∧
+      targetActivation config targetId afterOperands = .ok current afterOperands ∧
+      ownershipActivationChannels current = ownershipActivationChannels handler ∧
+      (∀ frame ∈ discarded, ∀ earlier, frame.projectedHandler = some earlier → earlier.act ≠ handler.act) ∧
+      ExitReached rootFuel config (.activation (enteredFuel + 1) handler pre body handlerOrigin) enteredState ∧
+      config.module.impls[handler.implementation]? = some implementation ∧
+      resultTypes = implementation.results.toList.map (·.ty) ∧
+      final.construction.stdout = afterOperands.construction.stdout ∧ final.objects = afterOperands.objects ∧
+      targetActivation config targetId final = .ok emittedCurrent final ∧
+      ownershipActivationChannels emittedCurrent = ownershipActivationChannels handler ∧
+      address.activation = handler.act) := by
+  obtain ⟨context, path⟩ := reached.context
+  exact ⟨context, path, path.returnFromForward_escape_nearest escaped⟩
+
+#print axioms ExitReached.returnFromForward_escape_nearest
+
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+open Goose.Proofs.ConstructionExecutionOwnership
+
+theorem ExitReached.returnFrom_operands_nearest {rootFuel fuel : Nat} {config : EvalConfig}
+    {environment activation : RuntimeActivation} {targetId : Nat} {operands : List Expr}
+    {origin : Goose.Core.OriginId} {initial prepared afterOperands : ExecutionState}
+    {channels : List Channel} {raw : List Carrier}
+    (reached : ExitReached rootFuel config
+      (.statement (fuel + 1) environment (.returnFrom targetId operands origin)) initial)
+    (selected : targetActivation config targetId initial = .ok activation initial)
+    (setup : exitChannels environment activation operands origin initial = .ok channels prepared)
+    (evaluated : evalOperands fuel config environment channels operands prepared = .ok raw afterOperands) :
+    ∃ context target handler resultTypes handlerOrigin discarded outer current enteredFuel pre body enteredState,
+      ExitContextReached rootFuel config context
+        (.statement (fuel + 1) environment (.returnFrom targetId operands origin)) initial ∧
+      config.module.targets[targetId]? = some target ∧
+      context = discarded ++ .handler handler resultTypes handlerOrigin :: outer ∧
+      ownershipActivationChannels handler = ownershipActivationChannels activation ∧
+      target.contains handler.implementation = true ∧
+      (∀ earlier ∈ discarded,
+        earlier.projectedHandler.any (fun candidate => target.contains candidate.implementation) = false) ∧
+      targetActivation config targetId afterOperands = .ok current afterOperands ∧
+      ownershipActivationChannels current = ownershipActivationChannels handler ∧
+      ExitReached rootFuel config (.activation (enteredFuel + 1) handler pre body handlerOrigin) enteredState := by
+  obtain ⟨context, path⟩ := reached.context
+  obtain ⟨target, handler, resultTypes, handlerOrigin, discarded, outer,
+      unchanged, declared, shape, same, included, excluded⟩ := path.selected_handler targetId activation initial selected
+  obtain ⟨current, selectedAfter, sameAfter⟩ := operands_preserve_selected_target fuel config environment activation
+    targetId operands origin initial prepared afterOperands channels raw reached.fresh selected setup evaluated
+  have member : ExitLexicalFrame.handler handler resultTypes handlerOrigin ∈ context := by
+    rw [shape]
+    simp only [List.mem_append, List.mem_cons, true_or, or_true]
+  obtain ⟨enteredFuel, pre, body, enteredState, implementation, entered, lookup, results⟩ :=
+    path.handler_entered handler resultTypes handlerOrigin member
+  exact ⟨context, target, handler, resultTypes, handlerOrigin, discarded, outer, current,
+    enteredFuel, pre, body, enteredState, path, declared, shape, same, included, excluded,
+    selectedAfter, sameAfter.trans same.symm, entered⟩
+
+#print axioms ExitReached.returnFrom_operands_nearest
+
+theorem ExitReached.returnFromForward_operands_nearest {rootFuel fuel : Nat} {config : EvalConfig}
+    {environment activation : RuntimeActivation} {targetId : Nat} {producer : Expr}
+    {origin : Goose.Core.OriginId} {initial prepared afterOperands : ExecutionState}
+    {channels : List Channel} {raw : List Carrier}
+    (reached : ExitReached rootFuel config
+      (.statement (fuel + 1) environment (.returnFromForward targetId producer origin)) initial)
+    (selected : targetActivation config targetId initial = .ok activation initial)
+    (setup : exitChannels environment activation (List.replicate activation.channels.length producer) origin initial = .ok channels prepared)
+    (evaluated : evalProduce fuel config environment channels producer prepared = .ok raw afterOperands) :
+    ∃ context target handler resultTypes handlerOrigin discarded outer current enteredFuel pre body enteredState,
+      ExitContextReached rootFuel config context
+        (.statement (fuel + 1) environment (.returnFromForward targetId producer origin)) initial ∧
+      config.module.targets[targetId]? = some target ∧
+      context = discarded ++ .handler handler resultTypes handlerOrigin :: outer ∧
+      ownershipActivationChannels handler = ownershipActivationChannels activation ∧
+      target.contains handler.implementation = true ∧
+      (∀ earlier ∈ discarded,
+        earlier.projectedHandler.any (fun candidate => target.contains candidate.implementation) = false) ∧
+      targetActivation config targetId afterOperands = .ok current afterOperands ∧
+      ownershipActivationChannels current = ownershipActivationChannels handler ∧
+      ExitReached rootFuel config (.activation (enteredFuel + 1) handler pre body handlerOrigin) enteredState := by
+  obtain ⟨context, path⟩ := reached.context
+  obtain ⟨target, handler, resultTypes, handlerOrigin, discarded, outer,
+      unchanged, declared, shape, same, included, excluded⟩ := path.selected_handler targetId activation initial selected
+  obtain ⟨current, selectedAfter, sameAfter⟩ := producer_preserve_selected_target fuel config environment activation
+    targetId producer origin initial prepared afterOperands channels raw reached.fresh selected setup evaluated
+  have member : ExitLexicalFrame.handler handler resultTypes handlerOrigin ∈ context := by
+    rw [shape]
+    simp only [List.mem_append, List.mem_cons, true_or, or_true]
+  obtain ⟨enteredFuel, pre, body, enteredState, implementation, entered, lookup, results⟩ :=
+    path.handler_entered handler resultTypes handlerOrigin member
+  exact ⟨context, target, handler, resultTypes, handlerOrigin, discarded, outer, current,
+    enteredFuel, pre, body, enteredState, path, declared, shape, same, included, excluded,
+    selectedAfter, sameAfter.trans same.symm, entered⟩
+
+#print axioms ExitReached.returnFromForward_operands_nearest
+
+end Goose.Proofs.ExitExecution
