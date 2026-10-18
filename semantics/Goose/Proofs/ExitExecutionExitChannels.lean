@@ -116,6 +116,12 @@ private theorem neverEscapes_materializeOwnedCarriers (origin : Goose.Core.Origi
   unfold materializeOwnedCarriers
   channels_never_escape
 
+theorem materializeOwnedCarriers_no_escape (origin : Goose.Core.OriginId)
+    (tokens : List Nat) (carriers : List Carrier) (state : ExecutionState)
+    (address : ExitAddress) (values : List Carrier) (final : ExecutionState) :
+    materializeOwnedCarriers origin tokens carriers state ≠ .escape address values final :=
+  neverEscapes_materializeOwnedCarriers origin tokens carriers state address values final
+
 private theorem neverEscapes_exitChannelCleanupBorrowed (origin : Goose.Core.OriginId)
     (borrowed : List BorrowedWaitingExitReservation) (tokens : List Nat) (cancel : Bool)
     (carriers : List Carrier) : NeverEscapes (exitChannelCleanupBorrowed origin borrowed tokens cancel carriers) := by

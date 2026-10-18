@@ -121,6 +121,31 @@ theorem completionInvocation_escape_inv (fuel : Nat) (config : EvalConfig)
           | escape target payload after =>
               exact False.elim (completionMaterialize_neverEscapes _ _ raw afterOperands target payload after materialized)
 
+theorem withCompletionChannels_after_escape (channels : List Channel) (origin : Goose.Core.OriginId)
+    (action : List Channel → EvalM (List Carrier)) (initial prepared before : ExecutionState)
+    (planned : List (Channel × Option Nat)) (address : ExitAddress) (carriers : List Carrier)
+    (setup : CompletionPreparation channels origin initial planned prepared)
+    (escaped : action (planned.map Prod.fst) prepared = .escape address carriers before) :
+    withCompletionChannels channels origin action initial =
+      finishBorrowedExitChannels origin [] (planned.filterMap Prod.snd) true carriers (.escape address carriers) before := by
+  rw [withCompletionChannels_decomposition]
+  change completionPlan channels origin initial = .ok planned prepared at setup
+  rw [setup]
+  simp only [bind, escaped, completionFinish]
+
+theorem withCompletionChannels_after_stop (channels : List Channel) (origin : Goose.Core.OriginId)
+    (action : List Channel → EvalM (List Carrier)) (initial prepared before : ExecutionState)
+    (planned : List (Channel × Option Nat)) (reason : Goose.Core.Stop)
+    (setup : CompletionPreparation channels origin initial planned prepared)
+    (stopped : action (planned.map Prod.fst) prepared = .stop reason before) :
+    withCompletionChannels channels origin action initial =
+      finishBorrowedExitChannels origin [] (planned.filterMap Prod.snd) false [] (.stop reason) before := by
+  rw [withCompletionChannels_decomposition]
+  change completionPlan channels origin initial = .ok planned prepared at setup
+  rw [setup]
+  simp only [bind, stopped, completionFinish]
+
+
 #print axioms completionInvocation_escape_inv
 #print axioms withCompletionChannels_decomposition
 end Goose.Proofs.ExitExecution

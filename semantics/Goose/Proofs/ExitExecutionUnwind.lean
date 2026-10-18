@@ -502,6 +502,13 @@ private theorem neverEscapes_finishChannels (layout : LayoutEnv) (channels : Lis
       | split
       | landing_escape_intro
 
+theorem finishChannels_no_escape (layout : LayoutEnv) (channels : List Channel)
+    (types : List Ty) (carriers : List Carrier) (origin : Goose.Core.OriginId)
+    (initial final : ExecutionState) (address : ExitAddress) (payload : List Carrier) :
+    finishChannels layout channels types carriers origin initial ≠ .escape address payload final :=
+  neverEscapes_finishChannels layout channels types carriers origin initial address payload final
+
+
 private theorem finishActivation_escape_origin (layout : LayoutEnv) (activation : RuntimeActivation)
     (types : List Ty) (origin : Goose.Core.OriginId) (action : EvalM (List Carrier))
     (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)

@@ -41,7 +41,7 @@ inductive ProducerEscapeResult (config : EvalConfig) :
       ProducerEscapeResult config (.element (fuel + 1) environment parent element operand) initial
         (.value fuel environment operand) initial carriers before before
 
-private theorem producerForEach_append (action : α → EvalM Unit) (before after : List α) :
+theorem producerForEach_append (action : α → EvalM Unit) (before after : List α) :
     ((do for item in before ++ after do action item) : EvalM Unit) =
       (do (do for item in before do action item); for item in after do action item) := by
   induction before with
@@ -60,7 +60,7 @@ private theorem producerForEach_append (action : α → EvalM Unit) (before afte
         | stop reason after | escape target payload after | jump target kind after =>
             simp only [bind, pure] at actual; erw [restResult] at actual; exact actual
 
-private theorem producerForEach_escape (action : α → EvalM Unit) (before after : List α) (item : α)
+theorem producerForEach_escape (action : α → EvalM Unit) (before after : List α) (item : α)
     (initial ready final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
     (preceding : ((do for previous in before do action previous) : EvalM Unit) initial = .ok () ready)
     (escaped : action item ready = .escape address carriers final) :
@@ -74,7 +74,7 @@ private theorem producerForEach_escape (action : α → EvalM Unit) (before afte
   erw [preceding]
   simp only [List.forIn_cons, bind, escaped]
 
-private theorem producerForEach_raw_escape (action : α → EvalM Unit) (items : List α)
+theorem producerForEach_raw_escape (action : α → EvalM Unit) (items : List α)
     (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
     (escaped : ((do for item in items do action item) : EvalM Unit) initial = .escape address carriers final) :
     (forIn items PUnit.unit (fun item _ => (do action item; pure (ForInStep.yield PUnit.unit) : EvalM (ForInStep PUnit))) : EvalM PUnit) initial =
@@ -90,7 +90,7 @@ private theorem producerForEach_raw_escape (action : α → EvalM Unit) (items :
       cases escaped
       rfl
 
-private theorem producerReceiving_continue {environment : RuntimeActivation} {incoming planned channels : List Channel}
+theorem producerReceiving_continue {environment : RuntimeActivation} {incoming planned channels : List Channel}
     {expression : Expr} {initial prepared : ExecutionState}
     (receiving : ProducerReceivingPrefix environment incoming expression initial planned channels prepared)
     (next : List Channel → List Channel → EvalM α) :

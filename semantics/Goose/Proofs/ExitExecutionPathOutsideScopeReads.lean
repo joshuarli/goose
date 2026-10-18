@@ -60,6 +60,12 @@ private theorem scope_filter_lookup (roots : List RootInst) (entries : List (Roo
         cases kept : roots.contains key <;>
           simp only [List.filter, List.lookup, kept, Bool.not_false, Bool.not_true, mismatch, ih]
 
+theorem releaseScopeState_root_lookup (environment : RuntimeActivation) (scope scopeInst : Nat)
+    (state : ExecutionState) (root : RootInst)
+    (outside : (Goose.Proofs.Exit.runtimeScopeRoots environment scope scopeInst).contains root = false) :
+    (releaseScopeState environment scope scopeInst state).objects.lookup root = state.objects.lookup root :=
+  scope_filter_lookup _ _ _ outside
+
 theorem releaseScopeState_outside_read (fuel : Nat) (layout : LayoutEnv)
     (environment : RuntimeActivation) (scope scopeInst : Nat) (state : ExecutionState) (location : Loc)
     (outside : (Goose.Proofs.Exit.runtimeScopeRoots environment scope scopeInst).contains location.root = false) :

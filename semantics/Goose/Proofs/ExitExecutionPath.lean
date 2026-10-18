@@ -1228,7 +1228,7 @@ private def ExitRuntimeFrame (context : List ExitLexicalFrame) (invocation : Exi
     (state : ExecutionState) : Prop :=
   ActivationChannelsProjection state = invocation.handlerProjection context
 
-private theorem ExitInvocation.frames_handlers {config : EvalConfig} {α : Type}
+theorem ExitInvocation.frames_handlers {config : EvalConfig} {α : Type}
     {caller : ExitInvocation α} {initial middle : ExecutionState} {outer inner : List ExitLexicalFrame}
     (frames : caller.frames config initial middle outer inner) :
     inner.filterMap ExitLexicalFrame.projectedHandler = caller.handlerProjection outer := by
@@ -1424,7 +1424,7 @@ private theorem ExitCallSite.runtime {config : EvalConfig} {α β : Type}
 
 #print axioms ExitCallSite.runtime
 
-private theorem ExitContextReached.reached {fuel : Nat} {config : EvalConfig} {α : Type}
+theorem ExitContextReached.reached {fuel : Nat} {config : EvalConfig} {α : Type}
     {context : List ExitLexicalFrame} {invocation : ExitInvocation α} {state : ExecutionState}
     (reached : ExitContextReached fuel config context invocation state) :
     ExitReached fuel config invocation state := by
@@ -1441,7 +1441,7 @@ theorem ExitContextReached.runtime {fuel : Nat} {config : EvalConfig} {α : Type
   | call callerReached site frames previous =>
       exact site.runtime frames callerReached.reached.fresh previous
 
-private theorem ExitContextReached.selected_handler {rootFuel fuel : Nat} {config : EvalConfig}
+theorem ExitContextReached.selected_handler {rootFuel fuel : Nat} {config : EvalConfig}
     {context : List ExitLexicalFrame} {environment : RuntimeActivation} {statement : Stmt} {initial : ExecutionState}
     (reached : ExitContextReached rootFuel config context (.statement fuel environment statement) initial)
     (targetId : Nat) (activation : RuntimeActivation) (final : ExecutionState)
@@ -1542,7 +1542,7 @@ private theorem operands_preserve_selected_target (fuel : Nat) (config : EvalCon
 #print axioms targetActivation_projection_transport
 #print axioms operands_preserve_selected_target
 
-private theorem ExitContextReached.handler_ids {rootFuel fuel : Nat} {config : EvalConfig}
+theorem ExitContextReached.handler_ids {rootFuel fuel : Nat} {config : EvalConfig}
     {context : List ExitLexicalFrame} {environment : RuntimeActivation} {statement : Stmt} {initial : ExecutionState}
     (reached : ExitContextReached rootFuel config context (.statement fuel environment statement) initial) :
     ((context.filterMap ExitLexicalFrame.projectedHandler).map (·.act)).Nodup := by
@@ -1552,7 +1552,7 @@ private theorem ExitContextReached.handler_ids {rootFuel fuel : Nat} {config : E
   have distinct := reached.reached.fresh.1
   simpa only [ActivationChannelsProjection, List.map_map, Function.comp_def, ownershipActivationChannels] using distinct
 
-private theorem lexical_handler_prefix_distinct (discarded outer : List ExitLexicalFrame)
+theorem lexical_handler_prefix_distinct (discarded outer : List ExitLexicalFrame)
     (handler : RuntimeActivation) (resultTypes : List Ty) (origin : Goose.Core.OriginId)
     (distinct : (((discarded ++ .handler handler resultTypes origin :: outer).filterMap
       ExitLexicalFrame.projectedHandler).map (·.act)).Nodup) :
