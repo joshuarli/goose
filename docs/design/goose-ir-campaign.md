@@ -153,6 +153,8 @@ The `V050` refSlice recipe repair and raw owner-dependency refinements are inclu
 - Preserve fixed-inline result representation kinds through actual evaluation. The observed gap is in the model; no direct C++ regression is confirmed.
 - Complete `C-DIRECT` and `C-STAGE` proofs for fixed-inline result representation and fixed-array calls. The evaluator repair is frozen through branch commit `f3a8e96f`, but query agreement, capacity-layout, renewal, and accepted inline-result obligations remain open.
 
+The actual initial `runModule` cannot return an unhandled nonlocal escape: `runModule_no_unhandled_nonlocal` has no acceptance or certificate premise. Its source descent covers all invocation cases and the 53 statement/loop/push/global sites. The focused 105-module closure passes Lean 4.35 at default limits; 158 public theorem audits and two projection-definition audits use only the three standard axioms. This excludes unhandled escape, without establishing successful landing or outside-root preservation.
+
 The whole-evaluation `TH-CON` and `TH-EXIT` proofs remain open. Existing lifecycle, token, destination, and receiving-boundary lemmas are components, not whole execution proofs. The remaining work includes positive-fuel source induction and accepted `runModule`, reservation `SourceState` preservation through renew/reserve/select/cancel/materialize/restore, actual receiving-boundary and ownership transport, protected-prefix geometry and byte-frame behavior, and extraction of the seven construction rules plus post-operand `TH-EXIT`.
 
 The proof boundary excludes correctness of the C++ frontend/exporter, C++ emitter, C compiler or linker, and operating system. See the [trust ledger](../../semantics/trust.md).

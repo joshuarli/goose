@@ -1,3 +1,8 @@
+import Goose.Proofs.ExitExecutionInvocationStatementsCausal
+import Goose.Proofs.ExitExecutionPathSequences
+import Goose.Proofs.ExitExecutionPathScopes
+import Goose.Proofs.ExitExecutionPathRank
+import Goose.Proofs.ExitExecutionPathModule
 import Goose.Proofs.ExitExecutionInvocationStatements
 import Goose.Proofs.ExitExecutionPathHandlers
 import Goose.Proofs.ExitExecutionCleanupFrames
@@ -1208,11 +1213,11 @@ private theorem projection_scope_prepared (environment : RuntimeActivation) (sco
   intro activation
   split <;> rfl
 
-private def ExitLexicalFrame.projectedHandler : ExitLexicalFrame → Option OwnershipActivationChannels
+def ExitLexicalFrame.projectedHandler : ExitLexicalFrame → Option OwnershipActivationChannels
   | .handler activation _ _ => some (ownershipActivationChannels activation)
   | _ => none
 
-private def ExitInvocation.handlerProjection (invocation : ExitInvocation α) (context : List ExitLexicalFrame) :
+def ExitInvocation.handlerProjection (invocation : ExitInvocation α) (context : List ExitLexicalFrame) :
     List OwnershipActivationChannels :=
   match invocation with
   | .activation _ activeEnvironment _ _ _ =>
@@ -1427,7 +1432,7 @@ private theorem ExitContextReached.reached {fuel : Nat} {config : EvalConfig} {�
   | initial => exact .initial
   | call callerReached site frames previous => exact .call previous site
 
-private theorem ExitContextReached.runtime {fuel : Nat} {config : EvalConfig} {α : Type}
+theorem ExitContextReached.runtime {fuel : Nat} {config : EvalConfig} {α : Type}
     {context : List ExitLexicalFrame} {invocation : ExitInvocation α} {state : ExecutionState}
     (reached : ExitContextReached fuel config context invocation state) :
     ExitRuntimeFrame context invocation state := by
@@ -1668,4 +1673,455 @@ private theorem ExitContextReached.returnFrom_escape_nearest {rootFuel fuel : Na
 
 #print axioms ExitContextReached.returnFrom_escape_nearest
 
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+open Goose.Proofs.ConstructionExecutionOwnership
+
+private def handlersMiss (address : ExitAddress) (context : List ExitLexicalFrame) : Prop :=
+  ∀ handler ∈ context.filterMap ExitLexicalFrame.projectedHandler, handler.act ≠ address.activation
+
+private theorem escaping_handlerProjection {config : EvalConfig} {α : Type}
+    {caller : ExitInvocation α} {initial final : ExecutionState} {address : ExitAddress} {carriers : List Carrier}
+    {context : List ExitLexicalFrame}
+    (escaped : caller.action config initial = .escape address carriers final)
+    (misses : handlersMiss address context) :
+    ∀ handler ∈ caller.handlerProjection context, handler.act ≠ address.activation := by
+  cases caller
+  all_goals try exact misses
+  case activation fuel activation pre body origin =>
+    have different : activation.act ≠ address.activation := by
+      cases fuel with
+      | zero =>
+          simp only [ExitInvocation.action, enterActivation, timeout, EvalM.stop] at escaped
+          cases escaped
+      | succ fuel =>
+          obtain ⟨implementation, before, lookup, evaluated, different, released⟩ :=
+            enterActivation_escape_origin fuel config activation pre body origin initial final address carriers escaped
+          exact different.symm
+    intro handler member
+    rcases List.mem_cons.mp member with same | member
+    · subst handler
+      exact different
+    · exact misses handler member
+
+private theorem ExitCallSite.escape_handlersMiss {config : EvalConfig} {α β : Type}
+    {caller : ExitInvocation α} {child : ExitInvocation β} {initial prepared final : ExecutionState}
+    {address : ExitAddress} {carriers : List Carrier} {outer inner : List ExitLexicalFrame}
+    (site : ExitCallSite config caller initial child prepared) (frames : site.frames outer inner)
+    (escaped : caller.action config initial = .escape address carriers final)
+    (misses : handlersMiss address outer) : handlersMiss address inner := by
+  change ∀ handler ∈ inner.filterMap ExitLexicalFrame.projectedHandler, handler.act ≠ address.activation
+  rw [ExitInvocation.frames_handlers frames]
+  exact escaping_handlerProjection escaped misses
+
+#print axioms ExitCallSite.escape_handlersMiss
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+open Goose.Proofs.ConstructionExecutionOwnership
+
+private def EscapingSourceChild (config : EvalConfig) {α : Type}
+    (caller : ExitInvocation α) (initial : ExecutionState) (address : ExitAddress)
+    (carriers : List Carrier) : Prop :=
+  ∃ (β : Type) (child : ExitInvocation β) (prepared before : ExecutionState),
+    ExitCallSite config caller initial child prepared ∧
+    child.action config prepared = .escape address carriers before
+
+private theorem ExitContextReached.selected_not_missing {rootFuel fuel : Nat} {config : EvalConfig}
+    {context : List ExitLexicalFrame} {environment activation : RuntimeActivation} {statement : Stmt}
+    {initial : ExecutionState} {address : ExitAddress}
+    (reached : ExitContextReached rootFuel config context (.statement fuel environment statement) initial)
+    (target : Nat) (selected : targetActivation config target initial = .ok activation initial)
+    (misses : handlersMiss address context) : activation.act ≠ address.activation := by
+  obtain ⟨targetSet, handler, results, origin, discarded, outer,
+    unchanged, declared, shape, same, included, excluded⟩ := reached.selected_handler target activation initial selected
+  have member : ownershipActivationChannels handler ∈ context.filterMap ExitLexicalFrame.projectedHandler := by
+    rw [shape, List.filterMap_append]
+    simp only [List.filterMap_cons, ExitLexicalFrame.projectedHandler, List.mem_append, List.mem_cons,
+      true_or, or_true]
+  have different := misses (ownershipActivationChannels handler) member
+  have sameId := congrArg (fun current : OwnershipActivationChannels => current.act) same
+  change handler.act = activation.act at sameId
+  change handler.act ≠ address.activation at different
+  exact sameId ▸ different
+
+private theorem returnFrom_escaping_child {rootFuel fuel : Nat} {config : EvalConfig}
+    {context : List ExitLexicalFrame} {environment : RuntimeActivation} {target : Nat}
+    {operands : List Expr} {origin : Goose.Core.OriginId} {initial final : ExecutionState}
+    {address : ExitAddress} {carriers : List Carrier}
+    (reached : ExitContextReached rootFuel config context
+      (.statement (fuel + 1) environment (.returnFrom target operands origin)) initial)
+    (misses : handlersMiss address context)
+    (escaped : execStmt (fuel + 1) config environment (.returnFrom target operands origin) initial =
+      .escape address carriers final) :
+    EscapingSourceChild config (.statement (fuel + 1) environment (.returnFrom target operands origin)) initial address carriers := by
+  rcases reached_returnFrom_escape_operands rootFuel fuel config environment target operands origin initial final
+      address carriers reached.reached escaped with
+    ⟨activation, channels, prepared, before, selected, setup, childReached, evaluated, cleaned⟩ |
+    ⟨activation, channels, prepared, raw, before, afterMaterialized, selected, setup, childReached,
+      evaluated, materialized, cleaned, emitted⟩
+  · exact ⟨List Carrier, .operands fuel environment channels operands, prepared, before,
+      .returnFromOperands fuel environment activation target operands origin initial prepared channels selected setup, evaluated⟩
+  · have different := reached.selected_not_missing target selected misses
+    exact False.elim (different (by rw [emitted]))
+
+private theorem returnFromForward_escaping_child {rootFuel fuel : Nat} {config : EvalConfig}
+    {context : List ExitLexicalFrame} {environment : RuntimeActivation} {target : Nat}
+    {producer : Expr} {origin : Goose.Core.OriginId} {initial final : ExecutionState}
+    {address : ExitAddress} {carriers : List Carrier}
+    (reached : ExitContextReached rootFuel config context
+      (.statement (fuel + 1) environment (.returnFromForward target producer origin)) initial)
+    (misses : handlersMiss address context)
+    (escaped : execStmt (fuel + 1) config environment (.returnFromForward target producer origin) initial =
+      .escape address carriers final) :
+    EscapingSourceChild config (.statement (fuel + 1) environment (.returnFromForward target producer origin)) initial address carriers := by
+  obtain ⟨activation, targetSet, discarded, outer, selected, declared, stack, included, excluded, occurrence⟩ :=
+    returnFromForward_escape_produce_origin fuel config environment target producer origin initial final address carriers escaped
+  rcases occurrence with ⟨channels, prepared, before, setup, evaluated, cleaned⟩ |
+    ⟨channels, prepared, raw, before, afterMaterialized, setup, evaluated, materialized, cleaned, emitted⟩
+  · exact ⟨List Carrier, .produce fuel environment channels producer, prepared, before,
+      .returnFromForwardProduce fuel environment activation target producer origin initial prepared channels selected setup, evaluated⟩
+  · have different := reached.selected_not_missing target selected misses
+    exact False.elim (different (by rw [emitted]))
+
+#print axioms returnFrom_escaping_child
+#print axioms returnFromForward_escaping_child
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+
+private theorem returnValues_escaping_child (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (operands : List Expr) (origin : Goose.Core.OriginId)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (nonlocal : address.target ≠ .ordinary)
+    (escaped : execStmt (fuel + 1) config environment (.retValues operands origin) initial =
+      .escape address carriers final) :
+    EscapingSourceChild config (.statement (fuel + 1) environment (.retValues operands origin)) initial address carriers := by
+  obtain ⟨activation, selected, interrupted | ⟨normal, emitted⟩⟩ :=
+    returnValuesInvocation_escape_inv fuel config environment operands origin initial final address carriers escaped
+  · obtain ⟨channels, prepared, before, setup, evaluated, cleaned⟩ :=
+      withExitChannels_escape_origin environment activation operands origin
+        (fun channels => evalOperands fuel config environment channels operands) initial final address carriers interrupted
+    exact ⟨List Carrier, .operands fuel environment channels operands, prepared, before,
+      .returnOperands fuel environment activation operands origin initial prepared channels selected setup, evaluated⟩
+  · exact False.elim (nonlocal (congrArg ExitAddress.target emitted))
+
+private theorem returnForward_escaping_child (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (producer : Expr) (origin : Goose.Core.OriginId)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (nonlocal : address.target ≠ .ordinary)
+    (escaped : execStmt (fuel + 1) config environment (.retForward producer origin) initial =
+      .escape address carriers final) :
+    EscapingSourceChild config (.statement (fuel + 1) environment (.retForward producer origin)) initial address carriers := by
+  obtain ⟨activation, selected, interrupted | ⟨normal, emitted⟩⟩ :=
+    returnForwardInvocation_escape_inv fuel config environment producer origin initial final address carriers escaped
+  · obtain ⟨channels, prepared, before, setup, evaluated, cleaned⟩ :=
+      withExitChannels_escape_origin environment activation _ origin
+        (fun channels => evalProduce fuel config environment channels producer) initial final address carriers interrupted
+    exact ⟨List Carrier, .produce fuel environment channels producer, prepared, before,
+      .returnForwardProduce fuel environment activation producer origin initial prepared channels selected setup, evaluated⟩
+  · exact False.elim (nonlocal (congrArg ExitAddress.target emitted))
+
+private theorem returnProduce_escaping_child (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (producer : Expr) (origin : Goose.Core.OriginId)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (nonlocal : address.target ≠ .ordinary)
+    (escaped : execStmt (fuel + 1) config environment (.ret (some producer) origin) initial =
+      .escape address carriers final) :
+    EscapingSourceChild config (.statement (fuel + 1) environment (.ret (some producer) origin)) initial address carriers := by
+  obtain ⟨activation, selected, interrupted | ⟨normal, emitted⟩⟩ :=
+    returnProduceInvocation_escape_inv fuel config environment producer origin initial final address carriers escaped
+  · obtain ⟨channels, prepared, before, setup, evaluated, cleaned⟩ :=
+      withExitChannels_escape_origin environment activation _ origin
+        (fun channels => evalProduce fuel config environment channels producer) initial final address carriers interrupted
+    exact ⟨List Carrier, .produce fuel environment channels producer, prepared, before,
+      .returnProduce fuel environment activation producer origin initial prepared channels selected setup, evaluated⟩
+  · exact False.elim (nonlocal (congrArg ExitAddress.target emitted))
+
+private theorem breakProduce_escaping_child (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (producer : Expr) (origin : Goose.Core.OriginId)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (escaped : execStmt (fuel + 1) config environment (.breakValue producer origin) initial =
+      .escape address carriers final) :
+    EscapingSourceChild config (.statement (fuel + 1) environment (.breakValue producer origin)) initial address carriers := by
+  obtain ⟨target, selected, interrupted⟩ :=
+    breakProduceInvocation_escape_inv fuel config environment producer origin initial final address carriers escaped
+  obtain ⟨channels, prepared, before, setup, evaluated, cleaned⟩ :=
+    withExitChannels_escape_origin environment { environment with channels := target.channels } _ origin
+      (fun channels => evalProduce fuel config environment channels producer) initial final address carriers interrupted
+  exact ⟨List Carrier, .produce fuel environment channels producer, prepared, before,
+    .breakProduce fuel environment target producer origin initial prepared channels selected setup, evaluated⟩
+
+#print axioms returnValues_escaping_child
+#print axioms returnForward_escaping_child
+#print axioms returnProduce_escaping_child
+#print axioms breakProduce_escaping_child
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+
+private theorem returnNone_nonordinary_impossible (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (origin : Goose.Core.OriginId)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (nonlocal : address.target ≠ .ordinary)
+    (escaped : execStmt (fuel + 1) config environment (.ret none origin) initial =
+      .escape address carriers final) : False := by
+  simp only [execStmt, bind] at escaped
+  cases selected : enclosingActivation environment initial with
+  | stop reason after | jump target kind after =>
+      simp only [selected] at escaped
+      cases escaped
+  | escape target payload after =>
+      have safe : ProducerNeverEscapes (enclosingActivation environment) := by
+        unfold enclosingActivation
+        producer_never_escapes_base
+      exact safe _ _ _ _ selected
+  | ok activation after =>
+      simp only [selected] at escaped
+      split at escaped
+      · simp only [returned] at escaped
+        cases escaped
+        exact nonlocal rfl
+      · split at escaped
+        · simp only [returned] at escaped
+          cases escaped
+          exact nonlocal rfl
+        · simp only [fault] at escaped
+          cases escaped
+
+#print axioms returnNone_nonordinary_impossible
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+
+private theorem call_escaping_child (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (context : Goose.Core.ContextId) (arguments : List Arg)
+    (channels : List Channel) (origin : Goose.Core.OriginId)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (escaped : invokeCall fuel config environment context arguments channels origin initial =
+      .escape address carriers final) :
+    EscapingSourceChild config (.call fuel environment context arguments channels origin) initial address carriers := by
+  cases fuel with
+  | zero => simp only [invokeCall, timeout, EvalM.stop] at escaped; cases escaped
+  | succ fuel =>
+      rcases callInvocation_escape_inv fuel config environment context arguments channels origin initial final address carriers escaped with
+        ⟨id, implementation, firstChannels, prepared, receivingPrefix, evaluated⟩ |
+        ⟨activation, pre, body, entered, receivingPrefix, evaluated⟩
+      · exact ⟨List Value, .arguments fuel environment implementation.vars implementation.params.toList arguments, prepared, final,
+          .callArguments fuel environment context arguments channels origin initial prepared id implementation firstChannels receivingPrefix, evaluated⟩
+      · exact ⟨List Carrier, .activation fuel activation pre body origin, entered, final,
+          .callActivation fuel environment context arguments channels origin initial entered activation pre body receivingPrefix, evaluated⟩
+
+private theorem activation_escaping_child (fuel : Nat) (config : EvalConfig)
+    (activation : RuntimeActivation) (pre : List (Goose.Core.VarId × Value)) (body : Block)
+    (origin : Goose.Core.OriginId) (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (escaped : enterActivation fuel config activation pre body origin initial = .escape address carriers final) :
+    EscapingSourceChild config (.activation fuel activation pre body origin) initial address carriers := by
+  cases fuel with
+  | zero => simp only [enterActivation, timeout, EvalM.stop] at escaped; cases escaped
+  | succ fuel =>
+      obtain ⟨implementation, before, lookup, evaluated, different, released⟩ :=
+        enterActivation_escape_origin fuel config activation pre body origin initial final address carriers escaped
+      exact ⟨List Carrier, .activationBody fuel activation pre body, initial, before,
+        .activationBody fuel activation pre body origin initial implementation lookup, evaluated⟩
+
+private theorem activationBody_escaping_child (fuel : Nat) (config : EvalConfig)
+    (activation : RuntimeActivation) (pre : List (Goose.Core.VarId × Value)) (body : Block)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (escaped : execActivationBody fuel config activation pre body initial = .escape address carriers final) :
+    EscapingSourceChild config (.activationBody fuel activation pre body) initial address carriers := by
+  cases fuel with
+  | zero => simp only [execActivationBody, timeout, EvalM.stop] at escaped; cases escaped
+  | succ fuel =>
+      exact ⟨Flow × List Carrier, .activationScope fuel activation pre body, initial, final,
+        .activationScope fuel activation pre body initial,
+        execActivationBody_escape_origin fuel config activation pre body initial final address carriers escaped⟩
+
+private theorem resultBlock_escaping_child (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (body : Block)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (escaped : execResultBlock fuel config environment channels body initial = .escape address carriers final) :
+    EscapingSourceChild config (.resultBlock fuel environment channels body) initial address carriers := by
+  cases fuel with
+  | zero => simp only [execResultBlock, timeout, EvalM.stop] at escaped; cases escaped
+  | succ fuel =>
+      exact ⟨Flow × List Carrier, .resultBlockWith fuel environment [] channels body, initial, final,
+        .resultBlockWith fuel environment channels body initial, by simpa only [execResultBlock, ExitInvocation.action] using escaped⟩
+
+private theorem resultBlockWith_escaping_child (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (body : Block)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (escaped : execResultBlockWith fuel config environment pre channels body initial = .escape address carriers final) :
+    EscapingSourceChild config (.resultBlockWith fuel environment pre channels body) initial address carriers := by
+  cases fuel with
+  | zero => simp only [execResultBlockWith, timeout, EvalM.stop] at escaped; cases escaped
+  | succ fuel =>
+      exact ⟨Flow × List Carrier, .resultScope fuel environment pre channels body, initial, final,
+        .resultScope fuel environment pre channels body initial,
+        by simpa only [execResultBlockWith, ExitInvocation.action] using escaped⟩
+
+private theorem completion_escaping_child (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (channels : List Channel) (expression : Expr)
+    (initial final : ExecutionState) (address : ExitAddress) (carriers : List Carrier)
+    (escaped : (ExitInvocation.completionTail fuel environment channels expression).action config initial =
+      .escape address carriers final) :
+    EscapingSourceChild config (.completionTail fuel environment channels expression) initial address carriers := by
+  obtain ⟨planned, prepared, before, setup, evaluated, cleaned⟩ :=
+    completionInvocation_escape_inv fuel config environment channels expression initial final address carriers escaped
+  exact ⟨List Carrier, .produce fuel environment (planned.map Prod.fst) expression, prepared, before,
+    .completionProduce fuel environment channels expression initial prepared planned setup, evaluated⟩
+
+#print axioms call_escaping_child
+#print axioms activation_escaping_child
+#print axioms activationBody_escaping_child
+#print axioms resultBlock_escaping_child
+#print axioms resultBlockWith_escaping_child
+#print axioms completion_escaping_child
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+
+private theorem invocation_escaping_child
+    (config : EvalConfig)
+    {rootFuel : Nat} {α : Type} {caller : ExitInvocation α}
+    {context : List ExitLexicalFrame} {initial final : ExecutionState}
+    {address : ExitAddress} {carriers : List Carrier}
+    (reached : ExitContextReached rootFuel config context caller initial)
+    (misses : handlersMiss address context) (nonlocal : address.target ≠ .ordinary)
+    (escaped : caller.action config initial = .escape address carriers final) :
+    EscapingSourceChild config caller initial address carriers := by
+  have common {β : Type} (parent : ExitInvocation β) (source : StatementInvocationSource parent)
+      (native : parent.action config initial = .escape address carriers final) :
+      EscapingSourceChild config parent initial address carriers := by
+    obtain ⟨γ, child, prepared, before, site, evaluated⟩ := statementInvocation_escape_inv config parent source initial final address carriers native
+    exact ⟨γ, child, prepared, before, .statements site, evaluated⟩
+  cases caller
+  all_goals try (exact common _ (by trivial) escaped)
+  all_goals first
+    | (apply call_escaping_child; exact escaped)
+    | (apply activation_escaping_child; exact escaped)
+    | (apply activationBody_escaping_child; exact escaped)
+    | (apply resultBlock_escaping_child; exact escaped)
+    | (apply resultBlockWith_escaping_child; exact escaped)
+    | (apply completion_escaping_child; exact escaped)
+    | skip
+  case module fuel =>
+    obtain ⟨β, child, prepared, site, evaluated⟩ := moduleInvocation_escape_inv fuel config initial final address carriers escaped
+    exact ⟨β, child, prepared, final, site, evaluated⟩
+  case value fuel environment expression =>
+    obtain ⟨β, child, prepared, site, evaluated⟩ := valueInvocation_escape_inv fuel config environment expression initial address carriers final escaped
+    exact ⟨β, child, prepared, final, .values site, evaluated⟩
+  case bound fuel environment count defaultValue operand =>
+    obtain ⟨β, child, prepared, site, evaluated⟩ := boundInvocation_escape_inv fuel config environment count defaultValue operand initial address carriers final escaped
+    exact ⟨β, child, prepared, final, .values site, evaluated⟩
+  case place fuel environment operand =>
+    obtain ⟨β, child, prepared, site, evaluated⟩ := placeInvocation_escape_inv fuel config environment operand initial address carriers final escaped
+    exact ⟨β, child, prepared, final, .values site, evaluated⟩
+  case view fuel environment operand =>
+    obtain ⟨β, child, prepared, site, evaluated⟩ := viewInvocation_escape_inv fuel config environment operand initial address carriers final escaped
+    exact ⟨β, child, prepared, final, .values site, evaluated⟩
+  case printArgument fuel environment argument =>
+    obtain ⟨β, child, prepared, site, evaluated⟩ := printInvocation_escape_inv fuel config environment argument initial address carriers final escaped
+    exact ⟨β, child, prepared, final, .values site, evaluated⟩
+  case produce fuel environment channels expression =>
+    obtain ⟨β, child, prepared, before, result, evaluated⟩ := produceInvocation_escape_inv fuel config environment channels expression initial address carriers final escaped
+    exact ⟨β, child, prepared, before, .producer result.site, evaluated⟩
+  case build fuel environment destination expression =>
+    obtain ⟨β, child, prepared, before, result, evaluated⟩ := buildInvocation_escape_inv fuel config environment destination expression initial address carriers final escaped
+    exact ⟨β, child, prepared, before, .producer result.site, evaluated⟩
+  case element fuel environment destination element expression =>
+    obtain ⟨β, child, prepared, before, result, evaluated⟩ := elementInvocation_escape_inv fuel config environment destination element expression initial address carriers final escaped
+    exact ⟨β, child, prepared, before, .producer result.site, evaluated⟩
+  case operands fuel environment channels operands =>
+    obtain ⟨β, child, prepared, site, evaluated⟩ := operandsInvocation_escape_inv fuel config environment channels operands initial address carriers final escaped
+    exact ⟨β, child, prepared, final, site, evaluated⟩
+  case arguments fuel environment vars params arguments =>
+    obtain ⟨β, child, prepared, site, evaluated⟩ := argumentsInvocation_escape_inv fuel config environment vars params arguments initial final address carriers escaped
+    exact ⟨β, child, prepared, final, site, evaluated⟩
+  case statements fuel environment statements =>
+    obtain ⟨β, child, prepared, site, evaluated⟩ := statementsInvocation_escape_inv fuel config environment statements initial address carriers final escaped
+    exact ⟨β, child, prepared, final, site, evaluated⟩
+  case block fuel environment pre channels body =>
+    cases body with
+    | mk scope statements tail =>
+      obtain ⟨β, child, prepared, before, site, evaluated, released⟩ := blockInvocation_escape_inv fuel config environment pre channels scope statements tail initial final address carriers escaped
+      exact ⟨β, child, prepared, before, site, evaluated⟩
+  case activationScope fuel environment pre body =>
+    cases body with
+    | mk scope statements tail =>
+      obtain ⟨β, child, prepared, before, site, evaluated, released⟩ := activationScopeInvocation_escape_inv fuel config environment pre scope statements tail initial final address carriers escaped
+      exact ⟨β, child, prepared, before, site, evaluated⟩
+  case resultScope fuel environment pre channels body =>
+    cases body with
+    | mk scope statements tail =>
+      obtain ⟨β, child, prepared, before, site, evaluated, released⟩ := resultScopeInvocation_escape_inv fuel config environment pre channels scope statements tail initial final address carriers escaped
+      exact ⟨β, child, prepared, before, site, evaluated⟩
+  case statement fuel environment statement =>
+    cases fuel with
+    | zero => simp only [ExitInvocation.action, execStmt, timeout, EvalM.stop] at escaped; cases escaped
+    | succ fuel =>
+      by_cases source : StatementInvocationSource (.statement (fuel + 1) environment statement)
+      · exact common _ source escaped
+      · cases statement <;> simp only [StatementInvocationSource, not_true_eq_false] at source
+        case retValues operands origin => exact returnValues_escaping_child fuel config environment operands origin initial final address carriers nonlocal escaped
+        case retForward producer origin => exact returnForward_escaping_child fuel config environment producer origin initial final address carriers nonlocal escaped
+        case returnFrom target operands origin => exact returnFrom_escaping_child reached misses escaped
+        case returnFromForward target producer origin => exact returnFromForward_escaping_child reached misses escaped
+        case breakValue producer origin => exact breakProduce_escaping_child fuel config environment producer origin initial final address carriers escaped
+        case ret producer origin =>
+          cases producer with
+          | none => exact False.elim (returnNone_nonordinary_impossible fuel config environment origin initial final address carriers nonlocal escaped)
+          | some producer => exact returnProduce_escaping_child fuel config environment producer origin initial final address carriers nonlocal escaped
+
+#print axioms invocation_escaping_child
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+
+private theorem no_unhandled_nonordinary
+    (config : EvalConfig)
+    {rootFuel : Nat} {α : Type} {caller : ExitInvocation α}
+    {context : List ExitLexicalFrame} {initial final : ExecutionState}
+    {address : ExitAddress} {carriers : List Carrier}
+    (reached : ExitContextReached rootFuel config context caller initial)
+    (misses : handlersMiss address context) (nonlocal : address.target ≠ .ordinary)
+    (escaped : caller.action config initial = .escape address carriers final) : False := by
+  obtain ⟨β, child, prepared, before, site, evaluated⟩ :=
+    invocation_escaping_child config reached misses nonlocal escaped
+  obtain ⟨inner, frames⟩ := site.has_frames context
+  exact no_unhandled_nonordinary config (.call reached site frames)
+    (site.escape_handlersMiss frames escaped misses) nonlocal evaluated
+termination_by caller.rank
+decreasing_by exact site.rank_lt
+
+private theorem runModule_no_unhandled_nonordinary
+    (config : EvalConfig)
+    (fuel : Nat) (address : ExitAddress) (carriers : List Carrier) (final : ExecutionState)
+    (nonlocal : address.target ≠ .ordinary)
+    (escaped : runModule fuel config .initial = .escape address carriers final) : False :=
+  no_unhandled_nonordinary config (.initial (fuel := fuel))
+    (by intro handler member; cases member) nonlocal escaped
+
+#print axioms no_unhandled_nonordinary
+#print axioms runModule_no_unhandled_nonordinary
+end Goose.Proofs.ExitExecution
+
+namespace Goose.Proofs.ExitExecution
+open Goose.Construct
+
+theorem runModule_no_unhandled_nonlocal (fuel : Nat) (config : EvalConfig)
+    (activation target : Nat) (carriers : List Carrier) (final : ExecutionState) :
+    runModule fuel config .initial ≠ .escape ⟨activation, .nonlocal target⟩ carriers final := by
+  intro escaped
+  exact runModule_no_unhandled_nonordinary config fuel ⟨activation, .nonlocal target⟩ carriers final (by intro impossible; cases impossible) escaped
+
+#print axioms runModule_no_unhandled_nonlocal
 end Goose.Proofs.ExitExecution
