@@ -2148,7 +2148,7 @@ def main():
             if skipped:
                 r.say(f"skip huge pages ({skipped})")
             else:
-                r.ok("huge pages: data stack regions start without them")
+                r.ok("huge pages: complete data stack regions exclude them")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("huge pages", str(e))
     if cc and wanted("extra/huge_pages"):

@@ -4823,6 +4823,26 @@ never touches another worker's state: a registry sized to the program's
 region count, which the runtime allocates as the thread program starts and
 frees with its regions.
 
+**Linux huge pages.** Before returning a reserved arena, the runtime requires
+`MADV_NOHUGEPAGE` to succeed over its complete usable range. The protected guard
+is excluded. Protecting only the first 2 MB leaves later sparse portions eligible
+for transparent huge pages, which can back untouched padding as well as live
+data. Rewinding a stack's cursor does not release its resident pages.
+
+Linux headers and the running kernel must support this advice. Failure releases
+the entire reservation before terminating with a runtime error and the saved
+`madvise` errno. If releasing it also fails, the diagnostic retains both errors.
+No partially configured arena is returned or registered. An `mmap` refusal still
+uses the existing smaller-reservation retry; advice failure does not retry.
+Other platform reservation behavior is unchanged.
+
+This policy favors predictable sparse backing over the address-translation and
+throughput benefits huge pages may provide for dense arenas. It is not a claim
+of faster execution. Linux documents the range guarantee in
+[`madvise(2)`](https://man7.org/linux/man-pages/man2/madvise.2.html) and describes
+the memory/translation tradeoff in the
+[transparent huge-page guide](https://docs.kernel.org/admin-guide/mm/transhuge.html).
+
 **Stack counts and the thread cap.** Every function's stacks are `gs_sp + k`
 for constants below its own count, a callee's start above what the caller
 has in use at the call, and no call into a recursive cycle is made with a

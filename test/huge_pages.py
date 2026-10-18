@@ -1,13 +1,13 @@
-"""Data stack regions on Linux: the first 2 MB of each is marked for no
-transparent huge pages (VmFlags nh in /proc/<pid>/smaps), so that a stack
-holding a few bytes commits a page of memory rather than a huge one. The
-program waits on stdin while its mappings are read."""
+import re
+import selectors
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import toolchain as tc
+
+ARENA_BYTES = 2 << 30
 
 PROGRAM = """\
 import os;
@@ -22,26 +22,53 @@ fn main() {
 
 
 def check_program(app):
-    """Runs the built program and raises RuntimeError unless a 2 MB mapping
-    of its is marked nh."""
     p = subprocess.Popen([str(app)], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.PIPE)
     try:
-        ready = p.stdout.readline()
+        with selectors.DefaultSelector() as selector:
+            selector.register(p.stdout, selectors.EVENT_READ)
+            if not selector.select(60):
+                raise RuntimeError("huge pages: program did not become ready")
+            ready = p.stdout.readline()
         if b"ready" not in ready:
             raise RuntimeError(f"huge pages: the program said {ready!r}")
         smaps = Path(f"/proc/{p.pid}/smaps").read_text()
     finally:
-        p.communicate(b"\n", timeout=60)
-    marked = 0
-    size = 0
+        try:
+            _, err = p.communicate(b"\n", timeout=60)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            p.communicate()
+            raise
+    if p.returncode:
+        raise RuntimeError(f"huge pages: program exited {p.returncode}: {tc.decode(err)}")
+    mappings = []
     for line in smaps.splitlines():
-        if line.startswith("Size:"):
-            size = int(line.split()[1])
-        elif line.startswith("VmFlags:") and " nh" in line and size == 2048:
-            marked += 1
-    if not marked:
-        raise RuntimeError("huge pages: no 2 MB mapping of the program is marked nh")
+        header = re.match(r"^([0-9a-f]+)-([0-9a-f]+) (\S+) \S+ \S+ \d+\s*(.*)$", line)
+        if header:
+            lo, hi, access, name = header.groups()
+            mappings.append((int(lo, 16), int(hi, 16), access, name, set()))
+        elif line.startswith("VmFlags:"):
+            mappings[-1][4].update(line.split()[1:])
+    regions = 0
+    for index, (lo, hi, access, name, _) in enumerate(mappings):
+        if access != "---p" or name or hi - lo != 1 << 20:
+            continue
+        begin, end, segments = lo - ARENA_BYTES, lo, []
+        for start, stop, access, name, flags in reversed(mappings[:index]):
+            if stop != end or start < begin or access != "rw-p" or name:
+                break
+            end = start
+            segments.append(flags)
+            if end == begin:
+                regions += 1
+                if not all("nh" in flags for flags in segments):
+                    raise RuntimeError("huge pages: a runtime arena is only partly marked nh")
+                break
+        if end != begin:
+            raise RuntimeError("huge pages: incomplete configured runtime arena before guard")
+    if not regions:
+        raise RuntimeError("huge pages: no complete runtime arena with a protected guard")
 
 
 def check_huge_pages(exe, base):
@@ -58,7 +85,8 @@ def check_huge_pages(exe, base):
         source = root / "waits.goose"
         tc.write_text(source, PROGRAM)
         app = root / "waits"
-        r = subprocess.run([str(exe), "build", "-o", str(app), str(source)], cwd=root,
+        r = subprocess.run([str(exe), "build", "--stack-reserve", str(ARENA_BYTES),
+                            "-o", str(app), str(source)], cwd=root,
                            capture_output=True, text=True, errors="replace", timeout=300)
         if r.returncode != 0:
             raise RuntimeError(f"huge pages: goose build:\n{r.stdout}{r.stderr}")
