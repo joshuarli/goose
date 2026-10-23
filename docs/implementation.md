@@ -5388,7 +5388,14 @@ reports a commit the system refuses (its commit limit reached) as out of
 memory. macOS commits on fault too, through its signal handler: the whole
 region is mapped `PROT_NONE` and the handler opens the usable part 1 MB at a
 time from the page that faulted. Linux reserves with overcommit and protects
-only the gap. Runtime C therefore writes a stack in user mode only
+only the gap. Before publishing a Linux data stack, the runtime disables
+transparent huge pages across its whole usable mapping with `MADV_NOHUGEPAGE`.
+Linux kernels must support and accept that advice. If it fails, the runtime
+attempts to release the entire reservation and terminates with the saved advice
+error and any cleanup error. Whole-range exclusion can increase page-table
+memory and TLB pressure for dense stacks.
+
+Runtime C therefore writes a stack in user mode only
 (`memcpy`, `gs_bld_append`), never through a system call, which would fail on
 an unopened page rather than fault; and a debugger sees each such fault first
 (lldb stops on its `EXC_BAD_ACCESS` unless it is passed on to the program). A

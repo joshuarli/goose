@@ -1560,11 +1560,12 @@ static GS_NORETURN void gs_park(void) {
 
 #else  /* posix */
 
-#include <sys/mman.h>
+#include <errno.h>
+)GSRT"
+R"GSRT(#include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
-)GSRT"
-R"GSRT(#include <signal.h>
+#include <signal.h>
 #include <pthread.h>
 
 /* The calling thread's native stack, from GS_NATIVE_SLOP below its lowest
@@ -1706,8 +1707,7 @@ static void gs_native_stack_init(int primordial) {
             }
             pthread_attr_destroy(&attr);
         }
-)GSRT"
-R"GSRT(        if (primordial && hi) {
+        if (primordial && hi) {
             struct rlimit rl;
             if (!getrlimit(RLIMIT_STACK, &rl) && rl.rlim_cur != RLIM_INFINITY &&
                 rl.rlim_cur > hi - lo && rl.rlim_cur < hi)
@@ -1752,14 +1752,27 @@ static uint8_t *gs_os_reserve(size_t usable, size_t size) {
                    #endif
                    , -1, 0);
     if (p == MAP_FAILED) return NULL;
-    if (mprotect((uint8_t *)p + usable, size - usable, PROT_NONE)) {
+)GSRT"
+R"GSRT(    if (mprotect((uint8_t *)p + usable, size - usable, PROT_NONE)) {
         munmap(p, size);
         gs_panic("cannot protect data stack guard gap");
     }
 #endif
-    /* Most stacks hold a few bytes, which a transparent huge page at the
-       start would commit 2 MB for. */
-    #ifdef MADV_NOHUGEPAGE
+    #ifdef __linux__
+        #ifndef MADV_NOHUGEPAGE
+            #error Linux_runtime_requires_MADV_NOHUGEPAGE
+        #endif
+        if (madvise(p, usable, MADV_NOHUGEPAGE)) {
+            int advice_error = errno;
+            int release_error = munmap(p, size) ? errno : 0;
+            char message[sizeof("cannot disable huge pages for data stack (madvise errno=); cannot release address space (munmap errno=)") + 6 * sizeof(int)];
+            if (release_error)
+                snprintf(message, sizeof(message), "cannot disable huge pages for data stack (madvise errno=%d); cannot release address space (munmap errno=%d)", advice_error, release_error);
+            else
+                snprintf(message, sizeof(message), "cannot disable huge pages for data stack (madvise errno=%d)", advice_error);
+            gs_panic(message);
+        }
+    #elif defined(MADV_NOHUGEPAGE)
         madvise(p, usable < (2u << 20) ? usable : (2u << 20), MADV_NOHUGEPAGE);
     #endif
     return (uint8_t *)p;
@@ -1769,8 +1782,7 @@ static void gs_release_region(const gs_region *r) {
     if (munmap(r->base, r->size)) gs_panic("cannot release data stack address space");
 }
 
-)GSRT"
-R"GSRT(/* Whether this is the first call of gs_end; and where the later ones wait.
+/* Whether this is the first call of gs_end; and where the later ones wait.
    TinyCC names the memory orders in its stdatomic.h alone. */
 #ifndef __ATOMIC_SEQ_CST
 #define __ATOMIC_SEQ_CST 5
@@ -1916,7 +1928,8 @@ GS_API uint8_t gs_trim_memory(void) {
    node 0 is the header, and the others come off a chain of emptied nodes or
    past the last one, so the node count is the freelist's size, and the
    tree, in node numbers, is copied whole when a worker takes a copy of its
-   pool. A freelist starts empty, without a header, until a span is freed.
+)GSRT"
+R"GSRT(   pool. A freelist starts empty, without a header, until a span is freed.
    Every span comes from a slice of the pool, so spans stay inside the pool's
    length whatever the program frees: freeing a slice twice leaves
    overlapping spans that hand the same elements out twice, never anything
@@ -1947,8 +1960,7 @@ typedef struct {
 #define GS_SPLEAF(p, i) ((gs_spleaf *)((p)->base + (i) * GS_SPAN_NODE))
 #define GS_SPINNER(p, i) ((gs_spinner *)((p)->base + (i) * GS_SPAN_NODE))
 
-)GSRT"
-R"GSRT(static int64_t gs_sp_newnode(gs_sppath *p) {
+static int64_t gs_sp_newnode(gs_sppath *p) {
     int64_t i = GS_SPHEAD(p)->chain;
     if (i) {
         GS_SPHEAD(p)->chain = GS_SPLEAF(p, i)->link;
@@ -2070,8 +2082,7 @@ static int64_t gs_sp_find(gs_sppath *p, int64_t idx) {
 static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
     int64_t r = gs_sp_newnode(p);
     gs_spinner *rn = GS_SPINNER(p, r);
-)GSRT"
-R"GSRT(    rn->n = 2;
+    rn->n = 2;
     rn->key[0] = gs_sp_key(p, a, leaf);
     rn->max[0] = gs_sp_max(p, a, leaf, INT64_MAX);
     rn->child[0] = a;
@@ -2149,7 +2160,8 @@ static void gs_sp_insert(gs_sppath *p, int64_t k, int64_t idx, int64_t cnt) {
     o->cnt[s] = cnt;
     if (!nn) {
         gs_sp_fix(p, p->h, 0, cnt);
-    } else if (p->h == 0) {
+)GSRT"
+R"GSRT(    } else if (p->h == 0) {
         gs_sp_newroot(p, p->node[0], nn, 1);
     } else {
         gs_sp_fix(p, p->h, INT64_MAX, 0);
@@ -2189,8 +2201,7 @@ static void gs_sp_delete(gs_sppath *p, int64_t k) {
 }
 
 /* Takes cnt elements off the front of the span at position k of the path's
-)GSRT"
-R"GSRT(   leaf, or the whole span where it holds no more. */
+   leaf, or the whole span where it holds no more. */
 static void gs_sp_take(gs_sppath *p, int64_t k, int64_t cnt) {
     gs_spleaf *lf = GS_SPLEAF(p, p->node[p->h]);
     int64_t c = lf->cnt[k];
@@ -2371,8 +2382,7 @@ GS_API void gs_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx,
     p.top = top;
     if (*n == 0) {
         gs_sphead *hd = (gs_sphead *)base;
-)GSRT"
-R"GSRT(        *n = 1;
+        *n = 1;
         *top = base + GS_SPAN_NODE;
         hd->chain = 0;
         hd->height = 0;
@@ -2380,7 +2390,8 @@ R"GSRT(        *n = 1;
         GS_SPLEAF(&p, hd->root)->n = 0;
     }
     gs_sp_near(&p, &q, idx, idx + cnt, &s);
-    gs_sp_release(&p, &s, idx, cnt);
+)GSRT"
+R"GSRT(    gs_sp_release(&p, &s, idx, cnt);
 }
 
 /* In place where a free span starts where the slice ends and holds the
@@ -2413,8 +2424,7 @@ GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t
 
 /* ---------------------------------------------------------------------------
    Byte search: std's find_any and find_pair (docs/stdlib.md). A set arrives
-)GSRT"
-R"GSRT(   as std's ByteSet, made by its byte_set, which gs_byteset lays out as the
+   as std's ByteSet, made by its byte_set, which gs_byteset lays out as the
    Goose struct is (spec C.2: packed, in declaration order). `members` is
    the set. `kind` says how a block of bytes is tested for it: by comparing
    with 1 to 3 of `bytes` (kinds 1-3), or as the range bytes[0] .. bytes[0] +
@@ -2567,10 +2577,10 @@ static GS_SSSE3 GS_INLINE __m128i gs_bsm_tables(const gs_bsm *m, __m128i x) {
 /* The same over np >= 16 positions for two sets, d bytes apart. */
 #define GS_PAIR_LOOP(TESTA, TESTB)                                                     \
     int64_t i = 0;                                                                     \
-    unsigned k;                                                                        \
-    for (; i + 16 <= np; i += 16) {                                                    \
 )GSRT"
-R"GSRT(        k = (unsigned)_mm_movemask_epi8(                                               \
+R"GSRT(    unsigned k;                                                                        \
+    for (; i + 16 <= np; i += 16) {                                                    \
+        k = (unsigned)_mm_movemask_epi8(                                               \
             _mm_and_si128(TESTA(GS_LOAD(p + i)), TESTB(GS_LOAD(p + i + d))));          \
         if (k) return i + gs_ctz32(k);                                                 \
     }                                                                                  \
@@ -2593,8 +2603,7 @@ static GS_INLINE int64_t gs_scan_any_k(const uint8_t *p, int64_t n, const gs_byt
     GS_ANY_LOOP(GS_TEST_S)
 }
 
-)GSRT"
-R"GSRT(static GS_SSSE3 int64_t gs_scan_any_tables(const uint8_t *p, int64_t n, const gs_byteset *s) {
+static GS_SSSE3 int64_t gs_scan_any_tables(const uint8_t *p, int64_t n, const gs_byteset *s) {
     gs_bsm ms;
     gs_bsm_init(&ms, s, 1);
     GS_ANY_LOOP(GS_TABLES_S)
@@ -2753,7 +2762,8 @@ GS_API int64_t gs_fmt_u64(uint8_t *dst, uint64_t v) {
     }
     if (v >= 10) {
         p[-2] = (uint8_t)gs_digit_pairs[2 * v];
-        p[-1] = (uint8_t)gs_digit_pairs[2 * v + 1];
+)GSRT"
+R"GSRT(        p[-1] = (uint8_t)gs_digit_pairs[2 * v + 1];
     } else {
         p[-1] = (uint8_t)('0' + v);
     }
@@ -2778,15 +2788,13 @@ GS_API int64_t gs_fmt_i64(uint8_t *dst, int64_t v) {
 
    The numbers are naturals in 32-bit limbs, least significant first. The
    denominator s stays below 2^1079 (ten times 2^1075, for the smallest
-)GSRT"
-R"GSRT(   doubles), and the others below eleven times s. */
+   doubles), and the others below eleven times s. */
 typedef struct { int n; uint32_t d[36]; } gs_big;
 
 /* a = v << sh, for v > 0. */
 static void gs_big_set(gs_big *a, uint64_t v, int sh) {
     int w = sh >> 5, b = sh & 31, i;
-)GSRT"
-R"GSRT(    uint64_t lo = v << b, hi = b ? v >> (64 - b) : 0;
+    uint64_t lo = v << b, hi = b ? v >> (64 - b) : 0;
     for (i = 0; i < w; i++) a->d[i] = 0;
     a->d[w] = (uint32_t)lo;
     a->d[w + 1] = (uint32_t)(lo >> 32);
@@ -2971,7 +2979,8 @@ GS_API int64_t gs_fmt_f64(uint8_t *dst, double v) {
 }
 
 /* The digits are the f32's own, laid out as an f64's are, so 0.1 as an f32
-   prints as 0.1, not as the digits of the f64 it widens to. */
+)GSRT"
+R"GSRT(   prints as 0.1, not as the digits of the f64 it widens to. */
 GS_API int64_t gs_fmt_f32(uint8_t *dst, float v) {
     double d = v;
     uint32_t b;
