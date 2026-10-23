@@ -18,6 +18,25 @@ fn abs<T>(x: T) -> T { if x < 0 { return -x; } return x; }
 fn abs(x: f32) -> f32 { if x < 0.0 { return -x; } return x; }
 fn abs(x: f64) -> f64 { if x < 0.0 { return -x; } return x; }
 
+// Truncating remainder pairs with `/`. The product stays between a and
+// zero; divisor -1 has remainder zero even when its quotient cannot fit.
+fn rem<T>(a: T, b: T) -> T {
+    // A negative all-ones divisor is -1; this also accepts unsigned types.
+    if b < 0 && ~b == 0 { return 0; }
+    return a - (a / b) * b;
+}
+
+// Euclidean division pairs with `%`. Adjust the truncating quotient from
+// its remainder, without forming a - (a % b), which can underflow.
+fn div_euclid<T>(a: T, b: T) -> T {
+    let q = a / b;
+    if rem(a, b) < 0 {
+        if b > 0 { return q - 1; }
+        return q + 1;
+    }
+    return q;
+}
+
 fn sign<T>(x: T) -> T {
     if x < 0 { return -1; }
     if 0 < x { return 1; }
@@ -46,9 +65,9 @@ fn next_pow2(x: i64) -> i64 {
 
 // The bits set, and the leading / trailing zero bits, 64 for zero: the
 // runtime's (src/runtime/runtime_ext.h), one instruction where it can.
-extern "gs_popcount" fn popcount(x: u64) -> i64;
-extern "gs_clz" fn clz(x: u64) -> i64;
-extern "gs_ctz" fn ctz(x: u64) -> i64;
+extern fn popcount(x: u64) -> i64 = "gs_popcount";
+extern fn clz(x: u64) -> i64 = "gs_clz";
+extern fn ctz(x: u64) -> i64 = "gs_ctz";
 
 // The values a and b refer to. `T&` of a reference type is that reference,
 // so for two elements of an array of references this swaps
@@ -422,11 +441,11 @@ fn byte_set(bytes: u8[:]) -> ByteSet {
 }
 
 // The first i with s[i] in the set, -1 if none.
-extern "gs_find_any" fn find_any(s: const u8[:], set: const ByteSet&) -> i64;
+extern fn find_any(s: const u8[:], set: const ByteSet&) -> i64 = "gs_find_any";
 
 // find_pair, but for its check of d.
-extern "gs_find_pair" fn byte_set_pair(s: const u8[:], a: const ByteSet&, d: i64,
-                                       b: const ByteSet&) -> i64;
+extern fn byte_set_pair(s: const u8[:], a: const ByteSet&, d: i64,
+                          b: const ByteSet&) -> i64 = "gs_find_pair";
 
 // The first i with s[i] in a and s[i + d] in b, of those with i + d < s.len;
 // -1 if none. d >= 0.

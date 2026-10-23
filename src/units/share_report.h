@@ -3,7 +3,7 @@
 
 namespace goose {
 
-inline void ReportSharingJson(JsonOut &j) {
+inline void ReportSharingJson(BuildReportJson &j) {
     auto &s = share_stats;
     if (!emit_options.share || !s.ran) {
         j.Null();
@@ -37,7 +37,7 @@ inline void ReportSharingJson(JsonOut &j) {
 
 // The units written for the program: how many, how big, and what each holds,
 // so that a changed unit can be attributed to the functions in it.
-inline void ReportUnitsJson(JsonOut &j) {
+inline void ReportUnitsJson(BuildReportJson &j) {
     auto &s = unit_stats;
     if (!s.ran) {
         j.Null();

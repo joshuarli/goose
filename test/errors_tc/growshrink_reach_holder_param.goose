@@ -1,4 +1,4 @@
-// error: storing a reference that may point into a grow-shrink array reached through the caller's storage behind t
+// error: storing a reference into t, which holds a grow-shrink array: such a reference lives in a variable, is passed down or returned, and is never stored (§5.2)
 // A by-value holder parameter's references point into the caller's storage
 // behind its class, which bounds t.a and an element of the array it
 // leads to: a grow-shrink array, whose slot the pop frees and the push

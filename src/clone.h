@@ -15,9 +15,13 @@ struct ExpansionArg {
     TypeExpr *type = nullptr;
     TypeExpr *owner = nullptr;
     string_view field;
+    // A variants<E> binding: the variant's name, which a match pattern takes
+    // (the type is its variant type; the value, a payload-less one's).
+    string_view variant;
 };
 
 struct ExpansionClone {
+    static constexpr size_t MAXNODES = 100000;
     vector<ExpansionArg> args;
     map<SFunction *, SFunction *> functions;
     string_view trace;
@@ -35,8 +39,8 @@ struct ExpansionClone {
 inline Node *Node::Clone(Ast &ast) const {
     auto ctx = ast.expansionclone;
     if (ctx) {
-        if (++*ctx->size > 100000)
-            ctx->error(line, "const for expansion exceeds 100000 generated nodes");
+        if (++*ctx->size > ExpansionClone::MAXNODES)
+            ctx->error(line, cat("const for expansion exceeds ", ExpansionClone::MAXNODES, " generated nodes"));
         if (auto id = Is<Ident>(this)) {
             if (auto arg = ctx->Find(expansionbinding)) {
                 if (!arg->value) {
@@ -44,14 +48,19 @@ inline Node *Node::Clone(Ast &ast) const {
                     // function unused. Keep the error with this bound use
                     // until ordinary checking actually reaches it.
                     auto c = ast.New<Ident>(line, id->name, id->ns);
-                    c->expansionerror = ast.Intern(cat("const for binding ", id->name,
-                                                      " is not a value (or a callable function)"));
+                    c->end = end;
+                    c->expansionerror = ast.Intern(
+                        arg->variant.empty()
+                            ? cat("const for binding ", id->name, " is not a value (or a callable function)")
+                            : cat("const for binding ", id->name, " is the variant ", arg->variant,
+                                  ", which has a payload: construct it with ", id->name, " { ... }"));
                     c->expansiontrace = ctx->trace;
                     c->origin = Origin();
                     return c;
                 }
                 auto c = arg->value->Clone(ast);
                 c->line = line;
+                c->end = end;
                 c->origin = Origin();
                 c->expansiontrace = ctx->trace;
                 return c;
@@ -59,6 +68,7 @@ inline Node *Node::Clone(Ast &ast) const {
         }
     }
     auto c = Clone1(ast);
+    c->end = end;
     c->origin = Origin();
     c->expansionbinding = expansionbinding;
     c->expansiontrace = ctx ? ctx->trace : expansiontrace;
@@ -131,6 +141,7 @@ inline Node *Binary::Clone1(Ast &ast) const {
 inline Node *Dot::Clone1(Ast &ast) const {
     auto d = ast.New<Dot>(line, obj->Clone(ast), name, ns);
     d->accessorowner = accessorowner;
+    d->incomplete = incomplete;
     return d;
 }
 
@@ -171,6 +182,7 @@ inline Node *RangeExpr::Clone1(Ast &ast) const {
 inline Node *Block::Clone1(Ast &ast) const {
     auto b = ast.New<Block>(line);
     b->expansionboundary = expansionboundary;
+    b->brokenat = brokenat;
     CloneNodes(ast, stmts, b->stmts);
     b->tail = CloneOrNull(ast, tail);
     return b;
@@ -181,17 +193,37 @@ inline Node *IfExpr::Clone1(Ast &ast) const {
                            CloneOrNull(ast, elseb));
 }
 
+// An arm as written: a variants<E> binding in its pattern becomes the
+// variant's name, which the match resolves as any other (§8.1).
+inline MatchArm CloneArm(Ast &ast, const MatchArm &arm) {
+    MatchArm a;
+    a.pat = arm.pat;
+    a.generated = arm.generated;
+    a.expansion = CloneOrNull(ast, arm.expansion);
+    for (auto &pi : a.pat.items) {
+        auto ctx = ast.expansionclone;
+        auto arg = ctx ? ctx->Find(pi.lo->expansionbinding) : nullptr;
+        if (arg && !arg->variant.empty() && Is<Ident>(pi.lo)) {
+            auto id = ast.New<Ident>(pi.lo->line, arg->variant);
+            id->end = pi.lo->end;
+            id->origin = pi.lo->Origin();
+            id->expansiontrace = ctx->trace;
+            pi.lo = id;
+            pi.variantowner = arg->type->var->adt;
+        } else {
+            pi.lo = pi.lo->Clone(ast);
+        }
+        pi.hi = CloneOrNull(ast, pi.hi);
+    }
+    a.body = CloneOrNull(ast, arm.body);
+    return a;
+}
+
 inline Node *MatchExpr::Clone1(Ast &ast) const {
     auto m = ast.New<MatchExpr>(line, scrutinee->Clone(ast));
     m->arms.reserve(arms.size());
     for (auto &arm : arms) {
-        MatchArm a;
-        a.pat = arm.pat;
-        for (auto &pi : a.pat.items) {
-            pi.lo = pi.lo->Clone(ast);
-            pi.hi = CloneOrNull(ast, pi.hi);
-        }
-        a.body = arm.body->Clone(ast);
+        auto a = CloneArm(ast, arm);
         m->arms.push_back(a);
     }
     return m;
@@ -243,7 +275,6 @@ inline Node *FunVal::Clone1(Ast &ast) const {
     fv->params = params;
     for (auto &p : fv->params) p.type = ast.CloneExpansionType(p.type);
     fv->explicit_params = explicit_params;
-    fv->col = col;
     return fv;
 }
 
@@ -300,6 +331,8 @@ inline Node *ConstFor::Clone1(Ast &ast) const {
     CloneNodes(ast, constants, cf->constants);
     cf->body = CloneOrNull(ast, body);
     for (auto &fi : inits) cf->inits.push_back(ast.CloneFieldInit(fi));
+    cf->armfragments = armfragments;
+    for (auto &arm : arms) cf->arms.push_back(CloneArm(ast, arm));
     return cf;
 }
 
@@ -387,6 +420,14 @@ inline void ConstFor::Children(const function<void(Node *)> &f) const {
     for (auto c : constants) f(c);
     CH(body);
     for (auto &fi : inits) f(fi.val);
+    for (auto &arm : arms) {
+        CH(arm.expansion);
+        for (auto &pi : arm.pat.items) {
+            f(pi.lo);
+            CH(pi.hi);
+        }
+        CH(arm.body);
+    }
 }
 
 inline void IntLit::Children(const function<void(Node *)> &) const {}
@@ -460,11 +501,12 @@ inline void IfExpr::Children(const function<void(Node *)> &f) const {
 inline void MatchExpr::Children(const function<void(Node *)> &f) const {
     f(scrutinee);
     for (auto &arm : arms) {
+        CH(arm.expansion);
         for (auto &pi : arm.pat.items) {
             f(pi.lo);
             CH(pi.hi);
         }
-        f(arm.body);
+        CH(arm.body);
     }
 }
 

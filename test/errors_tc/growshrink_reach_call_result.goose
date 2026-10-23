@@ -1,4 +1,4 @@
-// error: storing a reference that may point into a grow-shrink array reached through tops's references
+// error: storing a reference into mine, which holds a grow-shrink array: such a reference lives in a variable, is passed down or returned, and is never stored (§5.2)
 // first's result is rooted at its argument's root, tops, only as a bound: it
 // was read out of the storage behind t. tops holds none, but its references
 // lead to mine, whose slot the pop frees and the push reuses.

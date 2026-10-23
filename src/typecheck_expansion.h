@@ -4,6 +4,78 @@
 
 namespace goose {
 
+// A body's trailing construct is a statement if any of its branches cannot
+// supply a value. Arm fragments count only when their source is nonempty.
+// This reads source shapes without checking or expanding expressions: a
+// nested block's locals are not in scope yet, and its tail may be unreachable.
+inline bool TypeCheck::IsValuelessTail(const Node *n) {
+    size_t visited = 0;
+    vector<pair<int, TypeExpr *>> bindings;
+    function<TypeExpr *(TypeExpr *)> shape = [&](TypeExpr *t) -> TypeExpr * {
+        set<TypeExpr *> seen;
+        while (t && t->kind == TY_GENERIC) {
+            if (!seen.insert(t).second) return nullptr;
+            auto id = t->named->expansionbinding;
+            if (!id) { t = LookupBindingOuter(t->named->name); continue; }
+            auto found = find_if(bindings.rbegin(), bindings.rend(),
+                                 [&](auto &b) { return b.first == id; });
+            t = found == bindings.rend() ? nullptr : found->second;
+        }
+        if (t && t->kind == TY_VARIANT && !t->var->variant) {
+            auto owner = shape(t->var->adt);
+            auto v = owner && owner->kind == TY_ENUM ? owner->enu->en->FindVariant(t->var->name) : nullptr;
+            return v ? ast.VariantTypeOf(owner, v, t->line) : nullptr;
+        }
+        return t;
+    };
+    function<bool(const Node *)> walk;
+    auto arms = [&](const vector<MatchArm> &as) {
+        return any_of(as.begin(), as.end(), [&](const MatchArm &a) {
+            return walk(a.expansion ? a.expansion : a.body);
+        });
+    };
+    walk = [&](const Node *x) {
+        if (!x) return false;
+        // Normal expansion diagnoses an oversized reachable source. The
+        // shape walk must stay bounded even for a tail never reached.
+        if (++visited > ExpansionClone::MAXNODES) return false;
+        if (auto fi = Is<IfExpr>(x))
+            return !fi->elseb || walk(fi->thenb) || walk(fi->elseb);
+        if (auto m = Is<MatchExpr>(x)) return arms(m->arms);
+        if (auto cf = Is<ConstFor>(x)) {
+            auto entry = [&](TypeExpr *t = nullptr) {
+                if (t) bindings.push_back({ cf->bindings.back(), t });
+                auto result = arms(cf->arms);
+                if (t) bindings.pop_back();
+                return result;
+            };
+            if (cf->source == ES_CONSTANTS) return !cf->constants.empty() && entry();
+            if (cf->source == ES_TYPES) {
+                for (auto t : cf->types) if (entry(shape(t))) return true;
+                return false;
+            }
+            auto t = shape(cf->types[0]);
+            if (!t) return false;
+            if (cf->source == ES_FIELDS) {
+                auto fields = t->kind == TY_STRUCT ? &t->struc->st->fields
+                            : t->kind == TY_VARIANT ? &t->var->variant->fields : nullptr;
+                return fields && any_of(fields->begin(), fields->end(),
+                                        [](const Field &f) { return !f.ispad; }) && entry();
+            }
+            if (t->kind == TY_ENUM) {
+                for (auto &v : t->enu->en->variants)
+                    if (entry(ast.VariantTypeOf(t, &v, cf->line))) return true;
+            }
+            return false;
+        }
+        if (auto l = Is<LoopExpr>(x)) return !BreaksWithValue(l->body);
+        if (auto b = Is<Block>(x)) return walk(b->tail);
+        if (auto e = Is<EarlyBlock>(x)) return walk(e->body);
+        return false;
+    };
+    return walk(n);
+}
+
 inline Node *TypeCheck::ExpansionConstant(Node *n, set<VarDecl *> &visiting) {
     // Checking a named global may have inserted its ordinary integer-to-
     // float conversion. This is not permission for a source-level cast.
@@ -22,6 +94,9 @@ inline Node *TypeCheck::ExpansionConstant(Node *n, set<VarDecl *> &visiting) {
     set<VarDecl *> integers;
     ConstUse use { n, "const for source" };
     if (ConstIntValue(n, v, literal, integers, &use)) {
+        // `~c` (Val::notconst) stays one, to adapt where the entry is used.
+        if (v.notconst)
+            return ast.New<Unary>(n->line, T_BITNOT, ast.New<IntLit>(n->line, v.litlo));
         auto i = ast.New<IntLit>(n->line, v.ival, string_view {}, v.uns);
         // An unannotated named literal keeps its ordinary adaptability.
         // Arithmetic still follows ConstIntValue's evaluation widths.
@@ -81,19 +156,37 @@ inline void TypeCheck::ExpandConstFor(ConstFor *cf, const function<void(Expansio
             ConstNamesIn(raw);
             auto t = Subst(raw);
             if (HasGenerics(t)) Error(cf, cat("const for source requires a concrete type, got ", TypeStr(t)));
-            if (cf->source == ES_FIELDS && t->kind != TY_STRUCT)
-                Error(cf, cat("fields requires a concrete struct type, got ", TypeStr(t)));
+            if (cf->source == ES_FIELDS && t->kind != TY_STRUCT && t->kind != TY_VARIANT)
+                Error(cf, cat("fields requires a concrete struct or variant type, got ", TypeStr(t)));
+            if (cf->source == ES_VARIANTS && ast.PlainOf(t)->kind != TY_ENUM)
+                Error(cf, cat("variants requires a concrete ADT type, got ", TypeStr(t)));
             if (t->kind != TY_FN) ValidateType(t, cf->line, VT_POINTEE);
             types.push_back(t);
         }
         if (cf->source == ES_FIELDS) {
+            // A variant type's payload is a struct-like run of fields (§3.5),
+            // reached as a struct's are, on a value of that variant type.
             auto t = ast.PlainOf(types[0]);
-            auto inst = GetStructInst(t);
-            for (auto &f : inst->st->fields) {
+            auto &fields = t->kind == TY_VARIANT ? t->var->variant->fields : GetStructInst(t)->st->fields;
+            for (auto &f : fields) {
                 if (f.ispad) continue;
                 entries.push_back({ { cf->bindings[0], ast.New<StrLit>(cf->line, string(f.name)) },
                                     { cf->bindings[1], nullptr, nullptr, t, f.name } });
                 descriptions.push_back(cat("field ", TypeStr(t), ".", f.name));
+            }
+        } else if (cf->source == ES_VARIANTS) {
+            // Every variant in declaration order: its name, and the variant as
+            // a type, a pattern, a constructor and, payload-less, a value.
+            auto t = ast.PlainOf(types[0]);
+            for (auto &v : t->enu->en->variants) {
+                auto vt = ast.VariantTypeOf(t, &v, cf->line);
+                Node *value = nullptr;
+                if (none_of(v.fields.begin(), v.fields.end(), [](const Field &f) { return !f.ispad; }))
+                    value = ast.New<StructLit>(cf->line, vt);
+                ExpansionArg variant { cf->bindings[1], value, vt };
+                variant.variant = v.name;
+                entries.push_back({ { cf->bindings[0], ast.New<StrLit>(cf->line, string(v.name)) }, variant });
+                descriptions.push_back(cat("variant ", TypeStr(t), ".", v.name));
             }
         } else {
             for (auto t : types) {
@@ -109,7 +202,7 @@ inline void TypeCheck::ExpandConstFor(ConstFor *cf, const function<void(Expansio
                                   cf->expansiontrace));
         ctx.size = &expansionsize;
         ctx.error = [&](Line line, const string &msg) {
-            ErrorIn(line, msg, cat(ctx.trace, InstantiationChain()));
+            ErrorIn(LocOf(line), msg, Chain(ctx.trace));
         };
         auto saved = ast.expansionclone;
         ast.expansionclone = &ctx;
@@ -130,6 +223,30 @@ inline Block *TypeCheck::ExpandStatements(ConstFor *cf) {
         out->stmts.push_back(body);
     });
     return out;
+}
+
+// A match's arm list with each `const for` of arms replaced by its arms, one
+// set per entry, in place: the ordinary match checks then see every arm.
+inline void TypeCheck::ExpandArms(vector<MatchArm> &arms) {
+    if (none_of(arms.begin(), arms.end(), [](const MatchArm &a) { return a.expansion != nullptr; }))
+        return;
+    vector<MatchArm> flat;
+    for (auto &arm : arms) {
+        if (auto cf = Is<ConstFor>(arm.expansion)) {
+            vector<MatchArm> generated;
+            ExpandConstFor(cf, [&](ExpansionClone &) {
+                for (auto &a : cf->arms) {
+                    generated.push_back(CloneArm(ast, a));
+                    generated.back().generated = true;
+                }
+            });
+            ExpandArms(generated);
+            flat.insert(flat.end(), generated.begin(), generated.end());
+        } else {
+            flat.push_back(arm);
+        }
+    }
+    arms = std::move(flat);
 }
 
 inline void TypeCheck::ExpandInitializers(vector<FieldInit> &inits) {

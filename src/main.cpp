@@ -53,11 +53,11 @@
 #include "jit.h"
 #include "progress.h"
 #include "buildfile.h"
+#include "json.h"
 #include "toolchain.h"
 #include "builtin.h"
 #include "build.h"
 #include "packages.h"
-#include "json.h"
 #include "native.h"
 #include "units/build.h"
 #include "lint_facts.h"
@@ -74,6 +74,11 @@
 #include "gir/gir_verify.h"
 #include "gir/c/gir_c.h"
 #include "core/core_emit.h"
+#include "lsp_rpc.h"
+#include "lsp_analysis.h"
+#include "lsp_workspace.h"
+#include "lsp_features.h"
+#include "lsp.h"
 
 namespace goose {
 
@@ -147,17 +152,25 @@ string RelativeTo(const string &path, const string &dir) {
 
 // Where the standard library lives: an explicit --stdlib or
 // GOOSE_STDLIB, else the `stdlib/` directory of the source tree the compiler
-// was built in, found by walking up from the executable.
+// was built in, found by walking up from the executable. A directory more
+// than one of those name is in the list once, as the first named it.
 vector<string> StdlibDirs(const string &stdlibdir, const string &exe) {
-    vector<string> dirs;
-    if (!stdlibdir.empty()) dirs.push_back(cat(stdlibdir, "/"));
-    if (auto env = getenv("GOOSE_STDLIB")) dirs.push_back(cat(env, "/"));
+    vector<string> cands;
+    if (!stdlibdir.empty()) cands.push_back(cat(stdlibdir, "/"));
+    if (auto env = getenv("GOOSE_STDLIB")) cands.push_back(cat(env, "/"));
     auto exedir = DirOf(exe);
-    dirs.push_back(cat(exedir, "stdlib/"));
-    dirs.push_back(cat(exedir, "../stdlib/"));
-    dirs.push_back(cat(exedir, "../../stdlib/"));
-    dirs.push_back(cat(exedir, "../../../stdlib/"));
-    dirs.push_back("stdlib/");
+    cands.push_back(cat(exedir, "stdlib/"));
+    cands.push_back(cat(exedir, "../stdlib/"));
+    cands.push_back(cat(exedir, "../../stdlib/"));
+    cands.push_back(cat(exedir, "../../../stdlib/"));
+    cands.push_back("stdlib/");
+    vector<string> dirs;
+    set<string> seen;
+    for (auto &dir : cands) {
+        std::error_code ec;
+        auto canon = filesystem::weakly_canonical(filesystem::path(dir), ec);
+        if (seen.insert(ec ? dir : canon.string()).second) dirs.push_back(dir);
+    }
     return dirs;
 }
 
@@ -168,9 +181,23 @@ struct DeclaredPackage {
     int line = 0;            // Where the root declared it.
 };
 
-[[noreturn]] static void ImportError(const string &file, int line, const string &msg,
-                                     CompileErrorKind kind = CompileErrorKind::Source) {
-    throw CompileError { cat(file, ":", line, ": error: ", msg), kind };
+// An error at an import in the file named `file`: over the whole `import ...;`.
+static Diagnostic ImportDiagnostic(const string &file, const Import &imp, const string &msg) {
+    Diagnostic d;
+    d.where = LocOf(imp.line);
+    if (imp.end.line > 0) {
+        d.where.endline = imp.end.line;
+        d.where.endcol = imp.end.col;
+    }
+    d.message = msg;
+    d.text = RenderDiagnostic(d, file, {}, false);
+    return d;
+}
+
+[[noreturn]] static void ImportError(const string &file, const Import &imp, const string &msg,
+                        CompileErrorKind kind = CompileErrorKind::Source) {
+    auto d = ImportDiagnostic(file, imp, msg);
+    throw CompileError { d.text, { d }, kind };
 }
 
 // Parses a root file and, transitively, everything it imports (each file once).
@@ -180,13 +207,16 @@ struct DeclaredPackage {
 // declared; then in the standard library. `import .a.b;` resolves relative to
 // the importing file's directory. `import name from "source";` declares a
 // package in the root file and is a requirement anywhere else, which the
-// root's declaration must satisfy. A
-// `rootsource` is the root file's text, which is then not read from disk.
-// `exedir` is the compiler's directory, where a release keeps the packages
-// compiled into it.
+// root's declaration must satisfy (docs/design/packages.md §4.3). A file's
+// text comes from `sources` where that has it (SourceProvider, utils.h),
+// else from disk. `exedir` is the compiler's directory, where a release
+// keeps the packages compiled into it. An import that fails is reported
+// at the import (Ast::Report), and the program goes on without what it
+// would have loaded: the names it would have declared are unknown where
+// they are used.
 void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlibdirs,
-                  const string &exedir, const string *rootsource = nullptr,
-                  PackageFetchPolicy fetch_policy = PackageFetchPolicy::AllowFetch) {
+                  const string &exedir, const SourceProvider &sources = {},
+                  PackageFetchPolicy fetch_policy) {
     // The program is package 0; a standard library directory becomes a
     // package the first time a module in it is reached.
     auto rootdir = DirOf(rootpath);
@@ -249,16 +279,28 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
     set<string> loaded = { rootpath };
     map<string, int> fileof;                 // Resolved path -> index in ast.sources.
     vector<vector<string>> importsof;        // Per source, the paths it imports.
+    // An imported file's first import, where an error opening it is.
+    map<string, pair<string, Import>> importedat;
+    // The packages whose declaration, or blessed load, failed: what imports
+    // them again was reported at that import.
+    set<string> failedpkgs;
     while (!queue.empty()) {
         auto [path, pkg] = queue.back();
         queue.pop_back();
         auto contents = make_unique<string>();
-        if (rootsource && path == rootpath) *contents = *rootsource;
-        else if (!LoadSource(path, *contents))
-            throw CompileError { cat("cannot open file: ", path),
-                                 path == rootpath ? CompileErrorKind::Source
-                                                  : CompileErrorKind::MissingImport };
-        if (!(rootsource && path == rootpath)) DepNoteFileRead(path, *contents);
+        if (auto text = sources ? sources(path) : nullptr) {
+            *contents = *text;
+            StripBom(*contents);
+        } else if (!LoadSource(path, *contents)) {
+            auto it = importedat.find(path);
+            if (it == importedat.end()) throw CompileError { cat("cannot open file: ", path) };
+            if (ast.capture_lint_metadata)
+                throw CompileError { cat("cannot open file: ", path), CompileErrorKind::MissingImport };
+            ast.Report(ImportDiagnostic(it->second.first, it->second.second,
+                                        cat("cannot open file: ", path)));
+            continue;
+        }
+        if (!sources || !sources(path)) DepNoteFileRead(path, *contents);
         auto fileidx = (int)ast.sources.size();
         ast.sources.emplace_back(path, std::move(contents));
         ast.filepkg.push_back(pkg);
@@ -268,137 +310,157 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
         Parser parser(ast, filename, source->c_str(), fileidx);
         parser.ParseTop();
         for (auto &imp : parser.imports) {
-            auto imppkg = pkg;
-            string imppath;
-            if (!imp.source.empty()) {
-                PackageSource src;
-                try {
-                    src = ParsePackageSource(imp.source, DirOf(path));
-                } catch (CompileError &e) {
-                    ImportError(filename, imp.line, e.msg);
-                }
-                auto it = declared.find(imp.path);
-                if (fileidx == 0) {
-                    // The root declares the package, and imports its entry.
-                    if (it != declared.end())
-                        ImportError(filename, imp.line, cat("the package ", imp.path,
-                                                            " is declared twice"));
-                    string root;
+            // The package this import declares or loads, where it does.
+            string pkgname;
+            try {
+                auto imppkg = pkg;
+                string imppath;
+                if (!imp.source.empty()) {
+                    if (failedpkgs.count(imp.path)) continue;
+                    pkgname = imp.path;
+                    PackageSource src;
                     try {
-                    root = PackageRoot(src, imp.path, fetch_policy);
+                        src = ParsePackageSource(imp.source, DirOf(path));
                     } catch (CompileError &e) {
-                    ImportError(filename, imp.line, e.msg, CompileErrorKind::MissingImport);
+                        ImportError(filename, imp, e.msg);
                     }
-                    ast.packages.push_back(Package { imp.path, root, false });
-                    if (!src.ispath) ast.packages.back().cachekey = GitCacheKey(src);
-                    LoadSidecar(ast.packages.back(), false);
-                    it = declared.emplace(imp.path, DeclaredPackage { src, (int)ast.packages.size() - 1,
-                                                                      imp.line }).first;
-                } else {
-                    // A requirement: satisfied by the root's declaration, or
-                    // by the blessed table where the root declared nothing.
-                    if (it == declared.end())
-                        if (auto be = BlessedLookup(imp.path); be && be->package == imp.path) {
-                            loadblessed(*be);
-                            it = declared.find(imp.path);
+                    auto it = declared.find(imp.path);
+                    if (fileidx == 0) {
+                        // The root declares the package, and imports its entry.
+                        if (it != declared.end())
+                            ImportError(filename, imp, cat("the package ", imp.path,
+                                                                " is declared twice"));
+                        string root;
+                        try {
+                            root = PackageRoot(src, imp.path, fetch_policy);
+                        } catch (CompileError &e) {
+                            ImportError(filename, imp, e.msg);
                         }
-                }
-                if (it == declared.end()) {
-                    // A requirement the root does not satisfy: the error is
-                    // the line to add there.
-                    ImportError(filename, imp.line,
-                                cat(ast.packages[pkg].name, " needs the package ", imp.path,
-                                    ": add\n    import ", imp.path, " from \"",
-                                    SourceForRoot(src, rootdir), "\";\nto ", rootpath,
-                                    " (packages are declared by the root file only)"),
-                                CompileErrorKind::MissingImport);
-                } else if (fileidx != 0 && !SameSource(it->second.source, src)) {
-                    ImportError(filename, imp.line,
-                                cat(ast.packages[pkg].name, " needs the package ", imp.path,
-                                    " from ", src.text, ", which ", rootpath, ":", it->second.line,
-                                    " declared from a different source, ", it->second.source.text));
-                } else if (fileidx != 0 && it->second.source.ref != src.ref) {
-                    fprintf(stderr, "%s:%d: warning: %s needs the package %s at %s, which %s:%d "
-                                    "declares at %s\n",
-                            filename.c_str(), imp.line, ast.packages[pkg].name.c_str(),
-                            imp.path.c_str(), src.ref.c_str(), rootpath.c_str(), it->second.line,
-                            it->second.source.ref.c_str());
-                }
-                imppkg = it->second.pkg;
-                // What a package requires links after it.
-                if (fileidx != 0 && pkg != imppkg) {
-                    auto &req = ast.packages[pkg].required;
-                    if (std::find(req.begin(), req.end(), imppkg) == req.end())
-                        req.push_back(imppkg);
-                }
-                imppath = cat(ast.packages[imppkg].root, imp.path, ".goose");
-            } else if (imp.relative) {
-                imppath = cat(DirOf(path), imp.path, ".goose");
-            } else {
-                // A file under this package's root; a module of a package the
-                // root declared (`import pkg;` is its entry, `import pkg.sub;`
-                // its sub.goose); a blessed name, its package loaded as if
-                // the root had declared it; the standard library.
-                auto local = cat(ast.packages[pkg].root, imp.path, ".goose");
-                auto first = imp.path.substr(0, imp.path.find('/'));
-                auto rest = imp.path.size() > first.size() ? imp.path.substr(first.size() + 1)
-                                                           : first;
-                auto it = declared.find(first);
-                // A package's own name, from inside it, is its own file.
-                if (it != declared.end() && it->second.pkg == pkg) it = declared.end();
-                auto blessed = it == declared.end() && !FileExists(local) ? BlessedLookup(first)
-                                                                           : nullptr;
-                if (it != declared.end()) {
-                    if (FileExists(local))
-                        ImportError(filename, imp.line,
-                                    cat(imp.path, " is both a file of this package (", local,
-                                        ") and the declared package ", first, "'s module"));
+                        ast.packages.push_back(Package { imp.path, root, false });
+                        if (!src.ispath) ast.packages.back().cachekey = GitCacheKey(src);
+                        LoadSidecar(ast.packages.back(), false);
+                        auto dp = DeclaredPackage { src, (int)ast.packages.size() - 1,
+                                                    imp.line.line };
+                        it = declared.emplace(imp.path, dp).first;
+                    } else {
+                        // A requirement: satisfied by the root's declaration, or
+                        // by the blessed table where the root declared nothing.
+                        if (it == declared.end())
+                            if (auto be = BlessedLookup(imp.path); be && be->package == imp.path) {
+                                loadblessed(*be);
+                                it = declared.find(imp.path);
+                            }
+                    }
+                    if (it == declared.end()) {
+                        // A requirement the root does not satisfy: the error is
+                        // the line to add there.
+                        ImportError(filename, imp,
+                                    cat(ast.packages[pkg].name, " needs the package ", imp.path,
+                                        ": add\n    import ", imp.path, " from \"",
+                                        SourceForRoot(src, rootdir), "\";\nto ", rootpath,
+                                        " (packages are declared by the root file only)"));
+                    } else if (fileidx != 0 && !SameSource(it->second.source, src)) {
+                        ImportError(filename, imp,
+                                    cat(ast.packages[pkg].name, " needs the package ", imp.path,
+                                        " from ", src.text, ", which ", rootpath, ":",
+                                        it->second.line, " declared from a different source, ",
+                                        it->second.source.text));
+                    } else if (fileidx != 0 && it->second.source.ref != src.ref) {
+                        ast.Warn(LocOf(imp.line),
+                                 cat(ast.packages[pkg].name, " needs the package ", imp.path,
+                                     " at ", src.ref, ", which ", rootpath, ":", it->second.line,
+                                     " declares at ", it->second.source.ref));
+                    }
                     imppkg = it->second.pkg;
-                    imppath = cat(ast.packages[imppkg].root, rest, ".goose");
-                } else if (blessed) {
-                    imppkg = loadblessed(*blessed);
-                    imppath = cat(ast.packages[imppkg].root, rest, ".goose");
+                    // What a package requires links after it (§5.5).
+                    if (fileidx != 0 && pkg != imppkg) {
+                        auto &req = ast.packages[pkg].required;
+                        if (std::find(req.begin(), req.end(), imppkg) == req.end())
+                            req.push_back(imppkg);
+                    }
+                    imppath = cat(ast.packages[imppkg].root, imp.path, ".goose");
+                } else if (imp.relative) {
+                    imppath = cat(DirOf(path), imp.path, ".goose");
                 } else {
-                    imppath = local;
-                    if (!FileExists(local)) {
-                        for (auto &dir : stdlibdirs) {
-                            auto cand = cat(dir, imp.path, ".goose");
-                            if (FileExists(cand)) {
-                                imppath = cand;
-                                imppkg = stdlibpkg(dir);
-                                break;
-                            }
+                    // A file under this package's root; a module of a package the
+                    // root declared (`import pkg;` is its entry, `import pkg.sub;`
+                    // its sub.goose); a blessed name, its package loaded as if
+                    // the root had declared it (§4.5); the standard library.
+                    auto local = cat(ast.packages[pkg].root, imp.path, ".goose");
+                    auto first = imp.path.substr(0, imp.path.find('/'));
+                    auto rest = imp.path.size() > first.size() ? imp.path.substr(first.size() + 1)
+                                                               : first;
+                    auto it = declared.find(first);
+                    // A package's own name, from inside it, is its own file.
+                    if (it != declared.end() && it->second.pkg == pkg) it = declared.end();
+                    if (it == declared.end() && failedpkgs.count(first)) continue;
+                    auto blessed = it == declared.end() && !FileExists(local) ? BlessedLookup(first)
+                                                                               : nullptr;
+                    if (blessed) pkgname = blessed->package;
+                    if (it != declared.end()) {
+                        if (FileExists(local))
+                            ImportError(filename, imp,
+                                        cat(imp.path, " is both a file of this package (", local,
+                                            ") and the declared package ", first, "'s module"));
+                        imppkg = it->second.pkg;
+                        imppath = cat(ast.packages[imppkg].root, rest, ".goose");
+                    } else if (blessed) {
+                        try {
+                            imppkg = loadblessed(*blessed);
+                        } catch (CompileError &e) {
+                            ImportError(filename, imp, e.msg);
                         }
-                        // Not found: where it was looked for, the standard
-                        // library being the directories that hold std.goose.
-                        if (imppath == local) {
-                            auto name = imp.path;
-                            for (auto &c : name) if (c == '/') c = '.';
-                            auto msg = cat("cannot find the module ", name, ", looked for\n    ",
-                                           ForwardSlashes(AbsolutePath(local)));
-                            auto havestd = false;
-                            for (auto &dir : stdlibdirs)
-                                if (FileExists(cat(dir, "std.goose"))) {
-                                    havestd = true;
-                                    Append(msg, "\n    ",
-                                           ForwardSlashes(AbsolutePath(cat(dir, imp.path, ".goose"))));
+                        imppath = cat(ast.packages[imppkg].root, rest, ".goose");
+                    } else {
+                        imppath = local;
+                        if (!FileExists(local)) {
+                            for (auto &dir : stdlibdirs) {
+                                auto cand = cat(dir, imp.path, ".goose");
+                                if (FileExists(cand)) {
+                                    imppath = cand;
+                                    imppkg = stdlibpkg(dir);
+                                    break;
                                 }
-                            if (!havestd) {
-                                Append(msg, "\nand found no standard library, looking in");
-                                set<string> shown;
-                                for (auto &dir : stdlibdirs) {
-                                    auto abs = ForwardSlashes(AbsolutePath(dir));
-                                    if (shown.insert(abs).second) Append(msg, "\n    ", abs);
-                                }
-                                Append(msg, "\nset --stdlib or GOOSE_STDLIB to its directory");
                             }
-                            ImportError(filename, imp.line, msg);
+                            // Not found: where it was looked for, the standard
+                            // library being the directories that hold std.goose.
+                            if (imppath == local) {
+                                auto name = imp.path;
+                                for (auto &c : name) if (c == '/') c = '.';
+                                auto msg = cat("cannot find the module ", name,
+                                               ", looked for\n    ",
+                                               ForwardSlashes(AbsolutePath(local)));
+                                auto havestd = false;
+                                for (auto &dir : stdlibdirs)
+                                    if (FileExists(cat(dir, "std.goose"))) {
+                                        havestd = true;
+                                        auto cand = cat(dir, imp.path, ".goose");
+                                        Append(msg, "\n    ", ForwardSlashes(AbsolutePath(cand)));
+                                    }
+                                if (!havestd) {
+                                    Append(msg, "\nand found no standard library, looking in");
+                                    for (auto &dir : stdlibdirs)
+                                        Append(msg, "\n    ", ForwardSlashes(AbsolutePath(dir)));
+                                    Append(msg, "\nset --stdlib or GOOSE_STDLIB to its directory");
+                                }
+                                ImportError(filename, imp, msg);
+                            }
                         }
                     }
                 }
+                importsof[fileidx].push_back(imppath);
+                ast.imports.push_back({ imp.line, imp.end, imppath });
+                if (loaded.insert(imppath).second) {
+                    queue.push_back({ imppath, imppkg });
+                    importedat.emplace(imppath, make_pair(filename, imp));
+                }
+            } catch (CompileError &e) {
+                if (ast.capture_lint_metadata)
+                    throw CompileError { e.msg, e.diags, CompileErrorKind::MissingImport };
+                if (e.diags.empty()) ast.Report(ImportDiagnostic(filename, imp, e.msg));
+                for (auto &d : e.diags) ast.Report(d);
+                if (!pkgname.empty() && !declared.count(pkgname)) failedpkgs.insert(pkgname);
             }
-            importsof[fileidx].push_back(imppath);
-            if (loaded.insert(imppath).second) queue.push_back({ imppath, imppkg });
         }
     }
     // Globals initialize in import order: everything a file imports runs before
@@ -426,6 +488,37 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                      [&](VarDecl *a, VarDecl *b) {
                          return rank[a->line.fileidx] < rank[b->line.fileidx];
                      });
+    // A sidecar's dylibs entry names a library some extern block declares
+    // (§7.10): the program's, one in any package it uses; a package's, one
+    // of its own. A package's blocks are those of all its files, including
+    // modules this program does not import, which only a scan of them finds
+    // (PackageExternNames); it is made only for a name no parsed block has.
+    vector<set<string>> scanned(ast.packages.size());
+    vector<bool> isscanned(ast.packages.size());
+    auto scannedlibs = [&](size_t p) -> const set<string> & {
+        if (!isscanned[p]) {
+            PackageExternNames(ast, (int)p, &scanned[p]);
+            isscanned[p] = true;
+        }
+        return scanned[p];
+    };
+    for (size_t p = 0; p < ast.packages.size(); p++) {
+        auto &pkg = ast.packages[p];
+        for (auto &d : pkg.dylibs) {
+            auto declared = false;
+            for (auto sf : ast.functions)
+                if (sf->dylib == d.name && (p == 0 || ast.filepkg[sf->line.fileidx] == (int)p))
+                    declared = true;
+            for (size_t q = 1; q < ast.packages.size() && !declared; q++)
+                if ((p == 0 || q == p) && !ast.packages[q].stdlib && ast.packages[q].builtin < 0 &&
+                    !ast.packages[q].root.empty() && scannedlibs(q).count(d.name))
+                    declared = true;
+            if (!declared)
+                throw CompileError { cat(pkg.sidecar, ": dylibs maps ", d.name, ", which no "
+                                         "extern block ", p == 0 ? "in the program" : "of the package",
+                                         " names") };
+        }
+    }
 }
 
 // Parses a program's dump as a program of its own and requires that dumping
@@ -435,7 +528,8 @@ void CheckRoundtrip(const string &dumped, const string &path,
                     const vector<string> &stdlibdirs, const string &exedir) {
     Ast again;
     try {
-        ParseProgram(again, path, stdlibdirs, exedir, &dumped);
+        ParseProgram(again, path, stdlibdirs, exedir,
+                     [&](const string &p) -> const string * { return p == path ? &dumped : nullptr; });
     } catch (CompileError &e) {
         throw CompileError { cat("the dump does not parse again:\n", e.msg) };
     }
@@ -476,6 +570,52 @@ void DumpTokens(const string &path) {
         lex.Next();
     }
     fputs(s.c_str(), stdout);
+}
+
+// What --dump-docs prints: the documentation comments (Lexer::doc) of the
+// top-level declarations, in source order, and of their fields and
+// variants: a line naming each one that has one (`fn add`, `field
+// Point.x`, `variant Shape.Circle`), then the comment's lines, each less
+// its indentation and indented by four spaces.
+void DumpDocs(Ast &ast, string &s) {
+    auto doc = [&](const string &head, string_view text) {
+        if (text.empty()) return;
+        Append(s, head, "\n");
+        for (size_t pos = 0; pos <= text.size();) {
+            auto end = text.find('\n', pos);
+            if (end == string_view::npos) end = text.size();
+            auto line = text.substr(pos, end - pos);
+            if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
+            auto first = line.find_first_not_of(" \t");
+            Append(s, "    ", first == string_view::npos ? string_view() : line.substr(first),
+                   "\n");
+            pos = end + 1;
+        }
+    };
+    auto fields = [&](const string &owner, const vector<Field> &fs) {
+        for (auto &f : fs)
+            if (!f.ispad) doc(cat("field ", owner, ".", f.name), f.doc);
+    };
+    for (auto d : ast.topdecls) {
+        if (auto fd = Is<FnDecl>(d)) {
+            doc(cat("fn ", fd->sf->qname), fd->sf->doc);
+        } else if (auto sd = Is<StructDecl>(d)) {
+            doc(cat("struct ", sd->st->qname), sd->st->doc);
+            fields(string(sd->st->qname), sd->st->fields);
+        } else if (auto ed = Is<EnumDecl>(d)) {
+            doc(cat("enum ", ed->en->qname), ed->en->doc);
+            for (auto &v : ed->en->variants) {
+                auto name = cat(ed->en->qname, ".", v.name);
+                doc(cat("variant ", name), v.doc);
+                fields(name, v.fields);
+            }
+        } else if (auto ad = Is<AliasDecl>(d)) {
+            doc(cat("type ", ad->al->qname), ad->al->doc);
+        } else if (auto vd = Is<VarDecl>(d)) {
+            doc(cat(vd->isconst ? "const " : vd->isvar ? "var " : "let ",
+                    ast.QualifiedName(vd->ns, vd->names[0])), vd->doc);
+        }
+    }
 }
 
 // The runtime C sources embedded into the compiler (runtime_inline.h), in the
@@ -586,13 +726,17 @@ constexpr const char *MULTIMARK = "==== goose --multi-test: exit";
 
 // The options run, build and check share, for their help.
 constexpr const char *COMPILEOPTIONS =
-R"(  -D NAME[=VALUE]       Define a C macro in the generated program (or -DNAME).
+R"(  --diagnostics json    Print the errors and warnings as JSON on stdout, and
+                        the progress lines on stderr.
+  --offline             Fetch nothing: a package that is not fetched is an
+                        error at its import, which goose fetch resolves.
+  -D NAME[=VALUE]       Define a C macro in the generated program (or -DNAME).
   --stdlib dir          The standard library's directory (or GOOSE_STDLIB);
                         found from where goose is by default.
   --update              Fetch packages at a tag or branch again (a commit is
                         never fetched again).
-  --stack-reserve size  Address space reserved per data stack, with a K, M, G
-                        or T suffix (default 2G).
+  --stack-reserve size  Address space reserved per data stack, from 64K, with a
+                        K, M, G or T suffix (default 2G).
   --stacks              Report the data stacks the program and each worker can
                         take, and the cap that puts on hardware_threads().
   --no-bce              Keep every bounds check.
@@ -621,6 +765,7 @@ Commands:
   fetch      Fetch the packages a program declares.
   toolchain  Report the C compiler, cmake and git found, and GOOSE_HOME.
   version    Print the runtime version.
+  lsp        Serve an editor over the Language Server Protocol.
   help       Print this (or --help, -h); with a command, that command's help.
   lint       Analyze a program and report lint diagnostics.
 
@@ -691,8 +836,8 @@ the packages the program uses. Intermediates go under GOOSE_HOME.
 
 Options:
   -o exe                Where the executable goes.
-  -O0, -O1, -O2         Inlining level and the C compiler's optimization
-                        (default -O2).
+  -O0, -O1, -O2         Inlining level (default -O2). The C compiler
+                        optimizes at every level, unless --debug.
   --debug               Overflow, range and tag checks that name the source
                         line they fail on, and the C built for a debugger.
 )", COMPILEOPTIONS,
@@ -723,6 +868,26 @@ compiles nothing. A run or a build fetches what is missing as well.
 Options:
   --update              Fetch packages at a tag or branch again (a commit is
                         never fetched again).
+)";
+    if (topic == "lsp") return
+R"(usage: goose lsp [--stdio] [--stdlib dir]
+       goose lsp --probe
+
+Serves an editor over the Language Server Protocol, on stdin and stdout:
+diagnostics as files change, hover, go to definition, references and
+rename, document and workspace symbols, semantic highlighting, signature
+help, completion, inlay hints, folding and selection ranges, and code
+lenses. It analyzes the programs whose entry files the editor configures
+(the initializationOptions' entryFiles, with the standard library's
+directory as stdlib) and every open file none of them imports; the
+initializationOptions' commands are the client's own commands a code lens
+may name (goose.run, goose.showInstantiations). It fetches nothing: a
+package not fetched is an error at its import, which goose fetch resolves.
+
+Options:
+  --probe               Print the protocol version and exit.
+  --stdio               Serve on stdin and stdout, as it does anyway.
+  --stdlib dir          The standard library's directory (or GOOSE_STDLIB).
 )";
     if (topic == "toolchain") return
 R"(usage: goose toolchain [--cc name|path] [--json] [--refresh]
@@ -781,6 +946,8 @@ Options:
   --parse               Stop after parsing.
   --check               Stop after typechecking, as goose check does.
   --dump                Print the parsed program back as source.
+  --dump-docs           Print the documentation comments of the program's
+                        declarations, fields and variants.
   --dump-file out       Write that dump to a file, and go on.
   --roundtrip           Check that the dump parses and dumps back to itself.
   --multi-test file...  Compile each file as a run of its own would, ending what
@@ -800,6 +967,46 @@ Options:
   --gen-runtime-header  Regenerate src/runtime_inline.h from src/runtime/.
 )");
     return "";
+}
+
+// The diagnostics as `--diagnostics json` prints them: an array with one
+// object per error or warning, holding its severity, its message, where it
+// is (the file as the compiler names it, its 1-based line and byte column,
+// and one past its last byte as endLine and endCol, each left out where
+// unknown), the related lines after the message the same way, and the text
+// the terminal would have shown.
+string DiagnosticsJson(const vector<Diagnostic> &diags, const Ast *ast) {
+    string s = "[";
+    auto where = [&](const DiagLoc &w) {
+        if (!ast || w.fileidx < 0 || w.fileidx >= (int)ast->sources.size()) return;
+        s += ", \"file\": ";
+        JsonQuote(s, ast->sources[w.fileidx].first);
+        Append(s, ", \"line\": ", w.line);
+        if (w.col > 0) Append(s, ", \"col\": ", w.col);
+        if (w.endline > 0) Append(s, ", \"endLine\": ", w.endline, ", \"endCol\": ", w.endcol);
+    };
+    for (size_t i = 0; i < diags.size(); i++) {
+        auto &d = diags[i];
+        Append(s, i ? ",\n  {" : "\n  {", "\"severity\": \"", d.warning ? "warning" : "error",
+               "\", \"message\": ");
+        JsonQuote(s, d.message);
+        where(d.where);
+        if (!d.related.empty()) {
+            s += ", \"related\": [";
+            for (size_t j = 0; j < d.related.size(); j++) {
+                Append(s, j ? ", {" : "{", "\"message\": ");
+                JsonQuote(s, d.related[j].message);
+                where(d.related[j].where);
+                s += "}";
+            }
+            s += "]";
+        }
+        s += ", \"text\": ";
+        JsonQuote(s, d.text);
+        s += "}";
+    }
+    s += diags.empty() ? "]\n" : "\n]\n";
+    return s;
 }
 
 // A size with an optional K, M, G or T suffix (--stack-reserve).
@@ -906,7 +1113,7 @@ int Main(int argc, char **argv) {
     if (argc > 1) {
         string v = argv[1];
         if (v == "run" || v == "build" || v == "check" || v == "fetch" || v == "toolchain" ||
-            v == "version" || v == "help") {
+            v == "version" || v == "help" || v == "lsp") {
             verb = v;
             firstarg = 2;
         }
@@ -935,6 +1142,7 @@ int Main(int argc, char **argv) {
         printf("goose runtime %s\n", RuntimeVersion().c_str());
         return 0;
     }
+    if (verb == "lsp") return RunLsp(exe, vector<string>(argv + firstarg, argv + argc));
     string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile, reportfile, emitcore, unitsdir,
         emitgirhigh, emitgirlow, pipeline = "legacy";
     optional<string> constructionTracePath;
@@ -942,15 +1150,16 @@ int Main(int argc, char **argv) {
     for (int i = firstarg; i < argc && string_view(argv[i]) != "--"; i++)
         if (string_view(argv[i]) == "--emit-core-report") emitcorereport = true;
     auto unitsbuild = false, rebuildflag = false, verifyflag = false;
-    auto dump = false, tokens = false, parseonly = false, specs = false, nocgen = false;
+    auto dump = false, dumpdocs = false, tokens = false, parseonly = false, specs = false, nocgen = false;
     auto roundtrip = false, multitest = false;
     auto nobce = false, bcetest = false, bcelines = false, norfcheck = false;
     auto stacks = false;
     auto forcejit = false, standalone = false;
     auto json = false, refresh = false, debug = false, verbose = false, dryrun = false;
+    auto jsondiag = false;
     string ccrequest;
-    // A build is for a deliverable: the inlining and the C compiler's
-    // optimization both at their highest.
+    // A build is for a deliverable: the inlining at its highest. The C
+    // compiler optimizes whatever the level, unless --debug (Builder::CFlags).
     auto optlevel = verb == "build" ? 2 : 1;
     vector<string> cdefines, progargs, includenames, files;
     for (int i = firstarg; i < argc; i++) {
@@ -987,8 +1196,10 @@ int Main(int argc, char **argv) {
         else if (arg == "--stacks") stacks = true;
         else if (arg == "--stack-reserve" && i + 1 < argc) {
             uint64_t size;
-            if (!ParseSize(argv[++i], size) || !size || size > (1ull << 48)) {
-                fprintf(stderr, "--stack-reserve takes a size from 1 byte to 256 TB (2^48, "
+            // A whole page at least, 64 KB being the largest a platform
+            // uses: the runtime rounds a reservation down to whole pages.
+            if (!ParseSize(argv[++i], size) || size < (64ull << 10) || size > (1ull << 48)) {
+                fprintf(stderr, "--stack-reserve takes a size from 64 KB to 256 TB (2^48, "
                                 "goose_spec.md 10.4), with an optional K, M, G or T suffix: %s\n",
                         argv[i]);
                 return 1;
@@ -1007,6 +1218,14 @@ int Main(int argc, char **argv) {
             unitsdir = argv[++i];
             emit_options.units = emit_options.stable_names = true;
         }
+        else if (arg == "--diagnostics" && i + 1 < argc) {
+            string how = argv[++i];
+            if (how == "json") jsondiag = true;
+            else if (how != "text") {
+                fprintf(stderr, "--diagnostics takes json or text, not %s\n", how.c_str());
+                return 1;
+            }
+        }
         else if (arg == "--no-bce") nobce = true;
         else if (arg == "--bce-test") bcetest = true;
         else if (arg == "--bce-lines") bcelines = true;
@@ -1020,7 +1239,12 @@ int Main(int argc, char **argv) {
                 fprintf(stderr, "--emit-core-report cannot be combined with runtime output\n");
                 return 1;
             }
-            GenRuntimeHeader(exe.c_str());
+            try {
+                GenRuntimeHeader(exe.c_str());
+            } catch (CompileError &e) {
+                fprintf(stderr, "%s\n", e.msg.c_str());
+                return 1;
+            }
             return 0;
         }
         else if (arg == "--emit-runtime" && i + 1 < argc) {
@@ -1078,6 +1302,8 @@ int Main(int argc, char **argv) {
         else if (arg == "-v") verbose = true;
         else if (arg == "--dry-run") dryrun = true;
         else if (arg == "--update") package_update = true;
+        else if (arg == "--offline") package_nofetch = true;
+        else if (arg == "--dump-docs") dumpdocs = true;
         // A -D lands in the generated C itself rather than on some backend's
         // command line, so a JIT run and a compiled one see the same source.
         else if (arg == "-D" && i + 1 < argc) cdefines.push_back(argv[++i]);
@@ -1225,8 +1451,7 @@ int Main(int argc, char **argv) {
                         "--dump-file, --jit or program arguments\n");
         return 1;
     }
-    // The program shares stdout in JIT mode; progress goes to stderr.
-    auto msgs = jit || emitcorereport ? stderr : stdout;
+    auto msgs = jit || jsondiag || emitcorereport ? stderr : stdout;
     // The file being compiled, the C file it goes to, if any, and the
     // --include headers as that C file names them.
     string filename, outfile;
@@ -1239,6 +1464,9 @@ int Main(int argc, char **argv) {
     // its packages, for the native parts the program needs (native.h).
     unique_ptr<Ast> astp;
     vector<int> nativepkgs;
+    // The compile's diagnostics as data (--diagnostics json): the warnings
+    // as they come, then the error's.
+    vector<Diagnostic> found;
     auto compile = [&]() -> int {
         if (tokens) {
             DumpTokens(filename);
@@ -1248,8 +1476,18 @@ int Main(int argc, char **argv) {
             BuildReportStart(reportfile, filename, optlevel, nocgen && !stacks);
         astp = make_unique<Ast>();
         auto &ast = *astp;
+        if (jsondiag) ast.sink = [&](const Diagnostic &d) { found.push_back(d); };
         auto stdlibdirs = StdlibDirs(stdlibdir, exe);
         ParseProgram(ast, filename, stdlibdirs, DirOf(exe));
+        // The parser reported what it recovered from as it went; nothing
+        // further is asked of a program with a syntax error.
+        if (!ast.errors.empty()) return 1;
+        if (dumpdocs) {
+            string s;
+            DumpDocs(ast, s);
+            fputs(s.c_str(), stdout);
+            return 0;
+        }
         if (dump) {
             // Dump is parse-level output: no name resolution or typecheck,
             // so parse-only test files can roundtrip, and every name shows
@@ -1269,6 +1507,8 @@ int Main(int argc, char **argv) {
             fclose(f);
         }
         ResolveTypeNames(ast);
+        // As after the parse, which an unknown type name is part of.
+        if (!ast.errors.empty()) return 1;
         // Printed by every run that gets this far, so that one which goes on
         // to fail says by itself which side of resolution it failed on.
         fprintf(msgs, "parsed ok: %d top-level declarations, %d file(s)\n",
@@ -1287,6 +1527,7 @@ int Main(int argc, char **argv) {
             BuildReportPhase(Phase::CheckSpecialize);
         }
         TypeCheckProgram(ast, library, nullptr, nocgen);
+        if (!ast.errors.empty()) return 1;
         if (g_build_report) BuildReportAfterCheck(ast);
         if (emitcorereport) {
             EmitCoreReport(ast, filename);
@@ -1379,11 +1620,11 @@ int Main(int argc, char **argv) {
             bce.RunAll();
             fprintf(msgs, "bce: elided %d/%d index and %d/%d slice checks\n",
                     bce.idxelided, bce.idxtotal, bce.slelided, bce.sltotal);
-            if (!bce.checkfreefails.empty()) throw CompileError { bce.CheckfreeReport() };
+            if (!bce.checkfreefails.empty()) throw bce.CheckfreeError();
         } else {
             for (auto sf : ast.functions)
                 if (sf->checkfree && !sf->isnested) {
-                    fprintf(stderr, "warning: checkfree is not verified under --no-bce\n");
+                    ast.Warn(DiagLoc {}, "checkfree is not verified under --no-bce");
                     break;
                 }
         }
@@ -1638,7 +1879,8 @@ int Main(int argc, char **argv) {
             emit_options.units = emit_options.stable_names = true;
             unitsdir = ur.store.Units();
         }
-        try {
+        found.clear();
+        auto attempt = [&]() -> int {
             // The compile has a thread of its own. The program a JIT run
             // starts runs back on this one, the main thread, which a window
             // on macOS has to be made on, and whose stack the link reserves
@@ -1752,7 +1994,7 @@ int Main(int argc, char **argv) {
                     if (g_build_report) BuildReportWrite();
                     return 0;
                 }
-                return BuildExecutable(filename, outfile, builddir, tc, buildopts, DirOf(exe), msgs,
+                return BuildExecutable(filename, outfile, builddir, tc, buildopts, msgs,
                                        rsps, astp->packages[0].output);
             }
             if (program.empty()) return code;
@@ -1784,10 +2026,25 @@ int Main(int argc, char **argv) {
             // and whatever it wrote is already on the same streams.
             fflush(msgs);
             return RunJit(program, JitLibPath(DirOf(exe)), filename, progargs, symbols);
+        };
+        auto code = 0;
+        try {
+            code = attempt();
         } catch (CompileError &e) {
-            fprintf(stderr, "%s\n", e.msg.c_str());
-            return 1;
+            if (!jsondiag) fprintf(stderr, "%s\n", e.msg.c_str());
+            // A driver's error has no place in the program: its text is all
+            // there is to report.
+            if (e.diags.empty()) {
+                Diagnostic d;
+                d.message = d.text = e.msg;
+                found.push_back(std::move(d));
+            } else {
+                found.insert(found.end(), e.diags.begin(), e.diags.end());
+            }
+            code = 1;
         }
+        if (jsondiag) fputs(DiagnosticsJson(found, astp.get()).c_str(), stdout);
+        return code;
     };
     if (!multitest) return run(files[0]);
     // Each file has an Ast and a compile thread of its own, which is all the
@@ -1815,6 +2072,8 @@ int Main(int argc, char **argv) {
     #define NOMINMAX
     #include <windows.h>
     #include <process.h>
+    #include <io.h>
+    #include <fcntl.h>
 #else
     #include <pthread.h>
     #include <unistd.h>
@@ -1824,6 +2083,16 @@ int Main(int argc, char **argv) {
 #endif
 
 namespace goose {
+
+// The language server's streams carry bytes with Content-Length counts,
+// which the text mode Windows gives them, translating line breaks, would
+// put off.
+void SetBinaryStdio() {
+    #ifdef _WIN32
+        _setmode(_fileno(stdin), _O_BINARY);
+        _setmode(_fileno(stdout), _O_BINARY);
+    #endif
+}
 
 // The running executable's path with links resolved, so that what is found
 // relative to the compiler (the standard library, the runtime sources) is found
@@ -2082,11 +2351,13 @@ int LintMain(int argc, char **argv, const string &exe) {
             parse_started = true;
             ParseProgram(ast, cli.input, stdlibdirs, DirOf(exe), nullptr,
                          cli.allow_fetch ? PackageFetchPolicy::LintAllowFetch : PackageFetchPolicy::Offline);
+            if (!ast.errors.empty()) throw CompileError { ast.errors.front().text, ast.errors };
             parse_complete = true;
             check_started = true;
             ResolveTypeNames(ast);
             vector<LintWarning> warnings;
             TypeCheckProgram(ast, false, &warnings);
+            if (!ast.errors.empty()) throw CompileError { ast.errors.front().text, ast.errors };
             check_complete = true;
             facts_started = true;
             auto facts = BuildLintFacts(ast, warnings, cli.input, cli.optlevel, cli.allow_fetch);

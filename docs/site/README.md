@@ -19,7 +19,7 @@ documents, and fails on a broken one.
 
 | File | Role |
 |---|---|
-| `build.py` | lists the pages, runs pandoc on each, copies the logo and the extension, checks the links |
+| `build.py` | lists the pages, runs pandoc on each, copies the logo, the extension and `docs/html`, checks the links |
 | `template.html` | the page: a top bar, a sidebar table of contents, the text |
 | `style.css` | the one stylesheet |
 | `links.lua` | a pandoc filter: `.md` links become `.html`, `.goose` links reach the sample pages, and the `<details>` table of contents each file carries for GitHub is dropped in favour of the sidebar |
@@ -38,4 +38,6 @@ change that setting itself.
 To add a page, write the markdown where it belongs in the repository and
 add it to `PAGES` in `build.py` if its directory is not already listed
 (every `docs/*.md`, `docs/design/*.md` and `bench/*.md` is picked up).
+A page that is already finished HTML goes in `docs/html`, whose files
+the build copies as they are, with a link to it from `docs/index.md`.
 The site's own index is [`docs/index.md`](../index.md).

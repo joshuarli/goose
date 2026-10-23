@@ -23,7 +23,7 @@ inline string DepsInputName(const string &path, const string &root) {
     return path;
 }
 
-inline void DepsWrite(JsonOut &j) {
+inline void DepsWrite(BuildReportJson &j) {
     j.Key("dependencies");
     if (!g_deps) {
         j.Null();

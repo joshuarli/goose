@@ -696,7 +696,7 @@ inline int BuildUnitObjects(UnitsBuildInput &in, const string &runtime_object) {
 
 // ---- Output of the units build to the report. ----
 
-inline void ReportNativeCompileJson(JsonOut &j) {
+inline void ReportNativeCompileJson(BuildReportJson &j) {
     auto &r = units_build;
     if (!r.enabled) {
         j.Null();
@@ -753,7 +753,7 @@ inline void ReportNativeCompileJson(JsonOut &j) {
 
 // The report of a build that ran nothing.
 inline void WriteNoOpReport(const string &path, const string &input) {
-    JsonOut j;
+    BuildReportJson j;
     j.Obj().F("format", kBuildReportFormat);
     j.Key("input").Obj().F("file", input).F("mode", "no-op").EndObj();
     j.Key("extensions").Obj();

@@ -1,4 +1,4 @@
-// error: storing a reference that may point into a grow-shrink array reached through the caller's storage behind t
+// error: storing a reference that may point into a grow-shrink array, as t may: such a reference lives in a variable, is passed down or returned, and is never stored (§5.2)
 // Either branch's value is the one stored: the bytes of the grow-shrink
 // array t.a leads to, or a literal.
 struct Cell { v: i64 }

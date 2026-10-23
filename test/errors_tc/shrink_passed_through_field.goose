@@ -1,4 +1,4 @@
-// error: cannot call f: it may shrink a while s is still used, and s may refer into a
+// error: cannot pop pp.y while s
 // A pop through a reference that the parameter's pointee holds frees an
 // array the argument's root only bounds: the error names the
 // array s views.

@@ -77,6 +77,12 @@ There is no general-purpose heap and no `malloc`. All dynamic allocation is
 expressed as values living on data stacks, owned by locals (or globals).
 (The runtime itself may allocate internally for thread queues, §11.2.)
 
+Rewinding a data stack makes its storage reusable, while normally keeping
+its pages committed. After a large workload, `trim_memory()` from `os`
+can ask the operating system to discard unused complete pages of the
+calling thread program's stacks. This preserves all live values and the
+virtual reservations; subsequent growth remains valid.
+
 ### 1.3 The stack invariant
 
 For each data stack:
@@ -766,9 +772,15 @@ array/pool* as the location storing it.
   overloads take them by reference: an ADT whose payloads hold them is used
   in variable mode, whose payloads bind by reference where the ADT is not
   resizable (§3.5). None of these is a copy: a call's by-value result, which
-  is built where it is received where it is not fixed-size (§4.3, §7.3), and
-  where it is holds no link but `self` and null, a returned literal having
-  no other root to point within; a function's named result (§7.3), a local
+  is built where it is received (§4.3, §7.3), including a fixed-size
+  aggregate or a trailing block's fresh result. Links to existing elements
+  require the receiving storage and those elements to share an exact root,
+  checked at every call, including forwarded and recursive calls. An
+  argument slot, discarded result, or operand temporary does not inherit
+  the enclosing result's root. A result relying on that root cannot be a
+  resize fill or undergo a representation conversion that stages or moves
+  its bytes; a variant may construct behind its ADT's tag. Also no copy:
+  a function's named result (§7.3), a local
   every return of the function gives, built at the destination from its
   declaration (a struct ending in a resizable needs its fields before the
   resizable tail free of self-relative references and of anything one in
@@ -976,7 +988,7 @@ var edges: NodeId[>..] = [];
 * **What stays out.** `format` and `to_bytes(a, out)` do not write into an
   array of `u8 in x`, which is no byte array. `from_bytes` checks each index
   in an image against its array's length when it verifies the image, which
-  it rejects otherwise. `qput`, `qget`, `qpoll` and `thread_spawn`
+  it rejects otherwise. `qput`, `qget`, `qpoll`, `qlimit` and `thread_spawn`
   arguments take no type holding an index type: each thread program's copy
   of the array grows on its own (§11.2). An `extern fn` or `export fn`
   signature holds none either, since C code is not checked against the
@@ -1159,7 +1171,7 @@ Literal forms usable in any construction context:
   code (a `sum`'s accumulator, a hash table's empty slots). A type that
   contains a non-optional reference without a declared default has no
   default value, and `default<T>()` for it is a compile error. (The zero
-  value a missed `qpoll` yields, §11.2, is the all-zero-bytes value; the two
+  value a missed `qpoll` or `qget<T>(ms)` yields, §11.2, is all zeros; the two
   agree except where a field declares a non-zero default.) A type that is
   not fixed-size has a default value too, which a literal's `..` gives a
   field though `default<T>()` does not: an array other than a fixed one is
@@ -1173,6 +1185,13 @@ A constructed nonfixed value is built **directly in its receiving
 storage**, including through calls and the selected branch of an
 `if`/`match`/case-dispatch. Passing through such an expression is not a
 reason to materialize a separate result and then copy it into place.
+
+The same guarantee applies to fresh fixed-size aggregates containing
+relative references when the receiver takes their representation. Their
+result channels name the receiving storage,
+including through multiple and nonlocal returns; correctness does not
+depend on inlining or C compiler optimization. Other fixed-size results
+may travel as ordinary C values.
 
 The packed byte layout may require relocation within the receiving
 storage: a length prefix whose width becomes known after constructing the
@@ -1353,6 +1372,32 @@ or to a holder, the storage whose tail shrinks among them, counts as what it
 refers to: while the reference is live, so is whatever that slice or holder
 may refer into.
 
+A whole assignment of a value that holds no references — `refs = []`,
+`s.refs = []`, a struct literal with none in it — *empties* the part of
+the holder it writes: what was stored there before is gone. The part is a
+variable's own storage or the pointee of a `let` reference or of a
+reference parameter, which no rebinding moves, and the fields named after
+it. A holder each of whose slots that can hold a view into the array lies,
+on every path to the shrink, in a part so emptied — the whole of it, or its
+fields one by one — holds only what was stored into its storage since; but
+no longer once a store into that storage the record cannot show is made,
+one moving the holder's own references within it, or once a call that may
+write into the part runs, a callee's stores never being on record in their
+order: one handed a reference that may point at the holder's storage, with
+room for the part or lying in it, or anything whose references may lead to
+storage of the part's type, whatever it points at; a nested function; one
+handed a block or any other function value; and a block's own call. A call
+handed a struct of the function's own built from the holder's reference
+fields, whose references lead only to what those do, may not. So
+`for i in 3 { refs = []; pool = []; refs.push(pool.push(i)); }` passes,
+the store at the end of one iteration being gone by the shrink at the start
+of the next, while emptying `refs` on some paths only, after a store that
+reaches the shrink, or only in a copy of it, does not; and so does
+`s.refs = []; s.pool = []; s.refs.push(s.pool.push(i));` through
+`s: S&`, `struct S { pool: i64[>..]&, refs: (i64&)[>..] }`, the path to
+the pool being no reference into it, and a view taken through it stored, if
+at all, in `refs`.
+
 Nor may the shrink free what a `for` loop around it walks (§6.5): each
 reference or slice on the path to its sequence, which the loop loads again
 on every iteration, and the sequence it iterates in place — a slice, an
@@ -1404,7 +1449,17 @@ variables, so it is checked at every level: each function specialization
 records which globals, and which parameters' pointees, it shrinks — directly
 or through its own callees — and what its calls stored into those pointees,
 and a call is checked as if it performed those shrinks and stores in the
-caller. The pointees of a parameter that holds references by value (a
+caller, each grow-only shrink where it stands in the body: against the
+stores the body made before it (in a loop, any the body makes), not those
+it makes after, and with the parts of reference parameters' pointees the
+body had emptied before it on every path empty in the caller's holders
+too, where the argument names such a part — the caller's variable, a field
+path in it, or the pointee of its own `let` reference or reference
+parameter, which its own callers judge the same way — of storage no nested
+function or function value names. A function doing
+`s.refs = []; s.pool = []; s.refs.push(s.pool.push(i));` may be called
+again and again on the same holder, in a loop or through a function taking
+the holder by reference. The pointees of a parameter that holds references by value (a
 struct with a reference field, an array of slices) are what those
 references point to: a shrink or a store through one of them is of the
 caller's storage, not of the callee's copy of the holder. The other globals
@@ -1430,7 +1485,17 @@ any array of its type that the root bounds, and a shrink through it counts
 as a shrink of each of them: those in variables at the root's scope or
 outside it, and the caller's arrays a parameter's references lead to, for
 which the callers check it. The same holds where a call shrinks what an
-inexactly rooted argument points at.
+inexactly rooted argument points at. Read out of the storage behind a
+reference parameter — `s.text = …` for `s: S&` — the reference may point
+at anything the callers or the function stored there: the function judges
+its own variables against every array of the type outliving the call, and
+its callers judge the shrink as one of an array that storage leads to,
+each by its argument. A struct of the caller's leads to the arrays its
+record says it refers to, of the type shrunk, or holding or leading to one:
+`s.text = copy(t)` in a callee frees no global `u8[>..]` the caller views,
+where the caller's struct refers to a local text and a node pool. One built
+from the caller's own struct parameter's reference fields leads where those
+do, which the caller's callers judge in turn.
 
 Nor can a shrink inside a function tell what its parameters point into: a
 parameter's pointee is whatever each call passes, which may be a global, a
@@ -1746,7 +1811,8 @@ without conversion overhead.
 
 **Elementwise math**: the arithmetic operators apply memberwise to any two
 values of the *same* struct/fixed-array type whose scalar leaves are all
-integers or all floats; the result has that same type. The compound forms
+integers or all floats, none of an index or bound type (§3.11); the
+result has that same type. The compound forms
 `+= -= *= /= %=` apply to these same types, resolving the destination once
 and reading its old value before the right-hand side runs (§2). Unary `-`
 negates such a value memberwise where no leaf is an unsigned integer
@@ -1779,7 +1845,8 @@ the scalar is a member of the destination.
   never widens both sides behind the programmer's back.
 * Signedness is part of the type: `/`, `>>`, and the ordering comparisons are
   unsigned operations on unsigned types (`>>` shifts in zeroes) and signed on
-  signed ones (`>>` replicates the sign bit).
+  signed ones (`>>` replicates the sign bit). Integer `/` truncates toward
+  zero: `-7 / 3 == -2`, while `-7 >> 1 == -4`.
 * **`%` is Euclidean** at every integer type: the result lies in `[0, |b|)`
   and is never negative, whatever the dividend's sign. So `x % n` is a valid
   index into a length-`n` array for *any* `x` — the reduction idiom means
@@ -1788,8 +1855,20 @@ the scalar is a member of the destination.
   On unsigned types this is ordinary remainder; on signed ones it costs one
   predictable conditional add over C's truncating `%`, on an operation that
   is already a division. Consequently `i64.min % -1` is `0`, not a trap.
-  (A truncating form may be added later if a use for it appears; float `%`
-  stays C `fmod`, whose convention numeric code expects.)
+  Float `%` stays C `fmod`, so `-7.0 % 3.0 == -1.0`, while `-7 % 3 == 2`.
+* **Division pairs.** Integer `/` and `%` use different conventions, so
+  `b * (a / b) + a % b == a` does not hold in general. With `import std;`,
+  `rem(a, b)` is the truncating remainder (zero or the dividend's sign),
+  and `div_euclid(a, b)` is the Euclidean quotient. The matching identities
+  are `b * (a / b) + rem(a, b) == a` and
+  `b * div_euclid(a, b) + a % b == a`, as mathematical identities when the
+  quotient is representable; evaluating their intermediate products can
+  overflow. Both functions accept all eight integer types, returning the
+  operands' type. `div_euclid` rounds down for a positive divisor and up
+  for a negative one, and has the same zero-divisor and quotient-overflow
+  behavior as `/`. `rem` aborts on a zero divisor and returns zero for
+  `MIN, -1` at every signed width. For unsigned integers `div_euclid` is
+  ordinary `/` and `rem` is `%`.
 * **Signed overflow** (at the operation's width): aborts in debug builds;
   wraps two's-complement (defined) in release. The debug abort is per
   operation *as it executes*, not per operation as written: the optimizer
@@ -2053,10 +2132,11 @@ refs[i]; for x in r`), leaves the array free.
 
 **Specialization-time expansion.** `const for` specializes a fragment once
 per entry of a compiler-known sequence. Its v1 sources are `fields<T>` with
-two bindings (field name string and field accessor), `types<T1, T2, ...>`
-with one type binding, and `[c1, c2, ...]` with one constant binding. `fields`
-and `types` are contextual identifiers in this header, not keywords or
-ordinary function calls. Bindings use required angle brackets:
+two bindings (field name string and field accessor), `variants<E>` with two
+bindings (variant name string and variant), `types<T1, T2, ...>` with one
+type binding, and `[c1, c2, ...]` with one constant binding. `fields`,
+`variants` and `types` are contextual identifiers in this header, not
+keywords or ordinary function calls. Bindings use required angle brackets:
 
 ```goose
 fn visit_fields<T, F>(value: T&) {
@@ -2065,12 +2145,22 @@ fn visit_fields<T, F>(value: T&) {
 fn transform_fields<T, F>(value: T&) -> T {
     T { const for <N, A> in fields<T> { A: F(N, value.A), } }
 }
+fn each_case<T, F>(value: T) {
+    match value { const for <N, V> in variants<T> { V c => F(N, c), } }
+}
 ```
 
-`fields<T>` visits direct, non-padding fields of a concrete struct in
-declaration order. Its accessor identifies the field of that particular
+`fields<T>` visits direct, non-padding fields of a concrete struct or
+variant type (a variant's payload) in declaration order. Its accessor identifies the field of that particular
 struct instantiation; another struct with the same field name does not
-match. It can appear in a member access or initializer label. Bindings
+match; a variant's accessor reaches a value of that variant type only,
+not the ADT before it is matched. It can appear in a member access or
+initializer label. `variants<E>` visits every variant of a concrete ADT in
+declaration order, with or without payload; its variant binding is written
+where a variant's name is: a type, a constructor, a `match` pattern with or
+without a binder, and, for a variant without payload only, a value. It is
+not stored, passed or turned into a number, and its name string is no
+persistence identifier. Bindings
 follow lexical scope and shadowing, including in nested functions. Types
 and constants may be heterogeneous; all three sources may be empty.
 Constants are scalar or string literals, named global constants, and the
@@ -2079,7 +2169,11 @@ expansion bindings. There is no arbitrary compile-time execution.
 
 A statement fragment is a separate scope for each entry. A constructor
 fragment contributes comma-separated initializer entries, flattened before
-ordinary default, completeness, ordering and destination checks. An
+ordinary default, completeness, ordering and destination checks. A `match`
+fragment contributes arms, flattened before the checks of §8.1: every
+variant once, `_` last, and the reference-binder and lifetime rules for each
+generated arm. A generated arm may bind a variant without payload, to an
+empty value of its variant type. An
 expansion produces no runtime iterator or reflection metadata. Its body
 contains ordinary runtime code, with the usual reference, lifetime and
 construction rules. Returns retain their lexical targets; a `break` or
@@ -2363,9 +2457,19 @@ reported with the instantiation chain). `F` is the function value wherever
 it is in scope, hiding a variable around a nested function's declaration and
 a global or function of its name (§11.1), and is called as `F(a)`: a member
 call `a.F()` names it too, and is an error. A block's value is checked
-without the destination its call's value meets, so it cannot be a `[]` (nor
+without the destination **type** its call's value meets, so it cannot be a `[]` (nor
 a construct whose branches all are one), which would have no element type
 (§4.2).
+
+Its receiving storage is supplied independently of that type inference:
+relative links in a fresh result are checked against where it will be
+constructed, including when the block is called from another function.
+
+A fresh block result follows the same construction rules as a named
+function's result, including literals containing self-relative references.
+Selecting a fresh result through `if`, `match`, `loop`, or `block` preserves
+that property. A tail that instead names existing storage (or a reference
+to it) is still a copy and must obey §3.9's relative-reference restrictions.
 
 A function argument must be a function name (including a bound generic
 function parameter) or a block literal. A name with several overloads
@@ -2750,13 +2854,18 @@ local propagation and `return from` to return across several calls.
 
 ```goose
 extern fn sqrt(x: f64) -> f64;
-extern "sqrtf" fn sqrt(x: f32) -> f32;
-extern "gs_os_read_file" fn read_file(path: u8[:], out: u8[>..]&) -> bool;
+extern fn sqrt(x: f32) -> f32 = "sqrtf";
+extern fn read_file(path: u8[:], out: u8[>..]&) -> bool = "gs_os_read_file";
 extern fn gl_vertex3(v: float3&);
 ```
 
-A declaration without a body binds a Goose signature to a C function: the
-optional string is the C symbol (default: the Goose name). It is top-level
+A declaration without a body binds a Goose signature to a C function: a
+string after `=`, where a body would go, is the C symbol (default: the
+Goose name). The older spelling with the string after `extern`,
+`extern "sqrtf" fn sqrt(x: f32) -> f32;`, is deprecated: it binds the
+same way and draws a warning naming the `= "sqrtf"` form (except in a
+package fetched from a git source, whose authors change it), and a
+declaration giving both strings is an error. It is top-level
 only, fully typed, not generic, and joins overload resolution like any
 function. A call compiles to a direct C call with no calling-convention
 extras, and a prototype is emitted from the declaration unless the runtime
@@ -2799,6 +2908,74 @@ retain a borrowed argument beyond the call, and may only append to a
 builder. The compiler assumes an extern may write through its arguments
 but does not mutate unrelated Goose globals; C code is responsible for
 honoring those obligations.
+
+**Binding from a shared library.** An `extern` block names a shared
+library and declares the functions bound from it by name when the program
+starts, with no C of the program's own and no linking:
+
+```goose
+extern "SDL2" {
+    fn SDL_Init(flags: u32) -> i32;
+    fn SDL_Quit();
+    fn SDL_GetTicks64() -> u64;
+    fn delay(ms: u32) = "SDL_Delay";
+}
+```
+
+A member is an `extern fn` in every respect above: fully typed, not
+generic, no body, the same shapes crossing (except a struct holding a
+`pad` by value: the library's own struct has padding where Goose's C has
+a byte array, which a calling convention may pass differently, so such a
+value crosses by reference), a string after `=` its C symbol
+and its Goose leaf name otherwise, a `declname` so a namespaced member is
+written as it would be outside the block. A member is written without
+`extern`, since the block's covers it; `export`, `thread_fn` and the
+qualifiers an `extern fn` cannot carry are errors inside the block with the
+same messages. A block is top-level only, may not nest, and may be empty.
+Two declarations may bind one symbol under different Goose signatures,
+each through a pointer of its own. A member no call reaches is never
+looked for, and a library none of whose members is called is never opened.
+
+The string is a bare name or a file name, spelled for the platform the
+program runs on:
+
+| string | Windows | macOS | Linux |
+|---|---|---|---|
+| `"SDL2"` (no separator, no dot) | `SDL2.dll` | `libSDL2.dylib` | `libSDL2.so` |
+| `"libfoo.so.3"`, `"foo.dll"` (a dot) | as written | as written | as written |
+| `"bin/steam_api64"`, `"./x.so"` (a separator) | relative to the program's resource directory (`resource_dir()`, docs/stdlib.md) unless absolute; the bare-name rule applies to the last component |
+
+A bare spelling goes to the platform's loader as a bare name, searched as
+the loader searches: the DLL search order, `DYLD_LIBRARY_PATH` and the
+usual places, `LD_LIBRARY_PATH`, the rpath and the cache. A dotted file
+name is taken literally and is therefore one platform's; it belongs in the
+sidecar rather than the source unless the program has one platform. The
+sidecar's `dylibs` list, with the `_windows`, `_linux` and `_macos`
+suffixes every list takes, maps a name a block uses to the spelling to
+open, `name=spelling`: a package's sidecar maps its own names as defaults,
+the program's maps a name for every package it uses, and for a platform
+the program's entry says anything about, the program's wins. A name no
+block declares is an error at the sidecar (docs/packages.md).
+
+The libraries are opened and the symbols resolved when the program starts,
+after the runtime and before the globals' initializers run, on the main
+thread; the pointers are written once and read thereafter. A library that
+cannot be opened, or a symbol it lacks, is a runtime error naming the
+spelling tried, and the program does not start:
+
+```
+cannot load SDL2 (libSDL2.so): libSDL2.so: cannot open shared object file: No such file or directory
+SDL2 (libSDL2.so) has no symbol SDL_Foo
+```
+
+A library is never closed. A `main_thread_only` package (docs/packages.md)
+applies to its block's members as to its other externs. A variadic C
+function cannot be bound: the declaration has no way to say so, and
+calling one through a fixed-arity pointer is undefined. The generated C is
+the same on every platform, the runtime choosing the spelling, and a
+program whose only C is such libraries runs under the in-process backend
+with no C toolchain installed. Conventions for declaring a real library's
+functions under these shapes are in docs/reference.md §24.
 
 ### 7.11 Exporting Goose functions to C
 
@@ -3005,6 +3182,8 @@ match dir { North, South => "vertical", East, West => "horizontal" }
   by reference only (§3.9), which is why an ADT with such payloads is used
   in variable mode, and a resizable ADT holds them only in its resizable
   payloads (§3.5).
+* An arm list may hold `const for` expansions (§6.5) beside written arms;
+  their arms are flattened first, and every rule above applies to the result.
 * `T?` narrows via `if r { … }` / `guard` / `assert(r)` (flow typing, §3.8).
 
 ### 8.2 Case functions (match as an overload set)
@@ -3203,7 +3382,8 @@ Violations are compile errors. There is no escape hatch in v1.
 
 ### 9.3 What the runtime still checks
 
-Aborts (message + exit; not catchable):
+Aborts (message + exit; not catchable). In a contained worker (§11.2), each
+but the last two ends only that worker:
 
 * array/slice indexing out of bounds (elided wherever the compiler proves it
   cannot fire, §10.5; can be disabled wholesale in a designated unsafe-fast
@@ -3374,6 +3554,24 @@ variable stays its candidate. Then, by where `C`'s own root lies:
    iterations read.
 3. **A reference parameter's pointee, or itself inexact.** The owner may be
    caller storage this function cannot enumerate: the root is `C`'s, inexact.
+   A non-recursive function can retain the caller's more precise record when
+   its argument names a local holder exactly, all the holder's recorded
+   contents point into one root exactly, and only parameters can reach that
+   holder during the call: neither the function nor a function value it runs
+   can name it directly. Reads then have that contents root, including any
+   roots stored through possibly aliased parameters while the body runs.
+   A nested function or callback's stores keep the distinction that the
+   resulting references came from that holder's contents; call sites judge
+   them by the actual stores into its storage, including aliased stores.
+   Stores feed back around loops, and calls are specialized for the contents
+   they receive; a call after a rebind is checked for the new contents. The
+   same rule applies when a parameter forwards such a holder to another
+   function. It does not separate fields whose contents have different
+   roots: those retain the conservative bound. For example, a `Cache&`
+   naming a local `Cache { bytes: buffer }` keeps `buffer` as the root of
+   `cache.bytes`, so an unrelated reusable byte pool cannot be that buffer.
+   Shrinking it still checks every live reference and stored view into
+   `buffer`, including those in the caller.
 4. **A temporary** (§9.2). Everything in it came from the literal's
    initializers, from the call whose result it is, or from the value it is
    a copy of, so the root is theirs: the innermost root among the
@@ -3725,17 +3923,32 @@ the Linda tuple-space / coordination style.
   reports no more workers than the implementation's address space for data
   stacks (§10.4) holds beside the main program, so a pool sized by it never
   exhausts it.
-  `thread_wait(id)` blocks until that worker's body has returned and all of
+  `thread_wait(id) -> bool` blocks until that worker has ended and all of
   its Goose storage has been released — enabling both scoped fork/join
   parallelism and orderly shutdown (send quit messages, then wait). Repeated
   waits on a completed id return immediately; multiple workers may wait for
-  the same id. A negative or never-issued id, or a worker waiting for itself,
-  aborts with a runtime diagnostic.
+  the same id. Every wait returns `false` for a contained worker that
+  aborted, and `true` otherwise. `thread_wait(id, msg) -> bool` waits the
+  same way and appends the abort's message to `msg`, a growable `u8` array:
+  what the abort would print after `goose runtime error: `, its location
+  included. The first such wait for the worker takes the message; later
+  waits, and a worker that returned, append nothing. A program that wants
+  the message asks for it once and keeps it. A negative or never-issued id,
+  or a worker waiting for itself, aborts with a runtime diagnostic.
+* `thread_spawn_contained(worker, args…) -> i64` starts a **contained**
+  worker, as `thread_spawn` does otherwise. An abort in it (§9.3) ends only
+  that worker, which releases what a return would, and leaves its message
+  for `thread_wait` instead of printing it. The program and other workers
+  run on. Resources it opened through `extern fn`
+  stay open. Guard-page hits, native stack exhaustion, `exit(code)`, and the
+  runtime's own failures still end the program, as does any abort on main's
+  thread. A worker it starts with `thread_spawn` is not contained.
 * A worker's return releases its copied arguments, stack block, every reserved
   and committed data-stack region, and active-worker record, whether or not
   anyone waits for it. The runtime retains no per-completed-worker record or
-  native handle. Native threads are detached; their final native stack/TLS
-  teardown occurs when the runtime entry wrapper returns, immediately after
+  native handle, except the id of each contained worker that aborted, so
+  that waits can answer, and its message until a wait takes it. Native
+  threads are detached; their final native stack/TLS teardown occurs when the runtime entry wrapper returns, immediately after
   publishing Goose cleanup completion. A child worker owns its storage
   independently and may outlive the worker that spawned it. Queued messages
   belong to their queues and remain available to receivers after the sender
@@ -3757,10 +3970,19 @@ the Linda tuple-space / coordination style.
   `thread_fn`'s parameters have no defaults (§7.1): `thread_spawn` passes
   every argument.
 * **Typed queues**: conceptually one queue per flat element type;
-  `qput(v)`, `qget<T>() -> T` (blocking), `qpoll<T>() -> T, bool`
+  `qput(v) -> bool`, `qget<T>() -> T` (blocking), `qpoll<T>() -> T, bool`
   (non-blocking; bool = got one; on a miss the value is T's zero value —
-  zeroed scalars, empty arrays, variant 0) select the queue by type. Queues
-  live outside stack memory (runtime-internal allocation permitted here).
+  zeroed scalars, empty arrays, variant 0), `qget<T>(ms: i64) -> T, bool`
+  (as `qpoll`, after waiting at most `ms` milliseconds; zero or less does
+  not wait) and `qlimit<T>(n: i64)` select the queue by type. Queues live
+  outside stack memory (runtime-internal allocation permitted here).
+* **Bounded queues**: `qput` never blocks. It returns `true` once the value
+  is queued, and `false` at once, queueing nothing, when the queue holds its
+  limit of messages. A call statement drops the result (§7.1), so `qput(v);`
+  ignores a refusal. A queue has no limit until `qlimit<T>(n)` gives it one
+  of `n` messages; lowering a limit below what the queue holds keeps the
+  messages queued, and puts fail until fewer than `n` remain. A limit of
+  zero or less aborts with a runtime diagnostic.
 
 ### 11.3 Dynamic stacks (future)
 
@@ -3784,8 +4006,9 @@ The language's own functions:
 | `abort(msg: u8[:])`, `exit(code: i64)` | end the program; both diverge (§9.3) |
 | `copy(x) -> T` | a fresh copy of the stored value `x` names (§4.1) |
 | `default<T>() -> T` | the value a fixed-size `T` has before anything is written to it (§4.2) |
-| `hardware_threads() -> i64`, `thread_spawn(worker, args…) -> i64`, `thread_wait(id)` | workers (§11.2) |
-| `qput(v)`, `qget<T>() -> T`, `qpoll<T>() -> T, bool` | the typed queues (§11.2) |
+| `hardware_threads() -> i64`, `thread_spawn(worker, args…) -> i64`, `thread_spawn_contained(worker, args…) -> i64`, `thread_wait(id) -> bool`, `thread_wait(id, msg) -> bool` | workers (§11.2) |
+| `qput(v) -> bool`, `qget<T>() -> T`, `qget<T>(ms) -> T, bool`, `qpoll<T>() -> T, bool` | the typed queues (§11.2) |
+| `qlimit<T>(n)` | a queue's limit of messages (§11.2) |
 | `to_bytes(a) -> u8[>..]`, `to_bytes(a, out)` | an array's image — a varint byte count then its element region — fresh, or appended to a growable `u8` array (§3.9, `design/serialization.md`) |
 | `bytes_of(a) -> u8[:]` | the element region alone, as a view: no copy, and never writable |
 | `from_bytes<T[>..]>(b: u8[:]) -> T[>..], bool` | a *verified* array from an untrusted image; empty and `false` if it is not one. Also builds `T[>..<]` and the `T[]` family |
@@ -3968,9 +4191,10 @@ the end, each with where its resolution lives.
     narrowing; and rebinding to a plain reference first (`let r: T& = o;`)
     is the only escape hatch. Possibly fine; revisit with usage.
 0d. **Lifetime precision, remaining cases** — two checker conservatisms
-    still exceed the spec: long-distance returns (§7.9) only carry
-    references to globals/static data (precise rule: rooted at or above the
-    target's frame), and the recursive-cycle store rule (§7.8) admits only
+    still exceed the spec: long-distance returns (§7.9) written in a named
+    function only carry references to globals/static data (precise rule,
+    which a function value's return follows: rooted at or above the target's
+    frame), and the recursive-cycle store rule (§7.8) admits only
     globals, free variables, pool parameters and parameters every call back
     into the cycle passes on as roots of stored references — a reference to
     a caller's fixed-size local that such a call replaces is still
@@ -4009,7 +4233,8 @@ the end, each with where its resolution lives.
     say which versions it wants (an AVX-512 version is not faster for
     every loop).
 13. **Labels for `break`** — if early-out patterns demand them.
-15. **Wasm fallback** — index-based reference representation details.
+15. **Wasm fallback** — index-based reference representation details
+    (`docs/design/wasm.md` compares the options).
 16. **Relative-reference region tracking** — copies of values containing
     *self-relative* references are currently rejected outright (§3.9; the
     `in pool` form already copies); track the region an offset ranges over so
@@ -4056,8 +4281,9 @@ the end, each with where its resolution lives.
    liveness test of §5.1, plus per-specialization shrink summaries for
    the shrinks it cannot see directly (through a reference, or of a global).
 11. **FFI** — DONE, see §§7.10–7.11: `extern fn` binds a Goose signature to a C
-    function, and `export fn` exposes a Goose function through a C-callable
-    wrapper. The flat fixed-size types by value, references and slices to
+    function, an `extern "lib" { ... }` block binds its members from a shared
+    library by name when the program starts, and `export fn` exposes a Goose
+    function through a C-callable wrapper. The flat fixed-size types by value, references and slices to
     them, and `u8[>..]&` builders cross where supported; other shapes are
     rejected at the declaration.
 12. **Open syntax details** — DONE: both trailing-block parameter forms
@@ -4160,6 +4386,10 @@ is that header's `len`, so its tail cannot be referenced either.
   value; additional fixed returns use out-pointers. A slice, a reference to
   a resizable value and a reusable pool's reference parameter are passed as
   their members, each a C parameter of its own.
+  A fixed aggregate result containing relative references instead uses a
+  typed out-pointer at every size, and constructs directly through it.
+  Ordinary C-return selection skips these results. A nonlocal return uses
+  a saved pointer to the same receiver, rather than a copied result value.
 * Larger fixed-size parameters: the caller makes a private value copy on a
   scoped data stack and passes its typed pointer. The callee can mutate
   that copy without affecting the argument's source. Larger fixed returns
@@ -4192,14 +4422,16 @@ is that header's `len`, so its tail cannot be referenced either.
 
 ### C.4 Guard pages and commit order
 
-Construction rules (§4.2) write stacks front-to-back. When an allocation
-skips ahead without writing (a large limited-array capacity), the runtime
-commits the skipped range explicitly (VirtualAlloc/mprotect) instead of
-relying on touch order — Windows-style guard-page auto-commit covers the
-ordinary sequential-write case; Linux uses reserve + explicit commit.
-Fresh pages arrive zeroed from the OS; reused stack memory does not —
-harmless, since uninitialized slots are unreachable (§5.3). A final
-unmapped gap after each region turns runaway growth into a safe abort.
+Construction rules (§4.2) write stacks front-to-back. Windows and macOS
+commit on fault: the runtime's handler commits a chunk from whichever page
+was touched, so an allocation that skips ahead without writing (a large
+limited-array capacity) needs no explicit commit, and nothing depends on
+touch order. Linux reserves with overcommit and commits on touch. Fresh
+pages arrive zeroed from the OS; reused stack memory does not, nor on
+macOS a page that `trim_memory` released and the kernel has not reclaimed
+yet — harmless, since uninitialized slots are unreachable (§5.3). A final
+gap after each region, never committed, turns runaway growth into a safe
+abort.
 
 ---
 
@@ -4208,7 +4440,7 @@ unmapped gap after each region turns runaway growth into a safe abort.
 ```
 program     := namespace? topdecl*             // imports may precede namespace
 namespace   := "namespace" ident ";"
-topdecl     := import | struct | enum | typealias | fndecl | globaldecl
+topdecl     := import | struct | enum | typealias | fndecl | externblock | globaldecl
 import      := "import" "."? ident ("." ident)* ";" | "import" ident "from" strlit ";"
 declname    := ident | ident "::" ident | "::" ident   // the namespace, else the file's
 qname       := ident | ident "::" ident | "::" ident   // a declaration reference
@@ -4222,9 +4454,14 @@ generics    := "<" ident (":" type)? ("," ident (":" type)?)* ">"
 
 fndecl      := "checkfree"? ("export" strlit? | "extern" strlit?)? "checkfree"? "simd"?
                "inline"? "recursive"? ("fn" | "thread_fn")
-               declname generics? "(" params? ")" ("->" rettypes)? (blockexpr | ";")
+               declname generics? "(" params? ")" ("->" rettypes)?
+               (blockexpr | ("=" strlit)? ";")
+                                                 // "=" strlit: extern only, its C symbol
+                                                 // "extern" strlit: deprecated, the same
                                                  // checkfree at most once (§7.14)
                                                  // nested: ident only
+externblock := "extern" strlit "{" externmember* "}"   // §7.10: the library, then its functions
+externmember := "fn" declname "(" params? ")" ("->" rettypes)? ("=" strlit)? ";"
 params      := param ("," param)* ","?
 param       := "var"? ident (":" type ("=" expr)?)?
                                                  // untyped => generic; defaults

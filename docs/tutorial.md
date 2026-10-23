@@ -267,6 +267,12 @@ guard you know is redundant.
 print(-7 % 3, " ", 7 % -3);       // 2 1
 ```
 
+Integer `/` truncates toward zero: `-7 / 3` is `-2`. It does not pair with
+Euclidean `%` for negative dividends. Import `std` for `rem(a, b)`, the
+remainder that pairs with `/`, and `div_euclid(a, b)`, the quotient that
+pairs with `%`. For example, a coordinate of `-1` in tiles 10 wide has tile
+`div_euclid(-1, 10) == -1` and offset `-1 % 10 == 9`.
+
 **Unsigned arithmetic wraps, in every build**, by definition — that is what
 hashes and PRNGs mean by unsigned math. Signed overflow aborts in debug and
 wraps in release.
@@ -1437,7 +1443,7 @@ An `extern fn` binds a Goose signature to a C symbol. The `math` and `os`
 modules use this foreign-function interface.
 
 ```goose
-extern "cbrt" fn cube_root(x: f64) -> f64;
+extern fn cube_root(x: f64) -> f64 = "cbrt";
 extern fn hypot(x: f64, y: f64) -> f64;
 
 extern fn crc32_bytes(s: const u8[:]) -> u32;   // a slice in, a scalar out

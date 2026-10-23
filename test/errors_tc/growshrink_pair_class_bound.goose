@@ -1,4 +1,4 @@
-// error: cannot call g: it may shrink t while x is still used, and x may refer into t (§5.2)
+// error: cannot pop t.items while x
 // A callee's shrink of the storage a reference parameter stands for, passed
 // a reference read out of a struct, is of a value of the parameter's type
 // somewhere behind it, whose grow-shrink array can hold what x views.

@@ -14,17 +14,17 @@ namespace goose {
 string RuntimeVersion();
 
 // The sharing section, written by units/share_report.h.
-inline void ReportSharingJson(class JsonOut &j);
-inline void ReportUnitsJson(class JsonOut &j);
-class JsonOut;
-inline void DepsWrite(JsonOut &j);   // deps_report.h
-inline void ReportNativeCompileJson(class JsonOut &j);
+inline void ReportSharingJson(class BuildReportJson &j);
+inline void ReportUnitsJson(class BuildReportJson &j);
+class BuildReportJson;
+inline void DepsWrite(BuildReportJson &j);   // deps_report.h
+inline void ReportNativeCompileJson(class BuildReportJson &j);
 
 constexpr const char *kBuildReportFormat = "goose-build-report/1";
 
 // A JSON writer small enough to need nothing else. A comma is due before a
 // value or key whenever the enclosing container already holds one.
-class JsonOut {
+class BuildReportJson {
     string out;
     vector<bool> due;
 
@@ -47,37 +47,37 @@ class JsonOut {
     }
 
 public:
-    JsonOut &Obj() { Sep(); out += '{'; due.push_back(false); return *this; }
-    JsonOut &Arr() { Sep(); out += '['; due.push_back(false); return *this; }
-    JsonOut &EndObj() { due.pop_back(); out += '}'; return *this; }
-    JsonOut &EndArr() { due.pop_back(); out += ']'; return *this; }
-    JsonOut &Key(string_view k) {
+    BuildReportJson &Obj() { Sep(); out += '{'; due.push_back(false); return *this; }
+    BuildReportJson &Arr() { Sep(); out += '['; due.push_back(false); return *this; }
+    BuildReportJson &EndObj() { due.pop_back(); out += '}'; return *this; }
+    BuildReportJson &EndArr() { due.pop_back(); out += ']'; return *this; }
+    BuildReportJson &Key(string_view k) {
         Sep();
         Quoted(k);
         out += ':';
         due.back() = false;
         return *this;
     }
-    JsonOut &Str(string_view s) { Sep(); Quoted(s); return *this; }
-    JsonOut &Int(long long v) { Sep(); out += to_string(v); return *this; }
-    JsonOut &Num(double v) {
+    BuildReportJson &Str(string_view s) { Sep(); Quoted(s); return *this; }
+    BuildReportJson &Int(long long v) { Sep(); out += to_string(v); return *this; }
+    BuildReportJson &Num(double v) {
         Sep();
         char buf[48];
         snprintf(buf, sizeof buf, "%.6f", v);
         out += buf;
         return *this;
     }
-    JsonOut &Bool(bool v) { Sep(); out += v ? "true" : "false"; return *this; }
-    JsonOut &Null() { Sep(); out += "null"; return *this; }
+    BuildReportJson &Bool(bool v) { Sep(); out += v ? "true" : "false"; return *this; }
+    BuildReportJson &Null() { Sep(); out += "null"; return *this; }
     // A nullable measurement: -1 is "not available here".
-    JsonOut &OptInt(long long v) { return v < 0 ? Null() : Int(v); }
-    JsonOut &F(string_view k, string_view v) { return Key(k).Str(v); }
-    JsonOut &F(string_view k, long long v) { return Key(k).Int(v); }
-    JsonOut &F(string_view k, int v) { return Key(k).Int(v); }
-    JsonOut &F(string_view k, size_t v) { return Key(k).Int((long long)v); }
-    JsonOut &F(string_view k, double v) { return Key(k).Num(v); }
-    JsonOut &F(string_view k, bool v) { return Key(k).Bool(v); }
-    JsonOut &F(string_view k, const char *v) { return Key(k).Str(v); }
+    BuildReportJson &OptInt(long long v) { return v < 0 ? Null() : Int(v); }
+    BuildReportJson &F(string_view k, string_view v) { return Key(k).Str(v); }
+    BuildReportJson &F(string_view k, long long v) { return Key(k).Int(v); }
+    BuildReportJson &F(string_view k, int v) { return Key(k).Int(v); }
+    BuildReportJson &F(string_view k, size_t v) { return Key(k).Int((long long)v); }
+    BuildReportJson &F(string_view k, double v) { return Key(k).Num(v); }
+    BuildReportJson &F(string_view k, bool v) { return Key(k).Bool(v); }
+    BuildReportJson &F(string_view k, const char *v) { return Key(k).Str(v); }
     const string &Text() const { return out; }
 };
 
@@ -387,7 +387,7 @@ inline void BuildReportOutput(CodeGen &cg, const string &file, size_t bytes, siz
     r.glue = { 0, (long long)cg.code.size() - rec.body_bytes - helper_bytes };
 }
 
-inline void ReportPhaseJson(JsonOut &j, const BuildRecorder::PhaseTotal &p) {
+inline void ReportPhaseJson(BuildReportJson &j, const BuildRecorder::PhaseTotal &p) {
     j.Obj().F("wall_seconds", p.wall).F("cpu_seconds", p.cpu);
     j.Key("peak_rss_bytes").OptInt(p.peak_rss);
     j.EndObj();
@@ -398,7 +398,7 @@ inline void BuildReportWrite() {
     auto &r = *g_build_report;
     r.rec.Finish();
     auto &rec = r.rec;
-    JsonOut j;
+    BuildReportJson j;
     j.Obj();
     j.F("format", kBuildReportFormat);
     j.F("runtime_version", RuntimeVersion());

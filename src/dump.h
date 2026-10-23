@@ -296,6 +296,8 @@ inline void StructLit::Dump(string &s, int ind) const {
     s += inits.empty() && !defaultall ? "}" : " }";
 }
 
+inline void DumpArms(string &s, const vector<MatchArm> &arms, int ind);
+
 inline void ConstFor::Dump(string &s, int ind) const {
     s += "const for <";
     for (size_t i = 0; i < names.size(); i++) {
@@ -311,7 +313,7 @@ inline void ConstFor::Dump(string &s, int ind) const {
         }
         s += "]";
     } else {
-        s += source == ES_FIELDS ? "fields<" : "types<";
+        s += source == ES_FIELDS ? "fields<" : source == ES_VARIANTS ? "variants<" : "types<";
         for (size_t i = 0; i < types.size(); i++) {
             if (i) s += ", ";
             types[i]->Dump(s);
@@ -320,7 +322,11 @@ inline void ConstFor::Dump(string &s, int ind) const {
     }
     s += " ";
     if (body) body->Dump(s, ind);
-    else {
+    else if (armfragments) {
+        s += "{";
+        DumpArms(s, arms, ind);
+        s += "}";
+    } else {
         s += "{";
         for (auto &fi : inits) {
             NL(s, ind + 1);
@@ -437,12 +443,16 @@ inline void IfExpr::Dump(string &s, int ind) const {
     }
 }
 
-inline void MatchExpr::Dump(string &s, int ind) const {
-    s += "match ";
-    DumpOperand(s, scrutinee, ind);
-    s += " {";
+// A match's arms, each on a line of its own at ind + 1, then the closing
+// brace's line at ind: `pattern => expr,`, or a `const for` of arms.
+inline void DumpArms(string &s, const vector<MatchArm> &arms, int ind) {
     for (auto &arm : arms) {
         NL(s, ind + 1);
+        if (arm.expansion) {
+            arm.expansion->Dump(s, ind + 1);
+            s += ",";
+            continue;
+        }
         if (arm.pat.kind == P_WILDCARD) s += "_";
         for (auto &pi : arm.pat.items) {
             if (&pi != &arm.pat.items[0]) s += ", ";
@@ -476,6 +486,13 @@ inline void MatchExpr::Dump(string &s, int ind) const {
         s += ",";
     }
     NL(s, ind);
+}
+
+inline void MatchExpr::Dump(string &s, int ind) const {
+    s += "match ";
+    DumpOperand(s, scrutinee, ind);
+    s += " {";
+    DumpArms(s, arms, ind);
     s += "}";
 }
 
@@ -553,6 +570,7 @@ inline void FunVal::Dump(string &s, int ind) const {
     if (explicit_params) {
         for (size_t i = 0; i < params.size(); i++) {
             s += i ? ", " : " ";
+            if (params[i].isvar) s += "var ";
             s += params[i].name;
             if (params[i].type) { s += ": "; params[i].type->Dump(s); }
         }
@@ -619,11 +637,12 @@ inline void DumpFields(string &s, const vector<Field> &fields, int ind) {
 inline void FnDecl::Dump(string &s, int ind) const {
     if (sf->isexport) {
         s += "export ";
-        if (sf->cname != sf->name) { s += "\""; s += sf->cname; s += "\" "; }
+        if (sf->cname != sf->name) { EscapeString(s, sf->cname, '"'); s += " "; }
     }
     if (sf->isextern) {
-        s += "extern ";
-        if (sf->cname != sf->name) { s += "\""; s += sf->cname; s += "\" "; }
+        // A block's member is written without `extern`, inside the block
+        // Ast::Dump prints around the run of them.
+        if (sf->dylib.empty()) s += "extern ";
     }
     // A nested function takes its enclosing function's checkfree.
     if (sf->checkfree && !(sf->isnested && sf->outer && sf->outer->checkfree))
@@ -654,6 +673,7 @@ inline void FnDecl::Dump(string &s, int ind) const {
         }
     }
     if (sf->isextern) {
+        if (sf->cname != sf->name) { s += " = "; EscapeString(s, sf->cname, '"'); }
         s += ";";
         return;
     }
@@ -696,11 +716,29 @@ inline void AliasDecl::Dump(string &s, int) const {
 }
 
 inline void Ast::Dump(string &s) const {
+    // The members of an extern block (§7.10) are consecutive declarations
+    // with its library, printed back inside the block; two blocks of one
+    // library in a row print as one, which declares the same.
+    string openlib;
     for (auto d : topdecls) {
+        auto fd = Is<FnDecl>(d);
+        auto lib = fd && !fd->sf->dylib.empty() ? fd->sf->dylib : string();
+        if (!openlib.empty() && lib != openlib) {
+            s += "}\n";
+            openlib.clear();
+        }
+        if (!lib.empty() && openlib.empty()) {
+            s += "extern ";
+            EscapeString(s, lib, '"');
+            s += " {\n";
+            openlib = lib;
+        }
+        if (!openlib.empty()) s += "    ";
         d->Dump(s, 0);
         if (Is<VarDecl>(d)) s += ";";  // Globals; other decl kinds self-terminate.
         s += "\n";
     }
+    if (!openlib.empty()) s += "}\n";
 }
 
 }  // namespace goose

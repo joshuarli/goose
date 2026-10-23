@@ -237,6 +237,7 @@ inline CodeGen::Loc CodeGen::VarLoc(VarDef *vd) {
             auto &p = pit != vpool.end() ? pit->second : git->second;
             auto hdr = fvptr.count(vd) ? cat("(*", name, ")") : name;
             l.val = false;
+            l.hdr = hdr;
             l.s = PoolBaseOr(vd, cat(hdr, ".base"));
             l.lenlv = cat(hdr, ".len");
             l.stk = VStkOf(vd);
@@ -244,6 +245,7 @@ inline CodeGen::Loc CodeGen::VarLoc(VarDef *vd) {
             l.flstk = p.second;
         } else {
             l.val = false;
+            l.hdr = cat("(*", name, ".hdr)");
             l.s = cat(name, ".hdr->base");
             l.lenlv = cat(name, ".hdr->len");
             l.stk = cat(name, ".stk");
@@ -496,7 +498,7 @@ inline void CodeGen::FixedLocal(TypeExpr *t, string &name, const string &init, b
     SaveBase(forlocal, stk, cat("(uint8_t *)", name));
     Bump(stk, cat("sizeof(", CT(t), ")"));
     name = cat("(*", name, ")");
-    if (init == "{0}") L("memset(&", name, ", 0, sizeof(", name, "));");
+    if (init == "{0}") L("GS_MEMZERO(&", name, ", sizeof(", name, "));");
     else if (!init.empty()) L(name, " = ", init, ";");
 }
 
@@ -511,6 +513,96 @@ inline string CodeGen::Snapshot(TypeExpr *vt, const string &x) {
 inline string CodeGen::GenPure(Node *n) {
     if (Is<IntLit>(n) || Is<FltLit>(n) || Is<BoolLit>(n)) return GenX(n);
     return Snapshot(n->exprtype, GenX(n));
+}
+
+// An integer `/` or `%` at storage s, through runtime.h's gs_div_/gs_mod_
+// macros. Those name their operands more than once, so an operand that is
+// not already a C name or a number is read into a temp first; a signed `%`
+// also gets the temp it keeps the remainder in.
+inline string CodeGen::DivX(bool div, IntStorage s, const string &l, const string &r,
+                            Line line) {
+    auto pure = [&](const string &x) {
+        auto core = x;
+        while (core.size() > 2 && core.front() == '(' && core.back() == ')' &&
+               core.find_first_of("()", 1) == core.size() - 1)
+            core = core.substr(1, core.size() - 2);
+        auto name = !core.empty() && !isdigit((uint8_t)core[0]);
+        auto num = !core.empty() && isdigit((uint8_t)core[0]);
+        for (auto ch : core) {
+            if (!isalnum((uint8_t)ch) && ch != '_') name = false;
+            if (!isdigit((uint8_t)ch) && !strchr("uUlL", ch)) num = false;
+        }
+        if (name || num) return core;
+        auto t = T();
+        L(IntCT(s), " ", t, " = ", x, ";");
+        return t;
+    };
+    auto a = pure(l), b = pure(r);
+    if (div) return cat("gs_div_", IntSfx(s), "(", a, ", ", b, ", ", LocArgs(line), ")");
+    if (IsUnsigned(s)) return cat("gs_mod_", IntSfx(s), "(", a, ", ", b, ", ", LocArgs(line), ")");
+    auto t = T();
+    L("int64_t ", t, ";");
+    return cat("gs_mod_", IntSfx(s), "(", t, ", ", a, ", ", b, ", ", LocArgs(line), ")");
+}
+
+// Scalar `l op r` at type t, an integer or a float type: the one table of
+// arithmetic, bitwise and shift operators that binary operators, compound
+// assignments (whose operator stands for its plain one), `++` and `--`, and
+// the members of elementwise operations share. A call takes l and r as they
+// are, converted by its parameters; an infix operator takes lx and rx, by
+// default l and r cast to t, which realizes the implicit widening of
+// operands the typechecker unified without converting them. `nonneg`: a
+// signed `/`, `%` or `>>` computed unsigned (Binary::nonneg).
+inline string CodeGen::ArithX(TType op, TypeExpr *t, const string &l, const string &r, Line line,
+                              bool nonneg, string lx, string rx) {
+    assert(t->kind == TY_FLT || (t->kind == TY_INT && t->intstorage != IS_VARINT));
+    switch (op) {
+        case T_PLUSEQ:  op = T_PLUS;   break;
+        case T_MINUSEQ: op = T_MINUS;  break;
+        case T_MULEQ:   op = T_MUL;    break;
+        case T_DIVEQ:   op = T_DIV;    break;
+        case T_MODEQ:   op = T_MOD;    break;
+        case T_ANDEQ:   op = T_BITAND; break;
+        case T_OREQ:    op = T_BITOR;  break;
+        case T_XOREQ:   op = T_XOR;    break;
+        case T_SHLEQ:   op = T_SHL;    break;
+        case T_SHREQ:   op = T_SHR;    break;
+        default: break;
+    }
+    auto ct = CT(t);
+    if (lx.empty()) lx = cat("(", ct, ")(", l, ")");
+    if (rx.empty()) rx = cat("(", ct, ")(", r, ")");
+    if (t->kind == TY_FLT) {
+        switch (op) {
+            case T_PLUS:  return cat("(", lx, " + ", rx, ")");
+            case T_MINUS: return cat("(", lx, " - ", rx, ")");
+            case T_MUL:   return cat("(", lx, " * ", rx, ")");
+            case T_DIV:   return cat("(", lx, " / ", rx, ")");
+            case T_MOD:
+                return cat(t->fltstorage == FS_F32 ? "fmodf(" : "fmod(", lx, ", ", rx, ")");
+            default: assert(false); return l;
+        }
+    }
+    auto s = t->intstorage;
+    auto sfx = IntSfx(s);
+    switch (op) {
+        case T_PLUS:  return cat("gs_add_", sfx, "(", l, ", ", r, OvfLocArgs(s, line), ")");
+        case T_MINUS: return cat("gs_sub_", sfx, "(", l, ", ", r, OvfLocArgs(s, line), ")");
+        case T_MUL:   return cat("gs_mul_", sfx, "(", l, ", ", r, OvfLocArgs(s, line), ")");
+        case T_DIV: case T_MOD:
+            if (!nonneg) return DivX(op == T_DIV, s, l, r, line);
+            return cat("(", ct, ")((uint64_t)(", lx, op == T_DIV ? ") / " : ") % ", "(uint64_t)(",
+                       rx, "))");
+        case T_BITAND: return cat("(", ct, ")(", lx, " & ", rx, ")");
+        case T_BITOR:  return cat("(", ct, ")(", lx, " | ", rx, ")");
+        case T_XOR:    return cat("(", ct, ")(", lx, " ^ ", rx, ")");
+        case T_SHL:    return cat("gs_shl_", sfx, "(", l, ", (int64_t)(", r, "))");
+        case T_SHR:
+            if (!nonneg) return cat("gs_shr_", sfx, "(", l, ", (int64_t)(", r, "))");
+            return cat("(", ct, ")((uint64_t)(", lx, ") >> ((int64_t)(", r, ") & ", IntBits(s) - 1,
+                       "))");
+        default: assert(false); return l;
+    }
 }
 
 // The two minima are written as a subtraction: C has no negative decimal
@@ -864,12 +956,11 @@ inline bool CodeGen::IsCtl(Node *n) {
 // widening is implicit in C, varints decode, relative references load,
 // and a reference loc decays to its pointee when the exprtype says so.
 inline string CodeGen::LoadLoc(Loc lv, TypeExpr *et, Line ln) {
-    if (lv.t->kind == TY_REF && et->kind != TY_REF &&
-        !(IsOptional(lv.t) && et->kind == TY_REF)) {
+    if (lv.t->kind == TY_REF && et->kind != TY_REF) {
         DerefLoc(lv);
         return LoadLoc(lv, et, ln);
     }
-    if (lv.t->kind == TY_REF && lv.t->ref->lenstorage >= 0) {
+    if (IsRelRef(lv.t)) {
         // Relative reference load: an ordinary (possibly fat) reference;
         // a zero offset is the null of the optional form.
         auto &r = *lv.t->ref;
@@ -951,7 +1042,7 @@ inline string CodeGen::AdaptToFixed(Loc lv, TypeExpr *et, Line ln) {
             L("case ", TagConst(ei, (int)vi), ":");
             ind++;
             if (psz)
-                L("memcpy(&", tv, ".u.v_", Sanitize(ei->en->variants[vi].name), ", ",
+                L("GS_MEMCPY(&", tv, ".u.v_", Sanitize(ei->en->variants[vi].name), ", ",
                   lv.s, " + ", ts, ", ", psz, ");");
             L("break;");
             ind--;
@@ -1351,7 +1442,7 @@ inline string CodeGen::CtlValX(Node *n) {
     auto t = T();
     auto vt = n->exprtype;
     if (vt->kind == TY_INT && vt->intstorage == IS_VARINT) vt = ast.inttypes[IS_I64];
-    if (vt->kind == TY_REF && vt->ref->lenstorage >= 0)
+    if (IsRelRef(vt))
         vt = ast.RefTo(vt->ref->sub, n->line, vt->ref->optional);
     FixedLocal(vt, t);
     // The type rides along: a spliced body may deliver a reference where
@@ -1365,11 +1456,12 @@ inline void CodeGen::LeafAny(Node *n, const Dst &d) {
     if (d.k == DK_STACK) { GenConstruct(n, d.s, d.t, d.lenlv); return; }
     if (d.k == DK_LVALUE) {
         if (d.pool) { L(d.s, " = ", GenPrefVal(n), ";"); return; }
+        if (GenIntoLimited(n, d.t, d.s, true)) return;   // The source may lie in d.s.
         // A literal holding relative references builds at the destination;
         // assigning it from a temporary would copy the temporary's offsets.
         if ((Is<StructLit>(n) || Is<ArrayLit>(n)) && HasRelRef(n->exprtype)) {
             FixedLitAt(n, d.s);
-        } else if (!GenIntoLimited(n, d.t, d.s, true)) {   // The source may lie in d.s.
+        } else {
             L(d.s, " = ", GenXD(n, d.t), ";");
         }
         return;
@@ -1390,9 +1482,8 @@ inline string CodeGen::GenFixedArrayLit(ArrayLit *al) {
     auto et = al->exprtype;
     if (et->kind == TY_SLICE) {
         // A literal in slice position: a temporary fixed array, sliced
-        // whole (; rooted as a temporary by the checker).
-        auto count = al->fillval ? ((IntLit *)al->fillcount)->val
-                                 : (int64_t)al->elems.size();
+        // whole (§3.10; rooted as a temporary by the checker).
+        auto count = LitCount(al);
         auto at = ast.ArrayOf(et->sub, A_FIXED, al->line, count);
         auto save = al->exprtype;
         al->exprtype = at;
@@ -1443,7 +1534,9 @@ inline string CodeGen::GenPtr(Node *n, string *stkout) {
         if (stkout) *stkout = stk;
         return base;
     }
-    if (auto s = Is<StrLit>(n)) return GenStrBytes(s);
+    // A `u8[]` literal is an image in static data. A runtime-capacity limited
+    // one is built below as any other value, which gives it its capacity.
+    if (auto s = Is<StrLit>(n); s && n->exprtype->arr->akind == A_VAR) return GenStrBytes(s);
     // Everything else constructs on a fresh temp stack.
     string stk;
     auto base = BytesTemp(stk);
@@ -1488,7 +1581,7 @@ inline string CodeGen::BlobRaw(const string &v) {
 
 inline string CodeGen::GenStrBytes(StrLit *s) {
     auto et = s->exprtype;
-    assert(et->kind == TY_ARRAY);
+    assert(et->kind == TY_ARRAY && et->arr->akind == A_VAR);
     auto key = cat(Mangle(et), "|", s->val);
     auto it = strval.find(key);
     if (it != strval.end()) return it->second;
@@ -1545,6 +1638,28 @@ inline string CodeGen::GenPureVal(Node *n) {
         return p;
     }
     return Snapshot(et, GenVal(n));
+}
+
+// An operand whose value must not change before it is used: when `later`,
+// the code that runs between, has statements, its value lands in a temp
+// (GenPureVal). Code without statements calls nothing and assigns
+// nothing, so the operand's expression stands as it is -- unless its own
+// statements left more than a variable's name in it, which may hold a
+// call that C could order after the later operands. A number is converted
+// to the operand's type as the temp would have converted it: a literal 1
+// shifted at u64 must not shift as a C int.
+inline string CodeGen::GenOperandVal(Node *n, bool later) {
+    auto et = OperandT(n->exprtype);
+    if (later || IsBytesT(et)) return GenPureVal(n);
+    auto x = GenVal(n);
+    if (HasStmts(n) && !IsCName(x)) return Snapshot(et, x);
+    if (et->kind == TY_INT || et->kind == TY_FLT) return cat("(", CT(et), ")(", x, ")");
+    return x;
+}
+
+inline bool CodeGen::IsCName(const string &x) {
+    return !x.empty() && !isdigit((unsigned char)x[0]) &&
+           all_of(x.begin(), x.end(), [](char c) { return isalnum((unsigned char)c) || c == '_'; });
 }
 
 inline bool CodeGen::HasStmts(Node *n) {
@@ -1614,26 +1729,7 @@ inline void CodeGen::GenElemwiseInto(TypeExpr *t, TType op, Line line, const str
     GenElemwiseLeaves(t, dst, [&](TypeExpr *tt, const string &path) {
         auto a = cat("(", l, ")", lscalar ? string() : path);
         auto c = cat("(", r, ")", rscalar ? string() : path);
-        if (tt->kind == TY_FLT) {
-            switch (op) {
-                case T_PLUS: case T_PLUSEQ:   return cat("(", a, " + ", c, ")");
-                case T_MINUS: case T_MINUSEQ: return cat("(", a, " - ", c, ")");
-                case T_MUL: case T_MULEQ:     return cat("(", a, " * ", c, ")");
-                case T_DIV: case T_DIVEQ:     return cat("(", a, " / ", c, ")");
-                default: return cat((tt->fltstorage == FS_F32 ? "fmodf(" : "fmod("), a, ", ",
-                                    c, ")");
-            }
-        }
-        auto sfx = IntSfx(tt->intstorage);
-        auto ovf = OvfLocArgs(tt->intstorage, line);
-        switch (op) {
-            case T_PLUS: case T_PLUSEQ:   return cat("gs_add_", sfx, "(", a, ", ", c, ovf, ")");
-            case T_MINUS: case T_MINUSEQ: return cat("gs_sub_", sfx, "(", a, ", ", c, ovf, ")");
-            case T_MUL: case T_MULEQ:     return cat("gs_mul_", sfx, "(", a, ", ", c, ovf, ")");
-            case T_DIV: case T_DIVEQ:
-                return cat("gs_div_", sfx, "(", a, ", ", c, ", ", LocArgs(line), ")");
-            default: return cat("gs_mod_", sfx, "(", a, ", ", c, ", ", LocArgs(line), ")");
-        }
+        return ArithX(op, tt, a, c, line, false, a, c);
     });
 }
 
@@ -1712,7 +1808,11 @@ inline string CodeGen::GenElemwise(Binary *b, const string &l, const string &r) 
     return tv;
 }
 
-inline string CodeGen::GenSlice(SliceExpr *se) {
+// A slice expression's value, in a new temp, or with `into` (a variable of
+// the slice's C type) in that variable's members: the members are computed
+// from temps only, so writing one cannot change the other, and TinyCC is
+// spared building a temp and copying it.
+inline string CodeGen::GenSlice(SliceExpr *se, const string &into) {
     auto lv = GenLoc(se->obj);
     if (lv.t->kind == TY_REF) DerefLoc(lv);
     auto v = ArrayView(lv);
@@ -1735,19 +1835,27 @@ inline string CodeGen::GenSlice(SliceExpr *se) {
     if (!se->nobc)
         L("if (", lov, " < 0 || ", hiv, " < ", lov, " || ", hiv, " > ", lenv,
           ") gs_abort(GS_E_SLICE, ", LocArgs(se->line), ");");
-    auto t = T();
     // Adapted contexts (slice constructing an array) leave an array
     // exprtype on the node; the slice value's own type comes from the
     // source element.
     auto et = se->exprtype->kind == TY_SLICE ? se->exprtype : ast.SliceOf(v.elem, se->line);
+    string data, len;
     if (IsFix(v.elem)) {
         auto dp = v.typedelems ? v.elems
                                : cat("(", CT(v.elem), " *)(", v.elems, ")");
-        L(CT(et), " ", t, " = { ", dp, " + ", lov, ", ", hiv, " - ", lov, " };");
+        data = cat(dp, " + ", lov);
+        len = cat(hiv, " - ", lov);
     } else {
         // Whole-array slices only (TC): elements are sequential bytes.
-        L(CT(et), " ", t, " = { ", v.elems, ", ", lenv, " };");
+        data = v.elems;
+        len = lenv;
     }
+    if (!into.empty()) {
+        L(into, ".data = ", data, "; ", into, ".len = ", len, ";");
+        return into;
+    }
+    auto t = T();
+    L(CT(et), " ", t, " = { ", data, ", ", len, " };");
     return t;
 }
 

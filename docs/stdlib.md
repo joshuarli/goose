@@ -9,6 +9,7 @@
 - [vec](#vec)
 - [math](#math)
 - [os](#os)
+- [ffi](#ffi)
 - [binary](#binary)
 - [base64](#base64)
 - [csv](#csv)
@@ -21,9 +22,9 @@
 
 </details>
 
-The standard library has eleven Goose modules under `stdlib/`: `std`,
+The standard library has twelve Goose modules under `stdlib/`: `std`,
 `exception`, `dictionary`, `vec`, `math`, `os`, `binary`, `base64`, `csv`,
-`json` and `regex`. Four blessed import names are provided by external
+`json`, `regex` and `ffi`. Four blessed import names are provided by external
 packages: `gfx`, `audio` and `ui` come from `goose_gfx`, and `physics` comes
 from `goose_physics`. Import a module by name, for example `import std;`. The
 compiler locates the library in its source tree; use `--stdlib <dir>` or
@@ -31,7 +32,7 @@ compiler locates the library in its source tree; use `--stdlib <dir>` or
 Everything is written in Goose except the C behind `os`
 (`src/runtime/runtime_os.h`), the byte search behind `std`'s `find_any` and
 `find_pair` (`src/runtime/runtime_impl.h`), `std`'s `popcount`, `clz` and
-`ctz` (`src/runtime/runtime_ext.h`), libm behind `math`, the graphics layer behind
+`ctz` and `ffi`'s two copies (`src/runtime/runtime_ext.h`), libm behind `math`, the graphics layer behind
 `gfx`, the ui layer behind `ui` and the PCM mixer behind `audio` (the
 [goose_gfx](https://github.com/aardappel/goose_gfx) package) and the physics layer
 behind `physics` (the [goose_physics](https://github.com/aardappel/goose_physics)
@@ -93,8 +94,8 @@ The library uses these conventions:
   but its temporary array cannot hold copies of self-relative ones (spec
   §3.9).
 * The `std`, `dictionary`, `vec`, `math`, and `os` names are global;
-  `binary`, `base64`, `csv`, `json`, `regex`, `audio`, `gfx`, `physics`,
-  `ui` and `exception` use their own namespaces. A local named `fill` or `count`
+  `ffi`, `binary`, `base64`, `csv`, `json`, `regex`, `audio`, `gfx`,
+  `physics`, `ui` and `exception` use their own namespaces. A local named `fill` or `count`
   shadows the corresponding global function, causing an error at a call; a
   global variable of such a name does not, since a call names the functions
   past it (spec §11.1).
@@ -107,6 +108,8 @@ The library uses these conventions:
 fn min<T>(a: T, b: T) -> T          fn max<T>(a: T, b: T) -> T
 fn clamp<T>(x: T, lo: T, hi: T) -> T
 fn abs<T>(x: T) -> T                // integers; abs(f32) and abs(f64) overloads
+fn rem<T>(a: T, b: T) -> T         // integers; pairs with `/`
+fn div_euclid<T>(a: T, b: T) -> T  // integers; pairs with `%`
 fn sign<T>(x: T) -> T               // -1, 0, 1 at x's type; f32/f64 overloads
 fn lerp(a: f64, b: f64, t: f64) -> f64      // and f32
 fn next_pow2(x: i64) -> i64         // smallest power of two >= max(x, 1)
@@ -119,6 +122,22 @@ fn swap<T>(a: T&, b: T&)            // swap(x, y)
 `popcount`, `clz` and `ctz` are the runtime's, one instruction each where
 the C compiler has one (MSVC's `popcount` needs `/arch:AVX` or up for that),
 a loop under TinyCC.
+
+`rem` is the remainder of truncating division: `rem(-7, 3) == -1`, paired
+with `-7 / 3 == -2`. `div_euclid` is the quotient paired with Euclidean `%`:
+`div_euclid(-7, 3) == -3` and `-7 % 3 == 2`. It rounds down for positive
+divisors and up for negative ones (`div_euclid(-7, -3) == 3`). Thus a
+coordinate's tile and offset are `div_euclid(x, width)` and `x % width`.
+
+Both functions return the operands' integer type and abort on a zero
+divisor. `rem(MIN, -1)` is zero, including at `i64`; `div_euclid` follows
+`/`'s overflow rules (always abort at `i64.min, -1`; at narrower signed
+widths, debug abort and release wrap). Unsigned `rem` and `div_euclid` are
+ordinary `%` and `/`. Neither function takes floats; float `%` is already
+the truncating remainder (`fmod`). The identities
+`b * (a / b) + rem(a, b) == a` and
+`b * div_euclid(a, b) + a % b == a` hold mathematically when the quotient
+is representable, but evaluating their intermediate products can overflow.
 
 ### Hashing
 
@@ -561,6 +580,7 @@ fn write_stdout(s: const u8[:])   fn write_stderr(s: const u8[:])   fn flush_std
 fn arg_count() -> i64       fn arg(i: i64, out: u8[>..]&)
 fn args() -> u8[:][>..]                              // indexable; argument 0 is the program
 fn env(name: const u8[:], out: u8[>..]&) -> bool
+fn trim_memory() -> bool                            // return unused data-stack pages to the OS
 fn resource_dir() -> u8[>..]                         // absolute directory, trailing separator
 fn resource_dir(out: u8[>..]&) -> bool               // appends; unchanged on failure
 fn time() -> f64                                     // seconds since the epoch
@@ -570,6 +590,22 @@ fn sleep(seconds: f64)      fn sleep_ms(ms: i64)
 fn random_seed() -> u64                              // entropy, for rng
 ```
 
+`trim_memory` asks the OS to discard complete pages beyond every current
+data-stack top in the calling thread program, including its globals and
+scratch from scopes that have ended. It preserves live values, borrowed
+views, limited-array capacity and virtual-address reservations; subsequent
+growth works normally. It affects no other worker. Use it after a large
+workload, such as replacing a document, rather than on every temporary:
+ordinary scope exit still keeps pages available for cheap reuse, while
+trimmed pages cost a fault when the stack grows again. The release is
+eager: Windows decommits the pages, returning their commit charge too, and
+Linux drops them from the resident set at once, so either gives growth
+fresh zeroed pages. macOS marks them reusable, which takes them out of the
+footprint at once, and declares them reused as growth takes them back; a
+page the kernel has not reclaimed by then may still hold its old bytes,
+which nothing above a stack's top ever reads. `false` means at least one OS
+request failed.
+
 Paths are UTF-8 on every platform: on Windows the runtime converts them to
 UTF-16 for the system's wide APIs. So are environment values, and the
 arguments, which on Windows arrive through the ANSI code page first and so
@@ -578,12 +614,18 @@ keep only the characters it has. A path is refused, and the call returns
 is not valid UTF-8: cut short or read another way, it could name a
 different file.
 
+`read_file` appends nothing when it fails. `read_stdin` appends the bytes as
+they came, on Windows too, where the C library's text mode would make each
+`\r\n` a `\n` and stop at a Ctrl-Z; `read_line` leaves out a line's `\r`
+before its newline as well.
+
 `write_file_atomic` is for files that must never be seen half-written, such
 as saved games. It writes the data to a new file beside `path`, named after
 it with a random tag and `.tmp` added, flushes that file to disk and renames
-it over `path`. A crash or a failure at any point leaves `path` with either
-its old contents or all of the new ones. On a failure the new file is
-removed; after a crash it can remain, its name ending in `.tmp`.
+it over `path`, whose permissions it keeps on POSIX. A crash or a failure at
+any point leaves `path` with either its old contents or all of the new ones.
+On a failure the new file is removed; after a crash it can remain, its name
+ending in `.tmp`.
 `rename_file` is the same one-step replacement for a file the program wrote
 itself, within one volume. On Windows no file can be replaced while another
 program has it open, and virus scanners open files just written for a
@@ -623,7 +665,10 @@ executable's directory, discovered at runtime rather than recorded at
 compilation. In a conventional macOS `.app` bundle it is `Contents/Resources/`.
 Deploy the data relative to that root; moving the executable and its data
 together preserves resource lookup. An AOT program does not depend on its
-original source tree or on the launcher's working directory.
+original source tree or on the launcher's working directory. A shared
+library an `extern "..." { }` block names with a separator in its spelling,
+`"bin/steam_api64"`, is opened relative to the same root (spec §7.10), so
+a library shipped beside the program is found the same way its data is.
 
 The string-returning form aborts if the directory cannot be discovered;
 the builder overload returns false and appends nothing. Native discovery
@@ -634,6 +679,33 @@ continue to use ordinary file operations and their chosen locations.
 `exit(code)` and `abort(msg)` are builtins, since the checker knows they
 diverge. Subprocesses and networking are not in v1; they arrive as
 `extern fn`s when a program needs them.
+
+## ffi
+
+```goose
+fn cstr(p: u64, out: u8[>..]&) -> bool       // the C string at p, its NUL left out; false for null
+fn cstr(p: u64) -> u8[>..]                   // the same, fresh; empty for null
+fn bytes(p: u64, n: i64, out: u8[>..]&) -> bool   // the n bytes at p; false for null
+fn bytes(p: u64, n: i64) -> u8[>..]
+```
+
+Reading memory a C library owns. A function bound from a shared library
+(spec §7.10, [reference.md §24](reference.md#24-calling-c-and-being-called-from-c))
+hands a `const char *` or an array it keeps back as a `u64`, which Goose
+cannot look through; these copy what is there into Goose storage, so
+nothing foreign is ever a Goose value without a copy. They trust the
+pointer and the length as every extern call trusts C: a wrong one is C's
+kind of error, not caught. A null pointer appends nothing and is the
+`false` result.
+
+```goose
+import ffi;
+extern "SDL2" {
+    fn SDL_Init(flags: u32) -> i32;
+    fn SDL_GetError() -> u64;
+}
+if SDL_Init(0x20) < 0 { abort(str("SDL: ", ffi::cstr(SDL_GetError()))); }
+```
 
 ## binary
 

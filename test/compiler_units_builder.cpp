@@ -49,11 +49,11 @@
 #include "../src/report/deps_report.h"
 #include "../src/progress.h"
 #include "../src/process.h"
+#include "../src/json.h"
 #include "../src/buildfile.h"
 #include "../src/toolchain.h"
 #include "../src/builtin.h"
 #include "../src/build.h"
-#include "../src/json.h"
 #include "../src/units/build.h"
 
 using namespace goose;

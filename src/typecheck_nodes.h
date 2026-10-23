@@ -164,6 +164,8 @@ inline Val Ident::Check(TypeCheck &tc, TypeExpr *) {
     }
     if (auto &cands = DepLookupFunctions(tc.ast, name, ns); !cands.empty()) {
         fnref = cands[0];
+        for (auto sf : cands)
+            if (sf->brokensig) throw Abandoned {};
         Val v;
         v.type = tc.fntype;
         v.fnv.named = cands[0];
@@ -318,8 +320,7 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
         // adapts to either, or stands as a first-class variant value.
         // Which it is decides what `self` inside it denotes, so settle the
         // type before the initializers are checked.
-        v.type = expected && expected->kind == TY_ENUM && expected->enu->en == ei->en &&
-                         tc.TypeArgsEq(expected->enu->args, t->var->adt->enu->args)
+        v.type = expected && expected->kind == TY_ENUM && tc.SameAdt(expected, t->var->adt)
                      ? expected : t;
         auto deep = tc.CheckInits(this, var->fields, ei->vftypes[vi], ei->en->name, v.type);
         v.Set(tc.TempRoot(), false);   // A temporary, as an array literal is.
@@ -329,15 +330,29 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
     if (t->kind == TY_STRUCT) {
         auto st = t->struc->st;
         if (t->struc->args.empty() && !st->generics.empty()) {
-            // Infer the struct's generics from the field initializers.
+            // Infer the struct's generics from the field initializers as
+            // written, in the order written: the first to bind a parameter
+            // binds it. A check after the first finds them as CheckInits
+            // left them, in declaration order beside the defaults it put in,
+            // which belong to the declaration's environment and to the type
+            // the first inference gave; the source order it kept
+            // (sourcefieldindices) picks out the written ones.
+            vector<FieldInit *> written;
+            if (sourcefieldindices.empty()) {
+                for (auto &fi : inits) written.push_back(&fi);
+            } else {
+                for (auto idx : sourcefieldindices)
+                    for (auto &fi : inits)
+                        if (fi.name == st->fields[idx].name) written.push_back(&fi);
+            }
             vector<pair<string_view, TypeExpr *>> b;
-            auto named = !inits.empty() && !inits[0].name.empty();
+            auto named = !written.empty() && !written[0]->name.empty();
             auto pos = 0;
-            for (auto &fi : inits) {
+            for (auto fi : written) {
                 Field *field = nullptr;
                 if (named) {
                     for (auto &f2 : st->fields)
-                        if (!f2.ispad && f2.name == fi.name) { field = &f2; break; }
+                        if (!f2.ispad && f2.name == fi->name) { field = &f2; break; }
                 } else {
                     while (pos < (int)st->fields.size() && st->fields[pos].ispad) pos++;
                     if (pos < (int)st->fields.size()) field = &st->fields[pos++];
@@ -345,11 +360,11 @@ inline Val StructLit::Check(TypeCheck &tc, TypeExpr *expected) {
                 if (!field) continue;  // Reported properly below.
                 // `self` says nothing about the arguments (its type is the
                 // literal's own), and has no meaning outside CheckInits.
-                if (Is<SelfRef>(fi.val)) continue;
-                auto av = tc.CheckV(fi.val, nullptr);
-                fi.val->exprtype = av.type;
+                if (Is<SelfRef>(fi->val)) continue;
+                auto av = tc.CheckV(fi->val, nullptr);
+                fi->val->exprtype = av.type;
                 // The value's own type is what binds the arguments.
-                tc.JudgeCastAt(fi.val, nullptr, av);
+                tc.JudgeCastAt(fi->val, nullptr, av);
                 auto nt = tc.NaturalType(av);
                 // The shape-changing coercion generics see through, as a
                 // call's do: an array, or a reference to one, meeting a
@@ -397,6 +412,11 @@ inline Val Unary::Check(TypeCheck &tc, TypeExpr *) {
         r.type = tc.ast.booltype;
         return r;
     }
+    if (auto t = tc.LoadType(v.type); IsOpaque(t)) {
+        Val r;
+        r.type = t;
+        return r;
+    }
     auto r = tc.NumericUnary(this, v, false);
     tc.JudgeUnaryCast(this, child, r);
     return r;
@@ -416,6 +436,9 @@ inline Val Binary::Check(TypeCheck &tc, TypeExpr *) {
 }
 
 inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
+    TypeCheck::DestScope ds(tc, TypeCheck::Dest {});
+    if (incomplete) tc.IncompleteDot(this);
+    // EnumName.Variant: a payload-less variant constant (§3.5).
     if (auto id = Is<Ident>(obj); id && id->expansionerror.empty()) {
         const FnValBind *fb;
         if (!tc.LookupVar(id->name, id->ns) && !tc.LookupTypeParam(id->name, fb) && !fb)
@@ -434,9 +457,7 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
         ov.ClearReads();
         ov.reached = tc.LoadType(t);
     }
-    if (accessorowner && !tc.TypeEq(tc.ast.PlainOf(t), accessorowner))
-        tc.Error(this, cat("const for accessor belongs to ", tc.TypeStr(accessorowner),
-                           ", not ", tc.TypeStr(t)));
+    tc.CheckAccessorOwner(this, accessorowner, t);
     // Builtin properties (.len/.cap) from the table.
     if (auto bd = LookupBuiltin(name); bd && (bd->flags & BF_PROPERTY)) {
         if (RecvKindOf(t) & bd->recv) {
@@ -462,10 +483,12 @@ inline Val Dot::Check(TypeCheck &tc, TypeExpr *) {
 inline Val Call::Check(TypeCheck &tc, TypeExpr *expected) { return tc.CheckCall(this, expected); }
 
 inline Val Index::Check(TypeCheck &tc, TypeExpr *) {
+    TypeCheck::DestScope ds(tc, TypeCheck::Dest {});
     return tc.ContainerRead(tc.CheckLValue(this));
 }
 
 inline Val SliceExpr::Check(TypeCheck &tc, TypeExpr *) {
+    TypeCheck::DestScope ds(tc, TypeCheck::Dest {});
     auto lv = tc.LValueBase(obj, cmpview);
     tc.DerefLValue(lv, obj);
     tc.SliceProvenance(lv, obj);
@@ -497,6 +520,7 @@ inline Val SliceExpr::Check(TypeCheck &tc, TypeExpr *) {
 }
 
 inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {
+    TypeCheck::DestScope ds(tc, TypeCheck::Dest {});
     // A conversion the checker inserted is checked again as the integer it
     // converts, which its destination or operator converts again
     // (TypeCheck::ToFloat).
@@ -508,9 +532,20 @@ inline Val AsCast::Check(TypeCheck &tc, TypeExpr *) {
     auto cv = tc.DecayRef(raw);
     child->exprtype = cv.type;
     auto st = tc.LoadType(cv.type);
+    // To or from an exemplar's opaque type (TypeCheck::CheckExemplars): the
+    // type the code says the value has.
+    Val ov;
+    if (IsOpaque(st)) {
+        totype = ov.type = tc.Subst(type);
+        return ov;
+    }
     if (!IsIntT(st) && st->kind != TY_FLT)
         tc.Error(this, cat("as requires a numeric source, got ", tc.TypeStr(st)));
     auto tt = tc.Subst(type);
+    if (IsOpaque(tt)) {
+        totype = ov.type = tt;
+        return ov;
+    }
     if (tt->kind == TY_INT && tt->intstorage == IS_VARINT)
         tc.Error(this, "cannot cast to varint (varints are written at construction only)");
     if (tt->kind != TY_INT && tt->kind != TY_FLT)
@@ -544,7 +579,7 @@ inline Val ConstFor::Check(TypeCheck &tc, TypeExpr *) {
 inline Val Block::Check(TypeCheck &tc, TypeExpr *expected) {
     // On joinpath the construct that started it makes the copy (CheckJoin).
     auto onjoin = tc.joinpath == this;
-    auto v = tc.CheckBlockVal(this, expected, true, TypeCheck::SK_PLAIN);
+    auto v = tc.CheckBlockVal(this, expected, true);
     return tc.VoidIfBottom(onjoin ? v : tc.TempCopy(v));
 }
 

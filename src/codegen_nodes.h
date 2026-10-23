@@ -50,7 +50,7 @@ inline string StrLit::CgX(CodeGen &cg) {
     cg.FixedLocal(et, t, et->arr->akind == A_LIMITED ? "{0}" : "");
     if (et->arr->akind == A_LIMITED) cg.L(t, ".len = ", val.size(), ";");
     if (!val.empty())
-        cg.L("memcpy(", t, ".e, ", cg.StrRaw(val), ", ", val.size(), ");");
+        cg.L("GS_MEMCPY(", t, ".e, ", cg.StrRaw(val), ", ", val.size(), ");");
     return t;
 }
 
@@ -116,14 +116,16 @@ inline string Unary::CgX(CodeGen &cg) {
 inline string Binary::CgX(CodeGen &cg) {
     if (op == T_DOTEQ || op == T_DOTNEQ) {
         // Reference identity: the addresses (a fat reference's header
-        // pointer); null is the null address.
+        // pointer); null is the null address. A relative reference variable
+        // holds an offset, which loads as the address it encodes (§3.9).
         auto side = [&](Node *n) -> string {
             if (Is<NullLit>(n)) return "NULL";
             string x;
             TypeExpr *t = n->exprtype;
             if (auto id = Is<Ident>(n); id && id->vdef && id->vdef->type->kind == TY_REF) {
-                x = cg.VarLoc(id->vdef).s;
                 t = id->vdef->type;
+                auto lv = cg.VarLoc(id->vdef);
+                x = t->ref->lenstorage >= 0 ? cg.LoadLoc(lv, t, line) : lv.s;
             } else {
                 x = cg.GenX(n);
             }
@@ -138,7 +140,14 @@ inline string Binary::CgX(CodeGen &cg) {
     if (op == T_ANDAND || op == T_OROR) {
         auto l = cg.GenTruth(left);
         auto t = cg.T();
-        cg.L("uint8_t ", t, " = (uint8_t)(", l, op == T_ANDAND ? " != 0);" : " != 0);");
+        cg.L("uint8_t ", t, " = (uint8_t)(", l, " != 0);");
+        // In a loop that can be straight-line code, a right operand that can
+        // neither fail nor have an effect runs whatever the left gave,
+        // combined with & or | on the two 0/1 values: a C compiler can
+        // if-convert that, and vectorize the loop, where it keeps the branch
+        // of a short circuit. Elsewhere the early branch is as good, and
+        // better ahead of a branch that stays (docs/implementation.md §6.11).
+        // A condition takes the short circuit as branches (GenBranch).
         if (cg.SpeculativeForm(this)) {
             auto r = cg.GenTruth(right);
             return cat("(uint8_t)(", t, op == T_ANDAND ? " & " : " | ", "(uint8_t)(", r,
@@ -209,16 +218,15 @@ inline string Binary::CgX(CodeGen &cg) {
         auto eq = cg.GenRangeEq(lvw.elem, lvw.elems, lvw.len, rvw.elems, rvw.len);
         return op == T_EQ ? eq : cat("(uint8_t)(!", eq, ")");
     }
-    // Order of evaluation is left-to-right: the left operand lands in
-    // a temp before the right one runs.
-    auto l = cg.GenPureVal(left);
+    // Order of evaluation is left-to-right (§2): the left operand lands in
+    // a temp before the right one runs, where the right one can change what
+    // it read (GenOperandVal).
+    auto l = cg.GenOperandVal(left, cg.HasStmts(right));
     auto r = cg.GenVal(right);
     if (exprtype && (exprtype->kind == TY_STRUCT || exprtype->kind == TY_ARRAY))
         return cg.GenElemwise(this, l, r);
     auto isint = lt->kind == TY_INT && lt->intstorage != IS_VARINT;
     auto isflt = lt->kind == TY_FLT;
-    auto f32 = exprtype && exprtype->kind == TY_FLT &&
-               exprtype->fltstorage == FS_F32;
     // Operands were unified by the typechecker; casting to the common C type
     // realizes any implicit widening (and truncates nothing).
     auto ct = isint || isflt ? cg.CT(lt) : "";
@@ -226,51 +234,11 @@ inline string Binary::CgX(CodeGen &cg) {
     auto rc = isint || isflt ? cat("(", ct, ")(", r, ")") : r;
     switch (op) {
         case T_PLUS: case T_MINUS: case T_MUL: case T_DIV: case T_MOD: {
-            if (isflt) {
-                if (op == T_MOD) return cat(f32 ? "fmodf(" : "fmod(", lc, ", ", rc, ")");
-                const char *o = op == T_PLUS ? " + " : op == T_MINUS ? " - "
-                                : op == T_MUL ? " * " : " / ";
-                return cat("(", lc, o, rc, ")");
-            }
-            if (isint) {
-                auto sfx = cg.IntSfx(lt->intstorage);
-                switch (op) {
-                    case T_PLUS:  return cat("gs_add_", sfx, "(", l, ", ", r,
-                                             cg.OvfLocArgs(lt->intstorage, line), ")");
-                    case T_MINUS: return cat("gs_sub_", sfx, "(", l, ", ", r,
-                                             cg.OvfLocArgs(lt->intstorage, line), ")");
-                    case T_MUL:   return cat("gs_mul_", sfx, "(", l, ", ", r,
-                                             cg.OvfLocArgs(lt->intstorage, line), ")");
-                    default: {   // T_DIV, T_MOD
-                        auto div = op == T_DIV;
-                        auto plain = nonneg ? cat("(", ct, ")((uint64_t)(", lc, div ? ") / " : ") % ",
-                                                  "(uint64_t)(", rc, "))")
-                                            : cat(div ? "gs_div_" : "gs_mod_", sfx, "(", l, ", ", r,
-                                                  ", ", cg.LocArgs(line), ")");
-                        // A divisor fixed for an enclosing loop: its magic, unless
-                        // gs_divu_gen found none to give (HoistDivisors).
-                        auto key = cg.LoopDivisible(this) ? cg.DivisionKey(this) : string();
-                        auto dm = key.empty() ? cg.divmagic.end() : cg.divmagic.find(key);
-                        if (dm == cg.divmagic.end()) return plain;
-                        auto &mg = dm->second;
-                        auto w = mg.narrow ? "uint32_t" : "uint64_t";
-                        auto q = cat(mg.narrow ? "gs_divu32_q(" : "gs_divu_q(", "(", w, ")(", lc,
-                                     "), ", mg.magic, ", ", mg.more, ")");
-                        auto fast = div ? q : cat("(", w, ")(", lc, ") - ", q, " * ", mg.val);
-                        // Where only a zero divisor goes without, the plain division would
-                        // fail. Failing outright leaves a test of the loop-invariant `more`
-                        // that gcc takes out of the loop; the plain division's own zero
-                        // test would be a loop exit after which the loop's stores might
-                        // not run, which keeps gcc from holding them in registers (and
-                        // from vectorizing the loop).
-                        if (mg.zeronone) plain = cat("(gs_divfail(", cg.LocArgs(line), "), 0)");
-                        return cat("(", ct, ")(", mg.more, " != GS_DIVU_NONE ? ", fast, " : ",
-                                   plain, ")");
-                    }
-                }
-            }
-            // Elementwise math on identical struct/fixed-array types.
-            return cg.GenElemwise(this, l, r);
+            // Elementwise math on identical struct/fixed-array types (§6.1).
+            if (!isint && !isflt) return cg.GenElemwise(this, l, r);
+            auto x = [&] { return cg.ArithX(op, lt, l, r, line, nonneg); };
+            CodeGen::Division dv;
+            return CodeGen::AsDivision(this, dv) ? cg.FixedDivX(dv, l, x, line) : x();
         }
         case T_LT: case T_GT: case T_LTEQ: case T_GTEQ: {
             const char *o = op == T_LT ? " < " : op == T_GT ? " > "
@@ -285,16 +253,8 @@ inline string Binary::CgX(CodeGen &cg) {
             auto eq = cg.GenEquality(lt, l, r);
             return op == T_EQ ? eq : cat("(uint8_t)(!", eq, ")");
         }
-        case T_BITAND: return cat("(", ct, ")(", lc, " & ", rc, ")");
-        case T_BITOR:  return cat("(", ct, ")(", lc, " | ", rc, ")");
-        case T_XOR:    return cat("(", ct, ")(", lc, " ^ ", rc, ")");
-        case T_SHL:    return cat("gs_shl_", cg.IntSfx(lt->intstorage), "(", l,
-                                  ", (int64_t)(", r, "))");
-        case T_SHR:
-            if (nonneg)
-                return cat("(", ct, ")((uint64_t)(", lc, ") >> ((int64_t)(", r, ") & ",
-                           IntBits(lt->intstorage) - 1, "))");
-            return cat("gs_shr_", cg.IntSfx(lt->intstorage), "(", l, ", (int64_t)(", r, "))");
+        case T_BITAND: case T_BITOR: case T_XOR: case T_SHL: case T_SHR:
+            return cg.ArithX(op, lt, l, r, line, nonneg);
         default: assert(false); return l;
     }
 }
@@ -591,7 +551,10 @@ inline void MatchExpr::CgAny(CodeGen &cg, const Dst &d) {
         tag = varmode ? cat("*(", cg.IntCT(cg.TagStore(ei->en)), " *)", p)
                       : cat("((", cg.CT(enumtype), " *)", p, ")->tag");
     } else {
-        sv = cg.GenPure(scrutinee);
+        // The value is read twice, for its tag and for an arm's binder, which
+        // the arm copies first thing: a variable needs no copy of its own.
+        sv = cg.GenX(scrutinee);
+        if (!cg.IsCName(sv)) sv = cg.Snapshot(scrutinee->exprtype, sv);
         tag = cat(sv, ".tag");
     }
     cg.L("switch (", tag, ") {");
@@ -630,7 +593,7 @@ inline void MatchExpr::CgAny(CodeGen &cg, const Dst &d) {
                 cg.vstk[arm.binder] = stk;
                 auto sz = cg.T();
                 cg.L("int64_t ", sz, " = ", cg.SizeX(vt, payload), ";");
-                cg.L("memcpy(", cg.Top(stk), ", ", payload, ", (size_t)", sz, ");");
+                cg.L("GS_MEMCPY(", cg.Top(stk), ", ", payload, ", (size_t)", sz, ");");
                 cg.Bump(stk, sz);
             } else if (EmptyLayout(variant->fields)) {
                 cg.FixedLocal(vt, bn, "{0}");
@@ -770,7 +733,7 @@ inline void Call::CgAny(CodeGen &cg, const Dst &d) {
     if (!rets.empty() && !cg.IsVoidT(exprtype) &&
         (!cg.IsBytesT(exprtype) || IsVarintT(exprtype) || exprtype->kind == TY_REF)) {
         auto r0 = cg.CallVal0(this, rets[0], d.t);
-        if (d.k == DK_LVALUE && d.t && d.t->kind == TY_REF && d.t->ref->lenstorage >= 0)
+        if (d.k == DK_LVALUE && d.t && IsRelRef(d.t))
             cg.EmitRelStoreAt(cat("(uint8_t *)&", d.s), d.t, r0, line, false);
         else if (d.k == DK_LVALUE && r0 != d.s) cg.L(d.s, " = ", r0, ";");
     }
@@ -811,7 +774,15 @@ inline void Binary::CgAny(CodeGen &cg, const Dst &d) {
 }
 inline void Dot::CgAny(CodeGen &cg, const Dst &d) { cg.LeafAny(this, d); }
 inline void Index::CgAny(CodeGen &cg, const Dst &d) { cg.LeafAny(this, d); }
-inline void SliceExpr::CgAny(CodeGen &cg, const Dst &d) { cg.LeafAny(this, d); }
+inline void SliceExpr::CgAny(CodeGen &cg, const Dst &d) {
+    // A slice stored in a variable of its own type is built in the variable.
+    if (d.k == DK_LVALUE && !d.pool && d.t && d.t->kind == TY_SLICE &&
+        exprtype->kind == TY_SLICE && cg.CT(d.t) == cg.CT(exprtype) && CodeGen::IsCName(d.s)) {
+        cg.GenSlice(this, d.s);
+        return;
+    }
+    cg.LeafAny(this, d);
+}
 inline void AsCast::CgAny(CodeGen &cg, const Dst &d) { cg.LeafAny(this, d); }
 inline void RangeExpr::CgAny(CodeGen &cg, const Dst &d) { cg.LeafAny(this, d); }
 
@@ -840,31 +811,11 @@ inline void VarDecl::CgStmt(CodeGen &cg) {
         auto c = Is<Call>(inits[0]);
         assert(c);
         vector<Dst> dsts;
-        for (size_t i = 0; i < defs.size(); i++) {
-            auto d = defs[i];
-            auto rt = c->rettypes[i];
-            auto name = cg.LocalName(d);
-            if (cg.IsResz(rt) && cg.IsFrameObj(rt)) {
-                cg.EmitCoreTypes();
-                auto stk = cg.AllocStk(true);
-                cg.L(cg.CT(rt), " ", name, ";");
-                cg.SaveBase(true, stk, cat(cg.FoTailHdr(rt, name), ".base"));
-                cg.vstk[d] = stk;
-                dsts.push_back(Dst { DK_STACK, stk, d->type, name });
-            } else if (cg.IsResz(rt)) {
-                cg.EmitCoreTypes();
-                auto stk = cg.AllocStk(true);
-                cg.L("gs_rhdr ", name, " = { ", cg.Top(stk), ", 0 };");
-                cg.SaveBase(true, stk, cat(name, ".base"));
-                cg.vstk[d] = stk;
-                dsts.push_back(Dst { DK_STACK, stk, d->type, cat(name, ".len") });
-            } else if (cg.IsBytesT(rt)) {
-                auto stk = cg.AllocStk(true);
-                cg.L("uint8_t *", name, " = ", cg.Top(stk), ";");
-                cg.SaveBase(true, stk, name);
-                cg.vstk[d] = stk;
-                dsts.push_back(Dst { DK_STACK, stk });
+        for (auto d : defs) {
+            if (cg.IsResz(d->type) || cg.IsBytesT(d->type)) {
+                dsts.push_back(cg.DeclStackLocal(d, true));
             } else {
+                auto name = cg.LocalName(d);
                 cg.FixedLocal(d->type, name, "", true);
                 cg.vnames[d] = name;
                 dsts.push_back(Dst { DK_LVALUE, name, d->type });
@@ -908,62 +859,33 @@ inline void Assign::CgStmt(CodeGen &cg) {
         lv.stk = s;
     }
     if (op == T_DOTASSIGN) { cg.GenRebind(this, lv); return; }
-    // Read the old value before the RHS runs, as for scalar compound math.
-    // Aggregates use the ordinary elementwise lowering, with both operands
-    // evaluated before writing any member of the destination.
+    // Read the old value before the RHS runs, as for scalar compound math,
+    // where the RHS runs statements that could change it. Aggregates use
+    // the ordinary elementwise lowering, with both operands evaluated
+    // before writing any member of the destination.
     if (op != T_ASSIGN) {
         assert(lv.val);
-        auto old = cg.Snapshot(lv.t, lv.s);
+        auto old = cg.HasStmts(rhs) ? cg.Snapshot(lv.t, lv.s) : lv.s;
         if (lv.t->kind == TY_STRUCT || lv.t->kind == TY_ARRAY) {
             auto r = cg.GenPureVal(rhs);
             cg.GenElemwiseInto(lv.t, op, line, old, r, lv.s, false,
                                cg.OperandT(rhs->exprtype)->kind != lv.t->kind);
             return;
         }
+        // The old value and the operand, which reaches the target's type
+        // implicitly, take part as they are, the C conversions doing the
+        // widening. A `/=` or `%=` divides by the magic number of a divisor a
+        // loop fixed, as `/` and `%` do.
         auto r = cg.GenX(rhs);
-        auto sfx = lv.t->kind == TY_INT ? cg.IntSfx(lv.t->intstorage) : "";
-        auto ovf = [&] { return cg.OvfLocArgs(lv.t->intstorage, line); };
-        switch (op) {
-            case T_PLUSEQ:
-                if (lv.t->kind == TY_FLT) cg.L(lv.s, " = ", old, " + (", r, ");");
-                else cg.L(lv.s, " = gs_add_", sfx, "(", old, ", ", r, ovf(), ");");
-                break;
-            case T_MINUSEQ:
-                if (lv.t->kind == TY_FLT) cg.L(lv.s, " = ", old, " - (", r, ");");
-                else cg.L(lv.s, " = gs_sub_", sfx, "(", old, ", ", r, ovf(), ");");
-                break;
-            case T_MULEQ:
-                if (lv.t->kind == TY_FLT) cg.L(lv.s, " = ", old, " * (", r, ");");
-                else cg.L(lv.s, " = gs_mul_", sfx, "(", old, ", ", r, ovf(), ");");
-                break;
-            case T_DIVEQ:
-                if (lv.t->kind == TY_FLT) cg.L(lv.s, " = ", old, " / (", r, ");");
-                else cg.L(lv.s, " = gs_div_", sfx, "(", old, ", ", r, ", ",
-                          cg.LocArgs(line), ");");
-                break;
-            case T_MODEQ:
-                if (lv.t->kind == TY_FLT)
-                    cg.L(lv.s, " = ", lv.t->fltstorage == FS_F32 ? "fmodf(" : "fmod(", old,
-                      ", ", r, ");");
-                else cg.L(lv.s, " = gs_mod_", sfx, "(", old, ", ", r, ", ",
-                          cg.LocArgs(line), ");");
-                break;
-            case T_ANDEQ: cg.L(lv.s, " = (", cg.CT(lv.t), ")(", old, " & (", r, "));"); break;
-            case T_SHLEQ:
-                cg.L(lv.s, " = gs_shl_", sfx, "(", old, ", (int64_t)(", r, "));");
-                break;
-            case T_SHREQ:
-                cg.L(lv.s, " = gs_shr_", sfx, "(", old, ", (int64_t)(", r, "));");
-                break;
-            case T_OREQ:  cg.L(lv.s, " = (", cg.CT(lv.t), ")(", old, " | (", r, "));"); break;
-            case T_XOREQ: cg.L(lv.s, " = (", cg.CT(lv.t), ")(", old, " ^ (", r, "));"); break;
-            default: assert(false);
-        }
+        auto x = [&] { return cg.ArithX(op, lv.t, old, r, line, false, old, cat("(", r, ")")); };
+        CodeGen::Division dv;
+        cg.L(lv.s, " = ", CodeGen::AsDivision(this, dv) ? cg.FixedDivX(dv, old, x, line) : x(),
+             ";");
         return;
     }
     // Plain assignment, by the target's representation.
     auto t = lv.t;
-    if (t->kind == TY_REF && t->ref->lenstorage >= 0) {
+    if (IsRelRef(t)) {
         // Relative-reference slot: encode from the plain reference value.
         cg.GenRelAssign(lv, lval, rhs, line);
         return;
@@ -994,7 +916,7 @@ inline void Assign::CgStmt(CodeGen &cg) {
         cg.L("if (", nn, " > ", cg.LimitedCap(lv), ") gs_abort(GS_E_CAPACITY, ",
              cg.LocArgs(line), ");");
         cg.L("*(uint32_t *)((", lv.s, ") + 4) = (uint32_t)", nn, ";");
-        cg.L("memcpy((", lv.s, ") + 8, ", src, " + 8, (size_t)(", nn, " * ",
+        cg.L("GS_MEMCPY((", lv.s, ") + 8, ", src, " + 8, (size_t)(", nn, " * ",
           cg.FixedSize(t->arr->sub), "));");
         return;
     }
@@ -1005,9 +927,7 @@ inline void IncDec::CgStmt(CodeGen &cg) {
     auto lv = cg.GenLoc(lval);
     if (lv.t->kind == TY_REF) cg.DerefLoc(lv);
     assert(lv.val);
-    auto o = op == T_INC ? "gs_add_" : "gs_sub_";
-    cg.L(lv.s, " = ", o, cg.IntSfx(lv.t->intstorage), "(", lv.s, ", 1",
-         cg.OvfLocArgs(lv.t->intstorage, line), ");");
+    cg.L(lv.s, " = ", cg.ArithX(op == T_INC ? T_PLUS : T_MINUS, lv.t, lv.s, "1", line), ";");
 }
 
 inline void FnDecl::CgStmt(CodeGen &) {}   // Nested declarations are separate specs.
@@ -1043,7 +963,7 @@ inline void While::CgStmt(CodeGen &cg) {
 inline void ForLoop::CgStmt(CodeGen &cg) {
     auto d = Dst {};
     CodeGen::ViewScope vs(cg, hoistrefs, hoistfields);
-    auto iv = vdef ? cg.LocalName(vdef) : cg.T();
+    auto iv = cg.LocalName(vdef);
     auto ix = idxdef ? cg.LocalName(idxdef) : "";
     if (iterkind == IK_RANGE || iterkind == IK_COUNT) {
         // The loop variable runs at the range's own type: narrow counters
@@ -1213,7 +1133,7 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
                                 esz, "))");
         if (!vdef->copybind && !held) {
             cg.L(cg.CT(et), " ", iv, " = &", elem, ";");
-        } else if (v.elem->kind == TY_REF && v.elem->ref->lenstorage >= 0) {
+        } else if (IsRelRef(v.elem)) {
             // A relative-reference element bound by value: the binding is the
             // decoded pointer, as indexing the array would give.
             auto fa = cg.T();
@@ -1259,15 +1179,15 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
     if (!idxdef && fixedlen && !fixedarr && !exitlen && CodeGen::CallsRecursive(body)) {
         if (!memlen) hoist();
         at = v.elems;
-        auto end = cg.T();
+        auto endp = cg.T();
         cg.L("if (", v.len, " > 0) {");
         cg.ind++;
         cg.GenLoopBody(bind, body, d,
             v.typedelems
-                ? cat("for (", cg.CT(v.elem), " *", end, " = ", at, " + ", v.len, "; ", at,
-                      " < ", end, "; ", at, "++) {")
-                : cat("for (uint8_t *", end, " = ", at, " + ", v.len, " * ", esz, "; ", at,
-                      " < ", end, "; ", at, " += ", esz, ") {"),
+                ? cat("for (", cg.CT(v.elem), " *", endp, " = ", at, " + ", v.len, "; ", at,
+                      " < ", endp, "; ", at, "++) {")
+                : cat("for (uint8_t *", endp, " = ", at, " + ", v.len, " * ", esz, "; ", at,
+                      " < ", endp, "; ", at, " += ", esz, ") {"),
             nullptr, 0, { vdef, idxdef });
         cg.ind--;
         cg.L("}");
@@ -1284,10 +1204,9 @@ inline void Return::CgStmt(CodeGen &cg) {
     // Exiting an inlined body?
     for (auto i = (int)cg.cscopes.size() - 1; i >= 0; i--) {
         if (cg.cscopes[i].kind == CodeGen::SC_IB && cg.cscopes[i].ibsf == target) {
-            if (!vals.empty()) {
-                cg.GenExitValue(vals[0], i);
-                for (size_t j = 1; j < vals.size(); j++) cg.GenAny(vals[j], Dst {});
-            }
+            // A function with several results is never inlined (Optimizer::Scan).
+            assert(vals.size() <= 1);
+            if (!vals.empty()) cg.GenExitValue(vals[0], i);
             cg.EmitExitRestores(i);
             cg.cscopes[i].usedbrk = true;
             cg.L("goto ", cg.cscopes[i].brklbl, ";");

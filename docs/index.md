@@ -17,8 +17,8 @@ library, the tools and the compiler.
 
 ## Library and tools
 
-* [Standard library](stdlib.md): the fifteen modules, `std`, `dictionary`,
-  `vec`, `math`, `os`, `binary`, `base64`, `csv`, `json`, `regex`,
+* [Standard library](stdlib.md): the sixteen modules, `std`, `dictionary`,
+  `vec`, `math`, `os`, `ffi`, `binary`, `base64`, `csv`, `json`, `regex`,
   `exception`, and `gfx`, `audio`, `physics` and `ui` for graphics, sound,
   rigid bodies and widgets. All readable Goose under `stdlib/`.
 * [Building programs and using packages](packages.md): `goose build`,
@@ -29,6 +29,8 @@ library, the tools and the compiler.
   Mandelbrot, a spinning cube and two small games.
 * [VS Code extension](../vscode/README.md): highlighting, checks on save,
   and one-key runs.
+* [Other editors](editors.md): the language server in Neovim, Helix and
+  Emacs.
 
 ## Benchmarks
 
@@ -54,7 +56,8 @@ and the reference describe what was built; these say why.
   checks moved to where data enters the program, and functions the
   compiler proves check-free.
 * [`const for`](design/const_for.md): specialization-time expansion over
-  a struct's fields, a list of types or a list of constants.
+  a struct's fields, an enum's variants, a list of types or a list of
+  constants.
 * [Relative references](design/relative_references.md): self-relative
   against pool-relative links, measured.
 * [Serialization](design/serialization.md): the verified loader for
@@ -69,12 +72,22 @@ and the reference describe what was built; these say why.
   why read-only data cannot be laundered into writable data.
 * [Independently owned dynamic data](design/owning_dynamic_data.md): an
   editor's open documents as a worked example of slice pools.
+* [Cleanup at scope exit](design/scope_exit_cleanup.md): `defer`,
+  destructor types and pool finalizers compared against the compiler's
+  exit paths and `return … from`; a proposal.
 * [Standard library design](design/stdlib_design.md): the library's
   original scope and conventions.
 * [Compiler analyses](design/analysis_inventory.md): an inventory of the
   checker's analyses and options for simplifying them.
 * [Column arrays](design/soa.md): a struct-of-arrays storage proposal, not
   implemented.
+* [WebAssembly](design/wasm.md): running without address-space reservation,
+  fixed partitions against relocating stacks; a proposal.
+* [Prior art](design/prior_art.md): the languages, libraries and papers
+  nearest Goose's memory model, ranked, and what has no precedent.
+* [Dynamic externs](design/dynamic_externs.md): `extern "lib" { ... }`,
+  an extern fn bound from a shared library by name at program start; a
+  proposal.
 
 ## Getting the compiler
 
@@ -85,6 +98,16 @@ beside them, and how to [build from source](../README.md#build-and-run).
 Questions and discussion: the
 [Discord](https://discord.gg/397eZdbnsR) and the
 [GitHub repository](https://github.com/aardappel/goose).
+
+## Standalone pages
+
+Pages made as finished HTML, kept in `docs/html` and published as they
+are.
+
+* [Goose, Byte by Byte](html/Goose,%20Byte%20by%20Byte.html): the
+  language on one long illustrated page, its data drawn byte by byte:
+  the array family, nested data kept inline, references the compiler
+  proves valid, and where the speed comes from.
 
 ---
 

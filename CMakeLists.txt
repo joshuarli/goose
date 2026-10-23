@@ -44,6 +44,11 @@ add_executable(goose
     src/packages.h
     src/json.h
     src/native.h
+    src/lsp_rpc.h
+    src/lsp_analysis.h
+    src/lsp_workspace.h
+    src/lsp_features.h
+    src/lsp.h
     src/builtin.h
     src/includes.h
     src/utils.h

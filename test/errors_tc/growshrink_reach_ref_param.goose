@@ -1,4 +1,4 @@
-// error: storing a reference that may point into a grow-shrink array reached through the caller's storage behind t
+// error: storing a reference into t, which holds a grow-shrink array: such a reference lives in a variable, is passed down or returned, and is never stored (§5.2)
 // t.a is read out of the caller's storage behind t, so it is rooted at t's
 // class only as a bound, and so is an element of the array it leads
 // to. t's argument lies in a grow-only array, but what its references lead

@@ -102,6 +102,8 @@ EXTRAS = (
     "extra/runtime_cache", "extra/s8_struct_contract",
     "extra/cli_paths", "extra/exit_race", "extra/huge_pages",
     "extra/native_toolchain", "extra/native_builder", "extra/reference_examples",
+    "extra/diagnostics_json", "extra/doc_comments", "extra/lsp_protocol",
+    "extra/native_cache", "extra/runtime_io", "extra/extern_dylib",
 )
 
 
@@ -1019,6 +1021,9 @@ class Runner:
             "tre_flt": (False, True),
             "tre_from": (False, True),
             "tre_inloop": (False, True),
+            "tre_walk": (optimized, not optimized),
+            "tre_local": (False, True),
+            "tre_and": (optimized, not optimized),
         }
         valid = True
         for name, want in shapes.items():
@@ -1031,6 +1036,13 @@ class Runner:
                 self.fail(f"tail-recursion {level} {name}",
                           f"(loop, self call): got {got}, want {want}")
                 valid = False
+        # A u64 above i64.max that the optimizer makes -- a fold, a tail loop's
+        # accumulator start -- dumps as that value, not as its bits signed.
+        want = ["18446744073709539270"] + (["var acc = 18446744073709551615;"] if optimized else [])
+        missing = [w for w in want if w not in specs]
+        if missing or "-12346" in specs:
+            self.fail(f"u64 constants {level}", f"missing {missing} or a signed -12346")
+            valid = False
         # Guarded base-case inlining: a copy of the body's first statement
         # per self-call site the rewrite took.
         copies = {
@@ -1107,9 +1119,9 @@ class Runner:
             "shape_strip_lanes": f"{strip} 8", "shape_strip_count": f"{strip} 4",
             "shape_strip_range": f"{strip} 3", "shape_strip_u8": f"{strip} 16",
             "shape_strip_return": f"{strip} 4", "shape_strip_structs": f"{strip} 2",
-            "shape_strip_fixed": f"{strip} 4",
+            "shape_strip_fixed": f"{strip} 4", "shape_strip_div": f"{strip} 4",
             "shape_sum_dot": sums, "shape_sum_count": sums, "shape_sum_f32": sums,
-            "shape_sum_range": sums, "keep_sum_reads": None,
+            "shape_sum_range": sums, "shape_sum_spec": sums, "keep_sum_reads": None,
             "shape_bound_count": f"{bound} 8", "shape_bound_any": f"{bound} 8",
             "shape_bound_all": f"{bound} 8", "shape_bound_for": f"{bound} 6",
             "shape_bound_grow": f"{bound} 8",
@@ -1125,6 +1137,12 @@ class Runner:
             elif (want not in got) if want else got:
                 self.fail(f"loop shapes {name}", f"got {got}, want {want or 'none'}")
                 valid = False
+        # Both copies of a body run in blocks divide by the magic number of a
+        # divisor the loop cannot change (HoistDivisors), never by the divisor.
+        body = texts.get("shape_strip_div", "")
+        if "gs_divu32_q(" not in body or re.search(r"\bgs_(?:div|mod)_u32\(", body):
+            self.fail("loop shapes shape_strip_div", "a division not by the divisor's magic number")
+            valid = False
         # A && or || condition is a chain of branches (CodeGen::GenBranch):
         # neither the 0/1 flag the right operand sets inside an `if`, which
         # a value keeps, nor the two flags combined with & or | of a loop that
@@ -1144,6 +1162,7 @@ class Runner:
             "shape_chain_while": set(), "shape_chain_skip": set(), "shape_chain_if": set(),
             "shape_chain_guard": set(), "shape_chain_order": set(), "shape_chain_call": set(),
             "keep_chain_value": {"flag"}, "keep_chain_spec": {"speculative"},
+            "shape_sum_spec": {"speculative"},
         }
         for name, want in chains.items():
             if name not in texts:
@@ -1400,7 +1419,7 @@ def main():
     # The names --only selects by: every fixture of a category directory, and
     # the checks that are not fixtures.
     fixture_files = [f for f in sorted(HERE.glob("*/*.goose"))
-                     if f.parent.name not in ("goose_in_goose", "lint") and f.name != "lexer_tokens.goose"]
+                     if f.parent.name not in ("goose_in_goose", "lint", "lsp") and f.name != "lexer_tokens.goose"]
     names = [fixture_name(f) for f in fixture_files] + list(EXTRAS)
     for glob in args.only:
         if not fnmatch.filter(names, glob):
@@ -1521,7 +1540,7 @@ def main():
 
     # One level of category directories; nested syntax helpers and the modules
     # of the goose_in_goose bootstrap are exercised through their entry points.
-    tests = [f for f in fixture_files if f.parent.name not in ("errors", "errors_tc")]
+    tests = [f for f in fixture_files if f.parent.name not in ("errors", "errors_tc", "lsp")]
     if len({f.stem for f in tests}) != len(tests):
         ap.error("fixture names must be unique across categories (shared expected/ and build outputs)")
     tests = [f for f in tests if wanted(fixture_name(f))]
@@ -1720,9 +1739,11 @@ def main():
         r.show_task(optimize, lvl)
 
     # The data stack report (--stacks): a program with a worker, whose
-    # first-line budget caps the workers at one, and a recursive one whose
-    # first-line GS_MAX_STACKS the compiler checks the count against. The
-    # counts themselves follow the emitted code and are not pinned.
+    # first-line budget caps the workers at one, a recursive one whose
+    # first-line GS_MAX_STACKS the compiler checks the count against, and one
+    # whose worker only puts a fixed value: it holds no regions, which caps
+    # nothing. The counts themselves follow the emitted code and are not
+    # pinned, other than that worker's none.
     def stacks_report(f, patterns):
         # The report goes where the compiler's messages do: without an -o,
         # stderr where it has TinyCC to run the program, stdout where it
@@ -1747,6 +1768,10 @@ def main():
         r"^main program: [1-4] data stacks \+ 0 global stacks = [1-4] regions$",
         r"^thread cap: none, no workers$",
         r"^fn in_block: [1-9]\d* own, [1-4] with callees$",
+    ])
+    r.show_task(stacks_report, HERE / "threads" / "thread_spawn_discarded.goose", [
+        r"^worker `worker`: 0 data stacks \+ 0 argument and global stacks = 0 regions$",
+        r"^thread cap: none, no worker holds a region$",
     ])
     # The loops codegen restates, read in the C of their fixture, where -O1
     # keeps each function a C function of its own.
@@ -1890,10 +1915,9 @@ def main():
 
         # Direct runtime lifecycle checks use small region limits and allocator
         # instrumentation that cannot be expressed by a Goose program. Keep
-        # this one focused native test in both profiles.
-        def runtime_lifecycle():
-            name = "runtime_threads_lifecycle"
-            src = HERE / "threads" / f"{name}.c"
+        # these focused native tests in both profiles.
+        def runtime_lifecycle(name, directory):
+            src = HERE / directory / f"{name}.c"
             out_exe = gendir / f"{name}{tc.EXE_SUFFIX}"
             ok, log = cc.compile(src, out_exe, opt=2 if args.profile == "baseline" else 1,
                                  extra=extra, strict_decls=True,
@@ -1905,7 +1929,8 @@ def main():
                 if out is not None and r.check_stdout(name, name, out):
                     r.ok(f"runtime {name}")
         if wanted("extra/runtime_lifecycle"):
-            r.show_task(runtime_lifecycle)
+            r.show_task(runtime_lifecycle, "runtime_threads_lifecycle", "threads")
+            r.show_task(runtime_lifecycle, "runtime_trim_memory", "runtime")
 
         # The same coverage test through clang, release and debug. A compiler
         # that accepts more C than the standard does is not what checks the
@@ -2000,6 +2025,18 @@ def main():
         r.section("extern types")
         r.show_task(extern_types)
 
+    def extern_dylib():
+        from extern_dylib import check_extern_dylib
+        try:
+            check_extern_dylib(exe, cc, gendir, jit=jit, runtime=r.runtime, extra=extra)
+            r.ok("extern dylib: a block's members bound from a shared library by name, "
+                 "missing library and symbol, unused members, a package with both kinds")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("extern dylib", str(e))
+    if cc and wanted("extra/extern_dylib"):
+        r.section("extern dylib")
+        r.show_task(extern_dylib)
+
     def resource_paths():
         from resource_paths import check_resource_paths
         try:
@@ -2019,7 +2056,7 @@ def main():
                 r.say(f"skip packages from git ({skipped})")
             else:
                 r.ok("packages from git: concurrent fetches, submodules, interrupted fetch, "
-                     "tag, commit, update, differing ref")
+                     "tag, commit, update, differing ref, offline")
         except RuntimeError as e:
             r.fail("packages from git", str(e))
     r.section("packages from git")
@@ -2044,6 +2081,10 @@ def main():
         code, out, err = tc.run_capture([exe, "version"])
         checks.append(("version", code == 0 and
                        re.match(r"goose runtime [0-9a-f]{12}\s*$", out) is not None, out + err))
+        # Less than a page or two of data stack is no reservation to run on.
+        code, out, err = tc.run_capture([exe, "check", "--stack-reserve", "5000", probe])
+        checks.append(("check --stack-reserve 5000 (refused)",
+                       code == 1 and "from 64 KB" in err, out + err))
         # The help: `goose --help` on the commands, `goose <command> --help`
         # and `goose help <topic>` on each, which between them name every
         # option the driver reads, but for the hidden shader ones.
@@ -2086,6 +2127,52 @@ def main():
         except ValueError:
             good = False
         checks.append(("toolchain --json", good, out + err))
+        # A control character in what it reports is escaped, not lost.
+        home = str(gendir / "home\twith a tab")
+        tab = subprocess.run([str(exe), "toolchain", "--json"], capture_output=True, text=True,
+                             errors="replace", env=dict(os.environ, GOOSE_HOME=home))
+        try:
+            good = json.loads(tab.stdout).get("home") == home.replace("\\", "/")
+        except ValueError:
+            good = False
+        checks.append(("toolchain --json with a tab in GOOSE_HOME", good, tab.stdout + tab.stderr))
+        # A directory on PATH that has a tool's name is not that tool.
+        fakebin = gendir / "fakebin"
+        (fakebin / "git").mkdir(parents=True, exist_ok=True)
+        found = subprocess.run([str(exe), "toolchain", "--json"], capture_output=True, text=True,
+                               errors="replace",
+                               env=dict(os.environ, PATH=os.pathsep.join(
+                                   [str(fakebin), os.environ.get("PATH", "")])))
+        try:
+            git = json.loads(found.stdout).get("git")
+            good = not git or Path(git["path"]) != fakebin / "git"
+        except ValueError:
+            good = False
+        checks.append(("toolchain --json with a directory named git on PATH", good,
+                       found.stdout + found.stderr))
+        # With no C compiler anywhere, every one looked for is named.
+        nowhere = gendir / "nowhere"
+        nowhere.mkdir(exist_ok=True)
+        env = {k: v for k, v in os.environ.items()
+               if k.upper() not in ("GOOSE_CC", "PATH", "PROGRAMFILES(X86)")}
+        # Nothing on PATH, and no Visual Studio where vswhere would be.
+        env.update({"PATH": str(nowhere), "GOOSE_HOME": str(nowhere / "home"),
+                    "PROGRAMFILES(X86)": str(nowhere)})
+        nocc = subprocess.run([str(exe), "toolchain"], capture_output=True, text=True,
+                              errors="replace", env=env)
+        names = re.search(r"cannot find a C compiler \(looked for ([^)]*)\)", nocc.stdout)
+        checks.append(("toolchain with no C compiler",
+                       nocc.returncode == 1 and names is not None and
+                       all(re.search(rf"\b{n}\b", names[1]) for n in ("clang", "gcc", "cc")),
+                       nocc.stdout + nocc.stderr))
+        # A C compiler that cannot be started is reported with the reason.
+        notcc = gendir / ("not_a_compiler" + tc.EXE_SUFFIX)
+        tc.write_text(notcc, "not a program\n")
+        code, out, err = tc.run_capture([exe, "build", "--cc", str(notcc), "-o",
+                                         str(gendir / ("never" + tc.EXE_SUFFIX)), probe])
+        checks.append(("build --cc <not a program> (refused)",
+                       code == 1 and "cannot start" in out + err and "No error" not in out + err,
+                       out + err))
         if cc:
             # `goose build` against the toolchain the compiler finds itself:
             # the executable beside -o, running; a dry run writing none.
@@ -2115,11 +2202,45 @@ def main():
         try:
             check_cli_paths(exe, cc, gendir)
             r.ok("command line paths: new -o directories, \".\" and \"..\" sources, rooted "
-                 "--include, unresolved imports")
+                 "--include, unresolved imports, no runtime sources")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("command line paths", str(e))
     if wanted("extra/cli_paths"):
         r.show_task(cli_paths)
+
+    def diagnostics_json():
+        from diagnostics_json import check_diagnostics_json
+        try:
+            check_diagnostics_json(exe, gendir)
+            r.ok("diagnostics as JSON: the text mode's text, positions and ranges, the "
+                 "instantiation chain at its calls, warnings, several errors at once")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("diagnostics as JSON", str(e))
+    if wanted("extra/diagnostics_json"):
+        r.show_task(diagnostics_json)
+
+    def doc_comments():
+        from doc_comments import check_doc_comments
+        try:
+            check_doc_comments(exe, gendir)
+            r.ok("documentation comments: the comment lines above declarations, fields and "
+                 "variants, and what ends a run of them")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("documentation comments", str(e))
+    if wanted("extra/doc_comments"):
+        r.show_task(doc_comments)
+
+    def lsp_protocol():
+        from lsp_protocol import check_lsp_protocol
+        try:
+            check_lsp_protocol(exe, gendir)
+            r.ok("language server: diagnostics, hover, definition, references, rename, symbols, "
+                 "call hierarchy, semantic tokens, signature help, inlay hints, folding and selection ranges, "
+                 "completion, code lenses, edits and cancellation, requests right behind a change")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("language server", str(e))
+    if wanted("extra/lsp_protocol"):
+        r.show_task(lsp_protocol)
 
     def runtime_cache():
         from runtime_cache import check_runtime_cache
@@ -2130,6 +2251,26 @@ def main():
             r.fail("runtime cache", str(e))
     if cc and wanted("extra/runtime_cache"):
         r.show_task(runtime_cache)
+
+    def native_cache():
+        from native_cache import check_native_cache
+        try:
+            check_native_cache(exe, cc, gendir)
+            r.ok("native part cache: concurrent builds of one package compile its C once")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("native part cache", str(e))
+    if cc and wanted("extra/native_cache"):
+        r.show_task(native_cache)
+    def runtime_io():
+        from runtime_io import check_runtime_io
+        try:
+            check_runtime_io(exe, gendir, jit=jit)
+            r.ok("runtime io: stdin's bytes as they came, read_line into a builder holding a "
+                 "carriage return, write_file_atomic keeping a file's permissions")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("runtime io", str(e))
+    if cc and wanted("extra/runtime_io"):
+        r.show_task(runtime_io)
 
     def exit_race():
         from exit_race import check_exit_race
@@ -2153,6 +2294,19 @@ def main():
             r.fail("huge pages", str(e))
     if cc and wanted("extra/huge_pages"):
         r.show_task(huge_pages)
+
+    def commit_limit():
+        from commit_limit import check_commit_limit
+        try:
+            skipped = check_commit_limit(exe, gendir)
+            if skipped:
+                r.say(f"skip commit limit ({skipped})")
+            else:
+                r.ok("commit limit: a data stack the system will not commit is out of memory")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("commit limit", str(e))
+    if cc:
+        r.show_task(commit_limit)
 
     def native_toolchain():
         from native_toolchain import check_native_toolchain
@@ -2204,6 +2358,19 @@ def main():
     if cc and wanted("extra/s8_struct_contract"):
         r.section("S8 struct contract")
         r.show_task(s8_struct_contract)
+
+    def cmake_response_files():
+        from native_toolchain import check_cmake_response_files
+        try:
+            skipped = check_cmake_response_files(exe, gendir)
+            if skipped:
+                r.say(f"skip CMake response files ({skipped})")
+            else:
+                r.ok("CMake response files: cc-style archive paths with and without spaces")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("CMake response files", str(e))
+    if cc:
+        r.show_task(cmake_response_files)
 
     def native_rebuild():
         from native_rebuild import check_native_rebuild
@@ -2282,6 +2449,42 @@ def main():
     r.section("typecheck errors (errors_tc/ and native modules' rejection tests)")
     for f in tc_errors:
         r.show_later(tc_error, f)
+
+    # Recovery fixtures: several errors each, which the parser and the
+    # checker go on past (docs/design/language_server.md §5 D), reported in
+    # the order found, in text and as JSON. Each `// error:` marker is part
+    # of the message of the error in its position, and there are no others.
+    recovery = sorted((HERE / "errors_tc" / "recovery").glob("*.goose"))
+    recovery_runs = r.goose_each(["--check"], recovery)
+
+    def recovery_error(f):
+        code, out, err = r.screened(f, recovery_runs[f]())
+        if code != 1 or tc.sanitizer_failure(err):
+            r.fail(f"recovery {f.name} (exit {code})", out + err)
+            return
+        markers = error_markers(f)
+        heads = [m[1] for m in (re.match(r"^\S.*:\d+(?::\d+)?: error: (.*)$", line)
+                                for line in err.splitlines()) if m]
+
+        def in_order(got):
+            return len(got) == len(markers) and all(m in g for m, g in zip(markers, got))
+        if not in_order(heads):
+            r.fail(f"recovery {f.name}: the errors in order",
+                   "want:\n" + "\n".join(markers) + "\ngot:\n" + "\n".join(heads) + "\n" + err)
+            return
+        jcode, jout, jerr = r.goose("check", "--diagnostics", "json", f)
+        try:
+            diags = json.loads(jout)
+        except ValueError:
+            diags = []
+        messages = [d["message"] for d in diags if d.get("severity") == "error"]
+        if jcode != 1 or not in_order(messages) or any("line" not in d for d in diags):
+            r.fail(f"recovery {f.name}: --diagnostics json", jout + jerr)
+            return
+        r.ok(f"recovery {f.name}")
+    r.section("recovery (errors_tc/recovery/)")
+    for f in recovery:
+        r.show_later(recovery_error, f)
 
     r.section("long call chains and guard runs")
     for future in deep:

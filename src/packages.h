@@ -83,6 +83,9 @@ inline bool SameSource(const PackageSource &a, const PackageSource &b) {
 
 // `goose fetch --update`: refs that are not commits are fetched again.
 inline bool package_update = false;
+// `--offline`: nothing is fetched; a package whose checkout is not in the
+// cache is an error at its import, which `goose fetch` resolves.
+inline bool package_nofetch = false;
 
 // Offline resolution may use an existing checkout, but cannot fetch or update one.
 enum class PackageFetchPolicy { AllowFetch, Offline, LintAllowFetch };
@@ -132,7 +135,7 @@ inline void LoadSidecar(Package &pkg, bool isprogram) {
     DepNoteInput(pkg.sidecar);
     if (!pkg.hassidecar) return;
     const char *lists[] = { "c_sources", "c_include", "c_defines", "c_flags_cc", "c_flags_msvc",
-                            "c_libs" };
+                            "c_libs", "dylibs" };
     vector<string> known = { "cmake_target", "cmake_options", "main_thread_only", "exclude" };
     for (auto key : lists)
         for (auto suffix : { "", "_windows", "_linux", "_macos" }) known.push_back(cat(key, suffix));
@@ -164,6 +167,27 @@ inline void LoadSidecar(Package &pkg, bool isprogram) {
     pkg.main_thread_only = bf.Bool("main_thread_only");
     for (auto &e : bf.Strings("exclude")) pkg.exclude.push_back(PackageDir(cat(pkg.root, e)));
     if (isprogram) pkg.output = bf.Str("output");
+    // dylibs maps a name the source's extern blocks use to the spelling
+    // to open on every platform, and the suffixed lists on one; the
+    // generated C carries all of them, the runtime picking its own. A name
+    // no block declares is refused once every block is known (ParseProgram).
+    for (auto suffix : { "", "_windows", "_linux", "_macos" }) {
+        auto key = cat("dylibs", suffix);
+        for (auto &e : bf.Strings(key)) {
+            auto eq = e.find('=');
+            if (eq == string::npos || eq == 0 || eq + 1 == e.size())
+                throw CompileError { cat(pkg.sidecar, ": ", key, " entry \"", e,
+                                         "\" is written name=spelling") };
+            auto name = e.substr(0, eq), spelling = e.substr(eq + 1);
+            auto it = std::find_if(pkg.dylibs.begin(), pkg.dylibs.end(),
+                                   [&](auto &d) { return d.name == name; });
+            if (it == pkg.dylibs.end()) it = pkg.dylibs.insert(it, DylibSpelling { name });
+            auto &slot = *suffix ? it->On(suffix) : it->any;
+            if (!slot.empty())
+                throw CompileError { cat(pkg.sidecar, ": ", key, " maps ", name, " twice") };
+            slot = spelling;
+        }
+    }
     if (!pkg.csources.empty() && !pkg.cmake_target.empty())
         throw CompileError { cat(pkg.sidecar, ": a package has either c_sources or a cmake_target") };
 }
@@ -175,9 +199,12 @@ inline void RemoveTree(const string &path) {
     filesystem::path p(path);
     if (!filesystem::exists(p, ec)) return;
     #ifdef _WIN32
-        for (auto &e : filesystem::recursive_directory_iterator(p, ec))
-            filesystem::permissions(e.path(), filesystem::perms::owner_write,
-                                    filesystem::perm_options::add, ec);
+        for (filesystem::recursive_directory_iterator it(p, ec), end; !ec && it != end;
+             it.increment(ec)) {
+            std::error_code pec;
+            filesystem::permissions(it->path(), filesystem::perms::owner_write,
+                                    filesystem::perm_options::add, pec);
+        }
     #endif
     filesystem::remove_all(p, ec);
 }
@@ -220,7 +247,10 @@ inline string FetchPackage(const PackageSource &s, const string &name,
     auto dir = GitCacheDir(s);
     std::error_code ec;
     auto have = ProbeDirectory(dir);
-    auto update = have && package_update && !IsCommitHash(s.ref);
+    if (!have && package_nofetch)
+        throw CompileError { cat("the package ", name, " from ", s.text,
+                                 " is not fetched, and --offline fetches nothing: `goose fetch` fetches it") };
+    auto update = have && package_update && !IsCommitHash(s.ref) && !package_nofetch;
     if (policy == PackageFetchPolicy::Offline) {
         if (!have)
             throw CompileError { cat("cannot resolve package ", name,

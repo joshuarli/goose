@@ -610,7 +610,7 @@ public:
                 if (onfunval) onfunval(x);
                 c.B(x->explicit_params).U(x->params.size());
                 for (auto &q : x->params) Param_(q);
-                p.U((uint64_t)x->col);
+                p.U((uint64_t)x->line.col);
                 Expr(x->body);
                 break;
             }
@@ -1097,7 +1097,8 @@ class DepFinal {
                     Types(x->rettypes);
                     Types(x->tyargs);
                     Vars(x->fvparams);
-                    Decl(x->fvtarget);
+                    c.U(x->fvremap.size());
+                    for (auto &[source, target] : x->fvremap) { Var(source); Var(target); }
                     if (x->shaderblob) c.Tag('b').Dig(Blob(x->shaderblob));
                     else c.Tag('_');
                     if (x->trailing) {
@@ -1302,6 +1303,20 @@ class DepFinal {
         for (auto &rr : r.retroots) {
             RootsC(c, rr.alts);
             c.B(rr.writable).B(rr.byteview).B(rr.freshview).B(rr.set);
+        }
+        {
+            vector<string> stores;
+            for (auto &store : r.relativestores) {
+                Canon x;
+                RootsC(x, store.source);
+                RootsC(x, store.destination);
+                x.I(store.result);
+                stores.push_back(x.Text());
+            }
+            sort(stores.begin(), stores.end());
+            stores.erase(unique(stores.begin(), stores.end()), stores.end());
+            c.U(stores.size());
+            for (auto &store : stores) c.Str(store);
         }
         {
             vector<string> v;

@@ -1,4 +1,4 @@
-// error: call g stores a reference rooted at x into what its parameter h leads to, which may be n, which x does not outlive
+// error: storing a reference rooted at x, which does not outlive the destination (§9.2)
 // g passes its own h on, so what f stores into the storage behind it is g's
 // to report to its callers, which check it against theirs.
 struct Node { p: i64? }

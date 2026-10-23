@@ -90,7 +90,7 @@ struct Program {
         sf->ns = ns;
         sf->qname = name;
         sf->line = Line { line, file };
-        for (auto t : params) sf->params.push_back(Param { "p", t });
+        for (auto t : params) sf->params.push_back(Param { "p", Line {}, t });
         ast.functions.push_back(sf);
         return sf;
     }
@@ -376,6 +376,44 @@ static void TestContextKey() {
     assert(k_4.Context(i2).dims[(int)SpecDim::EnvReads] != k_1.Context(i1).dims[(int)SpecDim::EnvReads]);
 }
 
+static void TestRelativeStoreSummary() {
+    Program p;
+    auto callee = Spec(p, p.Fn("callee", { p.Slice(p.I(IS_I64)) }));
+    auto caller = Spec(p, p.Fn("caller", { p.Slice(p.I(IS_I64)) }));
+    DepRecorder recorder;
+    recorder.specs[caller].callees.insert(callee);
+    auto summary = [&] {
+        KeyMaker keys(p.ast);
+        DepFinal report(p.ast, keys, recorder);
+        report.Function(caller);
+        for (auto &dependency : report.out.back().deps)
+            if (dependency.kind == DepKind::Summary) return dependency.digest;
+        abort();
+    };
+    auto empty = summary();
+    callee->record.relativestores.push_back({});
+    auto stored = summary();
+    assert(stored != empty);
+    callee->record.relativestores[0].source.unknown = true;
+    auto source = summary();
+    assert(source != stored);
+    callee->record.relativestores[0].destination.unknown = true;
+    auto destination = summary();
+    assert(destination != source);
+    callee->record.relativestores[0].result = 0;
+    auto result = summary();
+    assert(result != destination);
+    auto other = callee->record.relativestores[0];
+    other.result = 1;
+    callee->record.relativestores.push_back(other);
+    auto multiple = summary();
+    assert(multiple != result);
+    reverse(callee->record.relativestores.begin(), callee->record.relativestores.end());
+    assert(summary() == multiple);
+    callee->record.relativestores.push_back(other);
+    assert(summary() == multiple);
+}
+
 int main() {
     TestSha256();
     TestCanon();
@@ -383,6 +421,7 @@ int main() {
     TestTypeKey();
     TestWrittenIdentity();
     TestContextKey();
+    TestRelativeStoreSummary();
     puts("ok");
     return 0;
 }

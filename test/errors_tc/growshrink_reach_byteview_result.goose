@@ -1,4 +1,4 @@
-// error: storing a reference that may point into a grow-shrink array reached through tops's references
+// error: storing a reference into mine, which holds a grow-shrink array: such a reference lives in a variable, is passed down or returned, and is never stored (§5.2)
 // bytes returns the bytes of the array t.a leads to, which no slot has
 // held; from main it is bounded by tops, whose references lead to mine.
 //

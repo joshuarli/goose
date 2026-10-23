@@ -77,7 +77,7 @@ them.
 [Appendix A](#appendix-a-keywords-and-operators). A few words are keywords
 only in one position and names everywhere else: `from` after a `return`
 value, `upto` after an unsigned type in a type, `inline` and `checkfree`
-before `fn`, and `fields` and `types` in a `const for` header. `in` is a
+before `fn`, and `fields`, `variants` and `types` in a `const for` header. `in` is a
 keyword throughout.
 
 **Integer literals** are decimal (`42`) or hexadecimal (`0xFF`). The whole
@@ -362,6 +362,32 @@ print(-7 % 3, " ", 7 % -3, " ", -7 / 3);
 ```
 2 1 -2
 ```
+
+Integer `/` truncates toward zero, so `/` and `%` do not form a matching
+quotient/remainder pair for negative dividends. `std` supplies both missing
+partners, at every integer width: `rem(a, b)` pairs with `/`, and
+`div_euclid(a, b)` pairs with `%`.
+
+```goose
+import std;
+fn main() {
+    print(-7 / 3, " ", rem(-7, 3));
+    print(div_euclid(-7, 3), " ", -7 % 3);
+    print(div_euclid(-1, 10), " ", -1 % 10);  // tile and offset
+}
+```
+
+```
+-2 -1
+-3 2
+-1 9
+```
+
+`div_euclid` rounds down for a positive divisor and up for a negative one;
+its quotient overflows exactly when `/` does. `rem` is zero or has the
+dividend's sign, and `rem(MIN, -1)` is zero at every signed width.
+Both functions abort on a zero divisor. Float `%` uses C `fmod`, so
+`-7.0 % 3.0` is `-1.0`; these `std` functions take integers only.
 
 **Overflow.** Unsigned arithmetic wraps modulo 2^width in every build, by
 definition: that is what hashes, random number generators and bit tricks
@@ -1768,6 +1794,32 @@ are all `in pool` copies like any other, since its offsets do not depend
 on where it sits. The one copy that is always allowed is a default value:
 a literal's `..` gives a relative field null. Spec §3.9.
 
+A function or trailing block can return a fresh value with relative links.
+It is constructed at the receiver, including across function calls and
+with optimization disabled:
+
+```goose
+struct Node { value: i64, next: Node&<u32>? }
+fn linked(first: Node&, value: i64) -> Node {
+    Node { value: value, next: first }
+}
+fn add<F>(nodes: Node[>..]&) { nodes.push(F()); }
+fn main() {
+    var nodes: Node[>..] = [Node { value: 1 }];
+    nodes.push(linked(nodes[0], 2));
+    let first .= nodes[0];
+    add(nodes) { Node { value: 3, next: first } };
+    let next = nodes[2].next;
+    if next { print(next.value); }  // 1
+}
+```
+
+Each call must place the result in the same root as the linked element.
+For example, `let n = linked(nodes[0], 2)` is an error: the new local is
+separate storage. Returning an existing node by value is still a prohibited
+copy. A result that needs its receiver's root also cannot be used as a
+resize fill or converted through a temporary array representation.
+
 ### Pool-relative links and `self`
 
 `pool` in `T&<u32 in pool>` names a global `var` or `reusable var` of a
@@ -2333,7 +2385,8 @@ var edges: NodeId[>..] = [];
 * **Using one.** Indexing `a` with an index of `a` needs no check. A
   value converts implicitly to its plain integer type, so arithmetic on it
   gives plain integers; compound assignment on a place of an index type is
-  an error.
+  an error, and so is memberwise arithmetic on a struct or fixed array
+  holding one.
 * **Loops.** `for i in lo..hi` whose bounds are index or bound types of
   one array gives `i` that array's index type; so does `for i in n` with
   `n` of one.
@@ -2586,7 +2639,8 @@ fn main() {
 ### `const for`: expansion at specialization time
 
 `const for` specializes a fragment once per entry of a compile-time
-sequence: the fields of a struct, a list of types, or a list of constants.
+sequence: the fields of a struct, the variants of an enum, a list of
+types, or a list of constants.
 It is the language's reflection, with no runtime iterator and no
 metadata: each copy of the body is ordinary code.
 
@@ -2630,7 +2684,45 @@ usable as `v.A` or as the label `A:` in a literal of that struct type;
 constants, and the integer expressions an array size allows). A statement
 fragment is a scope of its own per entry, and a constructor fragment
 contributes initializers. `break` and `continue` cannot cross an
-expansion. Spec §6.5, `docs/design/const_for.md`.
+expansion.
+
+`variants<E>` binds each variant's name and the variant `V`, written where
+a variant's name is: `V` as a type (and `fields<V>` for its payload), `V {
+… }` to build one, `V c` or `V &c` as a `match` arm, and `V` as a value when
+it has no payload. A `match` fragment contributes arms, checked as written
+ones: every variant once, `_` last.
+
+```goose
+enum Shape { Circle { r: i64 }, Rect { w: i64, h: i64 }, Dot }
+
+fn show<T>(value: T) {
+    match value {
+        const for <N, V> in variants<T> {
+            V v => {
+                print(N);
+                const for <F, A> in fields<V> { print("  ", F, " = ", v.A); }
+            },
+        }
+    }
+}
+
+fn main() {
+    let s: Shape = Shape.Rect { w: 3, h: 4 };
+    show(s);
+    const for <N, V> in variants<Shape> { print(N); }
+}
+```
+
+```
+Rect
+  w = 3
+  h = 4
+Circle
+Rect
+Dot
+```
+
+Spec §6.5, `docs/design/const_for.md`.
 
 ### Functions that never return
 
@@ -2866,7 +2958,7 @@ Spec §7.5.
 | Qualifier | Meaning | Section |
 |---|---|---|
 | `recursive fn` | the entry of a recursive cycle | [19](#19-recursion) |
-| `extern fn`, `extern "sym" fn` | a C function | [24](#24-calling-c-and-being-called-from-c) |
+| `extern fn`, `extern fn … = "sym"` | a C function | [24](#24-calling-c-and-being-called-from-c) |
 | `export fn`, `export "sym" fn` | a Goose function callable from C | [24](#24-calling-c-and-being-called-from-c) |
 | `thread_fn` | a worker's entry point | [22](#22-threads) |
 | `checkfree fn` | no bounds check may remain in it | [15](#checkfree-fn) |
@@ -2996,14 +3088,18 @@ foo(1, h)                            // a named function
   nested function.
 * A `return` inside a block returns from the **lexically enclosing named
   function**, not from the function calling the block, so a hand-written
-  iterator has the same structuring power as `for`.
+  iterator has the same structuring power as `for`. A reference it returns
+  may be one the function calling the block handed it, which points where
+  that call's argument does, but not one into that function's own locals
+  or the block's, which die as the return leaves them.
 * A named function keeps its parameter defaults as a value; a block's
   parameters have none. A function value may follow fewer arguments than
   the callee has parameters where the rest have defaults.
 * A name with several overloads passes them all, and each call of the
   value resolves among them.
-* A block's value is checked without the destination its call meets, so a
-  block cannot be `[]`.
+* A block infers its value's type without the destination type its call
+  meets, so a block cannot be `[]`. Its receiving storage is still available
+  for checking relative links in a fresh result.
 
 ```goose
 fn each_pair<T, F>(xs: T[:]) {
@@ -3234,8 +3330,9 @@ error: line 1: bad age
   function in scope, else the name's overload set, with `from ns::parse`
   explicit. An unrelated function that merely shares the name never
   catches the return.
-* The current compiler lets a long-distance return carry references to
-  globals and static data only; return owned values, as above.
+* The current compiler lets a long-distance return written in a named
+  function carry references to globals and static data only; return owned
+  values, as above.
 
 The same machinery is what lets a block `return` from its enclosing
 function through a higher-order function ([section 18](#function-values)).
@@ -3386,11 +3483,15 @@ in the language.
 | Builtin | Meaning |
 |---|---|
 | `thread_spawn(worker, args…) -> i64` | starts a worker; its id, never reused |
-| `thread_wait(id)` | blocks until that worker has returned and its storage is released |
+| `thread_spawn_contained(worker, args…) -> i64` | starts a worker whose aborts end only that worker |
+| `thread_wait(id) -> bool` | blocks until that worker has ended and its storage is released; `false` if it was contained and aborted |
+| `thread_wait(id, msg) -> bool` | as `thread_wait(id)`, and the first such wait appends a contained worker's abort message to `msg` |
 | `hardware_threads() -> i64` | a sensible worker count, never more than the data stacks allow |
-| `qput(v)` | puts `v` on the queue for its type |
+| `qput(v) -> bool` | puts `v` on the queue for its type; `false`, at once, if the queue is full |
 | `qget<T>() -> T` | takes the next `T`, blocking |
+| `qget<T>(ms) -> T, bool` | the same, waiting at most `ms` milliseconds; else `T`'s zero value and `false` |
 | `qpoll<T>() -> T, bool` | takes one if there is one; else `T`'s zero value and `false` |
+| `qlimit<T>(n)` | lets the queue for `T` hold at most `n` messages |
 
 Values cross between programs through **typed queues**, one per type, and
 whatever crosses, arguments included, must be **flat**: no references or
@@ -3426,6 +3527,12 @@ fn main() {
 }
 ```
 
+A queue has no limit of messages until `qlimit` gives it one. Past it,
+`qput` returns `false` without waiting, so a server can turn work away
+rather than queue it without end; `qput(v);` as a statement ignores the
+answer. To bound the memory a queue may hold, set its limit to that memory
+divided by the size of a typical message.
+
 A worker's return releases everything it owned, whether or not anyone
 waits for it; queued messages outlive their sender; workers still running
 when `main` returns are killed. A global that is not flat is an error in
@@ -3433,6 +3540,39 @@ any function a `thread_fn` reaches, unless it is a `let` whose references
 all lead to static data, as a string literal's do. Programs with threads
 need a real C compiler: `goose build`, since the in-process TinyCC
 backend cannot place thread-local storage. Spec §11.2.
+
+### Contained workers
+
+A failed check or `abort(msg)` in a worker started with
+`thread_spawn_contained` ends only that worker, which releases what a
+return would. The message goes to the waiter instead of stderr: every
+`thread_wait` for the worker returns `false`, and the first
+`thread_wait(id, msg)` appends the message, with its source location, to
+`msg`. Later waits get no message, so ask for it once and keep it. A
+supervisor can log it and start another:
+
+<!-- check-only -->
+```goose
+thread_fn serve(attempt: i64) {
+    assert(attempt >= 2);                        // a bug the first two hit
+    print("attempt ", attempt, " served");
+}
+
+fn main() {
+    var attempt = 0;
+    var why: u8[>..] = [];
+    while !thread_wait(thread_spawn_contained(serve, attempt), why) {
+        print("attempt ", attempt, " failed: ", why);
+        why.clear();
+        attempt++;
+    }
+}
+```
+
+Stack overflow, `exit(code)`, and aborts on main's thread still end the
+program, and a worker that a contained one starts with `thread_spawn` is
+not contained. Files and other resources opened through `extern fn` stay
+open. Spec §11.2.
 
 ---
 
@@ -3518,15 +3658,17 @@ links the checker never proved. The byte contract is in
 
 ### `extern fn`
 
-A declaration without a body binds a Goose signature to a C function; the
-optional string is the C symbol, and the Goose name is used otherwise. It
+A declaration without a body binds a Goose signature to a C function; a
+string after `=`, where the body would go, is the C symbol, and the Goose
+name is used otherwise. The older `extern "cbrt" fn cube_root(...)`,
+with the string after `extern`, is deprecated and warns. It
 is top-level, fully typed, not generic, and joins overload resolution like
 any function. A call compiles to a direct C call.
 
 ```goose
 struct Stats { lo: i32, hi: i32, mean: f64 }
 
-extern "cbrt" fn cube_root(x: f64) -> f64;      // libm, by its C name
+extern fn cube_root(x: f64) -> f64 = "cbrt";    // libm, by its C name
 extern fn hypot(x: f64, y: f64) -> f64;
 extern fn crc32_bytes(s: const u8[:]) -> u32;   // a slice crosses as { data, len }
 extern fn stats_of(xs: i32[:], out: Stats&);    // a struct filled through a pointer
@@ -3546,6 +3688,91 @@ C must not keep a borrowed argument beyond the call. The program's own C
 goes in a sidecar `foo.build` beside `foo.goose` (`c_sources = ["impl.c"];`)
 or arrives with `--include header.h`; the `math` and `os` modules are
 built on this interface. Spec §7.10, [packages.md](packages.md#3-a-program-with-c-of-its-own).
+
+### `extern "lib" { … }`: a shared library, bound by name
+
+An `extern` block names a shared library and declares functions bound
+from it when the program starts, with no C to compile or link: the
+program opens the library and looks the symbols up, and a library or
+symbol that is missing is a runtime error naming the spelling it tried.
+A member is an `extern fn` written without the word; its string after
+`=`, if any, is its C symbol.
+
+```goose
+extern "SDL2" {
+    fn SDL_Init(flags: u32) -> i32;
+    fn SDL_Quit();
+    fn SDL_GetTicks64() -> u64;
+    fn delay(ms: u32) = "SDL_Delay";
+}
+```
+
+`"SDL2"` opens `SDL2.dll`, `libSDL2.dylib` or `libSDL2.so` by the
+loader's search; `"bin/steam_api64"` opens that file, spelled the same
+way, under the program's resource directory (`resource_dir()`), which is
+how a program ships a library beside itself; a dotted name such as
+`"libSDL2-2.0.so.0"` is taken as written. A spelling that differs per
+platform, or per installation, goes in the sidecar rather than the source:
+
+<!-- fragment -->
+```goose
+// myprog.build
+dylibs_linux = ["SDL2=libSDL2-2.0.so.0"];     // the soname every distro installs
+dylibs_windows = ["SDL2=bin/SDL2.dll"];       // shipped with the program
+```
+
+A package's sidecar maps its own names as defaults and the program's
+sidecar wins, platform by platform, for the names it mentions.
+
+With no adapter between, a member is the library's real prototype under
+Goose's shapes. What that means in practice:
+
+* **Scalars** are their C types: `i32` is `int`, `u32` `unsigned`, `i64`
+  `int64_t`, `f32` `float`, `f64` `double`, `bool` one byte, `size_t`
+  `u64`. A C `enum`, `SDL_bool` included, is an `int`, so `i32`, not
+  `bool`. C's `long` is `i64` on Linux and macOS and `i32` on Windows, so
+  a function with a `long` needs a per-platform declaration or an adapter.
+* **Opaque handles**, the `SDL_Window *` a library returns and takes back,
+  are `u64`: a token Goose passes along and cannot look through.
+* **A pointer to something Goose owns** is `T&` for a flat fixed `T`:
+  `fn SDL_GetWindowSize(w: u64, x: i32&, y: i32&)`. Where C wants
+  `(ptr, count)`, pass `xs[0]` and `xs.len` as two arguments; where it
+  wants a NUL-terminated string, append the `\0` and pass the first byte
+  by reference:
+
+  ```goose
+  extern "SDL2" {
+      fn SDL_CreateWindow(title: const u8&, x: i32, y: i32, w: i32, h: i32, flags: u32) -> u64;
+  }
+  let title = "Goose\0";
+  let win = SDL_CreateWindow(title[0], 100, 100, 640, 480, 0);
+  ```
+
+* **Structs** cross in Goose's packed layout, which is C's only when the
+  fields already sit where C would place them. `SDL_Rect { int x, y, w,
+  h }` matches `struct Rect { x: i32, y: i32, w: i32, h: i32 }`; a `u8`
+  before an `i32` needs `pad 3` written where C pads, and a struct whose
+  size C rounds up, `{ a: i32, b: u8 }`, needs `pad 3` at the end to be
+  kept in an array C indexes. A struct with `pad` crosses by reference
+  only: by value, its pad is bytes the calling convention passes, where
+  C's padding is nothing, so `{ x: f32, pad 4, y: f64 }` would arrive in
+  the wrong registers. A struct passed by
+  reference, `const Rect&`, wants a variable: a literal is no reference
+  target, so `let r = Rect { 0, 0, 10, 10 }; SDL_HasIntersection(r, s)`
+  rather than the literal in the call.
+* **Memory the library owns**, a `const char *` it returns or an array it
+  keeps, comes back as a `u64` too, and `ffi::cstr(p)` and
+  `ffi::bytes(p, n)` ([stdlib.md](stdlib.md#ffi)) copy what is there into
+  Goose storage: `print(ffi::cstr(SDL_GetError()))`.
+* **Still an adapter's job**: callbacks (a function pointer the library
+  wants) and variadic functions, which cannot be bound at all. Each is a
+  few lines of C in a native part.
+
+Only a member a call reaches is bound, and a library none of whose
+members is called is never opened, so a block may declare an interface
+wider than any one program uses. A program whose only C is such libraries
+runs under the in-process backend with no C toolchain installed. Spec
+§7.10, [packages.md](packages.md#the-native-part).
 
 ### `export fn`
 
@@ -3592,8 +3819,8 @@ written in Goose under `stdlib/` and documented in [stdlib.md](stdlib.md).
 | `abort(msg)`, `exit(code)` | end the program; neither returns | [20](#stopping-the-program) |
 | `copy(x) -> T` | a fresh copy of the stored value `x` names | [4](#copies-are-visible) |
 | `default<T>() -> T` | the value a fixed-size `T` has before anything is written to it, declared defaults applied | [8](#field-defaults) |
-| `hardware_threads()`, `thread_spawn(worker, args…)`, `thread_wait(id)` | workers | [22](#22-threads) |
-| `qput(v)`, `qget<T>()`, `qpoll<T>()` | the typed queues | [22](#22-threads) |
+| `hardware_threads()`, `thread_spawn(worker, args…)`, `thread_spawn_contained(worker, args…)`, `thread_wait(id)`, `thread_wait(id, msg)` | workers | [22](#22-threads) |
+| `qput(v)`, `qget<T>()`, `qpoll<T>()`, `qlimit<T>(n)` | the typed queues | [22](#22-threads) |
 | `to_bytes(a)`, `to_bytes(a, out)`, `bytes_of(a)`, `from_bytes<T[>..]>(b)` | serialization | [23](#23-serialization) |
 | `embed_file(path)`, `embed_shader(…)` | a file's bytes, or a compiled shader, read at compile time | [21](#embed_file) |
 
