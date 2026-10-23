@@ -404,6 +404,7 @@ static GS_NORETURN void gs_park(void) {
 
 #else  /* posix */
 
+#include <errno.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -599,9 +600,21 @@ static uint8_t *gs_os_reserve(size_t usable, size_t size) {
         gs_panic("cannot protect data stack guard gap");
     }
 #endif
-    /* Most stacks hold a few bytes, which a transparent huge page at the
-       start would commit 2 MB for. */
-    #ifdef MADV_NOHUGEPAGE
+    #ifdef __linux__
+        #ifndef MADV_NOHUGEPAGE
+            #error Linux_runtime_requires_MADV_NOHUGEPAGE
+        #endif
+        if (madvise(p, usable, MADV_NOHUGEPAGE)) {
+            int advice_error = errno;
+            int release_error = munmap(p, size) ? errno : 0;
+            char message[sizeof("cannot disable huge pages for data stack (madvise errno=); cannot release address space (munmap errno=)") + 6 * sizeof(int)];
+            if (release_error)
+                snprintf(message, sizeof(message), "cannot disable huge pages for data stack (madvise errno=%d); cannot release address space (munmap errno=%d)", advice_error, release_error);
+            else
+                snprintf(message, sizeof(message), "cannot disable huge pages for data stack (madvise errno=%d)", advice_error);
+            gs_panic(message);
+        }
+    #elif defined(MADV_NOHUGEPAGE)
         madvise(p, usable < (2u << 20) ? usable : (2u << 20), MADV_NOHUGEPAGE);
     #endif
     return (uint8_t *)p;
