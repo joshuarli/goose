@@ -853,14 +853,13 @@ The Lean Core model implements the shrink-owner semantics in this contract, incl
 
 Their component type precedes the containing type. Here flat fixed elements are precisely §4.1's integers, booleans, fixed arrays and nominal flat structs: neither references/slices nor limited arrays occur inside an element. The slice supports `grow`, `growshrink` and `limited` as owned local/global arrays and as the pointee of a by-reference parameter. References to their whole owner, element references, slices, indexing, `.len`, `push`, `append`, iteration and the operations below work subject to their ordinary permission/root rules. It adds neither resizable fields nor dynamic-capacity `T[..]`. A `limited` is fixed-class in Goose, but this slice supports it only as an owner: by-value limited parameters/results, aggregate embedding, whole-object copies and whole limited-array assignment are `unsupported: limited-value`; they are not silently treated as clear-then-construct. Runtime-capacity arrays remain `unsupported: runtime-capacity`. By-value resizable arguments/results, `copy` of a nonfixed owner and nonfixed-result calls remain outside S8 (`unsupported: nonfixed-construction`). These are support boundaries, not changes to the source rules of language spec §3.4, §4.4 and §5.3.
 
-The exporter rejects the following source forms before publishing any Core/GIR artifact; a support failure includes its source location and is never represented by an opaque tag or a partially emitted module. The existing pilot/flat-struct exclusions also remain in force.
+The exporter rejects each excluded source form before it writes a Core or GIR artifact. Every support failure includes its source location. The exporter does not represent failures with opaque tags or partial modules. The pilot and flat-struct exclusions still apply. A limited owner's `.cap` returns its declared capacity after evaluating the receiver place once. `cap(owner)` remains invalid because `cap` is a property.
 
 | Excluded source form in this slice | Export feature id |
 |---|---|
 | Runtime-capacity `T[..]`, including `[..cap]` construction | `runtime-capacity` |
 | Static limited capacity zero, or greater than the wire `nat` limit | `zero-size`, or `capacity-limit`, respectively |
 | Limited initializer whose branches/block values are not literal runs (including array/slice variables, `copy`, `default` and limited-result calls) | `limited-initializer` |
-| `.cap`/`cap(owner)` on a limited owner | `limited-capacity` |
 | An owner fill literal `[value;count]` | `owner-fill-literal` |
 | By-value limited arguments/results, limited aggregate embedding/copy or whole limited-array assignment | `limited-value` |
 | By-value resizable arguments/results, nonfixed `copy`/result calls, or a grow/growshrink initializer/replacement with a nonliteral-run leaf | `nonfixed-construction` |

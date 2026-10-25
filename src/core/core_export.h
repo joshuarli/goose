@@ -2114,6 +2114,35 @@ private:
         return e;
     }
 
+    CoreExprP LimitedCapacityValue(Node *receiver, Line line) {
+        auto owner = receiver->exprtype ? Pointee(receiver->exprtype) : nullptr;
+        if (!IsArrayTE(owner) || owner->arr->akind != A_LIMITED) Fail("builtin-call", line);
+        auto ownerType = Ty(owner);
+        CoreType reference;
+        reference.kind = CoreType::Ref;
+        reference.mut = CoreMut::Const;
+        reference.elem = ownerType;
+        auto referenceType = mod.Intern(reference);
+
+        auto value = NewExpr(CoreExprKind::Block, mod.IntType(CoreIntTy::I64));
+        value->org = Org(line, CoreOriginKind::Expr);
+        ExprBlockScope inexpr(*this);
+        value->then = make_unique<CoreBlock>();
+        value->then->scope = cur.nextscope++;
+
+        auto evaluated = NewExpr(CoreExprKind::Ref, referenceType);
+        evaluated->mut = CoreMut::Const;
+        evaluated->place = ToPlace(receiver, true);
+        CoreStmt statement;
+        statement.kind = CoreStmtKind::Expr;
+        statement.org = Org(line, CoreOriginKind::Expr);
+        statement.expr = std::move(evaluated);
+        value->then->stmts.push_back(std::move(statement));
+        value->then->value = IntLiteral(mod.IntType(CoreIntTy::I64), false,
+                                        (uint64_t)mod.Type(ownerType).count);
+        return value;
+    }
+
     CoreExprP DotValue(Dot *d) {
         if (d->member == B_LEN) {
             auto e = NewExpr(CoreExprKind::Len, mod.IntType(CoreIntTy::I64));
@@ -2122,7 +2151,8 @@ private:
         }
         if (d->member == B_CAP) {
             auto recv = d->obj->exprtype ? Pointee(d->obj->exprtype) : nullptr;
-            if (IsArrayTE(recv) && recv->arr->akind == A_LIMITED) Fail("limited-capacity", d->line);
+            if (IsArrayTE(recv) && recv->arr->akind == A_LIMITED)
+                return LimitedCapacityValue(d->obj, d->line);
             Fail("builtin-call", d->line);
         }
         if (d->member >= 0) Fail("builtin-property");

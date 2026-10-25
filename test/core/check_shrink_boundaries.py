@@ -19,7 +19,6 @@ CASES = {
 }
 SOURCE_CASES = {
     "sem_mem11_boundary_limited_whole": ("limited-value",),
-    "sem_mem11_boundary_limited_cap": ("limited-capacity", "limited-value"),
     "sem_mem11_boundary_runtime_capacity": ("runtime-capacity",),
     "sem_mem11_boundary_limited_nonliteral_initializer": ("limited-initializer",),
 }
