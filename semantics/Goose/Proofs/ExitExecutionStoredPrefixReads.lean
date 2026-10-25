@@ -24,7 +24,7 @@ private theorem samplePacked_prefix_of_packedEnd (fuel : Nat) (layout : LayoutEn
             have lower := elementsEnd_monotone fuel layout element count before (start + 4) finish scanned
             exact equal.samplePacked (.varr element) start (by omega)
 
-private theorem fixedValue_width (fuel scanFuel : Nat) (layout : LayoutEnv) (ty : Ty)
+theorem fixedValue_backed_width (fuel scanFuel : Nat) (layout : LayoutEnv) (ty : Ty)
     (bytes : ByteArray) (start finish : Nat) (value : Value)
     (fixed : ty.nonfixed = false)
     (scanned : packedEnd scanFuel layout ty bytes start = .ok finish)
@@ -172,7 +172,7 @@ theorem readStoredElement_prefix_success (fuel backingFuel : Nat) (layout : Layo
       cases decoded : fixedValue fuel layout run.element original start with
       | error reason => simp only [decoded, Goose.Construct.liftExcept, EvalM.stop] at observed; cases observed
       | ok decodedValue =>
-          obtain ⟨width, size, endSize⟩ := fixedValue_width fuel fuel layout run.element original start last decodedValue nonfixed scanned decoded
+          obtain ⟨width, size, endSize⟩ := fixedValue_backed_width fuel fuel layout run.element original start last decodedValue nonfixed scanned decoded
           rw [equal.fixedValue fuel layout fields run.element width start size (by omega), decoded]
           simp only [decoded, Goose.Construct.liftExcept, pure] at observed ⊢
           cases observed
@@ -209,6 +209,7 @@ theorem readStoredElement_prefix_observation (fuel backingFuel : Nat) (layout : 
       simp only [Bool.false_eq_true, ↓reduceIte, decoded]
       cases fixedValue fuel layout run.element original start <;> rfl
 
+#print axioms fixedValue_backed_width
 #print axioms sampledStored_storage_transport
 #print axioms sampledStored_detached_of_samplePacked
 #print axioms readStoredElement_prefix_success

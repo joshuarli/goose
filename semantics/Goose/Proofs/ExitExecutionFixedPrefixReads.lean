@@ -1,5 +1,6 @@
 import Goose.Construct.Runtime
 import Goose.Proofs.ExitExecutionStorageIntervals
+import Goose.Proofs.ExitExecutionLandingPayload
 
 set_option Elab.async false
 
@@ -110,7 +111,86 @@ theorem BytePrefixEqual.fixedValue {before after : ByteArray} {limit : Nat}
               rw [reads]
     | _ => cases size
 
+theorem RelocatedBytes.bytesInt {before after : ByteArray} {source receiving count : Nat}
+    (equal : RelocatedBytes before after source receiving count) (ty : Goose.Core.IntTy) (start : Nat)
+    (inside : start + ty.bits / 8 ≤ count) :
+    Goose.Construct.bytesInt ty after (receiving + start) = Goose.Construct.bytesInt ty before (source + start) := by
+  have beforeSize := equal.sourceBound
+  have afterSize := equal.receivingBound
+  have beforeBound : ¬source + start + ty.bits / 8 > before.size := by omega
+  have afterBound : ¬receiving + start + ty.bits / 8 > after.size := by omega
+  simp only [Goose.Construct.bytesInt, beforeBound, afterBound, ↓reduceIte,
+    Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size]
+  congr 1
+  apply listForIn_congr
+  intro index member accumulator
+  have bounded : index < ty.bits / 8 := by
+    obtain ⟨offset, inside, rfl⟩ := List.mem_range'.mp member
+    simpa only [Nat.sub_zero, Nat.add_sub_cancel, Nat.div_one, Nat.zero_add, Nat.one_mul] using inside
+  simp only [Nat.add_assoc]
+  rw [equal.getElem? (start + index) (by omega)]
+
+theorem RelocatedBytes.fixedValue {before after : ByteArray} {source receiving count : Nat}
+    (equal : RelocatedBytes before after source receiving count) (fuel : Nat) (layout : LayoutEnv)
+    (fields : FixedLayoutFieldBounds layout) (ty : Ty) (width start : Nat)
+    (size : fixedByteSize? layout ty = some width) (inside : start + width ≤ count) :
+    Goose.Construct.fixedValue fuel layout ty after (receiving + start) =
+      Goose.Construct.fixedValue fuel layout ty before (source + start) := by
+  induction fuel generalizing ty width start with
+  | zero => rfl
+  | succ fuel ih =>
+    cases ty with
+    | int ty =>
+      have sizeEqual : ty.bits / 8 = width := Option.some.inj size
+      simp only [Goose.Construct.fixedValue]
+      rw [equal.bytesInt ty start (by omega)]
+    | bool =>
+      have sizeEqual : 1 = width := Option.some.inj size
+      simp only [Goose.Construct.fixedValue]
+      rw [equal.getElem? start (by omega)]
+    | arr element length =>
+      cases sized : fixedByteSize? layout element with
+      | none => simp [fixedByteSize?, sized] at size
+      | some elementWidth =>
+        have sizeEqual : length * elementWidth = width := by
+          simpa only [fixedByteSize?, sized, Option.map_some, Option.some.injEq] using size
+        simp only [Goose.Construct.fixedValue, sized, Nat.add_assoc]
+        have reads : (List.range length).mapM
+            (fun index => Goose.Construct.fixedValue fuel layout element after (receiving + (start + index * elementWidth))) =
+          (List.range length).mapM
+            (fun index => Goose.Construct.fixedValue fuel layout element before (source + (start + index * elementWidth))) := by
+          apply listMapM_congr
+          intro index member
+          have indexBound := List.mem_range.mp member
+          exact ih element elementWidth (start + index * elementWidth) sized (by
+            have multiplication := Nat.mul_le_mul_right elementWidth (show index + 1 ≤ length by omega)
+            simp only [Nat.add_mul, Nat.one_mul] at multiplication
+            omega)
+        rw [reads]
+    | structT id members =>
+      simp only [fixedByteSize?] at size
+      split at size
+      · cases size
+      · cases descriptor : layout.structs[id]? with
+        | none => simp [descriptor] at size
+        | some definition =>
+          have sizeEqual : definition.byteSize = width := by
+            simpa only [descriptor, Option.map_some, Option.some.injEq] using size
+          simp only [Goose.Construct.fixedValue, descriptor, Nat.add_assoc]
+          have reads : definition.fields.toList.mapM
+              (fun field => Goose.Construct.fixedValue fuel layout field.ty after (receiving + (start + field.byteOffset))) =
+            definition.fields.toList.mapM
+              (fun field => Goose.Construct.fixedValue fuel layout field.ty before (source + (start + field.byteOffset))) := by
+            apply listMapM_congr
+            intro field member
+            obtain ⟨fieldWidth, fieldSize, fieldBound⟩ := fields id definition descriptor field member
+            exact ih field.ty fieldWidth (start + field.byteOffset) fieldSize (by omega)
+          rw [reads]
+    | _ => cases size
+
 #print axioms BytePrefixEqual.bytesInt
 #print axioms BytePrefixEqual.fixedValue
+#print axioms RelocatedBytes.bytesInt
+#print axioms RelocatedBytes.fixedValue
 
 end Goose.Proofs.ExitExecution
