@@ -44,7 +44,7 @@ theorem exitLandingAnchor_supported (fuel : Nat) (state : ConstructionState)
       state.destinations[anchor]? = some destination ∧ destination.backing = row.backing ∧
       ReplacementSupported state anchor ∧
       (∀ receiver, receiving = some receiver → anchor = receiver) ∧
-      (receiving = none → ∀ parent, destination.use ≠ .replacement parent) := by
+      (receiving = none → ∀ parent, destination.use ≠ .replacement parent) ∧ anchor ∈ chain := by
   induction fuel generalizing selected old row with
   | zero => omega
   | succ fuel ih =>
@@ -78,7 +78,7 @@ theorem exitLandingAnchor_supported (fuel : Nat) (state : ConstructionState)
               obtain ⟨anchor, destination, chain⟩ := payload
               simp only [evaluated]
     by_cases hit : (receiving == some old) = true
-    · refine ⟨old, owner, [old], ?_, ownerFound, sameBacking.symm, oldSupported, ?_, ?_⟩
+    · refine ⟨old, owner, [old], ?_, ownerFound, sameBacking.symm, oldSupported, ?_, ?_, by simp⟩
       · rw [dispatch, hit]; rfl
       · intro receiver selectedReceiver
         have same := (beq_iff_eq).mp hit
@@ -104,10 +104,10 @@ theorem exitLandingAnchor_supported (fuel : Nat) (state : ConstructionState)
             subst receiver
             simp only [selectedReceiver, beq_self_eq_true, Bool.true_eq_false] at notHit
           exact ⟨Nat.lt_of_le_of_ne lower different, path⟩
-        obtain ⟨anchor, destination, chain, recursive, found, backing, anchorSupported, selectedReceiver, terminal⟩ :=
+        obtain ⟨anchor, destination, chain, recursive, found, backing, anchorSupported, selectedReceiver, terminal, member⟩ :=
           ih old parent owner ownerFound ownerUse oldSupported (by omega) innerBoundary
         rw [storageSame] at recursive
-        refine ⟨anchor, destination, old :: chain, ?_, found, backing.trans sameBacking.symm, anchorSupported, selectedReceiver, terminal⟩
+        refine ⟨anchor, destination, old :: chain, ?_, found, backing.trans sameBacking.symm, anchorSupported, selectedReceiver, terminal, List.mem_cons_of_mem _ member⟩
         simp only [dispatch, notHit, ownerUse, recursive, Bool.false_eq_true, ↓reduceIte]
       | receiver | child parent =>
         have terminal : ∀ parent, owner.use ≠ .replacement parent := by
@@ -122,7 +122,7 @@ theorem exitLandingAnchor_supported (fuel : Nat) (state : ConstructionState)
               (tailBoundary receiver selectedReceiver)
             subst receiver
             simp only [selectedReceiver, beq_self_eq_true, Bool.true_eq_false] at notHit
-        refine ⟨old, owner, [old], ?_, ownerFound, sameBacking.symm, oldSupported, ?_, fun _ => terminal⟩
+        refine ⟨old, owner, [old], ?_, ownerFound, sameBacking.symm, oldSupported, ?_, fun _ => terminal, by simp⟩
         · rw [dispatch, absent, ownerUse]
           rfl
         · intro receiver selectedReceiver
