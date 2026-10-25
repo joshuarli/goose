@@ -214,7 +214,7 @@ def check_semantics(expected, exe, tool, work, timeout, output_limit, deadline):
                          'detail': 'the tool ran out of fuel'}
     if answer[0] != 'done':
         return finding('semantics_mismatch', f'tool answered {list(answer)}')
-    outcome, stdout = answer[1], answer[2].encode('utf-8')
+    outcome, stdout = answer[1], answer[2]
     if isinstance(expected, trap_model.TrapExpectation):
         agrees = (outcome[0] == 'aborted' and outcome[1] == tool_abort_kind(expected)
                   and stdout == expected.stdout_prefix)
