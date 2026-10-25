@@ -456,7 +456,7 @@
   "statement": "Every accepted expression preserves the source output demand frame and incoming SSA operand and run maps at a reflected successful boundary. A successful checked aliasExpr query gives aliases realized by the result SSA cell. Reflection retains exact stopping outcomes and target residual fuel.",
   "assumptions": "ExprSource acceptance and its source invariants. Actual lowering, generated builder state and source/target frame correspondence. Incoming maps are realized and bounded. Shrink maps occur in the actual source retained list.",
   "limits": "Expression boundaries only. No interior prefix, nested call activation or whole-module demand traversal is proved. This component does not close TH-LOWER-03.",
-  "reviewer": "Independent review pending.",
+  "reviewer": "Independent source review through cff3a6b6 found no demonstrated P1 or P2; stated limits remain.",
   "evidence": "Goose/Lower/DemandExpressionBoundary.lean; DemandExpressionBoundaryChecks.lean covers an accepted call, checked push-result roots and an invalid retained run; registered axiom audit."
  },
  {
@@ -466,7 +466,7 @@
   "statement": "The actual emitted conditional branch enters the canonical RHS source context or the skipped-expression join. It preserves incoming operand and run SSA cells. A skipped RHS writes the boolean result only to the fresh join parameter.",
   "assumptions": "Accepted parent ExprSource, actual completed left evaluation and its ExpressionDemandBoundary. Canonical scFork emission extends into the target function. Incoming shrink aliases occur in the parent source retained list.",
   "limits": "One actual control edge after the left expression completes. Operand interior prefixes, general branches and loops, nested call activations and whole-module traversal remain open. This component does not close TH-LOWER-03.",
-  "reviewer": "Independent review pending.",
+  "reviewer": "Independent source review through cff3a6b6 found no demonstrated P1 or P2; stated limits remain.",
   "evidence": "Goose/Lower/DemandShortCircuit.lean; DemandShortCircuitChecks.lean rejects the opposite branch and checks all four branch choices with a retained sampled SSA run; registered axiom audit."
  },
  {
@@ -479,7 +479,7 @@
   "reviewer": "Independent review pending.",
   "evidence": "Goose/Proofs/ConstructionFixedWidthStorageWrite.lean; registered axiom audit."
  },
- {"feature":"Construction operand invocation replay","label":"model-proved","theorem":"Goose.Proofs.ConstructionInvocationReplay.derive; Goose.Proofs.ConstructionInvocationReplay.OperandReplay.once; Goose.Proofs.ConstructionInvocationReplay.fixedArray_replay","statement":"Actual operand-loop evaluation derives consecutive invocation indices and exact source order, including stop, escape and jump outcomes. Fixed-array evaluation uses the same replay.","assumptions":"The relation exposes each actual operand evaluator result and state. Fixed-array linkage requires a fixed element type and the stated fuel.","limits":"Does not derive replay for all construction evaluator families or preserve the completed fill-source byte snapshot. Universal C-ONCE and TH-CON-01 remain open.","reviewer":"Independent review pending.","evidence":"ConstructionInvocationReplay.lean includes duplicate-syntax state changes and hostile skipped, repeated and post-stop invocation controls; registered axiom audit."},
+ {"feature":"Construction operand invocation replay","label":"model-proved","theorem":"Goose.Proofs.ConstructionInvocationReplay.derive; Goose.Proofs.ConstructionInvocationReplay.OperandReplay.once; Goose.Proofs.ConstructionInvocationReplay.fixedArray_replay","statement":"Actual operand-loop evaluation derives consecutive invocation indices and exact source order, including stop, escape and jump outcomes. Fixed-array evaluation uses the same replay.","assumptions":"The relation exposes each actual operand evaluator result and state. Fixed-array linkage requires a fixed element type and the stated fuel.","limits":"Does not derive replay for all construction evaluator families or preserve the completed fill-source byte snapshot. Universal C-ONCE and TH-CON-01 remain open.","reviewer": "Independent source review through cff3a6b6 found no demonstrated P1 or P2; stated limits remain.","evidence":"ConstructionInvocationReplay.lean includes duplicate-syntax state changes and hostile skipped, repeated and post-stop invocation controls; registered axiom audit."},
 {
   "feature": "Repeated construction source byte frames",
   "label": "model-proved",
@@ -487,7 +487,7 @@
   "statement": "Actual repeatElement preserves a distinct built source destination and its complete storage bytes through every outcome. A repetition reads the completed snapshot. Successful retirement clears the source storage and preserves the parent storage.",
   "assumptions": "Actual destination lookup, open parent, built source, and explicit distinct backing for the preservation theorem. Retirement assumes the specified receiver backing and successful execution.",
   "limits": "Does not derive separation after arbitrary initialization or prove the complete fill loop and all evaluator families. The source snapshot is consumed at retirement. Universal C-ONCE remains open.",
-  "reviewer": "Independent review pending.",
+  "reviewer": "Independent source review through cff3a6b6 found no demonstrated P1 or P2; stated limits remain.",
   "evidence": "ConstructionRepeatedSourceSnapshot.lean includes exact-byte controls and a hostile shared-storage example; registered axiom audit."
  },
  {
@@ -497,7 +497,7 @@
   "statement": "The existing AcceptedRepresentationInput and OwnershipExecutionContext permit an object whose stored backing is absent. A typed positive-fuel owner-length expression then faults.",
   "assumptions": "A validated configuration and an explicitly constructed input environment and state.",
   "limits": "This input state is not shown reachable from an accepted initial run. The countermodel identifies an insufficient induction contract and does not refute TH-EXIT or validated whole-program safety.",
-  "reviewer": "Independent review pending.",
+  "reviewer": "Independent source review through cff3a6b6 found no demonstrated P1 or P2; stated limits remain.",
   "evidence": "ConstructionRepresentationBackingBoundary.lean; registered axiom audit."
  },
  {
@@ -507,7 +507,7 @@
   "statement": "The new owner-backing predicate holds initially after validation. Its stored values resolve to actual sampled storage with an explicit canonical byte interval. Fresh stored-root binding preserves retained backing, and backed owner-length evaluation succeeds without changing state.",
   "assumptions": "Explicit retained roots and backed stored values. Binding requires a fresh root ordinal. Length evaluation requires actual root resolution and an existing stored object. Construction frames require unchanged construction state.",
   "limits": "Does not establish reference or slice target validity, integer ranges, owner alias separation, or preservation through arbitrary initialization, reservation and landing. Universal TH-EXIT remains open.",
-  "reviewer": "Independent review pending.",
+  "reviewer": "Independent source review through cff3a6b6 found no demonstrated P1 or P2; stated limits remain.",
   "evidence": "ConstructionRootedBacking.lean; registered axiom audit."
  },
 {
@@ -517,7 +517,7 @@
   "statement": "An accepted infinite loop refutes lifting successful endpoint observations alone to every reached instruction. An accepted two-parameter call has a GIR timeout after one binding that matches no Core timeout state.",
   "assumptions": "The specified accepted loop and two-parameter call fixtures and their exact target lowering.",
   "limits": "These countermodels refute two proposed proof strategies, not TH-LOWER-03. Universal cursor reconstruction remains open.",
-  "reviewer": "Independent review pending.",
+  "reviewer": "Independent source review through cff3a6b6 found no demonstrated P1 or P2; stated limits remain.",
   "evidence": "DemandEndpointClosureChecks.lean and DemandStateReflectionChecks.lean; registered axiom audit."
  },
  {
@@ -527,7 +527,7 @@
   "statement": "Accepted block sources derive a typed demand frame at every parameter prefix, preserving existing roots and caller operand and run maps. The concrete two-parameter call connects its first binding cursor to an actual GIR point and fuel-13 timeout.",
   "assumptions": "An accepted BlockSource with typed parameter bindings and its source frame. Caller maps are realized in the incoming state. The actual point and timeout correspondence use the specified two-parameter fixture.",
   "limits": "The generic cursor is not yet reconstructed at arbitrary GIR points. General prologue correspondence, suspended caller stacks, expression and control phases, and whole-module demand traversal remain open. TH-LOWER-03 is not closed.",
-  "reviewer": "Independent review pending.",
+  "reviewer": "Independent source review through cff3a6b6 found no demonstrated P1 or P2; stated limits remain.",
   "evidence": "DemandParameterPrefix.lean and DemandParameterPrefixChecks.lean; registered axiom audit."
  }
 ]

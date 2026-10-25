@@ -372,7 +372,7 @@ These gate regardless of host load, because they count events and not time.
 
 ## 11. Budgets
 
-Proposed values. They are frozen in the campaign's baseline section after the first quiet-host measurement and are then gating at the campaign's close; until then they are recorded, not enforced. Time is CPU time, minimum of at least five interleaved runs, taken only when `perf-gate-ready` exits 0 before and after. A regression counts only beyond the observed spread.
+Proposed values. They are frozen in the campaign's baseline section after the first quiet-host measurement and are then gating at the campaign's close; until then they are recorded, not enforced. Time is CPU time, reported as the median and spread of at least five interleaved runs, taken only when `perf-gate-ready` exits 0 before and after. A minimum describes best-case behavior only. A regression counts only beyond the observed spread.
 
 | Budget | Proposed |
 |---|---|

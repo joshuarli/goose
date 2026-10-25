@@ -6,38 +6,114 @@
 
 ## Production qualification update (2026-10-25)
 
-Compiler sources through `02d57ad3` pass the full baseline, including 678 native
-programs, 798 JIT programs, bootstrap, rejection tests and samples.
+Compiler backend sources through `02d57ad3` pass the full baseline, including
+678 native programs, 798 JIT programs, bootstrap, rejection tests and samples.
 Both GIR source checks pass. The GIR units corpus passes 264 supported programs
 with zero failures. Its 597 skips comprise 545 explicit unsupported programs,
 49 native-layer programs, one parse-only fixture, one extern-function fixture,
 and one captured-reference fixture.
 
-The final production compiler passes the Aincrad3 E00–E03 structural reuse checks.
+The same compiler passes Aincrad3 E00–E03 structural reuse checks.
 E01 performs no native compilation and skips linking. E02 changes only the locations
 unit. E03 changes only one code unit. Each edit reuses the other 458 objects.
 Edited rows verify reuse against recompilation. Their durations are not timing evidence.
 
-Five alternating memory samples pass against baseline `24ba0840` on the same
-Aincrad3 input. Median RSS is 1,582,828 KiB baseline and 1,684,072 KiB candidate.
-Maximum candidate divided by minimum baseline is 1.0659, below 1.10.
-The Release binaries are 5,637,480 and 10,415,648 bytes. No size threshold is specified.
+The later report-only fix `3469527e` separates `native_build` from frontend phases
+and charges unit emission to `write_output`, rather than report collection.
+The new regression fails before the fix and passes with both Debug and Release compilers.
+It checks native timing contains the actual compiler and link intervals and stays outside
+`frontend_phases`. Existing units-builder contract probes and seven Python checks also pass.
+No code-generation or language behavior changes in this fix. The Release size remains 10,415,648 bytes.
 
-Five interleaved samples per condition pass readiness checks before and after each run.
-Median CPU seconds with reports off are 5.349411 baseline and 5.611698 candidate
-for `-O2 --check`, and 6.770916 baseline and 7.078505 candidate for standalone C emission.
-Reports raise candidate medians to 6.671604 and 8.293610 seconds respectively.
+Logical checkpoint `cff3a6b6` passes all 2,656 Goose and Main source modules.
+Its fresh native and interpreted audits match byte-for-byte on 217 unique claims,
+using only `Classical.choice`, `Quot.sound` and `propext`.
+All five independent kernels accept fresh exports of the 217 claims and `Main.main`.
+Their union of 44,732 logical dependencies is covered by 45,251 exported constants.
+The largest checker uses 4,443,254,784 bytes RSS. The coverage reader uses 6,498,000,896 bytes.
+Both stay below the 8 GiB budget. This qualification excludes native code generation,
+external implementations and module initialization code.
+
+The full conformance run at `0639f2d4` records 105 pilot agreements, two explicit
+unsupported features, three construction agreements and all nine native construction
+trace fixtures across both numeric profiles and O0/O2.
+The model definitions are unchanged at `cff3a6b6`. Its native audit and one pilot,
+one construction and one trace fixture pass after the new proof-module imports.
+Bounded generated-C checks at seed 20261025 complete 12 cases in each of six lanes
+with the full Goose/C optimization matrix and ASan/UBSan.
+All 72 legacy cases pass. Five lanes give 60 Core and GIR agreements.
+The 12 aggregate cases report explicit unsupported elementwise arithmetic in Core and GIR.
+
+Alias validation now rejects shrinking through retained interior references or slices,
+checks mapped callee effects, and admits alias-free grow clears.
+Initialized holders stay protected until scope exit, including after their last use.
+Bindings still being initialized do not protect their future roots.
+Independent review reproduced the initializer over-rejection and verified its correction.
+
+The checked proof components now include short-circuit transfer, indexed operand replay,
+exact fill-source byte frames, rooted owner backing and accepted parameter-prefix cursors.
+The proof API names are now `DemandInstructionStep` and `DemandPrefix`, replacing
+`DemandLinearStep` and `DemandLinearPrefix`. The source tree uses the new names throughout.
+The claim ledger records their assumptions and limits. A checked input countermodel shows
+why logical type and shape alone cannot supply storage backing.
+Two other countermodels reject endpoint-only prefix lifting and exact Core/GIR timeout-state matching.
+They do not refute the requested lifetime theorem.
+
+The remaining proof work is substantive:
+
+- `TH-LOWER-03` needs generic prologue correspondence and reconstruction of canonical
+  source cursors at every `Evidence.RuntimePoint`, including suspended caller and run maps.
+- `TH-CON-01` needs separation and byte geometry derived after arbitrary accepted
+  initialization, the complete fill loop, and invocation replay through all 23 evaluator families.
+- `TH-EXIT-01` needs the accepted owner-to-storage bridge through reservation and landing,
+  with outside-root observations preserved. Existing normalized-channel and concrete checks remain components.
+
+These obligations remain open. No exhausted full-acceptance attempt budget is claimed.
+
+Five alternating memory samples pass against baseline `24ba0840` on the same
+Aincrad3 input. Median RSS is 1,582,788 KiB baseline and 1,686,388 KiB candidate.
+Maximum candidate divided by minimum baseline is 1.0664, below 1.10.
+The Release binaries are 5,637,480 and 10,415,648 bytes. No size threshold is specified.
+These final memory samples use the reporting fix. Available memory stays above 30.13 GiB.
+
+Five interleaved samples per condition at `02d57ad3` pass readiness checks before
+and after every run. CPU seconds below are minimum / median / maximum.
+
+| Command | Baseline, report off | Candidate, report off | Candidate, report on |
+| --- | --- | --- | --- |
+| `-O2 --check` | 5.198292 / 5.349411 / 5.395433 | 5.602449 / 5.611698 / 6.260169 | 6.637201 / 6.671604 / 7.144562 |
+| `-O2 --standalone` | 6.563042 / 6.770916 / 7.069515 | 7.043827 / 7.078505 / 7.386480 | 8.102465 / 8.293610 / 8.611880 |
+
 The 18.9% checking overhead and 17.2% emission overhead exceed the proposed 10% cap.
 Reports preserve compiler output and emitted C exactly. Report consistency checks pass.
-The report cost remains open. These measurements do not establish cold-build or runtime budgets.
+Report-off checking ranges do not overlap; default checking cost also remains an open
+budget question. Emission ranges overlap.
+A phase-local node-pool experiment `67e714f4` is rejected and remains unmerged.
+Across five interleaved pairs, its median CPU change is 2.1% for checking and 2.3%
+for emission, inside the observed spread. Checking ranges overlap at 6.265507–6.850614
+versus 6.344176–6.517408 seconds. Emission ranges overlap at 7.740373–8.606291
+versus 7.774385–8.202209 seconds. No speedup is claimed.
 
-Semantic revision `29513a68` adds actual short-circuit demand transfer and indexed
-operand invocation replay. The ledger keeps their limits explicit.
-It also rejects shrinking through retained interior aliases and admits alias-free grow clears.
-Alias protection lasts until scope exit. Bindings still being initialized do not protect
-their future roots. Independent review reproduced and verified the initializer correction.
-The revised 195-claim source, native and independent-kernel qualifications are pending.
-The three universal proof obligations remain open. `G-CLOSE` has not passed.
+Cold-build and edit-loop timing series stop when post-run readiness fails.
+The corrected edit-loop measurement uses distinct receipt names for each round.
+The final attempt stops at E00's post-run check. It supplies no five-sample timing verdict.
+**Perf gate deferred: host busy.** Report cost, remaining build-loop budgets,
+units runtime and O5 LTO remain unqualified. `G-CLOSE` has not passed.
+
+Resuming performance qualification requires the archived Aincrad3 core entry, the
+matching Release baseline, and five alternating valid runs per condition.
+Use fresh `GOOSE_HOME` directories for cold builds and one retained directory per edit sequence.
+Both build modes need `--standalone` with the two native headers used by the structural matrix.
+Timed edit rows omit `--verify-reuse`. Keep report collection separate from frontend
+and `native_build` time. Each measured command requires successful default readiness
+before launch and `-1` immediately afterward. Discard a sample if either check fails.
+The application is not executed by these compiler and build-loop measurements.
+
+Cleanup retires the superseded b72 and 29513 qualification worktrees and the rejected
+node-pool worktree, reclaiming about 4.4 GiB of generated artifacts.
+The rejected experiment's branch is retained. Qualified v3/v4 artifacts, the immutable
+performance baseline, active input fixtures and other parked work remain available.
+Nothing is pushed.
 
 ## Completion checkpoint (2026-10-25)
 
