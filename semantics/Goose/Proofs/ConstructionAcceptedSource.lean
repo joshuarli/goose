@@ -77,7 +77,8 @@ def GlobalEffectsAvailable (interpretation : RootInterpretation) (initialized : 
   ∀ target, target ∈ effects.reads ++ effects.writes ++ effects.grows ++ effects.shrinks →
     ∀ global, (match target with
       | .global id => global = id
-      | .param id => interpretation.parameters id (.global global)) → global < initialized
+      | .param id => interpretation.parameters id (.global global) ∧ global < interpretation.globalCount) →
+      global < initialized
 
 structure CheckedValue (frame : ConstructionSourceFrame) (expression : Expr) (ty : Ty)
     (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState) : Prop where

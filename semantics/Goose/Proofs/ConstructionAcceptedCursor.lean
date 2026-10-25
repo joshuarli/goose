@@ -5,6 +5,13 @@ set_option Elab.async false
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 
+private theorem except_bind_success {ε α β : Type} (first : Except ε α) (next : α → Except ε β)
+    (result : β) (checked : first.bind next = .ok result) :
+    ∃ value, first = .ok value ∧ next value = .ok result := by
+  cases first with
+  | error failure => cases checked
+  | ok value => exact ⟨value, rfl, checked⟩
+
 def ordinaryOperandFrame (frame : ConstructionSourceFrame) (fuel : Nat) : ConstructionSourceFrame :=
   { frame with
     typingFuel := fuel
@@ -99,9 +106,74 @@ theorem evalValue_not_of_operand (fuel : Nat) (config : EvalConfig) (frame : Con
       acceptedValue_boolean config.layout types frame.interpretation after (!value)⟩
   | stored => contradiction
 
+theorem checkedValue_globalRead_available (frame : ConstructionSourceFrame) (id : Nat)
+    (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue frame (.read (.global id)) ty roots typingAfter rootsAfter) :
+    id < frame.initialized := by
+  have provenance := checked.provenance
+  have extracted := congrArg
+    (fun result : Except Goose.Core.Rejection (List RootRef × RState) =>
+      result.toOption.map (fun pair => pair.2.eff.reads)) provenance
+  change some (addTargets frame.rootCursor.eff.reads [.global id]) = some rootsAfter.eff.reads at extracted
+  have reads := (Option.some.inj extracted).symm
+  apply checked.available (.global id) _ id rfl
+  apply List.mem_append_left
+  rw [reads]
+  simp only [addTargets, List.foldl_cons, List.foldl_nil]
+  split <;> simp_all
+
+theorem typeExpr_globalRead_type (fuel : Nat) (environment : TypingEnv) (id : Nat)
+    (descriptor : Global) (declared : environment.module.globals[id]? = some descriptor)
+    (before after : Nat) (ty : Ty)
+    (checked : typeExpr fuel environment (.read (.global id)) before = .ok ([ty], after)) :
+    ty = descriptor.ty := by
+  cases fuel with
+  | zero => change Except.error _ = Except.ok _ at checked; cases checked
+  | succ fuel =>
+    cases fuel with
+    | zero => change Except.error _ = Except.ok _ at checked; cases checked
+    | succ fuel =>
+      by_cases available : id ≥ environment.globalLimit
+      · simp only [typeExpr, typePlace, available, ↓reduceIte, bind, StateT.bind] at checked
+        change Except.error _ = Except.ok _ at checked
+        cases checked
+      · simp only [typeExpr, typePlace, available, ↓reduceIte, declared, bind, StateT.bind] at checked
+        simp only [pure, StateT.pure, Except.bind] at checked
+        obtain ⟨result, _, returned⟩ := except_bind_success _ _ _ checked
+        cases returned
+        rfl
+
+theorem evalValue_checkedGlobalRead (fuel : Nat) (config : EvalConfig)
+    (accepted : AcceptedModule config) (frame : ConstructionSourceFrame) (state : ExecutionState)
+    (ambient : Goose.Proofs.ConstructionExecutionOwnership.OwnershipAmbient) (types : RootTypes)
+    (liveRoots : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion)
+    (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config frame.initialized state ambient types liveRoots regions pending)
+    (compatible : SourceFrameCompatible accepted frame) (id : Nat) (ty : Ty)
+    (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue frame (.read (.global id)) ty roots typingAfter rootsAfter) :
+    ∃ value, evalValue (fuel + 2) config frame.interpretation.environment (.read (.global id)) state =
+      .ok value state ∧ Goose.Proofs.ConstructionRepresentation.ValueRepresentation ty value ∧
+      PointerTypedValue types ty value ∧
+      Goose.Proofs.ConstructionRepresentation.ValueStorageBacked config.layout state value := by
+  have available := checkedValue_globalRead_available frame id ty roots typingAfter rootsAfter checked
+  obtain ⟨descriptor, value, declared, evaluated, represented, pointers, backed⟩ :=
+    evalValue_initializedGlobal fuel config frame.interpretation frame.initialized state ambient types liveRoots
+      regions pending world id available
+  have sourceDeclared : frame.typing.module.globals[id]? = some descriptor := by
+    rw [compatible.module]
+    exact declared
+  have type := typeExpr_globalRead_type frame.typingFuel frame.typing id descriptor sourceDeclared
+    frame.typingCounter typingAfter ty checked.typing
+  subst ty
+  exact ⟨value, evaluated, represented, pointers, backed⟩
+
 #print axioms rpExpr_not_operand
 #print axioms typeExpr_not_operand
 #print axioms checkedValue_not_operand
 #print axioms evalValue_not_of_operand
+#print axioms checkedValue_globalRead_available
+#print axioms typeExpr_globalRead_type
+#print axioms evalValue_checkedGlobalRead
 
 end Goose.Proofs.ConstructionAcceptedExecution
