@@ -104,4 +104,89 @@ theorem checkArgRoots_annotation (callee : Impl) (context : Context)
           simpa [subsetRoots] using tested
         exact (included (fun {_} member => members _ member)).elim
 
+private theorem rootCheck_bind_success {α β : Type} (action : Goose.Core.V α)
+    (next : α → Goose.Core.V β) (result : β) :
+    (action >>= next) = .ok result ↔ ∃ value, action = .ok value ∧ next value = .ok result := by
+  cases action <;> simp [bind, Except.bind]
+
+private theorem forAll_success_member {α : Type} (rows : List α) (action : α → Goose.Core.V Unit)
+    (checked : Goose.Core.forAll rows action = .ok ()) : ∀ row ∈ rows, action row = .ok () := by
+  induction rows with
+  | nil => intro row absent; cases absent
+  | cons row rows ih =>
+    simp only [Goose.Core.forAll] at checked
+    obtain ⟨value, first, rest⟩ := (rootCheck_bind_success _ _ _).mp checked
+    cases value
+    intro selected member
+    rcases List.mem_cons.mp member with equal | member
+    · subst selected
+      exact first
+    · exact ih rest selected member
+
+theorem parameterAnnotation_external (module : Module) (implementation : Impl) (context : Context)
+    (checked : checkAnnotationShape module implementation context = .ok ())
+    (index : Nat) (bound : index < implementation.params.size) (roots : List RootRef)
+    (annotated : (context.varRoots.find? (·.1 == index)).map Prod.snd = some roots) :
+    ∀ root ∈ roots, match root with
+      | .static | .global _ => True
+      | .param position => position = index
+      | .local _ => False := by
+  unfold checkAnnotationShape at checked
+  obtain ⟨_, _, checked⟩ := (rootCheck_bind_success _ _ _).mp checked
+  obtain ⟨_, _, checked⟩ := (rootCheck_bind_success _ _ _).mp checked
+  have parameter := forAll_success_member _ _ checked index (List.mem_range.mpr bound)
+  cases selected : context.varRoots.find? (·.1 == index) with
+  | none => simp [selected] at annotated
+  | some entry =>
+    have equal : entry.2 = roots := by simpa only [selected, Option.map_some, Option.some.injEq] using annotated
+    simp only [selected] at parameter
+    intro root member
+    have accepted := forAll_success_member _ _ parameter root (equal ▸ member)
+    cases root with
+    | static => trivial
+    | global id => trivial
+    | «local» id => simp [Goose.Core.reject] at accepted
+    | param position =>
+      by_cases same : position = index
+      · exact same
+      · simp [same, Goose.Core.reject] at accepted
+
+theorem checkArgRoots_parameterValueRooted (module : Module) (caller : RootInterpretation)
+    (callee : RuntimeActivation) (implementation : Impl) (context : Context)
+    (arguments : List (List RootRef)) (index : Nat) (parameter : Param) (descriptor : LocalVar)
+    (annotation roots : List RootRef) (value : Value)
+    (parameterAt : implementation.params[index]? = some parameter)
+    (variableAt : implementation.vars[parameter.var]? = some descriptor)
+    (parameterVariable : parameter.var = index) (refLike : descriptor.ty.isRefLike = true)
+    (annotated : context.varRoots.find? (·.1 == parameter.var) = some (parameter.var, annotation))
+    (checked : checkArgRoots implementation context arguments index = .ok ())
+    (shaped : checkAnnotationShape module implementation context = .ok ())
+    (argumentAt : arguments[index]? = some roots) (rooted : DirectValueRooted caller roots value) :
+    DirectValueRooted (CallInterpretation caller callee arguments) annotation value := by
+  have alternatives := checkArgRoots_annotation implementation context arguments index parameter descriptor annotation
+    parameterAt variableAt refLike annotated checked
+  have allowed := parameterAnnotation_external module implementation context shaped index
+    (Array.getElem?_eq_some_iff.mp parameterAt).1 annotation (by rw [← parameterVariable, annotated]; rfl)
+  intro location reference
+  have sourceRoots := rooted location reference
+  generalize actualRootEq : location.root = actualRoot at sourceRoots ⊢
+  have sourceRooted := sourceRoots
+  rcases alternatives with own | included
+  · subst annotation
+    exact ⟨.param index, by simp, .parameter index actualRoot ⟨roots, argumentAt, sourceRoots⟩⟩
+  · obtain ⟨symbolic, member, actual⟩ := sourceRoots
+    have member : symbolic ∈ annotation := included (by simpa only [argumentAt, Option.getD_some] using member)
+    have external := allowed symbolic member
+    cases symbolic with
+    | static =>
+      cases actual with
+      | static id synthetic => exact ⟨.static, member, .static id synthetic⟩
+    | global id =>
+      cases actual with
+      | global id declared => exact ⟨.global id, member, .global id declared⟩
+    | «local» id => exact external.elim
+    | param position =>
+      subst position
+      exact ⟨.param index, member, .parameter index actualRoot ⟨roots, argumentAt, sourceRooted⟩⟩
+
 end Goose.Proofs.ConstructionRootCorrespondence

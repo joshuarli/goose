@@ -1983,4 +1983,16 @@ theorem contextRootFacts_bodyRoots (module : Module) (context : Context)
       obtain ⟨⟨value, state⟩, replay, _⟩ := (rootFacts_bind_success _ _ _).mp bodyChecked
       exact ⟨implementation, bodyContext, escaping, actualEscapes, names, value, state, rfl, closed, rfl, replay⟩
 
+theorem contextRootFacts_annotationShape (module : Module) (context : Context)
+    (aliases : List (RootRef × RootRef)) (calls : List (ContextId × List (List RootRef)))
+    (facts : ContextRootFacts module context aliases calls) (implementation : Impl)
+    (present : module.impls[context.impl]? = some implementation) :
+    checkAnnotationShape module implementation context = .ok () := by
+  obtain ⟨escaping, names, facts, checked, _⟩ := facts
+  unfold checkContextFacts at checked
+  simp only [present] at checked
+  obtain ⟨value, accepted, _⟩ := (rootFacts_bind_success _ _ _).mp checked
+  cases value
+  exact accepted
+
 end Goose.Construct

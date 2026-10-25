@@ -515,20 +515,9 @@ private theorem validation_forIn_yields {α : Type} (rows : List α)
       · subst selected; exact head
       · exact ih tail selected member
 
-theorem validated_implementation_typing (module : Module) (id : ImplId) (implementation : Impl)
+private theorem validated_implementation_check (module : Module) (id : ImplId) (implementation : Impl)
     (accepted : validate module = .ok ()) (present : module.impls[id]? = some implementation) :
-    ∃ bodyTypes declared, typeBlock 4096 {
-      module := module
-      implementation := some implementation
-      variables := implementation.vars
-      visible := List.range implementation.params.size
-      scope := implementation.body.scope
-      loops := 0
-      use := if implementation.results.isEmpty then .ordinary else .result
-      request := .value
-      resultRequests := implementation.results.toList.map (·.request)
-      globalLimit := module.globals.size } implementation.body implementation.params.size =
-        .ok (bodyTypes, declared) := by
+    checkImplementation module id implementation = .ok () := by
   unfold validate at accepted
   obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
   obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
@@ -553,6 +542,23 @@ theorem validated_implementation_typing (module : Module) (id : ImplId) (impleme
   simp only [present] at checked
   obtain ⟨value, checked, _⟩ := (validation_bind_ok _ _ _).mp checked
   cases value
+  exact checked
+
+theorem validated_implementation_typing (module : Module) (id : ImplId) (implementation : Impl)
+    (accepted : validate module = .ok ()) (present : module.impls[id]? = some implementation) :
+    ∃ bodyTypes declared, typeBlock 4096 {
+      module := module
+      implementation := some implementation
+      variables := implementation.vars
+      visible := List.range implementation.params.size
+      scope := implementation.body.scope
+      loops := 0
+      use := if implementation.results.isEmpty then .ordinary else .result
+      request := .value
+      resultRequests := implementation.results.toList.map (·.request)
+      globalLimit := module.globals.size } implementation.body implementation.params.size =
+        .ok (bodyTypes, declared) := by
+  have checked := validated_implementation_check module id implementation accepted present
   unfold checkImplementation at checked
   obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
   obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
@@ -566,5 +572,25 @@ theorem validated_implementation_typing (module : Module) (id : ImplId) (impleme
       obtain ⟨⟨bodyTypes, declared⟩, replay, _⟩ := (validation_bind_ok _ _ _).mp checked
       exact ⟨bodyTypes, declared, replay⟩
   · cases checked
+
+theorem validated_parameter_variable (module : Module) (id : ImplId) (implementation : Impl)
+    (index : Nat) (parameter : Param) (accepted : validate module = .ok ())
+    (present : module.impls[id]? = some implementation)
+    (parameterAt : implementation.params[index]? = some parameter) : parameter.var = index := by
+  have checked := validated_implementation_check module id implementation accepted present
+  unfold checkImplementation at checked
+  obtain ⟨token, parameters, _⟩ := (validation_bind_ok _ _ _).mp checked
+  cases token
+  have eachParameter := validation_forIn_yields _ _ parameters (by
+    intro position token step checked
+    obtain ⟨value, _, tail⟩ := (validation_bind_ok _ _ _).mp checked
+    cases value
+    exact (Except.ok.inj tail).symm)
+  have checked := eachParameter index (List.mem_range.mpr (Array.getElem?_eq_some_iff.mp parameterAt).1)
+  obtain ⟨value, checked, _⟩ := (validation_bind_ok _ _ _).mp checked
+  cases value
+  by_cases same : parameter.var = index
+  · exact same
+  · simp [checkParameter, parameterAt, same, reject, bind, Except.bind] at checked
 
 end Goose.Construct
