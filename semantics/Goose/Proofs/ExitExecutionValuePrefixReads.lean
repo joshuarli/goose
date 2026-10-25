@@ -214,6 +214,22 @@ theorem readValuePath_prefix_observation (fuel : Nat) (module : Module)
           apply ih child rest
           exact valuePrefixObservable_stored_child fuel (.ofModule module) before after limit stored index child observable read
 
+theorem readLoc_prefix_observation (fuel : Nat) (module : Module)
+    (accepted : validate module = .ok ()) (before after : ExecutionState) (limit : Nat → Nat)
+    (location : Goose.Core.Loc)
+    (root : after.objects.lookup location.root = before.objects.lookup location.root)
+    (observable : ∀ value, before.objects.lookup location.root = some value →
+      ValuePrefixObservable (.ofModule module) before after limit value) :
+    mapStepState (fun _ => ExecutionState.initial)
+        (readLoc fuel (.ofModule module) location after) =
+      mapStepState (fun _ => ExecutionState.initial)
+        (readLoc fuel (.ofModule module) location before) := by
+  cases found : before.objects.lookup location.root with
+  | none => simp only [readLoc, EvalM.get, bind, root, found, fault, EvalM.stop, mapStepState]
+  | some value =>
+    simp only [readLoc, EvalM.get, bind, root, found]
+    exact readValuePath_prefix_observation fuel module accepted before after limit value location.path (observable value found)
+
 theorem rootedBackingObservations_readLoc_observation (fuel : Nat) (module : Module)
     (accepted : validate module = .ok ()) (before after : ExecutionState)
     (retainedRoot : Goose.Core.RootInst → Prop) (limit : Nat → Nat)
@@ -224,19 +240,15 @@ theorem rootedBackingObservations_readLoc_observation (fuel : Nat) (module : Mod
         (readLoc fuel (.ofModule module) location after) =
       mapStepState (fun _ => ExecutionState.initial)
         (readLoc fuel (.ofModule module) location before) := by
-  have root := frame.objects location.root retained
-  cases found : before.objects.lookup location.root with
-  | none => simp only [readLoc, EvalM.get, bind, root, found, fault, EvalM.stop, mapStepState]
-  | some value =>
-    simp only [readLoc, EvalM.get, bind, root, found]
-    apply readValuePath_prefix_observation fuel module accepted before after limit value location.path
-    intro stored occurrence
-    exact ⟨valid.observations location.root retained value found stored occurrence,
-      frame.sources location.root retained value found stored occurrence⟩
+  apply readLoc_prefix_observation fuel module accepted before after limit location (frame.objects location.root retained)
+  intro value found stored occurrence
+  exact ⟨valid.observations location.root retained value found stored occurrence,
+    frame.sources location.root retained value found stored occurrence⟩
 
 #print axioms fixedValue_no_storedOccurrence
 #print axioms valuePrefixObservable_stored_child
 #print axioms readValuePath_prefix_observation
+#print axioms readLoc_prefix_observation
 #print axioms rootedBackingObservations_readLoc_observation
 
 end Goose.Proofs.ExitExecution
