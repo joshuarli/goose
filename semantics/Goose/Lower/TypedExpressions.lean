@@ -231,6 +231,28 @@ structure ViewSource (cfg : Cfg) (env : Env) (view : View) (state : St) where
   rooted : rpView rootsEnv view rootsStart = .ok (roots, rootsEnd)
   effects : EffLe rootsEnd.eff world.E
 
+structure PlaceSource.ViewChildAt {cfg : Cfg} {env : Env} {place : Place} {view : View}
+    {state childState : St} (source : PlaceSource cfg env place state)
+    (child : ViewSource cfg env view childState) (index : Nat)
+    (found : DemandNode.child? (.place place) index = some (.view view)) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [index]
+  plans : child.plans = source.plans
+  context : HEq child.context
+    (source.context.child rfl index (.view view) .view found (by trivial))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+
+structure PlaceSource.ExpressionChildAt {cfg : Cfg} {env : Env} {place : Place} {expression : Expr}
+    {state childState : St} (source : PlaceSource cfg env place state)
+    (child : ExprSource cfg env expression childState) (index : Nat)
+    (found : DemandNode.child? (.place place) index = some (.expression expression)) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [index]
+  plans : child.plans = source.plans
+  context : HEq child.context
+    (source.context.child rfl index (.expression expression) .expression found (by trivial))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+
 structure ViewResult {cfg : Cfg} {env : Env} {view : View} {state : St}
     (source : ViewSource cfg env view state) (value : ViewVal) (after : St) : Prop where
   frame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after
@@ -1247,10 +1269,10 @@ theorem ExprSource.binChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
 theorem PlaceSource.elemChildren {cfg : Cfg} {env : Env} {view : View} {index : Expr} {state : St}
     (origin : OriginId) (source : PlaceSource cfg env (.elem view index origin) state) :
     ∃ intTy, ∃ left : ViewSource cfg env view state,
-      left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧
+      left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧ source.ViewChildAt left 0 rfl ∧
       ∀ n value after, evalView n cfg env view state = .ok value after →
         ∃ right : ExprSource cfg env index after, right.typingEnv = source.typingEnv ∧
-          right.rootsEnv = source.rootsEnv ∧ right.ty = .int intTy := by
+          right.rootsEnv = source.rootsEnv ∧ right.ty = .int intTy ∧ source.ExpressionChildAt right 1 rfl := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyPlace] at ht
@@ -1329,7 +1351,9 @@ theorem PlaceSource.elemChildren {cfg : Cfg} {env : Env} {view : View} {index : 
     observed := by simpa [hLeftShrink] using source.observed,
     classified := source.classified, permission := source.permission, frame := hLeftInput,
     typed := hta, rooted := hra, effects := (Core.Sound.rpExpr_mono hrb).2.trans hE2 }
-  refine ⟨intTy, left, rfl, rfl, ?_⟩
+  refine ⟨intTy, left, rfl, rfl,
+    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+      ec.child_retained_subset rfl 0 (.view view) .view rfl (by trivial) member⟩, ?_⟩
   intro n value after hdone
   have output := left.result n value hdone
   have hF1 : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
@@ -1379,7 +1403,9 @@ theorem PlaceSource.elemChildren {cfg : Cfg} {env : Env} {view : View} {index : 
     protection := by simpa [hRightShrink] using source.protection,
     observed := by simpa only [left, hLeftShrink, hRightShrink] using output.observed,
     classified := output.classified, permission := source.permission, frame := hFrameRight,
-    typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl, rfl⟩
+    typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl, rfl,
+      ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+        ec.child_retained_subset rfl 1 (.expression index) .expression rfl (by trivial) member⟩⟩
 
 theorem ExprSource.pushChildren {cfg : Cfg} {env : Env} {owner : Place} {argument : Expr} {state : St}
     (origin : Option OriginId) (source : ExprSource cfg env (.push owner argument origin) state) :
@@ -2806,7 +2832,7 @@ theorem typedPlaceClaim_elem {n : Nat} {cfg : Cfg} {results : List Ty} {view : V
     (hv : TypedViewClaim n cfg results view) (hi : TypedExprClaim n cfg results index)
     (origin : OriginId) : TypedPlaceClaim (n + 1) cfg results (.elem view index origin) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨intTy, left, htyping, hroots, next⟩ := source.elemChildren origin
+  obtain ⟨intTy, left, htyping, hroots, _, next⟩ := source.elemChildren origin
   have hleftMetadata : SourceResults left.typingEnv left.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
@@ -2817,7 +2843,7 @@ theorem typedPlaceClaim_elem {n : Nat} {cfg : Cfg} {results : List Ty} {view : V
   simp only [evalPlace]
   refine SimEAt.bind (hv env state left hleftMetadata ls first vw pt cx fr hfirst hpp
     hextFirst hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P1 => ?_
-  obtain ⟨right, htypingRight, hrootsRight, htype⟩ := next n value after hdone
+  obtain ⟨right, htypingRight, hrootsRight, htype, _⟩ := next n value after hdone
   have hrightMetadata : SourceResults right.typingEnv right.rootsEnv results := by
     rw [htypingRight, hrootsRight]
     exact hmetadata

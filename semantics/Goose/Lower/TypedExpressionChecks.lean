@@ -554,8 +554,8 @@ theorem indexed_children_source (artifact : ArtifactProfile) (profile : NumProfi
     (global := ⟨"selected", .bool, .mutable, .read (.elem (.of (.global 0)) (.lit .i64 index) 0), 0⟩)
     accepted rfl (indexed_prefix artifact profile index accepted).invariant
   obtain ⟨place, hplaceTyping, hplaceRoots⟩ := source.readChild
-  obtain ⟨intTy, view, hviewTyping, hviewRoots, next⟩ := place.elemChildren 0
-  obtain ⟨operand, hoperandTyping, hoperandRoots, hoperandType⟩ := next 3
+  obtain ⟨intTy, view, hviewTyping, hviewRoots, _, next⟩ := place.elemChildren 0
+  obtain ⟨operand, hoperandTyping, hoperandRoots, hoperandType, _⟩ := next 3
     ⟨⟨.global 0, []⟩, 0, 3, false⟩ { viewOwnerState with nextAct := 2 } (by cbv)
   exact ⟨view, operand, hviewTyping.trans hoperandTyping.symm⟩
 

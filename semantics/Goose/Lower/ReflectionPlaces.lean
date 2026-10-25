@@ -151,7 +151,7 @@ theorem typedPlaceReflection_elem {fuel : Nat} {cfg : Cfg} {results : List Ty}
     (origin : OriginId) :
     TypedPlaceReflection fuel cfg results (.elem view index origin) := by
   intro env state source metadata ls after id pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨intTy, viewSource, viewTyping, viewRoots, next⟩ := source.elemChildren origin
+  obtain ⟨intTy, viewSource, viewTyping, viewRoots, _, next⟩ := source.elemChildren origin
   have viewMetadata : SourceResults viewSource.typingEnv viewSource.rootsEnv results := by
     rw [viewTyping, viewRoots]
     exact metadata
@@ -172,7 +172,7 @@ theorem typedPlaceReflection_elem {fuel : Nat} {cfg : Cfg} {results : List Ty}
       (fun location _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(id,.val (.ref location))]) state := by
     refine first.bind ?_ (fun n k bound => (monoAll n k bound).view cfg env view) ?_
     · intro n sampled sampledAfter pt' fr' viewDone post residual bound
-      obtain ⟨indexSource,indexTyping,indexRoots,indexType⟩ := next n sampled sampledAfter viewDone
+      obtain ⟨indexSource,indexTyping,indexRoots,indexType,_⟩ := next n sampled sampledAfter viewDone
       have indexMetadata : SourceResults indexSource.typingEnv indexSource.rootsEnv results := by
         rw [indexTyping, indexRoots]
         exact metadata
