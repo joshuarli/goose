@@ -624,4 +624,38 @@ theorem validated_body_scope (module : Module) (id : ImplId) (implementation : I
   · exact same
   · simp [same, reject, bind, Except.bind] at checked
 
+theorem validated_global_storageType (module : Module) (id : GlobalId) (descriptor : Global)
+    (accepted : validate module = .ok ()) (present : module.globals[id]? = some descriptor) :
+    descriptor.ty.storageType = true := by
+  unfold validate at accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨token, globals, _⟩ := (validation_bind_ok _ _ _).mp accepted
+  cases token
+  have each := validation_forIn_yields _ _ globals (by
+    intro index token step checked
+    cases found : module.globals[index]? with
+    | none => simp only [found] at checked; cases checked
+    | some global =>
+      simp only [found] at checked
+      obtain ⟨value, _, tail⟩ := (validation_bind_ok _ _ _).mp checked
+      cases value
+      exact (Except.ok.inj tail).symm)
+  have checked := each id (List.mem_range.mpr (Array.getElem?_eq_some_iff.mp present).1)
+  simp only [present] at checked
+  obtain ⟨value, checked, _⟩ := (validation_bind_ok _ _ _).mp checked
+  cases value
+  unfold checkGlobal at checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  cases storage : descriptor.ty.storageType with
+  | true => rfl
+  | false => simp [storage, reject, bind, Except.bind] at checked
+
 end Goose.Construct
