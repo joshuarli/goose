@@ -355,3 +355,43 @@ private def clearIterationSource : Module :=
 #guard rejectsWith clearIterationSource .shrink
 
 end Goose.Construct.ValidationChecks
+
+namespace Goose.Construct.ValidationChecks
+
+private def viewAfterInitializerShrink (prior : Bool) (nested : Bool := false) : Module :=
+  let owner := Ty.growshrink (.int .i64)
+  let view := Ty.slice .readOnly (.int .i64)
+  let sampled := Expr.slice .readOnly (.of (.var 0)) .omitted .omitted 0
+  let id := if prior then 2 else 1
+  let initialBindings := if prior then [Stmt.letS 1 sampled 0] else []
+  let nestedBindings := if nested then [Stmt.letS 2 sampled 0] else []
+  let initializer := Expr.blockE (.mk 1 (nestedBindings ++ [.clear (.var 0) 0]) (some sampled)) 0
+  let variables := #[⟨"owner",owner,.mutable,0,0⟩] ++
+    (if prior then #[⟨"prior",view,.immutable,0,0⟩] else #[]) ++
+    #[⟨"received",view,.immutable,0,0⟩] ++
+    (if nested then #[⟨"nested",view,.immutable,1,0⟩] else #[])
+  let body := Block.mk 0 ([.letS 0 (.arrLit owner [.lit .i64 7] 0) 0] ++ initialBindings ++
+    [.letS id initializer 0,.print [.expr (.read (.var id))] 0]) none
+  let main := implementation body variables #[] .unknown
+  let annotations := [(1,[RootRef.local 0])] ++ (if prior || nested then [(2,[.local 0])] else [])
+  { (baseModule main) with contexts := #[⟨0,"main",annotations,[],[]⟩] }
+
+#guard accepts (viewAfterInitializerShrink false)
+#guard rejectsWith (viewAfterInitializerShrink true) .shrink
+#guard rejectsWith (viewAfterInitializerShrink false true) .shrink
+
+private def nestedInitializersShrink : Module :=
+  let owner := Ty.growshrink (.int .i64)
+  let view := Ty.slice .readOnly (.int .i64)
+  let sampled := Expr.slice .readOnly (.of (.var 0)) .omitted .omitted 0
+  let inner := Expr.blockE (.mk 2 [.clear (.var 0) 0] (some sampled)) 0
+  let outer := Expr.blockE (.mk 1 [.letS 2 inner 0] (some (.read (.var 2)))) 0
+  let main := implementation (.mk 0 [
+    .letS 0 (.arrLit owner [.lit .i64 7] 0) 0,.letS 1 outer 0,
+    .print [.expr (.read (.var 1))] 0] none)
+    #[⟨"owner",owner,.mutable,0,0⟩,⟨"outer",view,.immutable,0,0⟩,⟨"inner",view,.immutable,1,0⟩] #[] .unknown
+  { (baseModule main) with contexts := #[⟨0,"main",[(1,[.local 0]),(2,[.local 0])],[],[]⟩] }
+
+#guard accepts nestedInitializersShrink
+
+end Goose.Construct.ValidationChecks

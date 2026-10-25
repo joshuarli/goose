@@ -45,6 +45,7 @@ structure PEnv where
   targetEscapes : Array (List Nat) := #[]
   aliases : List (RootRef × RootRef) := []
   calleeNames : Array (List RootRef) := #[]
+  initializing : List VarId := []
 
 def rejP (r : Rule) (msg : String) : P α := throw ⟨r, msg⟩
 
@@ -663,7 +664,7 @@ private def checkScopedShrinkAliases (env : PEnv) (effects : Eff) : P Unit := do
   let declared := (← get).nextVar
   for h : id in [0:env.impl.vars.size] do
     let localVar := env.impl.vars[id]
-    if id < declared && env.scopes.contains localVar.scope && interiorAliasType localVar.ty then
+    if id < declared && !env.initializing.contains id && env.scopes.contains localVar.scope && interiorAliasType localVar.ty then
       let roots ← liftV (env.access.variableRoots id)
       let roots := roots ++ (env.cont id).getD []
       checkRetainedShrinks env roots effects
@@ -954,7 +955,7 @@ def rpStmt (env : PEnv) : Stmt → P Unit
 
     unless x = (← get).nextVar do rejP .root s!"variable {x} is declared out of order"
     modify fun s => { s with nextVar := s.nextVar + 1 }
-    let rho ← rpExpr env e
+    let rho ← rpExpr { env with initializing := x :: env.initializing } e
     match env.impl.vars[x]? with
     | some lv =>
       noteReceivingCapacity env lv.ty .value e
@@ -1284,7 +1285,7 @@ private def checkContextFacts (m : Module) (ctx : Context)
     | .ok escapes => pure escapes
     | .error message => reject .call message
   let bodyContext ← parameterBodyRootContext m impl ctx
-  let env : PEnv := ⟨m, impl, bodyContext, [], none, escaping, actualEscapes, aliases, names⟩
+  let env : PEnv := ⟨m, impl, bodyContext, [], none, escaping, actualEscapes, aliases, names, []⟩
   let ((), st) ← (do
       let (_, _) ← rpBlockValue env [] impl.body
       if let some expression := impl.body.value then
@@ -1311,7 +1312,7 @@ private def checkInitFacts (m : Module) (g : GlobalId) (names : Array (List Root
   match m.globals[g]? with
   | none => pure {}
   | some gl => do
-    let env : PEnv := ⟨m, initImpl, initContext, [], none, #[], #[], [], names⟩
+    let env : PEnv := ⟨m, initImpl, initContext, [], none, #[], #[], [], names, []⟩
     let (_, st) ← (do
       let roots ← rpExpr env gl.init
       noteReceivingCapacity env gl.ty .value gl.init
