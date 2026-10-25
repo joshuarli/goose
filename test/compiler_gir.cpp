@@ -9057,10 +9057,13 @@ CoreModule ConstructionScalarCallBeforeNamedOwnerModule() {
     core.contexts.push_back(CoreContext { .impl = 2, .resultroots = { {} } });
     return core;
 }
-CoreModule ConstructionBorrowedScalarReadModule() {
+CoreModule ConstructionBorrowedScalarReadModule(CoreIntTy kind = CoreIntTy::I64) {
     auto core = CoreLengthModule(CoreType::Grow);
-    auto integer = core.IntType(CoreIntTy::I64);
+    auto integer = core.IntType(kind);
+    auto indexType = core.IntType(CoreIntTy::I64);
     auto owner = core.impls[0].vars[0].type;
+    core.types[owner].elem = integer;
+    core.impls[0].body.stmts[0].expr->elems[0]->type = integer;
     auto reference = core.Intern(CoreType { .kind = CoreType::Ref, .mut = CoreMut::Const, .elem = owner });
     auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
     auto &call = core.impls[0].body.stmts[1].expr;
@@ -9076,7 +9079,7 @@ CoreModule ConstructionBorrowedScalarReadModule() {
     dereference->expr = make_unique<CoreExpr>(); dereference->expr->kind = CoreExprKind::Read;
     dereference->expr->type = reference; dereference->expr->place = CoreLocal(0);
     auto element = make_unique<CorePlace>(); element->kind = CorePlace::Elem;
-    element->view = CorePlaceView(std::move(dereference)); element->expr = CoreInt(integer, "0"); element->org = origin;
+    element->view = CorePlaceView(std::move(dereference)); element->expr = CoreInt(indexType, "0"); element->org = origin;
     reader.body.value = make_unique<CoreExpr>(); reader.body.value->kind = CoreExprKind::Read;
     reader.body.value->type = integer; reader.body.value->place = std::move(element); reader.body.value->org = origin;
     core.impls.push_back(std::move(reader));
@@ -9173,6 +9176,23 @@ void ConstructionScalarMailboxesRequirePrivateCallerStorage() {
     assert(Code(premature) == "GIR-V090");
 }
 
+void ConstructionScalarMailboxesUseTheirAbiWordWidth() {
+    for (auto kind : { CoreIntTy::I8, CoreIntTy::U8, CoreIntTy::I32, CoreIntTy::I64 }) {
+        auto core = ConstructionBorrowedScalarReadModule(kind);
+        auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } }, [](const CoreOrigin &) { return 0; }).Lower();
+        assert(Code(high) == "");
+        assert(Code(GirToLow(high).Lower()) == "");
+    }
+    auto core = ConstructionBorrowedScalarReadModule(CoreIntTy::I8);
+    auto boolean = core.impls[1].results[0].type;
+    core.types[boolean] = CoreType { .kind = CoreType::Bool };
+    auto &value = core.impls[0].body.stmts[0].expr->elems[0];
+    value = make_unique<CoreExpr>(); value->kind = CoreExprKind::Bool; value->type = boolean; value->flag = true;
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } }, [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    assert(Code(GirToLow(high).Lower()) == "");
+}
+
 void ConstructionGlobalOwnersInitializeTheirBackingBase() {
     for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
         auto high = Base();
@@ -9222,6 +9242,7 @@ int main() {
     NonreturningConstructionCallsKeepTheirNormalEdgeProof();
     ConstructionGlobalOwnersInitializeTheirBackingBase();
     ConstructionScalarMailboxesRequirePrivateCallerStorage();
+    ConstructionScalarMailboxesUseTheirAbiWordWidth();
     OwnerBorrowsMakeMutableOwnerAuthorityExplicit();
     OwnerReferencesLowerThroughExplicitBorrowFormation();
     ConstructionTargetDestinationsForwardProgressThroughCalls();

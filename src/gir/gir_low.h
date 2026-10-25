@@ -2968,10 +2968,10 @@ private:
                     cells = { carrier[0], carrier[1], Metadata(ConstI(I64(), 0)), Progress() };
                 }
                 else for (auto wordType : s.resultWords[result]) {
-                    auto size = IsAggregate(g.results[result]) ? Size(g.results[result]) : 8;
+                    auto size = IsAggregate(g.results[result]) ? Size(g.results[result]) :
+                        l.Type(wordType).kind == CoreType::Ptr ? l.pointerBytes : LowScalarSize(wordType);
                     auto pointer = Simple(GirOp::FrameAddr, Ptr(), -1, -1, FrameTemp(size));
                     cells.push_back(pointer);
-                    (void)wordType;
                 }
                 for (auto cell : cells) c.vals.push_back(cell);
                 addresses.push_back(std::move(cells));
