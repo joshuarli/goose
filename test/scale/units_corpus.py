@@ -120,7 +120,7 @@ class Corpus:
         if why:
             return "skip", f"unsupported in pipeline {self.pipeline}: {why}"
         outcome = expected_pilot_outcome(h, fixture)
-        stdout = h.joined(fixture.out.read_text(encoding="utf-8"))
+        stdout = h.joined(fixture.out.read_bytes())
         for mode in fixture.modes:
             defines = ["-DGS_DEBUG=1"] if mode == h.DEBUG else []
             ccdefs = ["GS_DEBUG=1"] if mode == h.DEBUG else []
@@ -140,8 +140,9 @@ class Corpus:
                                           log=d / "cc.log")
                 if not ok:
                     return "FAIL", f"cc {fixture.name} {mode} O{opt}: " + "\n".join(log.splitlines()[:6])
-                code, out, err = tc.run_capture([str(exe)], cwd=d)
-                verdict = h.judge_pipeline("units", fixture, mode, outcome, stdout, code, out, err)
+                ran = h.run([exe], 120, cwd=d)
+                verdict = h.judge_pipeline("units", fixture, mode, outcome, stdout,
+                                           ran.returncode, ran.stdout, h.text(ran.stderr))
                 if verdict.cls != h.AGREE:
                     return "FAIL", f"{fixture.name} O{opt}: {verdict.detail}"
         return "ok", ""
