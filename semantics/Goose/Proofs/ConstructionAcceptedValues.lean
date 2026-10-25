@@ -5,6 +5,7 @@ set_option Elab.async false
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionRootCorrespondence
+open Goose.Proofs.ConstructionExecutionOwnership
 
 theorem acceptedValue_integer (layout : LayoutEnv) (types : RootTypes)
     (interpretation : RootInterpretation) (state : ExecutionState)
@@ -65,7 +66,47 @@ theorem evalValue_checked_boolean (fuel : Nat) (config : EvalConfig)
     exact ⟨by simp only [evalValue, pure],
       acceptedValue_boolean config.layout types frame.interpretation state value⟩
 
+theorem evalValue_globalReference (fuel : Nat) (config : EvalConfig)
+    (interpretation : RootInterpretation) (initialized : Nat) (state : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (liveRoots : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized state ambient types liveRoots regions pending)
+    (globals : interpretation.globalCount = config.module.globals.size)
+    (id : Nat) (descriptor : Global) (declared : config.module.globals[id]? = some descriptor)
+    (mutability : Goose.Core.Mutability) :
+    evalValue (fuel + 2) config interpretation.environment (.ref mutability (.global id)) state =
+        .ok (.ref ⟨.global id, []⟩) state ∧
+      AcceptedValue config.layout types interpretation state (.ref mutability descriptor.ty)
+        [.global id] (.ref ⟨.global id, []⟩) := by
+  refine ⟨by simp only [evalValue, evalPlace, pure, bind],
+    .reference mutability descriptor.ty _, .reference mutability descriptor.ty _ ?_, .reference _, ?_⟩
+  · exact ⟨descriptor.ty, world.globalTypes id descriptor declared, .root descriptor.ty⟩
+  · intro location reference
+    cases reference
+    exact ⟨.global id, List.mem_cons_self, .global id (by
+      rw [globals]
+      exact (Array.getElem?_eq_some_iff.mp declared).1)⟩
+
+theorem evalValue_initializedGlobal (fuel : Nat) (config : EvalConfig)
+    (interpretation : RootInterpretation) (initialized : Nat) (state : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (liveRoots : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized state ambient types liveRoots regions pending)
+    (id : Nat) (available : id < initialized) :
+    ∃ descriptor value, config.module.globals[id]? = some descriptor ∧
+      evalValue (fuel + 2) config interpretation.environment (.read (.global id)) state = .ok value state ∧
+      Goose.Proofs.ConstructionRepresentation.ValueRepresentation descriptor.ty value ∧
+      PointerTypedValue types descriptor.ty value ∧
+      Goose.Proofs.ConstructionRepresentation.ValueStorageBacked config.layout state value := by
+  obtain ⟨descriptor, value, declared, found, represented⟩ := world.globals.2 id available
+  refine ⟨descriptor, value, declared, ?_, represented,
+    (world.heap _ _ _ (world.globalTypes id descriptor declared) found).2,
+    world.backing.values (.global id) (world.globalLive id available) value found⟩
+  simp only [evalValue, evalPlace, bind, pure, readLoc, EvalM.get, found, readValuePath]
+
 #print axioms evalValue_checked_integer
 #print axioms evalValue_checked_boolean
+#print axioms evalValue_globalReference
+#print axioms evalValue_initializedGlobal
 
 end Goose.Proofs.ConstructionAcceptedExecution

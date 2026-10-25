@@ -67,6 +67,7 @@ structure AcceptedWorld (config : EvalConfig) (initialized : Nat) (state : Execu
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) : Prop where
   ownership : OwnershipExecutionContext state ambient
   globals : GlobalRepresentations config.module initialized state
+  globalLive : ∀ id, id < initialized → liveRoots (.global id)
   globalTypes : ∀ id descriptor, config.module.globals[id]? = some descriptor →
     types (.global id) = some descriptor.ty
   typeFrontier : ∀ act scope id ty, types (.local act scope id) = some ty →
@@ -104,8 +105,10 @@ def declaredRootTypes (module : Module) : RootTypes
 
 theorem initial_acceptedWorld (config : EvalConfig) :
     AcceptedWorld config 0 .initial [] (declaredRootTypes config.module) (fun _ => False) [] [] := by
-  refine ⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_,
+  refine ⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_, ?_,
     initial_rootedBackingState config.layout _, ?_, ?_⟩
+  · intro id bound
+    exact (Nat.not_lt_zero id bound).elim
   · intro id bound
     exact (Nat.not_lt_zero id bound).elim
   · intro id descriptor present
