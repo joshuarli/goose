@@ -199,9 +199,12 @@ private def mutableValueParameter (impl : Impl) (variableId : VarId) : Bool :=
   (impl.vars[variableId]?).any (fun localVar => localVar.kind == .mutable && localVar.ty.isRefLike) &&
     impl.params.any (fun parameter => parameter.var == variableId && parameter.mode == .byValue)
 
+def mutableParameterRebindings (impl : Impl) : List (VarId × Expr) :=
+  (blockParameterRebindings impl.body).filter fun (variableId, _) => mutableValueParameter impl variableId
+
 def parameterBodyRootContext (module : Module) (impl : Impl) (context : Context) : V Context := do
   if !(impl.params.any fun parameter => mutableValueParameter impl parameter.var) then return context
-  let assignments := (blockParameterRebindings impl.body).filter fun (variableId, _) => mutableValueParameter impl variableId
+  let assignments := mutableParameterRebindings impl
   let mut current := context
   let bound := impl.params.size * (module.globals.size + impl.vars.size + impl.params.size + 1) + 1
   for _ in [0:bound] do
