@@ -47,6 +47,7 @@ structure ReceivingRegion where
   destination : Nat
   mutableRoots : RootInst → Prop
   limit : Nat → Nat
+  mutableDestinations : List Nat
 
 structure ReceivingProtection (layout : LayoutEnv) (state : ExecutionState)
     (liveRoots : RootInst → Prop) (region : ReceivingRegion) : Prop where
@@ -57,6 +58,10 @@ structure ReceivingProtection (layout : LayoutEnv) (state : ExecutionState)
     region.limit row.storage ≤ row.rollbackEnd
   landing : ∀ row, state.construction.destinations[region.destination]? = some row →
     region.limit row.storage ≤ row.capability.start
+  authority : region.destination ∈ region.mutableDestinations
+  names : ∀ root, liveRoots root → ¬ region.mutableRoots root → ∀ value,
+    state.objects.lookup root = some value → ∀ stored, StoredOccurrence value stored →
+    ∀ id, stored.destination = some id → id ∉ region.mutableDestinations
 
 structure PendingCarrierFrame where
   channels : List Channel
