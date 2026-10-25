@@ -7,6 +7,9 @@ named by $FAKE_SCRIPT, where NAME is the case recorded in FILE:
   {"answer": JSON, "exit": N}   print the answer as one line and exit N
   {"raw": TEXT, "exit": N}      print TEXT verbatim and exit N
   {"sleep": SECONDS}            hang, then print nothing
+`gir-validate`, `gir-run` and `agree` use gir_validate, gir_run and agree
+overrides. Their defaults validate successfully and reuse the Core result.
+`gir-reencode` preserves the input artifact.
 """
 
 import json
@@ -17,23 +20,30 @@ import time
 
 script = json.loads(Path(os.environ["FAKE_SCRIPT"]).read_text())
 args = sys.argv[1:]
-if args[:1] == ["validate"]:
+if args[:1] == ["gir-reencode"]:
+    print(Path(args[1]).read_text())
+    sys.exit(0)
+if args[:1] in (["validate"], ["gir-validate"]):
     name = json.loads(Path(args[1]).read_text())["case"]
-    entry = script.get("validate", {}).get(name, "ok")
+    entry = script.get("gir_validate" if args[0] == "gir-validate" else "validate", {}).get(name, "ok")
     if entry == "ok":
         print('["ok"]')
         sys.exit(0)
     print(json.dumps(["rejected", *entry["rejected"]]))
     sys.exit(5)
-if args[:1] != ["run"] or "--numeric" not in args:
+if args[:1] not in (["run"], ["gir-run"], ["agree"]) or "--numeric" not in args:
     print("fake semantics: unsupported arguments", file=sys.stderr)
     sys.exit(99)
 name = json.loads(Path(args[1]).read_text())["case"]
 mode = args[args.index("--numeric") + 1]
-entry = script["run"].get(name, {}).get(mode)
+runs = script.get("gir_run", script["run"]) if args[0] == "gir-run" else script["run"]
+entry = runs.get(name, {}).get(mode)
 if entry is None:
     print(f"fake semantics: no script for {name} {mode}", file=sys.stderr)
     sys.exit(99)
+if args[0] == "agree":
+    entry = script.get("agree", {}).get(name, {}).get(mode,
+        {"answer": ["agree", entry["answer"]], "exit": 0})
 if "sleep" in entry:
     time.sleep(entry["sleep"])
     sys.exit(0)

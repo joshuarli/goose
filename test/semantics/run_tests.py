@@ -5,10 +5,10 @@ For every runnable fixture in this directory and every golden in `golden/`, the
 Goose compiler exports the program (`--emit-core FILE --check SOURCE`), the
 reference tool runs the export (`TOOL run FILE --numeric MODE`), and the
 tool's outcome and standard output are compared with the fixture's expectation.
-With `--pipeline gir` the compiler also builds and runs the fixture through
-that pipeline, and the native result is compared with the same expectation.
-`--profile core-construction --pipeline gir` selects construction fixtures and
-checks Core, high GIR, their agreement, and the native GIR pipeline. Standard
+With `--pipeline gir` the runner checks high GIR validation, evaluation,
+re-encoding and agreement with Core, then compares native GIR output with the
+same expectation. `--profile core-construction --pipeline gir` selects
+construction fixtures for these checks. Standard
 output is compared as bytes: legacy JSON strings are UTF-8 encoded, while
 construction JSON byte arrays are used directly.
 
@@ -468,7 +468,7 @@ def check_gir_reencode(tool: Path, gir: Path, timeout: float) -> Verdict:
 
 
 def agree_result(tool: Path, core: Path, gir: Path, fixture: Fixture, mode: str,
-                 outcome: Outcome, stdout: bytes, timeout: float) -> Verdict:
+                 outcome: Outcome, stdout: bytes, timeout: float, construction: bool) -> Verdict:
     done = run([tool, "agree", core, gir, "--numeric", mode], timeout)
     lines = text(done.stdout).splitlines()
     if len(lines) != 1:
@@ -480,7 +480,7 @@ def agree_result(tool: Path, core: Path, gir: Path, fixture: Fixture, mode: str,
     if answer == ["inconclusive"] and done.returncode == 3:
         return Verdict(INCONCLUSIVE, f"[{mode}] Core/GIR comparison ran out of fuel")
     if isinstance(answer, list) and len(answer) == 2 and answer[0] == "agree" and done.returncode == 0:
-        inner = parse_tool_answer(0, json.dumps(answer[1]), construction=True)
+        inner = parse_tool_answer(0, json.dumps(answer[1]), construction=construction)
         return judge_tool(fixture, mode, inner, outcome, stdout)
     if isinstance(answer, list) and len(answer) == 3 and answer[0] == "disagree" and done.returncode == 6:
         return Verdict(MISMATCH, f"[{mode}] Core/GIR disagree")
@@ -694,7 +694,7 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
     construction = profile == "core-construction"
     if fixture.construction and not construction:
         return Verdict(HARNESS_FAILURE, f"construction fixture exported as {profile}")
-    if construction and pipeline is not None and gir_file is None:
+    if pipeline is not None and gir_file is None:
         gir_file = guarded(lambda: export_high_gir(goose, fixture, work, timeout))
         if gir_file is None:
             return verdicts[0]
@@ -713,19 +713,18 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
         guarded(check_tool)
         if pipeline is not None:
             def check_pipeline():
-                if construction:
-                    if gir_file is None:
-                        raise HarnessFailure("construction fixture has no high GIR artifact")
-                    if mode == fixture.modes[0]:
-                        answer = validate_gir_result(tool, gir_file, timeout)
-                        if answer[0] != "valid":
-                            verdicts.append(Verdict(MISMATCH,
-                                f"[{mode}] GIR validation answered {json.dumps(list(answer))}"))
-                        verdicts.append(check_gir_reencode(tool, gir_file, timeout))
-                    answer = gir_tool_result(tool, gir_file, mode, timeout, construction)
-                    verdicts.append(judge_tool(fixture, mode, answer, outcome, stdout))
-                    verdicts.append(agree_result(tool, core_file, gir_file, fixture, mode,
-                                                 outcome, stdout, timeout))
+                if gir_file is None:
+                    raise HarnessFailure("fixture has no high GIR artifact")
+                if mode == fixture.modes[0]:
+                    answer = validate_gir_result(tool, gir_file, timeout)
+                    if answer[0] != "valid":
+                        verdicts.append(Verdict(MISMATCH,
+                            f"[{mode}] GIR validation answered {json.dumps(list(answer))}"))
+                    verdicts.append(check_gir_reencode(tool, gir_file, timeout))
+                answer = gir_tool_result(tool, gir_file, mode, timeout, construction)
+                verdicts.append(judge_tool(fixture, mode, answer, outcome, stdout))
+                verdicts.append(agree_result(tool, core_file, gir_file, fixture, mode,
+                                             outcome, stdout, timeout, construction))
                 for label, code, out, err in build_and_run_pipeline(goose, cc, pipeline, fixture, mode,
                                                                     work, timeout):
                     verdicts.append(judge_pipeline(f"{pipeline} {label}", fixture, mode, outcome, stdout,
@@ -1072,6 +1071,22 @@ def self_test() -> int:
             check(f"gir {name}: expected {want}, got {reported.get(name, AGREE)}",
                   reported.get(name, AGREE) == want)
         check("a pipeline mismatch exits 1", status == 1)
+
+        for stage, overrides in (
+                ("GIR execution", {"gir_run": {"agree_returned": returns("wrong\n")}}),
+                ("GIR validation", {"gir_validate": {"agree_returned": {"rejected": ["GIR-V010", "bad"]}}}),
+                ("Core/GIR agreement", {"agree": {"agree_returned": {
+                    RELEASE: answer(["disagree", ["done", ["returned"], "hi\n"],
+                                     ["done", ["returned"], "wrong\n"]], 6)}}})):
+            write_script(gir_runs=gir_runs, **overrides)
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                status = fake_main(["--goose", str(fake_goose), "--semantics", str(fake_tool),
+                                    "--timeout", "10", "--pipeline", "gir",
+                                    "--case", "agree_returned"], root=tree / "semantics")
+            summary = json.loads(stdout.getvalue().splitlines()[-1])
+            check(f"pilot {stage} failure rejects matching Core and native results",
+                  status == 1 and summary[MISMATCH] == 1)
 
         # A compiler that rejects the flag is a harness failure, never a pass.
         write_script(gir="reject", gir_runs=gir_runs)

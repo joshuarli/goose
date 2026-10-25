@@ -48,7 +48,15 @@ if "--emit-core" in args:
         sys.exit(1)
     if entry != "nofile":
         target.write_text(json.dumps({"case": name}))
+    if "--emit-gir-high" in args and entry != "nofile":
+        Path(args[args.index("--emit-gir-high") + 1]).write_text(json.dumps({"case": name}))
     print("parsed ok")
+    sys.exit(0)
+
+if "--emit-gir-high" in args:
+    target = Path(args[args.index("--emit-gir-high") + 1])
+    source = Path(args[args.index("--check") + 1])
+    target.write_text(json.dumps({"case": source.stem}))
     sys.exit(0)
 
 if "--pipeline" in args:
