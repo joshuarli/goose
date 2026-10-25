@@ -74,18 +74,21 @@ theorem generated_clear_place_extended {le : LEnv} {before : LS} {loop : Option 
     simpa only [lowerStmt, bind_run] using extended
   exact cleared.of_adv (adv_emitEffect rfl)
 
+theorem generated_block_leave_extended {le : LEnv} {before : LS} {loop : Option LoopCtx}
+    {parameters : List (SlotId × ValueId × OriginId)} {want : Bool} {block : Core.Block} {blocks : Array GIR.Block}
+    (extended : ExtT (lowerBlock loop parameters want block le before).2 blocks) :
+    ExtT (emitEffect (.leave block.scope) le
+      (lowerBlockValue want block.value le (demandBlockValueBefore le before loop parameters block)).2).2 blocks := by
+  cases block with
+  | mk scope statements value =>
+    simp only [lowerBlock, inScope, bind_run, pushScope_run, popScope_run, pure_run] at extended
+    simpa only [ExtT, demandBlockValueBefore, demandBlockStatementsBefore, Core.Block.scope, Core.Block.stmts, Core.Block.value] using extended
+
 theorem generated_block_value_extended {le : LEnv} {before : LS} {loop : Option LoopCtx}
     {parameters : List (SlotId × ValueId × OriginId)} {want : Bool} {block : Core.Block} {blocks : Array GIR.Block}
     (extended : ExtT (lowerBlock loop parameters want block le before).2 blocks) :
-    ExtT (lowerBlockValue want block.value le (demandBlockValueBefore le before loop parameters block)).2 blocks := by
-  cases block with
-  | mk scope statements value =>
-    have leftExtended : ExtT (emitEffect (.leave scope) le
-        (lowerBlockValue want value le
-          (demandBlockValueBefore le before loop parameters (.mk scope statements value))).2).2 blocks := by
-      simp only [lowerBlock, inScope, bind_run, pushScope_run, popScope_run, pure_run] at extended
-      simpa only [ExtT, demandBlockValueBefore, demandBlockStatementsBefore, Core.Block.scope, Core.Block.stmts] using extended
-    simpa only [Core.Block.value] using leftExtended.of_adv (adv_emitEffect rfl)
+    ExtT (lowerBlockValue want block.value le (demandBlockValueBefore le before loop parameters block)).2 blocks :=
+  (generated_block_leave_extended extended).of_adv (adv_emitEffect rfl)
 
 theorem generated_block_statements_extended {le : LEnv} {before : LS} {loop : Option LoopCtx}
     {parameters : List (SlotId × ValueId × OriginId)} {want : Bool} {block : Core.Block} {blocks : Array GIR.Block}
@@ -119,6 +122,24 @@ theorem generated_statements_head_extended {le : LEnv} {before : LS} {loop : Opt
   obtain ⟨block, current, _, _⟩ := LS.pp_some atPoint
   simp only [lowerStmts, bind_run, isLive_run current, ite_true] at extended
   exact extended.of_adv (advB_lowerStmts loop rest _ _ _ _ rfl)
+
+theorem generated_block_statement_extended {le : LEnv} {before : LS} {loop : Option LoopCtx}
+    {parameters : List (SlotId × ValueId × OriginId)} {want : Bool} {block : Core.Block}
+    {index : Nat} {statement : Stmt} {blocks : Array GIR.Block} {point : Pt}
+    (statementAt : block.stmts[index]? = some statement)
+    (atPoint : (lowerStmts loop (block.stmts.take index) le
+      (demandBlockStatementsBefore le before parameters block)).2.pp = some point)
+    (extended : ExtT (lowerBlock loop parameters want block le before).2 blocks) :
+    ExtT (lowerStmt loop statement le (lowerStmts loop (block.stmts.take index) le
+      (demandBlockStatementsBefore le before parameters block)).2).2 blocks := by
+  have statementsExtended := generated_block_statements_extended extended
+  obtain ⟨bound, selected⟩ := List.getElem?_eq_some_iff.mp statementAt
+  have split : block.stmts = block.stmts.take index ++ statement :: block.stmts.drop (index + 1) := by
+    calc
+      block.stmts = block.stmts.take index ++ block.stmts.drop index := (List.take_append_drop index block.stmts).symm
+      _ = _ := by rw [List.drop_eq_getElem_cons bound, selected]
+  rw [split, lowerStmts_append_run] at statementsExtended
+  exact generated_statements_head_extended atPoint statementsExtended
 
 theorem GeneratedDemandInstruction.literal_auto {module : Core.Module} {access : AccessEnv} {function : Func}
     {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS} {type : IntTy} {number : Int}
@@ -188,6 +209,56 @@ theorem GeneratedDemandInstruction.indexChecked_auto {module : Core.Module} {acc
   have extension : ExtT (emitDef operation le indexRun.2).2 function.blocks := by
     simpa only [operation, indexRun, lowerPlace, bind_run] using extended
   simpa only [operation, indexRun, lowerPlace, bind_run, instAt_eq] using (emitDef_facts emitted atPoint extension).2.2.2.2
+
+theorem GeneratedDemandInstruction.load_auto {module : Core.Module} {access : AccessEnv} {function : Func}
+    {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS} {place : Place}
+    {point : Pt} {required : RetainedSsaMap}
+    (occurrence : GeneratedDemandOccurrence module function le root path (.expression (.read place)) before)
+    (rows : GeneratedDemandRows module access occurrence required)
+    (atPoint : (lowerPlace place le before).2.pp = some point)
+    (extended : ExtT (lowerExpr (.read place) le before).2 function.blocks) :
+    GeneratedDemandInstruction module access function required ⟨path ++ [0], .place, .exit⟩ point
+      (.def (lowerExpr (.read place) le before).1 (.load (lowerPlace place le before).1)) := by
+  apply GeneratedDemandInstruction.load occurrence rows atPoint
+  let addressed := lowerPlace place le before
+  let loaded := emitDef (.load addressed.1) le addressed.2
+  have emitted : emitDef (.load addressed.1) le addressed.2 = (loaded.1, loaded.2) := rfl
+  have instruction := (emitDef_facts emitted atPoint (generated_read_load_extended extended)).2.2.2.2
+  simpa only [lowerExpr_read_run, instAt_eq] using instruction
+
+
+theorem GeneratedDemandInstruction.blockEnter_auto {module : Core.Module} {access : AccessEnv} {function : Func}
+    {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS} {loop : Option LoopCtx}
+    {parameters : List (SlotId × ValueId × OriginId)} {want : Bool} {block : Core.Block}
+    {point : Pt} {required : RetainedSsaMap}
+    (occurrence : GeneratedDemandOccurrence module function le root path (.block loop parameters want block) before)
+    (rows : GeneratedDemandRows module access occurrence required) (atPoint : before.pp = some point)
+    (extended : ExtT (lowerBlock loop parameters want block le before).2 function.blocks) :
+    GeneratedDemandInstruction module access function required ⟨path, .block, .entry⟩ point (.eff (.enter block.scope)) := by
+  apply GeneratedDemandInstruction.blockEnter occurrence rows atPoint
+  have parametersExtended := generated_block_parameters_extended extended
+  unfold demandBlockStatementsBefore at parametersExtended
+  have enteredExtended := parametersExtended.of_adv (advB_initSlots parameters _ _ _ _ rfl)
+  have extension : ExtT (emitEffect (.enter block.scope) le before).2 function.blocks := by
+    simpa only [ExtT] using enteredExtended
+  simpa only [instAt_eq] using (emitEffect_facts (rfl : emitEffect (.enter block.scope) le before = _)
+    atPoint extension).2.2.2
+
+theorem GeneratedDemandInstruction.blockLeave_auto {module : Core.Module} {access : AccessEnv} {function : Func}
+    {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS} {loop : Option LoopCtx}
+    {parameters : List (SlotId × ValueId × OriginId)} {want : Bool} {block : Core.Block}
+    {point : Pt} {required : RetainedSsaMap}
+    (occurrence : GeneratedDemandOccurrence module function le root path (.block loop parameters want block) before)
+    (rows : GeneratedDemandRows module access occurrence required)
+    (atPoint : (lowerBlockValue want block.value le (demandBlockValueBefore le before loop parameters block)).2.pp = some point)
+    (extended : ExtT (lowerBlock loop parameters want block le before).2 function.blocks) :
+    GeneratedDemandInstruction module access function required (match (generalizing := false) block.value with
+      | some _ => ⟨path ++ [block.stmts.length], .expression, .exit⟩
+      | none => ⟨path, .block, .exit⟩) point (.eff (.leave block.scope)) := by
+  apply GeneratedDemandInstruction.blockLeave occurrence rows atPoint
+  simpa only [instAt_eq] using (emitEffect_facts (rfl : emitEffect (.leave block.scope) le
+    (lowerBlockValue want block.value le (demandBlockValueBefore le before loop parameters block)).2 = _)
+    atPoint (generated_block_leave_extended extended)).2.2.2
 
 theorem GeneratedDemandInstruction.clear_auto {module : Core.Module} {access : AccessEnv} {function : Func}
     {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS} {loop : Option LoopCtx}

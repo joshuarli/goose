@@ -1,4 +1,4 @@
-import Goose.Lower.DemandGeneratedInstructions
+import Goose.Lower.DemandGeneratedConstruction
 import Goose.Lower.DemandRetainedRows
 import Goose.Evidence.Execution
 
@@ -97,46 +97,70 @@ private theorem clearRows : GeneratedDemandRows source access clearOccurrence sa
 private theorem clearAddressRows : GeneratedDemandRows source access clearAddressOccurrence sampledRows := .clearPlace clearRows
 private theorem valueRows : GeneratedDemandRows source access valueOccurrence sampledRows := .blockValue (valueAt := by rfl) blockRows
 
+private theorem rootExtended : ExtT (lowerExpr indexedExpression environment startLS).2 function.blocks :=
+  generated_global_expression_extended source indexedGlobal
+
+private theorem placeExtended : ExtT (lowerPlace elementPlace environment startLS).2 function.blocks :=
+  generated_read_place_extended rootExtended
+
+private theorem viewExtended : ExtT (lowerView ownerView environment startLS).2 function.blocks :=
+  generated_index_view_extended placeExtended
+
+private theorem addressExtended : ExtT (lowerPlace (.global 0) environment startLS).2 function.blocks :=
+  generated_view_place_extended viewExtended
+
+private theorem blockExtended : ExtT (lowerBlock none [] true indexBlock environment indexBefore).2 function.blocks :=
+  generated_index_expression_extended placeExtended
+
+private theorem clearExtended : ExtT (lowerStmt none (.clear (.global 0) 0) environment clearBefore).2 function.blocks :=
+  generated_block_statement_extended (index := 0) (by rfl) (point := (0, 3)) (by cbv) blockExtended
+
+private theorem clearAddressExtended : ExtT (lowerPlace (.global 0) environment clearBefore).2 function.blocks :=
+  generated_clear_place_extended clearExtended
+
+private theorem valueExtended : ExtT (lowerExpr (.lit .i64 0) environment valueBefore).2 function.blocks := by
+  simpa only [valueBefore, indexBlock, Core.Block.value, lowerBlockValue, ite_true] using generated_block_value_extended blockExtended
+
 theorem generated_address :
     GeneratedDemandInstruction source access function empty ⟨[0, 0, 0], .place, .entry⟩ (0, 0) (.def 0 (.globalAddr 0)) := by
-  exact .globalAddress addressOccurrence addressRows (by cbv) (by cbv)
+  exact .globalAddress_auto addressOccurrence addressRows (by cbv) addressExtended
 
 theorem generated_snapshot :
     GeneratedDemandInstruction source access function empty ⟨[0, 0], .view, .exit⟩ (0, 1) (.def 1 (.snapshot .owner 0)) := by
-  exact .snapshot viewOccurrence viewRows (by cbv) (by cbv)
+  exact .snapshot_auto viewOccurrence viewRows (by cbv) viewExtended
 
 theorem generated_index_entry :
     GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0], .block, .entry⟩ (0, 2) (.eff (.enter 0)) := by
-  exact .blockEnter blockOccurrence blockRows (by cbv) (by cbv)
+  exact .blockEnter_auto blockOccurrence blockRows (by cbv) blockExtended
 
 theorem generated_clear_address :
     GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0, 0, 0], .place, .entry⟩ (0, 3) (.def 2 (.globalAddr 0)) := by
-  exact .globalAddress clearAddressOccurrence clearAddressRows (by cbv) (by cbv)
+  exact .globalAddress_auto clearAddressOccurrence clearAddressRows (by cbv) clearAddressExtended
 
 theorem generated_clear :
     GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0, 0, 0], .place, .exit⟩ (0, 4) (.eff (.clear 2 (some 0))) := by
-  exact .clear clearOccurrence clearRows (by cbv) (by cbv)
+  exact .clear_auto clearOccurrence clearRows (by cbv) clearExtended
 
 theorem generated_index_value :
     GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0, 1], .expression, .entry⟩ (0, 5) (.def 3 (.constInt .i64 0)) := by
-  exact .literal valueOccurrence valueRows (by cbv) (by cbv)
+  exact .literal_auto valueOccurrence valueRows (by cbv) valueExtended
 
 theorem generated_index_leave :
     GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0, 1], .expression, .exit⟩ (0, 6) (.eff (.leave 0)) := by
-  exact .blockLeave blockOccurrence blockRows (by cbv) (by cbv)
+  exact .blockLeave_auto blockOccurrence blockRows (by cbv) blockExtended
 
 theorem generated_index_check :
     GeneratedDemandInstruction source access function sampledRows ⟨[0, 1], .expression, .exit⟩ (0, 7)
       (.def 4 (.indexChecked 1 3 (some 0))) := by
-  exact .indexChecked placeOccurrence indexRows (by cbv) (by cbv)
+  exact .indexChecked_auto placeOccurrence indexRows (by cbv) placeExtended
 
 theorem generated_load :
     GeneratedDemandInstruction source access function empty ⟨[0], .place, .exit⟩ (0, 8) (.def 5 (.load 4)) := by
-  exact .load rootOccurrence rootRows (by cbv) (by cbv)
+  exact .load_auto rootOccurrence rootRows (by cbv) rootExtended
 
 theorem generated_return :
     GeneratedDemandInstruction source access function empty ⟨[], .expression, .exit⟩ (0, 9) (.term (.ret [5] (some 0))) := by
-  exact .globalReturn (globalId := 1) (by rfl) rootRows (by cbv) (by cbv)
+  exact .globalReturn_auto (globalId := 1) (by rfl) rootRows (by cbv)
 
 theorem empty_map_cannot_cover_index_rhs : ¬ empty.Covers sampledRows := by
   intro coverage
