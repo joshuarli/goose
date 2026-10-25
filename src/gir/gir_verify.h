@@ -839,7 +839,7 @@ private:
                     }
                 return nullopt;
             };
-            auto singleBranchSentinel = [&](int start, int source) {
+            auto guardedBranchSentinel = [&](int start, int source) {
                 set<int> seen;
                 auto block = start;
                 auto predecessor = source;
@@ -848,9 +848,19 @@ private:
                     auto &candidate = function.blocks[block];
                     auto *term = LastTerm(candidate);
                     if (term && term->op == GirOp::Unreachable && candidate.insts.size() == 1) return block;
-                    if (!term || term->op != GirOp::Br) return -1;
+                    if (!term) return -1;
+                    auto next = term->idx;
+                    if (term->op == GirOp::CondBr) {
+                        auto aborts = [&](int target) {
+                            return target >= 0 && target < (int)function.blocks.size() &&
+                                function.blocks[target].insts.size() == 1 &&
+                                function.blocks[target].insts[0].op == GirOp::Abort;
+                        };
+                        if (aborts(term->idx) == aborts(term->idx2)) return -1;
+                        next = aborts(term->idx) ? term->idx2 : term->idx;
+                    } else if (term->op != GirOp::Br) return -1;
                     predecessor = block;
-                    block = term->idx;
+                    block = next;
                 }
                 return -1;
             };
@@ -955,7 +965,7 @@ private:
                         bad("escaping low call has no closed invalid-discriminant sentinel");
                     checkedTargetUnreachable.emplace((int)functionIndex, next);
                     if (!returnFlags[call.idx].count(0) && !lowReturnFlagEffects[call.idx].preservesInput) {
-                        auto normalSentinel = singleBranchSentinel(normal, (int)block);
+                        auto normalSentinel = guardedBranchSentinel(normal, (int)block);
                         if (normalSentinel >= 0) checkedTargetUnreachable.emplace((int)functionIndex, normalSentinel);
                     }
                 }

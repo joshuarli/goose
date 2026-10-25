@@ -8983,8 +8983,59 @@ void ConstructionScalarIndexKeepsItsProgramValue() {
     assert(!violation);
 }
 
+CoreModule ConstructionNonreturningValueCallModule() {
+    auto core = ConstructionSourceTargetModule();
+    CoreOrigin origin { 0, 1, CoreOriginKind::Expr };
+    CoreImpl middle;
+    middle.name = "build";
+    middle.body.scope = 0;
+    middle.results = { { 1, CoreRequest::Value, nullopt } };
+    middle.summary.needs = { 0 };
+    middle.summary.escapes = { 0 };
+    CoreStmt callHelper;
+    callHelper.kind = CoreStmtKind::Expr;
+    callHelper.org = origin;
+    callHelper.expr = make_unique<CoreExpr>();
+    callHelper.expr->kind = CoreExprKind::Call;
+    callHelper.expr->ctx = 2;
+    callHelper.expr->type = 2;
+    callHelper.expr->org = origin;
+    middle.body.stmts.push_back(std::move(callHelper));
+    core.impls.push_back(std::move(middle));
+    core.contexts.push_back(CoreContext { .impl = 3, .resultroots = { {} } });
+    core.impls[1].vars = { { "result", 1, CoreVarKind::Var, 0, origin } };
+    auto &call = core.impls[1].body.stmts[0];
+    call.kind = CoreStmtKind::Let;
+    call.var = 0;
+    call.expr->ctx = 3;
+    call.expr->type = 1;
+    return core;
+}
+
+void NonreturningConstructionCallsKeepTheirNormalEdgeProof() {
+    auto core = ConstructionNonreturningValueCallModule();
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } },
+        [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    auto violation = GirVerifier(low).Verify();
+    if (violation) fprintf(stderr, "%s: %s\n", violation->code.c_str(), violation->message.c_str());
+    assert(!violation);
+    auto normal = low;
+    bool changed = false;
+    for (auto &block : normal.funcs[2].blocks) for (auto &instruction : block.insts)
+        if (instruction.op == GirOp::ReturnFlagSet)
+            for (auto &definitionBlock : normal.funcs[2].blocks) for (auto &definition : definitionBlock.insts)
+                if (definition.op == GirOp::Int && definition.res == instruction.a) {
+                    definition.text = "0";
+                    changed = true;
+                }
+    assert(changed && Code(normal) == "GIR-V020");
+}
+
 int main() {
     ConstructionScalarIndexKeepsItsProgramValue();
+    NonreturningConstructionCallsKeepTheirNormalEdgeProof();
     OwnerBorrowsMakeMutableOwnerAuthorityExplicit();
     OwnerReferencesLowerThroughExplicitBorrowFormation();
     ConstructionTargetDestinationsForwardProgressThroughCalls();
