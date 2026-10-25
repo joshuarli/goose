@@ -11,8 +11,9 @@ Local checkpoint `1197e996` contains limited-array capture support and its focus
 Its 310-module Lean closure now passes under pinned 4.35.0 after detecting an earlier 4.34.1 PATH mismatch.
 All current lanes use the pinned 4.35.0 explicitly.
 
-Four isolated lanes own source-demand correspondence (`campaign/afk-demand`),
+Five isolated lanes own source-demand correspondence (`campaign/afk-demand`),
 construction backing and ownership (`campaign/afk-construction`), exit storage observations (`campaign/afk-exit`), and accepted runtime root correspondence (`campaign/afk-construct-roots`).
+The fifth lane, `campaign/afk-short-circuit`, owns short-circuit demand traversal against the shared generated-occurrence interfaces.
 Their worktrees are `.work/wt/afk-demand`, `.work/wt/afk-construction`, `.work/wt/afk-exit`, and `.work/wt/afk-construct-roots`.
 The integrator owns verification and profile completeness.
 The next proof milestone is an accepted-execution invariant, not another endpoint-only wrapper.
@@ -44,6 +45,20 @@ under explicit receiving geometry and parent-readiness premises.
 The joint typed source-action induction must establish those premises for reachable execution.
 Exact retained operand rows now reject missing rows, wrong SSA identities and removed resizable backing;
 canonical instruction ownership and full source-demand coverage remain open.
+
+The shared construction source frame now carries exact typing and root-checker cursors.
+Its accepted entry factory derives the actual implementation, checker witnesses, fresh activation and alias completeness;
+it does not assert storage backing for an arbitrary input state.
+The live-carrier singleton theorem derives native landing success and preserves backing and its own receiving readiness.
+Producer-side readiness, protected outside-root geometry and sequential carrier exclusions still need the joint execution induction.
+Generic demand factories derive instruction lookup from real builder extension and emission equations.
+One accepted limited-array initializer has static source ownership at every runtime point;
+dynamic retained-row realization and coverage through all source actions remain open.
+
+The integrated dependency check passes all 304 modules selected by construction backing, root correspondence,
+completed exit observations, live commit and retained-row checks under pinned Lean 4.35.0.
+Later proof-only source-frame, parameter-scope and singleton-carrier components retain their focused lane checks.
+Stable-key C++ unit tests pass after sharing the visitation helper.
 
 An isolated report experiment replaces per-node hash allocations in report walks with a pointer set.
 Five interleaved samples per condition on Aincrad3 checking, using Clang Release with libtcc and native layers disabled,
