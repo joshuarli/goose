@@ -29,6 +29,31 @@ Accepted validation supplies the required struct field bounds.
 Construction references now have explicit source-root interpretations, checked argument/result substitution, and local binding preservation.
 These components pass focused 4.35.0 closures but do not close the universal construction, exit or demand invariants.
 
+The source root checker now owns `RootAlias`, `RootSetsOverlap` and `AliasClosure`.
+Accepted module validation supplies the alias closure and actual checked body environments;
+the former provisional proof vocabulary has been removed.
+Expanded equality proofs retain the checker's context-before-initializer order and errors.
+Reference-slice content correspondence distinguishes the holder's root from its pointee's roots.
+Grounded direct and forwarded calls validate and print `7`; self-content substitutions fail their actual call checks.
+Scope-entry transport still requires freshness and visible-local premises that the accepted execution induction must derive.
+
+Integrated construction components derive backing after accepted arbitrary byte-owner initialization,
+packed-count completion, fresh allocation, and complete repeat-element fill loops.
+Exit components derive payload relocation, completed landing, rooted read preservation and live anchor traversal
+under explicit receiving geometry and parent-readiness premises.
+The joint typed source-action induction must establish those premises for reachable execution.
+Exact retained operand rows now reject missing rows, wrong SSA identities and removed resizable backing;
+canonical instruction ownership and full source-demand coverage remain open.
+
+An isolated report experiment replaces per-node hash allocations in report walks with a pointer set.
+Five interleaved samples per condition on Aincrad3 checking, using Clang Release with libtcc and native layers disabled,
+give report-on CPU medians of 5.842 seconds before and 5.651 seconds after;
+observed ranges are 5.822–5.973 and 5.611–5.795 seconds.
+Report-off ranges overlap. Non-timing reports and generated C match exactly on the bounded controls.
+The binary grows by 264 bytes, and peak process RSS remains below 1.73 GB.
+Candidate report overhead is 12.7%, so the proposed 10% cap remains unmet.
+This experiment does not replace production-configuration qualification.
+
 ## Feature-completion priority (2026-10-25)
 
 The owner redirected the campaign toward feature completeness using the test-pyramid philosophy.
