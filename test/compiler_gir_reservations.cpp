@@ -1578,6 +1578,57 @@ void Valid(GirModule module) {
     assert(!violation);
 }
 
+void MutableParameterRebindingKeepsBodyRootInference() {
+    for (auto mutability : { CoreMut::Const, CoreMut::Mut }) {
+        CoreModule core;
+        core.profile = CoreProfile::Construction;
+        core.files = { "parameter-rebind.goose" };
+        auto integer = core.IntType(CoreIntTy::I64);
+        auto slice = core.Intern(CoreType { .kind = CoreType::Slice, .mut = mutability, .elem = integer });
+        CoreImpl entry;
+        entry.name = "entry";
+        entry.body.scope = 0;
+        core.impls.push_back(std::move(entry));
+        CoreImpl rebind;
+        rebind.name = "rebind";
+        rebind.body.scope = 0;
+        rebind.vars = { { "view", slice, CoreVarKind::Var, 0, origin },
+                       { "source", slice, CoreVarKind::Let, 0, origin } };
+        rebind.params = { { 0, false }, { 1, false } };
+        rebind.summary.unknown = true;
+        CoreStmt statement;
+        statement.kind = CoreStmtKind::Rebind;
+        statement.var = 0;
+        statement.org = origin;
+        statement.expr = make_unique<CoreExpr>();
+        statement.expr->kind = CoreExprKind::Read;
+        statement.expr->type = slice;
+        statement.expr->place = make_unique<CorePlace>();
+        statement.expr->place->index = 1;
+        rebind.body.stmts.push_back(std::move(statement));
+        core.impls.push_back(std::move(rebind));
+        CoreContext entryContext;
+        entryContext.impl = 0;
+        core.contexts.push_back(std::move(entryContext));
+        CoreContext rebindContext;
+        rebindContext.impl = 1;
+        rebindContext.varroots = { { 0, { { CoreRootRef::Param, 0 } } },
+                                  { 1, { { CoreRootRef::Param, 1 } } } };
+        core.contexts.push_back(std::move(rebindContext));
+        auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
+        Valid(high);
+        Valid(GirToLow(high).Lower());
+        auto forged = high;
+        auto &slots = *forged.funcs[1].roots.slots;
+        auto bound = find_if(slots.begin(), slots.end(), [](auto &row) { return row.first == 0; });
+        if (bound == slots.end()) slots.push_back({ 0, { { CoreRootRef::Param, 0 } } });
+        else bound->second = { { CoreRootRef::Param, 0 } };
+        auto violation = GirVerifier(forged).Verify();
+        assert(violation && violation->code == "GIR-V050");
+        assert(violation->message.find("root info omits a root stored by the body") != string::npos);
+    }
+}
+
 void RawCompletionAliasesPreserveTheWritingPhase() {
     auto core = Fixture("adapted-open");
     auto high = GirLowerer(core, core.files, { origin }, [](const CoreOrigin &) { return 0; }).Lower();
@@ -2258,6 +2309,7 @@ int main(int argc, char **argv) try {
         Valid(high);
         Valid(GirToLow(high).Lower());
     }
+    MutableParameterRebindingKeepsBodyRootInference();
     FixedCallEffectsPrecedeTheKnownReceivingCheck();
     ReturningFixedBranchPrecedesTheReceivingCheck();
     RawCompletionAliasesPreserveTheWritingPhase();

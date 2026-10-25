@@ -2885,6 +2885,11 @@ private:
             if (row.first < 0 || row.first >= (int)impl.vars.size()) continue;
             auto type = impl.vars[row.first].type;
             if (!GirRefLike(mod, type)) continue;
+            auto mutableParameter = impl.vars[row.first].kind == CoreVarKind::Var &&
+                any_of(impl.params.begin(), impl.params.end(), [&](auto &parameter) {
+                    return parameter.var == row.first && !parameter.byRef;
+                });
+            if (mutableParameter) continue;
             auto &ty = mod.Type(type);
             auto refSlice = ty.kind == CoreType::Ref && mod.Type(ty.elem).kind == CoreType::Slice &&
                 row.first < (int)impl.params.size() && impl.params[row.first].var == row.first;
