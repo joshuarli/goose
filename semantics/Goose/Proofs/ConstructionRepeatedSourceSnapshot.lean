@@ -1,4 +1,5 @@
 import Goose.Construct.Eval
+import Goose.Proofs.ConstructionElementWriteTransition
 import Lean.Elab.Tactic.Split
 
 set_option Elab.async false
@@ -6,14 +7,6 @@ set_option Elab.async false
 namespace Goose.Proofs.ConstructionRepeatedSourceSnapshot
 open Goose.Construct Goose.Core
 
-local syntax "snapshot_write_split_if" : tactic
-elab_rules : tactic
-  | `(tactic| snapshot_write_split_if) => Lean.Elab.Tactic.liftMetaTactic fun goal => do
-      let some (yes, no) ← Lean.Meta.splitIfTarget? goal
-        | Lean.throwError "no snapshot write condition to split"
-      return [yes.mvarId, no.mvarId]
-
-set_option maxHeartbeats 800000 in
 theorem writeElement_sourceFrame (id : DestinationId) (bytes : ByteArray)
     (state : ConstructionState) (source : StorageId) (sourceId : DestinationId) (destination : PendingDestination)
     (found : state.destinations[id]? = some destination)
@@ -21,94 +14,15 @@ theorem writeElement_sourceFrame (id : DestinationId) (bytes : ByteArray)
     ((writeElement id bytes state).finalState.destinations[sourceId]?,
       (writeElement id bytes state).finalState.storage[source]?) =
         (state.destinations[sourceId]?, state.storage[source]?) := by
-  simp only [writeElement, writableDestination_result, bind]
-  rw [found]
-  have present := found
-  cases allowed : destinationCanWrite state id with
-  | false => rfl
-  | true =>
-      have inside := (Array.getElem?_eq_some_iff.mp present).choose
-      cases progress : destination.progress <;> (try simp only [progress]) <;> try rfl
-      case «open» count =>
-        have committed : ∀ storage : ReceivingStorage,
-            (({ state with
-              storage := state.storage.set! destination.storage storage
-              destinations := state.destinations.set! id { destination with progress := .open (count + 1), writeEnd := destination.writeEnd + bytes.size },
-              events := state.events ++ [.write id count] } : ConstructionState).destinations[sourceId]?,
-              ({ state with storage := state.storage.set! destination.storage storage } : ConstructionState).storage[source]?) =
-                (state.destinations[sourceId]?, state.storage[source]?) := by
-          intro storage
-          simp [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds,
-            Ne.symm separate, Ne.symm distinct]
-        cases stored : state.storage[destination.storage]? with
-        | none => simp only [lookupStorage_result, stored, bind]; rfl
-        | some storage =>
-            have bound := (Array.getElem?_eq_some_iff.mp stored).choose
-            simp only [lookupStorage_result, stored, bind]
-            snapshot_write_split_if
-            · rfl
-            · try simp only [pure, bind, ConstructionM.fail, ConstructionResult.finalState]
-              cases layout : (destination.adaptation.map (·.layout)).getD destination.layout <;>
-                simp only [layout]
-              all_goals
-                repeat' first
-                  | simp only [pure, bind, ConstructionM.fail, ConstructionResult.finalState]
-                  | snapshot_write_split_if
-                all_goals try rfl
-                all_goals
-                  cases use : destination.use <;> simp only [use]
-                  all_goals
-                    try solve | repeat' first
-                        | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
-                            replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
-                            ConstructionM.fail, emit_result, ConstructionResult.finalState]
-                        | snapshot_write_split_if
-                        | rfl
-                        | exact committed _
-                  case child parentId =>
-                    cases parentFound : state.destinations[parentId]? with
-                    | none => simp [lookupDestination_result, parentFound, bind]
-                    | some parent =>
-                      simp only [lookupDestination_result, parentFound, bind]
-                      cases parentLayout : parent.layout <;> (try simp only [parentLayout])
-                      all_goals
-                        try solve | repeat' first
-                            | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
-                                replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
-                                ConstructionM.fail, emit_result, ConstructionResult.finalState]
-                            | snapshot_write_split_if
-                            | rfl
-                            | exact committed _
-                      case limited capacity slotBytes =>
-                        cases parentProgress : parent.progress <;> (try simp only [parentProgress])
-                        all_goals
-                          try solve | repeat' first
-                            | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
-                                replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
-                                ConstructionM.fail, emit_result, ConstructionResult.finalState]
-                            | snapshot_write_split_if
-                            | rfl
-                            | exact committed _
-                        case suspended parentCount child =>
-                          cases parentBacking : parent.backing <;> (try simp only [parentBacking])
-                          all_goals
-                            try solve | repeat' first
-                              | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
-                                  replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
-                                  ConstructionM.fail, emit_result, ConstructionResult.finalState]
-                              | snapshot_write_split_if
-                              | rfl
-                              | exact committed _
-                          case direct parentStorage =>
-                            cases backing : destination.backing <;> (try simp only [backing])
-                            all_goals
-                              repeat' first
-                                | simp_all only [lookupDestination_result, lookupStorage_result, replaceStorage_result,
-                                    replaceDestination_result, inside, bound, ↓reduceIte, pure, bind,
-                                    ConstructionM.fail, emit_result, ConstructionResult.finalState]
-                                | snapshot_write_split_if
-                                | rfl
-                                | exact committed _
+  have transition := Goose.Proofs.ConstructionStorage.writeElement_transition id bytes state
+  generalize evaluated : writeElement id bytes state = result at transition ⊢
+  cases transition with
+  | rejected reason => rfl
+  | written actual storage count present opened =>
+      have same := Option.some.inj (present.symm.trans found)
+      subst actual
+      simp [ConstructionResult.finalState, Array.set!_eq_setIfInBounds,
+        Array.getElem?_setIfInBounds, Ne.symm separate, Ne.symm distinct]
 
 theorem recordCopy_sourceFrame (source : CopySource) (id : DestinationId)
     (state : ConstructionState) :
