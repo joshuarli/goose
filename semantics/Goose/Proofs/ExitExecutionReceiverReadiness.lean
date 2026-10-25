@@ -17,7 +17,7 @@ elab_rules : tactic
           | Lean.throwError "no receiver condition"
         return [yes.mvarId, no.mvarId]
 
-private theorem openDestination_receiver_row (state after : ConstructionState) (target : Nat)
+theorem openDestination_receiver_row (state after : ConstructionState) (target : Nat)
     (capability : Goose.Core.Destination Ty) (layout : ReceivingLayout) (knownCount : Option Nat)
     (id : Nat) (executed : openDestination target capability layout knownCount state = .ok id after) :
     id = state.destinations.size ∧ after.destinationSuccessors = state.destinationSuccessors ∧
@@ -112,6 +112,7 @@ theorem newDestination_receiving_ready (layout : LayoutEnv) (owner : Goose.Core.
       bind, pure] at executed
     exact receivingLayout_open_ready layout ty prepared after state.construction.storage.size id origin _ knownCount valid executed
 
+#print axioms openDestination_receiver_row
 #print axioms openDestination_receiving_ready
 #print axioms newDestination_receiving_ready
 
