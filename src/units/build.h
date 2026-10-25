@@ -710,7 +710,8 @@ inline void ReportNativeCompileJson(BuildReportJson &j) {
     j.Key("frontend_phases").Arr();
     if (g_build_report)
         for (int p = 0; p < kPhases; p++)
-            if (g_build_report->rec.phase[p].ran && (Phase)p != Phase::ReportCollection)
+            if (g_build_report->rec.phase[p].ran && (Phase)p != Phase::ReportCollection &&
+                (Phase)p != Phase::NativeBuild)
                 j.Str(PhaseName((Phase)p));
     j.EndArr();
     j.F("units_written", r.units_written);

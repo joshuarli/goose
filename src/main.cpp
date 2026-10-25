@@ -1960,6 +1960,7 @@ int Main(int argc, char **argv) {
         if (g_build_report) BuildReportPhase(Phase::CodeGeneration);
         CodeGen cg(ast, runtime_ext_text, includes, norfcheck, library, stackcfg.maxstacks);
         if (g_build_report) BuildReportAfterCodegen(cg);
+        if (g_build_report) BuildReportPhase(Phase::WriteOutput);
         if (!unitsdir.empty() && !nocgen) {
             // The units include one header, the runtime's, and link with the
             // runtime object as separately built output does.
@@ -2030,7 +2031,6 @@ int Main(int argc, char **argv) {
                        cg.head, RuntimeSections({ "runtime_ext.h", "runtime_os.h" }), cg.result);
             return out;
         };
-        if (g_build_report) BuildReportPhase(Phase::WriteOutput);
         if (!outfile.empty() && !nocgen) {
             auto out = assemble(!standalone);
             if (!WriteFileMakingDirs(outfile, out))
@@ -2198,7 +2198,10 @@ int Main(int argc, char **argv) {
             }
             replay();
             if (code) return code;
-            if (g_build_report && !ur.active) BuildReportWrite();
+            if (g_build_report) {
+                if (ur.active) BuildReportPhase(Phase::NativeBuild);
+                else BuildReportWrite();
+            }
             if (verb == "build") {
                 if (nocgen) return 0;
                 // The native parts first, so that the link can take their

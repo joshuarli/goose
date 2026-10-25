@@ -386,6 +386,28 @@ static void TestEmittedSourceUnitBuilder(const string &goose, const string &sour
     assert(!ec);
     TestLinkResponseProbes(root);
 
+    auto report_path = root + "/build-report.json";
+    auto reported_build = RunProcess({ goose, "build", "--units", "--standalone", "-O1",
+        "--build-report", report_path, "-o", root + "/reported", source }, root);
+    assert(reported_build.started && reported_build.code == 0);
+    string report_text;
+    assert(UnitReadFile(report_path, report_text));
+    auto report = ParseJson(report_text);
+    auto phases = report.Get("phases");
+    assert(phases);
+    auto native_phase = phases->Get("native_build");
+    assert(native_phase);
+    auto native_wall = native_phase->Get("wall_seconds");
+    assert(native_wall && native_wall->kind == Json::NUMBER);
+    auto native = report.Get("extensions")->Get("native_compile");
+    assert(native && !native->Arr("native_compiler_invocations").empty());
+    for (auto &invocation : native->Arr("native_compiler_invocations"))
+        assert(native_wall->num >= invocation.Get("wall_seconds")->num);
+    assert(native_wall->num >= native->Get("link")->Get("wall_seconds")->num);
+    auto frontend = native->Arr("frontend_phases");
+    assert(any_of(frontend.begin(), frontend.end(), [](const Json &phase) { return phase.str == "write_output"; }));
+    assert(none_of(frontend.begin(), frontend.end(), [](const Json &phase) { return phase.str == "native_build"; }));
+
     Toolchain tc;
     string why;
     assert(FindToolchain("", tc, why));

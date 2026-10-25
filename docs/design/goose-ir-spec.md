@@ -1539,6 +1539,13 @@ Sharing: classes formed, and for instances that share a `DeclKey` and lowering k
 
 Phases: wall time, CPU time and peak resident memory for parse and resolve, check and specialize, optimize, bounds-check elimination, lowering, emission, each native compilation, link, and total. Under units: units written, units whose text changed, native compiler invocations, objects reused, whether the link ran, and for each changed unit the instances that changed it.
 
+For a units build, `phases.native_build` starts after Goose compilation.
+It covers native package preparation, object reuse, native compilation, linking and cache publication.
+`extensions.native_compile.frontend_phases` excludes this phase and `report_collection`.
+The `write_output` phase ends before native work starts.
+It includes constructing and writing the emitted units.
+Per-invocation and link timings remain in `extensions.native_compile`.
+
 Timing and attribution cost nothing when the flag is absent.
 
 ## 21. Linter and bootstrap

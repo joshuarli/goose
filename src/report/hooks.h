@@ -29,10 +29,7 @@ inline const char *HelperKindName(HelperKind k) {
 
 enum class Phase {
     ParseResolve, CheckSpecialize, Optimize, BoundsCheckElimination, CodeGeneration,
-    WriteOutput,
-    // The report's own work between phases, kept apart so that it never
-    // inflates a phase of the compiler.
-    ReportCollection,
+    WriteOutput, NativeBuild, ReportCollection,
     Count
 };
 constexpr int kPhases = (int)Phase::Count;
@@ -40,7 +37,7 @@ constexpr int kPhases = (int)Phase::Count;
 inline const char *PhaseName(Phase p) {
     static const char *names[] = { "parse_and_resolve", "check_and_specialize", "optimize",
                                    "bounds_check_elimination", "code_generation",
-                                   "write_output", "report_collection" };
+                                   "write_output", "native_build", "report_collection" };
     static_assert(sizeof names / sizeof *names == kPhases);
     return names[(int)p];
 }
