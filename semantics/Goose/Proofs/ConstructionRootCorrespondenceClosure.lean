@@ -108,15 +108,24 @@ theorem parameterBodyRootContext_annotationExtends (module : Module) (implementa
       subst result
       exact maintained.2 value output
 
+theorem localValueRooted_annotationExtends (interpretation : RootInterpretation)
+    (before after : Context) (id : VarId) (value : Value)
+    (extended : AnnotationExtends before after)
+    (valid : LocalValueRooted interpretation before id value) :
+    LocalValueRooted interpretation after id value := by
+  intro location reference
+  obtain ⟨roots, annotation, rooted⟩ := valid location reference
+  obtain ⟨upper, upperAt, included⟩ := extended id roots annotation
+  exact ⟨upper, upperAt, rootIn_mono included rooted⟩
+
 theorem localRootCorrespondence_annotationExtends (interpretation : RootInterpretation)
     (before after : Context) (visible : List VarId) (state : ExecutionState)
     (extended : AnnotationExtends before after)
     (valid : LocalRootCorrespondence interpretation before visible state) :
     LocalRootCorrespondence interpretation after visible state := by
-  intro id member root value resolved found location reference
-  obtain ⟨roots, annotation, rooted⟩ := valid id member root value resolved found location reference
-  obtain ⟨upper, upperAt, included⟩ := extended id roots annotation
-  exact ⟨upper, upperAt, rootIn_mono included rooted⟩
+  intro id member root value resolved found
+  exact localValueRooted_annotationExtends interpretation before after id value extended
+    (valid id member root value resolved found)
 
 private def addParameterRoots (context : Context) (variableId : VarId) (roots : List RootRef) : Context :=
   { context with varRoots := context.varRoots.map fun (id, previous) =>

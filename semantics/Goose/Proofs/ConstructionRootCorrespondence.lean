@@ -35,14 +35,24 @@ inductive DirectReference : Value → Loc → Prop
 def DirectValueRooted (interpretation : RootInterpretation) (roots : List RootRef) (value : Value) : Prop :=
   ∀ location, DirectReference value location → RootIn interpretation roots location.root
 
+def LocalValueRooted (interpretation : RootInterpretation) (context : Context) (id : VarId) (value : Value) : Prop :=
+  ∀ location, DirectReference value location →
+    ∃ roots, (context.varRoots.find? (·.1 == id)).map Prod.snd = some roots ∧
+      RootIn interpretation roots location.root
+
 def LocalRootCorrespondence (interpretation : RootInterpretation) (context : Context)
     (visible : List VarId) (state : ExecutionState) : Prop :=
   ∀ id ∈ visible, ∀ root value,
     rootOf interpretation.environment id state = .ok root state →
     state.objects.lookup root = some value →
-    ∀ location, DirectReference value location →
-      ∃ roots, (context.varRoots.find? (·.1 == id)).map Prod.snd = some roots ∧
-        RootIn interpretation roots location.root
+    LocalValueRooted interpretation context id value
+
+theorem localValueRooted_empty (interpretation : RootInterpretation) (context : Context)
+    (id : VarId) (value : Value) (rooted : DirectValueRooted interpretation [] value) :
+    LocalValueRooted interpretation context id value := by
+  intro location reference
+  obtain ⟨symbolic, absent, _⟩ := rooted location reference
+  cases absent
 
 def ContentRootCorrespondence (interpretation : RootInterpretation) (context : Context)
     (visible : List VarId) (fuel : Nat) (layout : LayoutEnv) (state : ExecutionState) : Prop :=
@@ -183,6 +193,14 @@ theorem evalValue_referenceSlice_rooted (fuel : Nat) (config : EvalConfig)
 def AliasComplete (interpretation : RootInterpretation) (aliases : List (RootRef × RootRef)) : Prop :=
   ∀ left right root, Instantiates interpretation left root → Instantiates interpretation right root →
     RootAlias aliases left right
+
+theorem aliasComplete_mono (interpretation : RootInterpretation) (lower upper : List (RootRef × RootRef))
+    (complete : AliasComplete interpretation lower) (included : lower ⊆ upper) : AliasComplete interpretation upper := by
+  intro left right root leftInst rightInst
+  rcases complete left right root leftInst rightInst with equal | forward | backward
+  · exact Or.inl equal
+  · exact Or.inr (.inl (included forward))
+  · exact Or.inr (.inr (included backward))
 
 def SymbolicDisjoint (aliases : List (RootRef × RootRef)) (left right : List RootRef) : Prop :=
   ∀ a ∈ left, ∀ b ∈ right, a ≠ b ∧ (a, b) ∉ aliases ∧ (b, a) ∉ aliases
