@@ -54,7 +54,7 @@ def EntryInterpretation (environment : RuntimeActivation) (globalCount : Nat) : 
 theorem entry_aliasComplete (environment : RuntimeActivation) (globalCount : Nat) :
     AliasComplete (EntryInterpretation environment globalCount) [] := by
   intro left right root leftInst rightInst
-  cases leftInst <;> cases rightInst <;> simp_all [EntryInterpretation]
+  cases leftInst <;> cases rightInst <;> simp_all [EntryInterpretation, RootAlias]
   all_goals omega
 
 theorem validated_entry_bodyContext (module : Module) (accepted : validate module = .ok ()) :
@@ -64,5 +64,24 @@ theorem validated_entry_bodyContext (module : Module) (accepted : validate modul
   obtain ⟨context, implementation, contextAt, implementationAt, empty, _⟩ := validated_entry module accepted
   exact ⟨context, implementation, contextAt, implementationAt,
     parameterBodyRootContext_emptyParameters module implementation context empty⟩
+
+theorem validated_moduleRootFacts (module : Module) (accepted : validate module = .ok ()) :
+    ModuleRootFacts module := by
+  unfold validate at accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (success_bind _ _ _).mp accepted
+  exact checkModuleExitRoots_facts module accepted
 
 end Goose.Proofs.ConstructionRootCorrespondence

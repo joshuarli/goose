@@ -1334,21 +1334,58 @@ private def checkInitFacts (m : Module) (g : GlobalId) (names : Array (List Root
 def checkInitRoots (m : Module) (g : GlobalId) : V Unit := do
   let _ ← checkInitFacts m g #[]
 
+private def addArgumentAliases (module : Module) (caller : List (RootRef × RootRef))
+    (arguments : List (List RootRef)) (argument : List RootRef × Nat)
+    (initial : List (RootRef × RootRef)) : List (RootRef × RootRef) := Id.run do
+  let (roots, position) := argument
+  let mut pairs := initial
+  for (earlier, previous) in (arguments.take position).zipIdx do
+    if overlaps caller roots earlier then
+      pairs := (pairs ++ [(RootRef.param position, RootRef.param previous)]).eraseDups
+  for global in List.range module.globals.size do
+    if overlaps caller roots [.global global] then
+      pairs := (pairs ++ [(RootRef.param position, RootRef.global global)]).eraseDups
+  if overlaps caller roots [.static] then
+    pairs := (pairs ++ [(RootRef.param position, RootRef.static)]).eraseDups
+  return pairs
+
 private def addCallAliases (module : Module) (caller : List (RootRef × RootRef))
     (called : ContextId × List (List RootRef)) (aliases : Array (List (RootRef × RootRef))) :
     Array (List (RootRef × RootRef)) := Id.run do
   let (context, arguments) := called
   let mut pairs := aliases[context]?.getD []
-  for (roots, position) in arguments.zipIdx do
-    for (earlier, previous) in (arguments.take position).zipIdx do
-      if overlaps caller roots earlier then
-        pairs := (pairs ++ [(RootRef.param position, RootRef.param previous)]).eraseDups
-    for global in List.range module.globals.size do
-      if overlaps caller roots [.global global] then
-        pairs := (pairs ++ [(RootRef.param position, RootRef.global global)]).eraseDups
-    if overlaps caller roots [.static] then
-      pairs := (pairs ++ [(RootRef.param position, RootRef.static)]).eraseDups
+  for argument in arguments.zipIdx do
+    pairs := addArgumentAliases module caller arguments argument pairs
   return aliases.set! context pairs
+
+private def addCallsAliases (module : Module) (caller : List (RootRef × RootRef))
+    (calls : List (ContextId × List (List RootRef))) (aliases : Array (List (RootRef × RootRef))) :
+    Array (List (RootRef × RootRef)) :=
+  calls.foldl (fun accumulated called => addCallAliases module caller called accumulated) aliases
+
+private structure ModuleRootPassState where
+  escaping : Array (List (Nat × List (List RootRef)))
+  aliases : Array (List (RootRef × RootRef))
+  names : Array (List RootRef)
+
+private def checkContextRootPass (module : Module) (escaping : Array (List (Nat × List (List RootRef))))
+    (aliases : Array (List (RootRef × RootRef))) (names : Array (List RootRef))
+    (row : Context × Nat) (current : ModuleRootPassState) : V (ForInStep ModuleRootPassState) := do
+  let facts ← checkContextFacts module row.1 escaping aliases[row.2]! names
+  pure (.yield ⟨current.escaping.push (joinEscapeRoots escaping[row.2]! facts.escapeRoots),
+    addCallsAliases module aliases[row.2]! facts.calls current.aliases,
+    current.names.set! row.2 (names[row.2]! ++ facts.namedRoots).eraseDups⟩)
+
+private def checkInitRootPass (module : Module) (names : Array (List RootRef))
+    (global : GlobalId) (current : ModuleRootPassState) : V (ForInStep ModuleRootPassState) := do
+  let facts ← checkInitFacts module global names
+  pure (.yield { current with aliases := addCallsAliases module [] facts.calls current.aliases })
+
+private def checkModuleRootPass (module : Module) (escaping : Array (List (Nat × List (List RootRef))))
+    (aliases : Array (List (RootRef × RootRef))) (names : Array (List RootRef)) : V ModuleRootPassState := do
+  let next ← forIn module.contexts.toList.zipIdx (ModuleRootPassState.mk #[] aliases names)
+    (checkContextRootPass module escaping aliases names)
+  forIn (List.range module.globals.size) next (checkInitRootPass module names)
 
 def checkModuleExitRoots (module : Module) : V Unit := do
   let largestResults := module.impls.foldl (fun largest impl => max largest impl.results.size) 0
@@ -1364,23 +1401,586 @@ def checkModuleExitRoots (module : Module) : V Unit := do
   let mut aliases := Array.replicate module.contexts.size []
   let mut names := Array.replicate module.contexts.size []
   for _ in [0:bound] do
-    let mut nextEscaping := #[]
-    let mut nextAliases := aliases
-    let mut nextNames := names
-    for (descriptor, context) in module.contexts.toList.zipIdx do
-      let facts ← checkContextFacts module descriptor escaping aliases[context]! names
-      nextEscaping := nextEscaping.push (joinEscapeRoots escaping[context]! facts.escapeRoots)
-      nextNames := nextNames.set! context (names[context]! ++ facts.namedRoots).eraseDups
-      for called in facts.calls do
-        nextAliases := addCallAliases module aliases[context]! called nextAliases
-    for global in List.range module.globals.size do
-      let facts ← checkInitFacts module global names
-      for called in facts.calls do
-        nextAliases := addCallAliases module [] called nextAliases
-    if nextEscaping == escaping && nextAliases == aliases && nextNames == names then return ()
-    escaping := nextEscaping
-    aliases := nextAliases
-    names := nextNames
+    let next ← checkModuleRootPass module escaping aliases names
+    if next.escaping == escaping && next.aliases == aliases && next.names == names then return ()
+    escaping := next.escaping
+    aliases := next.aliases
+    names := next.names
   reject .root "construction root and escape closure did not converge"
+
+def RootAlias (aliases : List (RootRef × RootRef)) (left right : RootRef) : Prop :=
+  left = right ∨ (left, right) ∈ aliases ∨ (right, left) ∈ aliases
+
+def RootSetsOverlap (aliases : List (RootRef × RootRef)) (left right : List RootRef) : Prop :=
+  ∃ a ∈ left, ∃ b ∈ right, RootAlias aliases a b
+
+structure AliasClosure (caller callee : List (RootRef × RootRef))
+    (arguments : List (List RootRef)) (globalCount : Nat) : Prop where
+  parameters : ∀ left right a b, arguments[left]? = some a → arguments[right]? = some b →
+    RootSetsOverlap caller a b → RootAlias callee (.param left) (.param right)
+  globals : ∀ index roots global, arguments[index]? = some roots → global < globalCount →
+    RootSetsOverlap caller roots [.global global] → RootAlias callee (.param index) (.global global)
+  static : ∀ index roots, arguments[index]? = some roots →
+    RootSetsOverlap caller roots [.static] → RootAlias callee (.param index) .static
+
+private theorem rootSetsOverlap_checked (aliases : List (RootRef × RootRef)) (left right : List RootRef) :
+    RootSetsOverlap aliases left right ↔ overlaps aliases left right = true := by
+  constructor
+  · rintro ⟨a, aMember, b, bMember, alias⟩
+    apply List.any_eq_true.mpr
+    refine ⟨a, aMember, List.any_eq_true.mpr ⟨b, bMember, ?_⟩⟩
+    simpa [rootsMayAlias, RootAlias, or_assoc] using alias
+  · intro checked
+    obtain ⟨a, aMember, checked⟩ := List.any_eq_true.mp checked
+    obtain ⟨b, bMember, alias⟩ := List.any_eq_true.mp checked
+    exact ⟨a, aMember, b, bMember, by simpa [rootsMayAlias, RootAlias, or_assoc] using alias⟩
+
+private theorem idForIn_preserves {α β : Type} (rows : List α) (initial : β) (update : α → β → β)
+    (invariant : β → Prop) (valid : invariant initial)
+    (preserved : ∀ row before, invariant before → invariant (update row before)) :
+    invariant (forIn (m := Id) rows initial (fun row before => pure (.yield (update row before)))) := by
+  induction rows generalizing initial with
+  | nil => exact valid
+  | cons row rows ih =>
+    simp only [List.forIn_cons, bind, pure]
+    exact ih _ (preserved row initial valid)
+
+private theorem idForIn_member {α β : Type} (rows : List α) (initial : β) (update : α → β → β)
+    (invariant : β → Prop)
+    (preserved : ∀ row before, invariant before → invariant (update row before))
+    (selected : α) (member : selected ∈ rows) (established : ∀ before, invariant (update selected before)) :
+    invariant (forIn (m := Id) rows initial (fun row before => pure (.yield (update row before)))) := by
+  induction rows generalizing initial with
+  | nil => cases member
+  | cons row rows ih =>
+    simp only [List.forIn_cons, bind, pure]
+    rcases List.mem_cons.mp member with equal | member
+    · subst row
+      exact idForIn_preserves rows _ update invariant (established initial) preserved
+    · exact ih _ member
+
+private theorem addArgumentAliases_extends (module : Module) (caller : List (RootRef × RootRef))
+    (arguments : List (List RootRef)) (argument : List RootRef × Nat)
+    (initial : List (RootRef × RootRef)) : initial ⊆ addArgumentAliases module caller arguments argument initial := by
+  intro pair member
+  unfold addArgumentAliases
+  simp only [Id.run, bind, pure]
+  have earlier := idForIn_preserves (arguments.take argument.2).zipIdx initial
+    (fun previous pairs => if overlaps caller argument.1 previous.1 then
+      (pairs ++ [(RootRef.param argument.2, RootRef.param previous.2)]).eraseDups else pairs)
+    (fun pairs => pair ∈ pairs) member (by intro previous pairs retained; split <;> simp_all)
+  simp only [apply_ite, pure] at earlier
+  have globals := idForIn_preserves (List.range module.globals.size) _
+    (fun global pairs => if overlaps caller argument.1 [.global global] then
+      (pairs ++ [(.param argument.2, .global global)]).eraseDups else pairs)
+    (fun pairs => pair ∈ pairs) earlier (by intro global pairs retained; split <;> simp_all)
+  simp only [apply_ite, pure] at globals
+  split <;> simp_all
+
+private theorem addArgumentAliases_parameter (module : Module) (caller : List (RootRef × RootRef))
+    (arguments : List (List RootRef)) (roots earlier : List RootRef) (position previous : Nat)
+    (initial : List (RootRef × RootRef))
+    (member : (earlier, previous) ∈ (arguments.take position).zipIdx)
+    (overlap : overlaps caller roots earlier = true) :
+    (RootRef.param position, RootRef.param previous) ∈
+      addArgumentAliases module caller arguments (roots, position) initial := by
+  unfold addArgumentAliases
+  simp only [Id.run, bind, pure]
+  let pair := (RootRef.param position, RootRef.param previous)
+  have earlierAliases := idForIn_member (arguments.take position).zipIdx initial
+    (fun earlier pairs => if overlaps caller roots earlier.1 then
+      (pairs ++ [(RootRef.param position, RootRef.param earlier.2)]).eraseDups else pairs)
+    (fun pairs => pair ∈ pairs) (by intro row pairs retained; split <;> simp_all)
+    (earlier, previous) member (by intro pairs; simp [pair, overlap])
+  simp only [apply_ite, pure] at earlierAliases
+  have globals := idForIn_preserves (List.range module.globals.size) _
+    (fun global pairs => if overlaps caller roots [.global global] then
+      (pairs ++ [(RootRef.param position, RootRef.global global)]).eraseDups else pairs)
+    (fun pairs => pair ∈ pairs) earlierAliases (by intro row pairs retained; split <;> simp_all)
+  simp only [apply_ite, pure] at globals
+  split <;> simp_all [pair]
+
+private theorem addArgumentAliases_global (module : Module) (caller : List (RootRef × RootRef))
+    (arguments : List (List RootRef)) (roots : List RootRef) (position global : Nat)
+    (initial : List (RootRef × RootRef)) (bound : global < module.globals.size)
+    (overlap : overlaps caller roots [.global global] = true) :
+    (RootRef.param position, RootRef.global global) ∈
+      addArgumentAliases module caller arguments (roots, position) initial := by
+  unfold addArgumentAliases
+  simp only [Id.run, bind, pure]
+  let pair := (RootRef.param position, RootRef.global global)
+  let earlierAliases : List (RootRef × RootRef) := Id.run do
+    forIn (m := Id) (arguments.take position).zipIdx initial fun earlier pairs =>
+      pure (.yield (if overlaps caller roots earlier.1 then
+        (pairs ++ [(RootRef.param position, RootRef.param earlier.2)]).eraseDups else pairs))
+  have globals := idForIn_member (List.range module.globals.size) earlierAliases
+    (fun global pairs => if overlaps caller roots [.global global] then
+      (pairs ++ [(RootRef.param position, RootRef.global global)]).eraseDups else pairs)
+    (fun pairs => pair ∈ pairs) (by intro row pairs retained; split <;> simp_all)
+    global (List.mem_range.mpr bound) (by intro pairs; simp [pair, overlap])
+  simp only [apply_ite, pure] at globals
+  split <;> simp_all [pair, earlierAliases, apply_ite, pure, Id.run]
+
+private theorem addArgumentAliases_static (module : Module) (caller : List (RootRef × RootRef))
+    (arguments : List (List RootRef)) (roots : List RootRef) (position : Nat)
+    (initial : List (RootRef × RootRef)) (overlap : overlaps caller roots [.static] = true) :
+    (RootRef.param position, RootRef.static) ∈
+      addArgumentAliases module caller arguments (roots, position) initial := by
+  simp [addArgumentAliases, overlap, Id.run, bind, pure]
+
+private def AliasRowsExtend (before after : Array (List (RootRef × RootRef))) : Prop :=
+  before.size = after.size ∧ ∀ index, index < before.size → before[index]! ⊆ after[index]!
+
+private theorem addCallAliases_extends (module : Module) (caller : List (RootRef × RootRef))
+    (called : ContextId × List (List RootRef)) (aliases : Array (List (RootRef × RootRef))) :
+    AliasRowsExtend aliases (addCallAliases module caller called aliases) := by
+  constructor
+  · simp [addCallAliases, Id.run, bind, pure]
+  · intro index bound pair member
+    unfold addCallAliases
+    simp only [Id.run, bind, pure]
+    by_cases selected : called.1 = index
+    · subst index
+      rw [Array.getElem!_set!_self _ _ _ bound]
+      have initial : pair ∈ (aliases[called.1]?).getD [] := by
+        rw [Array.getElem?_eq_getElem bound]
+        simpa only [Option.getD_some, getElem!_pos aliases called.1 bound] using member
+      exact idForIn_preserves called.2.zipIdx _ _ (fun pairs => pair ∈ pairs) initial
+        (fun argument before retained => addArgumentAliases_extends module caller called.2 argument before retained)
+    · rw [Array.getElem!_set!_ne _ _ _ _ selected]
+      exact member
+
+private theorem addCallAliases_member (module : Module) (caller : List (RootRef × RootRef))
+    (called : ContextId × List (List RootRef)) (aliases : Array (List (RootRef × RootRef)))
+    (bound : called.1 < aliases.size) (argument : List RootRef × Nat)
+    (member : argument ∈ called.2.zipIdx) (pair : RootRef × RootRef)
+    (generated : ∀ initial, pair ∈ addArgumentAliases module caller called.2 argument initial) :
+    pair ∈ (addCallAliases module caller called aliases)[called.1]! := by
+  unfold addCallAliases
+  simp only [Id.run, bind, pure]
+  rw [Array.getElem!_set!_self _ _ _ bound]
+  exact idForIn_member called.2.zipIdx _ _ (fun pairs => pair ∈ pairs)
+    (fun argument before retained => addArgumentAliases_extends module caller called.2 argument before retained)
+    argument member generated
+
+private theorem rootSetsOverlap_symm {aliases : List (RootRef × RootRef)} {left right : List RootRef}
+    (overlap : RootSetsOverlap aliases left right) : RootSetsOverlap aliases right left := by
+  obtain ⟨a, aMember, b, bMember, alias⟩ := overlap
+  refine ⟨b, bMember, a, aMember, ?_⟩
+  rcases alias with equal | forward | backward
+  · exact Or.inl equal.symm
+  · exact Or.inr (.inr forward)
+  · exact Or.inr (.inl backward)
+
+private theorem argument_zipIdx {arguments : List (List RootRef)} {index : Nat} {roots : List RootRef}
+    (present : arguments[index]? = some roots) : (roots, index) ∈ arguments.zipIdx := by
+  apply List.mem_of_getElem? (i := index)
+  simp [List.getElem?_zipIdx, present]
+
+private theorem argument_take_zipIdx {arguments : List (List RootRef)} {index cutoff : Nat} {roots : List RootRef}
+    (present : arguments[index]? = some roots) (earlier : index < cutoff) :
+    (roots, index) ∈ (arguments.take cutoff).zipIdx := by
+  apply List.mem_of_getElem? (i := index)
+  simp [List.getElem?_zipIdx, earlier, present]
+
+private theorem addCallAliases_closes (module : Module) (caller : List (RootRef × RootRef))
+    (called : ContextId × List (List RootRef)) (aliases : Array (List (RootRef × RootRef)))
+    (bound : called.1 < aliases.size) :
+    AliasClosure caller (addCallAliases module caller called aliases)[called.1]! called.2 module.globals.size := by
+  constructor
+  · intro left right a b leftAt rightAt overlap
+    by_cases same : left = right
+    · exact Or.inl (congrArg RootRef.param same)
+    · by_cases earlier : right < left
+      · right; left
+        exact addCallAliases_member module caller called aliases bound (a, left) (argument_zipIdx leftAt) _
+          (fun initial => addArgumentAliases_parameter module caller called.2 a b left right initial
+            (argument_take_zipIdx rightAt earlier) ((rootSetsOverlap_checked caller a b).mp overlap))
+      · right; right
+        have before : left < right := by omega
+        exact addCallAliases_member module caller called aliases bound (b, right) (argument_zipIdx rightAt) _
+          (fun initial => addArgumentAliases_parameter module caller called.2 b a right left initial
+            (argument_take_zipIdx leftAt before)
+              ((rootSetsOverlap_checked caller b a).mp (rootSetsOverlap_symm overlap)))
+  · intro index roots global present globalBound overlap
+    right; left
+    exact addCallAliases_member module caller called aliases bound (roots, index) (argument_zipIdx present) _
+      (fun initial => addArgumentAliases_global module caller called.2 roots index global initial globalBound
+        ((rootSetsOverlap_checked caller roots [.global global]).mp overlap))
+  · intro index roots present overlap
+    right; left
+    exact addCallAliases_member module caller called aliases bound (roots, index) (argument_zipIdx present) _
+      (fun initial => addArgumentAliases_static module caller called.2 roots index initial
+        ((rootSetsOverlap_checked caller roots [.static]).mp overlap))
+
+private theorem aliasRowsExtend_refl (aliases : Array (List (RootRef × RootRef))) :
+    AliasRowsExtend aliases aliases := ⟨rfl, fun _ _ {_} member => member⟩
+
+private theorem aliasRowsExtend_trans {first second third : Array (List (RootRef × RootRef))}
+    (left : AliasRowsExtend first second) (right : AliasRowsExtend second third) : AliasRowsExtend first third := by
+  refine ⟨left.1.trans right.1, ?_⟩
+  intro index bound pair member
+  exact right.2 index (left.1 ▸ bound) (left.2 index bound member)
+
+private theorem aliasClosure_mono {caller lower upper : List (RootRef × RootRef)}
+    {arguments : List (List RootRef)} {globals : Nat} (included : lower ⊆ upper)
+    (closed : AliasClosure caller lower arguments globals) : AliasClosure caller upper arguments globals := by
+  have extend : ∀ a b, RootAlias lower a b → RootAlias upper a b := by
+    intro a b alias
+    rcases alias with equal | forward | backward
+    · exact Or.inl equal
+    · exact Or.inr (.inl (included forward))
+    · exact Or.inr (.inr (included backward))
+  exact ⟨fun left right a b leftAt rightAt overlap => extend _ _ (closed.parameters left right a b leftAt rightAt overlap),
+    fun index roots global present bound overlap => extend _ _ (closed.globals index roots global present bound overlap),
+    fun index roots present overlap => extend _ _ (closed.static index roots present overlap)⟩
+
+private theorem addCallsAliases_sound (module : Module) (caller : List (RootRef × RootRef))
+    (calls : List (ContextId × List (List RootRef))) (initial : Array (List (RootRef × RootRef))) :
+    AliasRowsExtend initial (addCallsAliases module caller calls initial) ∧
+      ∀ called ∈ calls, called.1 < initial.size →
+        AliasClosure caller (addCallsAliases module caller calls initial)[called.1]! called.2 module.globals.size := by
+  induction calls generalizing initial with
+  | nil => exact ⟨aliasRowsExtend_refl initial, fun _ absent => by cases absent⟩
+  | cons called calls ih =>
+    have first := addCallAliases_extends module caller called initial
+    obtain ⟨extended, covered⟩ := ih (addCallAliases module caller called initial)
+    refine ⟨aliasRowsExtend_trans first extended, ?_⟩
+    intro selected member bound
+    rcases List.mem_cons.mp member with equal | member
+    · subst selected
+      exact aliasClosure_mono (extended.2 called.1 (first.1 ▸ bound))
+        (addCallAliases_closes module caller called initial bound)
+    · exact covered selected member (first.1 ▸ bound)
+
+private theorem addCallsAliases_forIn (module : Module) (caller : List (RootRef × RootRef))
+    (calls : List (ContextId × List (List RootRef))) (aliases : Array (List (RootRef × RootRef))) :
+    forIn calls aliases (fun called current =>
+      (pure (.yield (addCallAliases module caller called current)) : V (ForInStep (Array (List (RootRef × RootRef)))))) =
+        .ok (addCallsAliases module caller calls aliases) := by
+  induction calls generalizing aliases with
+  | nil => rfl
+  | cons called calls ih =>
+    simp only [List.forIn_cons, pure, Except.pure, bind, Except.bind]
+    exact ih _
+
+private theorem addCallAliases_expanded (module : Module) (caller : List (RootRef × RootRef))
+    (called : ContextId × List (List RootRef)) (aliases : Array (List (RootRef × RootRef))) :
+    addCallAliases module caller called aliases = (Id.run do
+      let (context, arguments) := called
+      let mut pairs := aliases[context]?.getD []
+      for (roots, position) in arguments.zipIdx do
+        for (earlier, previous) in (arguments.take position).zipIdx do
+          if overlaps caller roots earlier then
+            pairs := (pairs ++ [(RootRef.param position, RootRef.param previous)]).eraseDups
+        for global in List.range module.globals.size do
+          if overlaps caller roots [.global global] then
+            pairs := (pairs ++ [(RootRef.param position, RootRef.global global)]).eraseDups
+        if overlaps caller roots [.static] then
+          pairs := (pairs ++ [(RootRef.param position, RootRef.static)]).eraseDups
+      return aliases.set! context pairs) := by
+  simp only [addCallAliases, addArgumentAliases, Id.run, bind, pure, apply_ite]
+
+private theorem checkContextRootPass_expanded (module : Module)
+    (escaping : Array (List (Nat × List (List RootRef)))) (aliases : Array (List (RootRef × RootRef)))
+    (names : Array (List RootRef)) (row : Context × Nat) (current : ModuleRootPassState) :
+    checkContextRootPass module escaping aliases names row current = (do
+      let facts ← checkContextFacts module row.1 escaping aliases[row.2]! names
+      let nextEscaping := current.escaping.push (joinEscapeRoots escaping[row.2]! facts.escapeRoots)
+      let nextNames := current.names.set! row.2 (names[row.2]! ++ facts.namedRoots).eraseDups
+      let nextAliases ← forIn facts.calls current.aliases fun called accumulated =>
+        pure (.yield (addCallAliases module aliases[row.2]! called accumulated))
+      pure (.yield (ModuleRootPassState.mk nextEscaping nextAliases nextNames))) := by
+  unfold checkContextRootPass
+  cases checked : checkContextFacts module row.1 escaping aliases[row.2]! names with
+  | error error => rfl
+  | ok facts =>
+    simp only [bind, Except.bind, pure, Except.pure]
+    have loop := addCallsAliases_forIn module aliases[row.2]! facts.calls current.aliases
+    simp only [pure, Except.pure] at loop
+    rw [loop]
+
+private theorem checkInitRootPass_expanded (module : Module) (names : Array (List RootRef))
+    (global : GlobalId) (current : ModuleRootPassState) :
+    checkInitRootPass module names global current = (do
+      let facts ← checkInitFacts module global names
+      let nextAliases ← forIn facts.calls current.aliases fun called accumulated =>
+        pure (.yield (addCallAliases module [] called accumulated))
+      pure (.yield (ModuleRootPassState.mk current.escaping nextAliases current.names))) := by
+  unfold checkInitRootPass
+  cases checked : checkInitFacts module global names with
+  | error error => rfl
+  | ok facts =>
+    simp only [bind, Except.bind, pure, Except.pure]
+    have loop := addCallsAliases_forIn module [] facts.calls current.aliases
+    simp only [pure, Except.pure] at loop
+    rw [loop]
+
+private theorem checkModuleRootPass_expanded (module : Module)
+    (escaping : Array (List (Nat × List (List RootRef)))) (aliases : Array (List (RootRef × RootRef)))
+    (names : Array (List RootRef)) :
+    checkModuleRootPass module escaping aliases names = (do
+      let next ← forIn module.contexts.toList.zipIdx (ModuleRootPassState.mk #[] aliases names) fun row current => do
+        let facts ← checkContextFacts module row.1 escaping aliases[row.2]! names
+        let nextEscaping := current.escaping.push (joinEscapeRoots escaping[row.2]! facts.escapeRoots)
+        let nextNames := current.names.set! row.2 (names[row.2]! ++ facts.namedRoots).eraseDups
+        let nextAliases ← forIn facts.calls current.aliases fun called accumulated =>
+          pure (.yield (addCallAliases module aliases[row.2]! called accumulated))
+        pure (.yield (ModuleRootPassState.mk nextEscaping nextAliases nextNames))
+      forIn (List.range module.globals.size) next fun global current => do
+        let facts ← checkInitFacts module global names
+        let nextAliases ← forIn facts.calls current.aliases fun called accumulated =>
+          pure (.yield (addCallAliases module [] called accumulated))
+        pure (.yield (ModuleRootPassState.mk current.escaping nextAliases current.names))) := by
+  unfold checkModuleRootPass
+  change (do
+    let next ← forIn module.contexts.toList.zipIdx (ModuleRootPassState.mk #[] aliases names)
+      (fun row current => checkContextRootPass module escaping aliases names row current)
+    forIn (List.range module.globals.size) next (fun global current => checkInitRootPass module names global current)) = _
+  simp only [checkContextRootPass_expanded, checkInitRootPass_expanded]
+
+def ContextRootFacts (module : Module) (context : Context) (aliases : List (RootRef × RootRef))
+    (calls : List (ContextId × List (List RootRef))) : Prop :=
+  ∃ escaping names facts, checkContextFacts module context escaping aliases names = .ok facts ∧ facts.calls = calls
+
+def InitializerRootFacts (module : Module) (global : GlobalId)
+    (calls : List (ContextId × List (List RootRef))) : Prop :=
+  ∃ names facts, checkInitFacts module global names = .ok facts ∧ facts.calls = calls
+
+def ModuleRootFacts (module : Module) : Prop :=
+  ∃ aliases : Array (List (RootRef × RootRef)), aliases.size = module.contexts.size ∧
+    (∀ row ∈ module.contexts.toList.zipIdx, ∃ calls, ContextRootFacts module row.1 aliases[row.2]! calls ∧
+      ∀ called ∈ calls, called.1 < module.contexts.size →
+        AliasClosure aliases[row.2]! aliases[called.1]! called.2 module.globals.size) ∧
+    ∀ global, global < module.globals.size → ∃ calls, InitializerRootFacts module global calls ∧
+      ∀ called ∈ calls, called.1 < module.contexts.size →
+        AliasClosure [] aliases[called.1]! called.2 module.globals.size
+
+private def ContextCallsCovered (module : Module) (snapshot : Array (List (RootRef × RootRef)))
+    (row : Context × Nat) (current : ModuleRootPassState) : Prop :=
+  ∃ calls, ContextRootFacts module row.1 snapshot[row.2]! calls ∧
+    ∀ called ∈ calls, called.1 < module.contexts.size →
+      AliasClosure snapshot[row.2]! current.aliases[called.1]! called.2 module.globals.size
+
+private def InitializerCallsCovered (module : Module) (global : GlobalId) (current : ModuleRootPassState) : Prop :=
+  ∃ calls, InitializerRootFacts module global calls ∧
+    ∀ called ∈ calls, called.1 < module.contexts.size →
+      AliasClosure [] current.aliases[called.1]! called.2 module.globals.size
+
+private theorem contextCallsCovered_mono (module : Module) (snapshot : Array (List (RootRef × RootRef)))
+    (row : Context × Nat) (before after : ModuleRootPassState)
+    (sized : before.aliases.size = module.contexts.size) (extended : AliasRowsExtend before.aliases after.aliases)
+    (covered : ContextCallsCovered module snapshot row before) : ContextCallsCovered module snapshot row after := by
+  obtain ⟨calls, checked, covered⟩ := covered
+  refine ⟨calls, checked, ?_⟩
+  intro called member bound
+  exact aliasClosure_mono (extended.2 called.1 (sized ▸ bound)) (covered called member bound)
+
+private theorem initializerCallsCovered_mono (module : Module) (global : GlobalId)
+    (before after : ModuleRootPassState)
+    (sized : before.aliases.size = module.contexts.size) (extended : AliasRowsExtend before.aliases after.aliases)
+    (covered : InitializerCallsCovered module global before) : InitializerCallsCovered module global after := by
+  obtain ⟨calls, checked, covered⟩ := covered
+  refine ⟨calls, checked, ?_⟩
+  intro called member bound
+  exact aliasClosure_mono (extended.2 called.1 (sized ▸ bound)) (covered called member bound)
+
+private theorem rootFacts_bind_success {α β : Type} (action : V α) (next : α → V β) (result : β) :
+    (action >>= next) = .ok result ↔ ∃ value, action = .ok value ∧ next value = .ok result := by
+  cases action <;> simp [bind, Except.bind]
+
+private theorem checkedForIn_properties {α β : Type} (rows : List α) (initial : β)
+    (body : α → β → V (ForInStep β)) (invariant : β → Prop) (property : α → β → Prop)
+    (valid : invariant initial)
+    (sound : ∀ row before step, invariant before → body row before = .ok step →
+      ∃ after, step = .yield after ∧ invariant after ∧ property row after ∧
+        ∀ selected, property selected before → property selected after)
+    (final : β) (checked : forIn rows initial body = .ok final) :
+    invariant final ∧ (∀ selected, property selected initial → property selected final) ∧
+      ∀ selected ∈ rows, property selected final := by
+  induction rows generalizing initial with
+  | nil =>
+    simp only [List.forIn_nil, pure, Except.pure, Except.ok.injEq] at checked
+    subst final
+    exact ⟨valid, fun _ present => present, fun _ absent => by cases absent⟩
+  | cons row rows ih =>
+    rw [List.forIn_cons] at checked
+    obtain ⟨step, evaluated, remaining⟩ := (rootFacts_bind_success _ _ _).mp checked
+    obtain ⟨after, equal, afterValid, established, preserved⟩ := sound row initial step valid evaluated
+    subst step
+    obtain ⟨finalValid, carried, covered⟩ := ih after afterValid remaining
+    refine ⟨finalValid, fun selected present => carried selected (preserved selected present), ?_⟩
+    intro selected member
+    rcases List.mem_cons.mp member with equal | member
+    · subst selected
+      exact carried row established
+    · exact covered selected member
+
+private theorem checkContextRootPass_sound (module : Module)
+    (escaping : Array (List (Nat × List (List RootRef)))) (aliases : Array (List (RootRef × RootRef)))
+    (names : Array (List RootRef)) (row : Context × Nat) (before : ModuleRootPassState)
+    (step : ForInStep ModuleRootPassState)
+    (valid : before.aliases.size = module.contexts.size ∧ AliasRowsExtend aliases before.aliases)
+    (checked : checkContextRootPass module escaping aliases names row before = .ok step) :
+    ∃ after, step = .yield after ∧
+      (after.aliases.size = module.contexts.size ∧ AliasRowsExtend aliases after.aliases) ∧
+      ContextCallsCovered module aliases row after ∧
+      ∀ selected, ContextCallsCovered module aliases selected before → ContextCallsCovered module aliases selected after := by
+  unfold checkContextRootPass at checked
+  obtain ⟨facts, accepted, completed⟩ := (rootFacts_bind_success _ _ _).mp checked
+  simp only [pure, Except.pure, Except.ok.injEq] at completed
+  subst step
+  have generated := addCallsAliases_sound module aliases[row.2]! facts.calls before.aliases
+  refine ⟨_, rfl, ⟨generated.1.1 ▸ valid.1, aliasRowsExtend_trans valid.2 generated.1⟩, ?_, ?_⟩
+  · refine ⟨facts.calls, ⟨escaping, names, facts, accepted, rfl⟩, ?_⟩
+    intro called member bound
+    exact generated.2 called member (valid.1 ▸ bound)
+  · intro selected covered
+    exact contextCallsCovered_mono module aliases selected before _ valid.1 generated.1 covered
+
+private def ModuleContextCoverage (module : Module) (snapshot : Array (List (RootRef × RootRef)))
+    (current : ModuleRootPassState) : Prop :=
+  current.aliases.size = module.contexts.size ∧ AliasRowsExtend snapshot current.aliases ∧
+    ∀ row ∈ module.contexts.toList.zipIdx, ContextCallsCovered module snapshot row current
+
+private theorem checkInitRootPass_sound (module : Module) (aliases : Array (List (RootRef × RootRef)))
+    (names : Array (List RootRef)) (global : GlobalId) (before : ModuleRootPassState)
+    (step : ForInStep ModuleRootPassState) (valid : ModuleContextCoverage module aliases before)
+    (checked : checkInitRootPass module names global before = .ok step) :
+    ∃ after, step = .yield after ∧ ModuleContextCoverage module aliases after ∧
+      InitializerCallsCovered module global after ∧
+      ∀ selected, InitializerCallsCovered module selected before → InitializerCallsCovered module selected after := by
+  unfold checkInitRootPass at checked
+  obtain ⟨facts, accepted, completed⟩ := (rootFacts_bind_success _ _ _).mp checked
+  simp only [pure, Except.pure, Except.ok.injEq] at completed
+  subst step
+  have generated := addCallsAliases_sound module [] facts.calls before.aliases
+  refine ⟨_, rfl, ⟨generated.1.1 ▸ valid.1, aliasRowsExtend_trans valid.2.1 generated.1, ?_⟩, ?_, ?_⟩
+  · intro row member
+    exact contextCallsCovered_mono module aliases row before _ valid.1 generated.1 (valid.2.2 row member)
+  · refine ⟨facts.calls, ⟨names, facts, accepted, rfl⟩, ?_⟩
+    intro called member bound
+    exact generated.2 called member (valid.1 ▸ bound)
+  · intro selected covered
+    exact initializerCallsCovered_mono module selected before _ valid.1 generated.1 covered
+
+private theorem checkModuleRootPass_sound (module : Module)
+    (escaping : Array (List (Nat × List (List RootRef)))) (aliases : Array (List (RootRef × RootRef)))
+    (names : Array (List RootRef)) (final : ModuleRootPassState)
+    (sized : aliases.size = module.contexts.size)
+    (checked : checkModuleRootPass module escaping aliases names = .ok final) :
+    ModuleContextCoverage module aliases final ∧
+      ∀ global, global < module.globals.size → InitializerCallsCovered module global final := by
+  unfold checkModuleRootPass at checked
+  obtain ⟨next, contexts, initializers⟩ := (rootFacts_bind_success _ _ _).mp checked
+  have contextResults := checkedForIn_properties module.contexts.toList.zipIdx
+    (ModuleRootPassState.mk #[] aliases names) (checkContextRootPass module escaping aliases names)
+    (fun current => current.aliases.size = module.contexts.size ∧ AliasRowsExtend aliases current.aliases)
+    (ContextCallsCovered module aliases) ⟨sized, aliasRowsExtend_refl aliases⟩
+    (checkContextRootPass_sound module escaping aliases names) next contexts
+  have initialized : ModuleContextCoverage module aliases next :=
+    ⟨contextResults.1.1, contextResults.1.2, contextResults.2.2⟩
+  have initializerResults := checkedForIn_properties (List.range module.globals.size) next
+    (checkInitRootPass module names) (ModuleContextCoverage module aliases) (InitializerCallsCovered module)
+    initialized (checkInitRootPass_sound module aliases names) final initializers
+  exact ⟨initializerResults.1, fun global bound => initializerResults.2.2 global (List.mem_range.mpr bound)⟩
+
+private theorem checkModuleRootPass_closed (module : Module)
+    (escaping : Array (List (Nat × List (List RootRef)))) (aliases : Array (List (RootRef × RootRef)))
+    (names : Array (List RootRef)) (final : ModuleRootPassState)
+    (sized : aliases.size = module.contexts.size)
+    (checked : checkModuleRootPass module escaping aliases names = .ok final)
+    (stable : final.aliases = aliases) : ModuleRootFacts module := by
+  obtain ⟨covered, initializers⟩ := checkModuleRootPass_sound module escaping aliases names final sized checked
+  refine ⟨aliases, sized, ?_, ?_⟩
+  · intro row member
+    obtain ⟨calls, accepted, closed⟩ := covered.2.2 row member
+    exact ⟨calls, accepted, by simpa only [stable] using closed⟩
+  · intro global bound
+    obtain ⟨calls, accepted, closed⟩ := initializers global bound
+    exact ⟨calls, accepted, by simpa only [stable] using closed⟩
+
+private theorem checkedForIn_invariant {α β : Type} (rows : List α) (initial : β)
+    (body : α → β → V (ForInStep β)) (invariant : β → Prop) (valid : invariant initial)
+    (preserved : ∀ row before step, invariant before → body row before = .ok step → invariant step.value)
+    (final : β) (checked : forIn rows initial body = .ok final) : invariant final := by
+  induction rows generalizing initial with
+  | nil =>
+    simp only [List.forIn_nil, pure, Except.pure, Except.ok.injEq] at checked
+    subst final
+    exact valid
+  | cons row rows ih =>
+    rw [List.forIn_cons] at checked
+    obtain ⟨step, evaluated, remaining⟩ := (rootFacts_bind_success _ _ _).mp checked
+    have nextValid := preserved row initial step valid evaluated
+    cases step with
+    | done value =>
+      simp only [pure, Except.pure, Except.ok.injEq] at remaining
+      subst final
+      exact nextValid
+    | yield value => exact ih value nextValid remaining
+
+theorem checkModuleExitRoots_facts (module : Module) (checked : checkModuleExitRoots module = .ok ()) :
+    ModuleRootFacts module := by
+  unfold checkModuleExitRoots at checked
+  dsimp only [] at checked
+  simp only [Std.Legacy.Range.forIn_eq_forIn_range'] at checked
+  obtain ⟨final, loop, returned⟩ := (rootFacts_bind_success _ _ _).mp checked
+  let invariant (current : Option Unit × Array (List (Nat × List (List RootRef))) ×
+      Array (List (RootRef × RootRef)) × Array (List RootRef)) :=
+    current.2.2.1.size = module.contexts.size ∧
+      ∀ output, current.1 = some output → ModuleRootFacts module
+  have initial : invariant (none, Array.replicate module.contexts.size [], Array.replicate module.contexts.size [],
+      Array.replicate module.contexts.size []) :=
+    ⟨by simp, fun _ absent => by cases absent⟩
+  have maintained := checkedForIn_invariant _ _ _ invariant initial (by
+    intro index current step valid evaluated
+    obtain ⟨next, pass, completed⟩ := (rootFacts_bind_success _ _ _).mp evaluated
+    split at completed
+    · rename_i stable
+      have aliasStable : next.aliases = current.2.2.1 := by
+        have both := ((Bool.and_eq_true _ _).mp stable).1
+        exact eq_of_beq (((Bool.and_eq_true _ _).mp both).2)
+      have facts := checkModuleRootPass_closed module current.2.1 current.2.2.1 current.2.2.2 next valid.1 pass aliasStable
+      simp only [pure, Except.pure, Except.ok.injEq] at completed
+      subst step
+      exact ⟨valid.1, fun _ _ => facts⟩
+    · have sound := checkModuleRootPass_sound module current.2.1 current.2.2.1 current.2.2.2 next valid.1 pass
+      simp only [pure, Except.pure, Except.ok.injEq] at completed
+      subst step
+      exact ⟨sound.1.1, fun _ absent => by cases absent⟩) final loop
+  cases output : final.1 with
+  | none => simp [output, Goose.Core.reject] at returned
+  | some value => exact maintained.2 value output
+
+theorem contextRootFacts_bodyRoots (module : Module) (context : Context)
+    (aliases : List (RootRef × RootRef)) (calls : List (ContextId × List (List RootRef)))
+    (facts : ContextRootFacts module context aliases calls) :
+    ∃ implementation bodyContext escaping actualEscapes names value state,
+      module.impls[context.impl]? = some implementation ∧
+      parameterBodyRootContext module implementation context = .ok bodyContext ∧
+      bodyTargets module = .ok actualEscapes ∧
+      (rpBlockValue { mod := module, impl := implementation, ctx := bodyContext, scopes := [], escaping := escaping, targetEscapes := actualEscapes, aliases := aliases, calleeNames := names }
+        [] implementation.body).run ⟨implementation.params.size, {}, []⟩ = .ok (value, state) := by
+  obtain ⟨escaping, names, facts, checked, _⟩ := facts
+  unfold checkContextFacts at checked
+  cases present : module.impls[context.impl]? with
+  | none => simp [present, Goose.Core.reject] at checked
+  | some implementation =>
+    simp only [present] at checked
+    obtain ⟨_, _, checked⟩ := (rootFacts_bind_success _ _ _).mp checked
+    obtain ⟨_, _, checked⟩ := (rootFacts_bind_success _ _ _).mp checked
+    obtain ⟨_, _, checked⟩ := (rootFacts_bind_success _ _ _).mp checked
+    cases targets : bodyTargets module with
+    | error message => simp [targets, reject, bind, Except.bind] at checked
+    | ok actualEscapes =>
+      simp only [targets] at checked
+      obtain ⟨resolvedEscapes, escaped, checked⟩ := (rootFacts_bind_success _ _ _).mp checked
+      simp only [pure, Except.pure, Except.ok.injEq] at escaped
+      subst resolvedEscapes
+      obtain ⟨bodyContext, closed, checked⟩ := (rootFacts_bind_success _ _ _).mp checked
+      obtain ⟨⟨token, final⟩, bodyChecked, _⟩ := (rootFacts_bind_success _ _ _).mp checked
+      obtain ⟨⟨value, state⟩, replay, _⟩ := (rootFacts_bind_success _ _ _).mp bodyChecked
+      exact ⟨implementation, bodyContext, escaping, actualEscapes, names, value, state, rfl, closed, rfl, replay⟩
 
 end Goose.Construct

@@ -6,35 +6,48 @@ namespace Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Construct
 open Goose.Core (RootInst)
 
-def MayAlias (aliases : List (RootRef × RootRef)) (left right : RootRef) : Prop :=
-  left = right ∨ (left, right) ∈ aliases ∨ (right, left) ∈ aliases
-
-theorem mayAlias_symm {aliases : List (RootRef × RootRef)} {left right : RootRef}
-    (alias : MayAlias aliases left right) : MayAlias aliases right left := by
+theorem rootAlias_symm {aliases : List (RootRef × RootRef)} {left right : RootRef}
+    (alias : RootAlias aliases left right) : RootAlias aliases right left := by
   rcases alias with equal | forward | backward
   · exact Or.inl equal.symm
   · exact Or.inr (.inr forward)
   · exact Or.inr (.inl backward)
 
-def RootsOverlap (aliases : List (RootRef × RootRef)) (left right : List RootRef) : Prop :=
-  ∃ a ∈ left, ∃ b ∈ right, MayAlias aliases a b
+theorem rootSetsOverlap_checked (aliases : List (RootRef × RootRef)) (left right : List RootRef) :
+    RootSetsOverlap aliases left right ↔
+      (left.any fun a => right.any fun b =>
+        a == b || aliases.contains (a, b) || aliases.contains (b, a)) = true := by
+  constructor
+  · rintro ⟨a, aMember, b, bMember, alias⟩
+    apply List.any_eq_true.mpr
+    refine ⟨a, aMember, List.any_eq_true.mpr ⟨b, bMember, ?_⟩⟩
+    simpa [RootAlias, or_assoc] using alias
+  · intro checked
+    obtain ⟨a, aMember, checked⟩ := List.any_eq_true.mp checked
+    obtain ⟨b, bMember, alias⟩ := List.any_eq_true.mp checked
+    exact ⟨a, aMember, b, bMember, by simpa [RootAlias, or_assoc] using alias⟩
+
+theorem checkedRoots_disjoint (aliases : List (RootRef × RootRef)) (left right : List RootRef)
+    (checked : (left.any fun a => right.any fun b =>
+      a == b || aliases.contains (a, b) || aliases.contains (b, a)) = false) :
+    SymbolicDisjoint aliases left right := by
+  have excluded : ¬RootSetsOverlap aliases left right := by
+    intro overlap
+    have conflict := (rootSetsOverlap_checked aliases left right).mp overlap
+    rw [checked] at conflict
+    cases conflict
+  intro a aMember b bMember
+  exact ⟨fun equal => excluded ⟨a, aMember, b, bMember, Or.inl equal⟩,
+    fun forward => excluded ⟨a, aMember, b, bMember, Or.inr (.inl forward)⟩,
+    fun backward => excluded ⟨a, aMember, b, bMember, Or.inr (.inr backward)⟩⟩
 
 theorem sharedRoot_overlap (interpretation : RootInterpretation) (aliases : List (RootRef × RootRef))
     (complete : AliasComplete interpretation aliases) (left right : List RootRef) (root : RootInst)
     (leftRoot : RootIn interpretation left root) (rightRoot : RootIn interpretation right root) :
-    RootsOverlap aliases left right := by
+    RootSetsOverlap aliases left right := by
   obtain ⟨a, aMember, aRoot⟩ := leftRoot
   obtain ⟨b, bMember, bRoot⟩ := rightRoot
   exact ⟨a, aMember, b, bMember, complete a b root aRoot bRoot⟩
-
-structure CallAliasCoverage (callerAliases calleeAliases : List (RootRef × RootRef))
-    (arguments : List (List RootRef)) (globalCount : Nat) : Prop where
-  parameters : ∀ left right a b, arguments[left]? = some a → arguments[right]? = some b →
-    RootsOverlap callerAliases a b → MayAlias calleeAliases (.param left) (.param right)
-  globals : ∀ index roots global, arguments[index]? = some roots → global < globalCount →
-    RootsOverlap callerAliases roots [.global global] → MayAlias calleeAliases (.param index) (.global global)
-  static : ∀ index roots, arguments[index]? = some roots →
-    RootsOverlap callerAliases roots [.static] → MayAlias calleeAliases (.param index) .static
 
 def RootFrontier (interpretation : RootInterpretation) (nextAct : Nat) : Prop :=
   interpretation.environment.act < nextAct ∧
@@ -50,7 +63,7 @@ theorem instantiates_before {interpretation : RootInterpretation} {nextAct : Nat
 theorem call_aliasComplete (caller : RootInterpretation) (callee : RuntimeActivation)
     (arguments : List (List RootRef)) (callerAliases calleeAliases : List (RootRef × RootRef))
     (complete : AliasComplete caller callerAliases)
-    (coverage : CallAliasCoverage callerAliases calleeAliases arguments caller.globalCount)
+    (coverage : AliasClosure callerAliases calleeAliases arguments caller.globalCount)
     (frontier : RootFrontier caller callee.act) :
     AliasComplete (CallInterpretation caller callee arguments) calleeAliases := by
   intro left right root leftInst rightInst
@@ -61,7 +74,7 @@ theorem call_aliasComplete (caller : RootInterpretation) (callee : RuntimeActiva
     | static id synthetic => omega
     | parameter index root supplied =>
       obtain ⟨roots, rootsAt, rooted⟩ := supplied
-      apply mayAlias_symm
+      apply rootAlias_symm
       apply coverage.globals index roots id rootsAt declared
       exact sharedRoot_overlap caller callerAliases complete roots [.global id] _ rooted
         ⟨.global id, by simp, .global id declared⟩
@@ -71,7 +84,7 @@ theorem call_aliasComplete (caller : RootInterpretation) (callee : RuntimeActiva
     | static id synthetic => exact Or.inl rfl
     | parameter index root supplied =>
       obtain ⟨roots, rootsAt, rooted⟩ := supplied
-      apply mayAlias_symm
+      apply rootAlias_symm
       apply coverage.static index roots rootsAt
       exact sharedRoot_overlap caller callerAliases complete roots [.static] _ rooted
         ⟨.static, by simp, .static id synthetic⟩

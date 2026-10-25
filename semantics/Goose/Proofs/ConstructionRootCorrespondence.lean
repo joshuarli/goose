@@ -162,7 +162,7 @@ theorem evalValue_localReference_rooted (fuel : Nat) (config : EvalConfig)
 
 def AliasComplete (interpretation : RootInterpretation) (aliases : List (RootRef × RootRef)) : Prop :=
   ∀ left right root, Instantiates interpretation left root → Instantiates interpretation right root →
-    left = right ∨ (left, right) ∈ aliases ∨ (right, left) ∈ aliases
+    RootAlias aliases left right
 
 def SymbolicDisjoint (aliases : List (RootRef × RootRef)) (left right : List RootRef) : Prop :=
   ∀ a ∈ left, ∀ b ∈ right, a ≠ b ∧ (a, b) ∉ aliases ∧ (b, a) ∉ aliases
