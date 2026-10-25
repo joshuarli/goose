@@ -4,6 +4,20 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR
 
+inductive DemandBoundary where
+  | entry
+  | exit
+  deriving DecidableEq
+
+structure DemandSourceLabel where
+  path : List Nat
+  phase : DemandPhase
+  boundary : DemandBoundary
+
+structure DemandPointMapEntry where
+  target : Pt
+  source : DemandSourceLabel
+
 structure DemandRuntimePoint where
   point : Pt
   frame : GIR.Frame
@@ -81,19 +95,127 @@ theorem DemandLinearPrefix.runAt {cx : FnCtx} {taken fuel : Nat}
   | next step rest induction =>
     simpa only [Nat.add_sub_add_right] using step.runAt.trans induction
 
-inductive DemandLinearTraversal (cx : FnCtx) (invariant : DemandRuntimePoint → Prop) :
+inductive DemandTraversal (cx : FnCtx) (invariant : DemandRuntimePoint → Prop) :
+    Nat → Nat → DemandRuntimePoint → DemandRuntimePoint → Prop
+  | done {point : DemandRuntimePoint} (fuel : Nat) (valid : invariant point) :
+      DemandTraversal cx invariant 0 fuel point point
+  | next {length fuel : Nat} {before middle after : DemandRuntimePoint}
+      (valid : invariant before)
+      (step : DemandLinearStep cx fuel before middle)
+      (rest : DemandTraversal cx invariant length fuel middle after) :
+      DemandTraversal cx invariant (length + 1) (fuel + 1) before after
+
+theorem DemandTraversal.prefix_invariant {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
+    {length fuel : Nat} {before after : DemandRuntimePoint}
+    (traversal : DemandTraversal cx invariant length fuel before after)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (bounded : taken ≤ length) (steps : DemandLinearPrefix cx taken fuel before reached) :
+    invariant reached := by
+  induction traversal generalizing taken reached with
+  | done fuel valid =>
+    have zero : taken = 0 := by omega
+    subst taken
+    cases steps
+    exact valid
+  | next valid step rest induction =>
+    cases steps with
+    | zero => exact valid
+    | next first tail =>
+      have same := step.deterministic first
+      cases same
+      exact induction (by omega) tail
+
+theorem DemandTraversal.fuel_bound {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
+    {length fuel : Nat} {before after : DemandRuntimePoint}
+    (traversal : DemandTraversal cx invariant length fuel before after) : length ≤ fuel := by
+  induction traversal with
+  | done => omega
+  | next valid step rest induction => omega
+
+theorem DemandTraversal.last_valid {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
+    {length fuel : Nat} {before after : DemandRuntimePoint}
+    (traversal : DemandTraversal cx invariant length fuel before after) : invariant after := by
+  induction traversal with
+  | done fuel valid => exact valid
+  | next valid step rest induction => exact induction
+
+theorem DemandTraversal.mono {cx : FnCtx} {first second : DemandRuntimePoint → Prop}
+    {length fuel : Nat} {before after : DemandRuntimePoint}
+    (traversal : DemandTraversal cx first length fuel before after)
+    (weaken : ∀ point, first point → second point) :
+    DemandTraversal cx second length fuel before after := by
+  induction traversal with
+  | done fuel valid => exact .done fuel (weaken _ valid)
+  | next valid step rest induction => exact .next (weaken _ valid) step induction
+
+theorem DemandTraversal.append {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
+    {firstLength secondLength fuel : Nat} {before middle after : DemandRuntimePoint}
+    (first : DemandTraversal cx invariant firstLength fuel before middle)
+    (second : DemandTraversal cx invariant secondLength (fuel - firstLength) middle after) :
+    DemandTraversal cx invariant (firstLength + secondLength) fuel before after := by
+  induction first with
+  | done fuel valid => simpa only [Nat.zero_add, Nat.sub_zero] using second
+  | next valid step rest induction =>
+    have tail := induction (by simpa only [Nat.add_sub_add_right] using second)
+    simpa only [Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using
+      DemandTraversal.next valid step tail
+
+theorem DemandTraversal.runAt {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
+    {length fuel : Nat} {before after : DemandRuntimePoint}
+    (traversal : DemandTraversal cx invariant length fuel before after) :
+    GIR.runAt cx before.point before.frame fuel before.state =
+      GIR.runAt cx after.point after.frame (fuel - length) after.state := by
+  induction traversal with
+  | done fuel valid => rfl
+  | next valid step rest induction =>
+    simpa only [Nat.add_sub_add_right] using step.runAt.trans induction
+
+inductive DemandInstructionStop (cx : FnCtx) : Nat → DemandRuntimePoint → Stop → St → Prop
+  | timeout (point : DemandRuntimePoint) : DemandInstructionStop cx 0 point .timeout point.state
+  | definition {fuel : Nat} {point : DemandRuntimePoint} {id : ValueId} {op : Op} {stop : Stop} {after : St}
+      (instruction : instAt cx.fn point.point = some (.def id op))
+      (execution : execOp fuel cx point.frame op point.state = .stop stop after) :
+      DemandInstructionStop cx (fuel + 1) point stop after
+  | effect {fuel : Nat} {point : DemandRuntimePoint} {effect : Effect} {stop : Stop} {after : St}
+      (instruction : instAt cx.fn point.point = some (.eff effect))
+      (execution : execEff cx.fn point.frame effect point.state = .stop stop after) :
+      DemandInstructionStop cx (fuel + 1) point stop after
+
+theorem DemandInstructionStop.runAt {cx : FnCtx} {fuel : Nat} {point : DemandRuntimePoint}
+    {stop : Stop} {after : St} (stopped : DemandInstructionStop cx fuel point stop after) :
+    GIR.runAt cx point.point point.frame fuel point.state = .stop stop after := by
+  cases stopped with
+  | timeout => rfl
+  | definition instruction execution =>
+    simp only [GIR.runAt, instsAt_cons instruction, exec, bind_apply, execution]
+  | effect instruction execution =>
+    simp only [GIR.runAt, instsAt_cons instruction, exec, bind_apply, execution]
+
+def DemandStoppedTraversal (cx : FnCtx) (invariant : DemandRuntimePoint → Prop)
+    (length fuel : Nat) (before : DemandRuntimePoint) (stop : Stop) (after : St) : Prop :=
+  ∃ checkpoint, DemandTraversal cx invariant length fuel before checkpoint ∧
+    DemandInstructionStop cx (fuel - length) checkpoint stop after
+
+theorem DemandStoppedTraversal.runAt {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
+    {length fuel : Nat} {before : DemandRuntimePoint} {stop : Stop} {after : St}
+    (traversal : DemandStoppedTraversal cx invariant length fuel before stop after) :
+    GIR.runAt cx before.point before.frame fuel before.state = .stop stop after := by
+  obtain ⟨checkpoint, steps, stopped⟩ := traversal
+  exact steps.runAt.trans stopped.runAt
+
+inductive DemandUniformTraversal (cx : FnCtx) (invariant : DemandRuntimePoint → Prop) :
     Nat → DemandRuntimePoint → DemandRuntimePoint → Prop
   | done {point : DemandRuntimePoint} (valid : invariant point) :
-      DemandLinearTraversal cx invariant 0 point point
+      DemandUniformTraversal cx invariant 0 point point
   | next {length : Nat} {before middle after : DemandRuntimePoint}
       (valid : invariant before)
       (step : ∀ fuel, DemandLinearStep cx fuel before middle)
-      (rest : DemandLinearTraversal cx invariant length middle after) :
-      DemandLinearTraversal cx invariant (length + 1) before after
+      (rest : DemandUniformTraversal cx invariant length middle after) :
+      DemandUniformTraversal cx invariant (length + 1) before after
 
-theorem DemandLinearTraversal.prefix_invariant {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
+theorem DemandUniformTraversal.prefix_invariant {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
     {length : Nat} {before after : DemandRuntimePoint}
-    (traversal : DemandLinearTraversal cx invariant length before after)
+    (traversal : DemandUniformTraversal cx invariant length before after)
     {taken fuel : Nat} {reached : DemandRuntimePoint}
     (bounded : taken ≤ length) (tracePrefix : DemandLinearPrefix cx taken fuel before reached) :
     invariant reached := by
@@ -111,25 +233,48 @@ theorem DemandLinearTraversal.prefix_invariant {cx : FnCtx} {invariant : DemandR
       cases same
       exact induction (by omega) tail
 
-theorem DemandLinearTraversal.mono {cx : FnCtx} {first second : DemandRuntimePoint → Prop}
+theorem DemandUniformTraversal.atFuel {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
     {length : Nat} {before after : DemandRuntimePoint}
-    (traversal : DemandLinearTraversal cx first length before after)
+    (traversal : DemandUniformTraversal cx invariant length before after)
+    {fuel : Nat} (enough : length ≤ fuel) :
+    DemandTraversal cx invariant length fuel before after := by
+  induction traversal generalizing fuel with
+  | done valid => exact .done fuel valid
+  | next valid step rest induction =>
+    cases fuel with
+    | zero => omega
+    | succ fuel => exact .next valid (step fuel) (induction (by omega))
+
+def DemandFramePreserved (frontier : ValueId) (frame : GIR.Frame) (before after : St)
+    (point : DemandRuntimePoint) : Prop :=
+  Same frontier frame point.frame ∧ (point.state = before ∨ point.state = after)
+
+theorem DemandUniformTraversal.last_valid {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
+    {length : Nat} {before after : DemandRuntimePoint}
+    (traversal : DemandUniformTraversal cx invariant length before after) : invariant after := by
+  induction traversal with
+  | done valid => exact valid
+  | next valid step rest induction => exact induction
+
+theorem DemandUniformTraversal.mono {cx : FnCtx} {first second : DemandRuntimePoint → Prop}
+    {length : Nat} {before after : DemandRuntimePoint}
+    (traversal : DemandUniformTraversal cx first length before after)
     (weaken : ∀ point, first point → second point) :
-    DemandLinearTraversal cx second length before after := by
+    DemandUniformTraversal cx second length before after := by
   induction traversal with
   | done valid => exact .done (weaken _ valid)
   | next valid step rest induction => exact .next (weaken _ valid) step induction
 
-theorem DemandLinearTraversal.append {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
+theorem DemandUniformTraversal.append {cx : FnCtx} {invariant : DemandRuntimePoint → Prop}
     {firstLength secondLength : Nat} {before middle after : DemandRuntimePoint}
-    (first : DemandLinearTraversal cx invariant firstLength before middle)
-    (second : DemandLinearTraversal cx invariant secondLength middle after) :
-    DemandLinearTraversal cx invariant (firstLength + secondLength) before after := by
+    (first : DemandUniformTraversal cx invariant firstLength before middle)
+    (second : DemandUniformTraversal cx invariant secondLength middle after) :
+    DemandUniformTraversal cx invariant (firstLength + secondLength) before after := by
   induction first with
   | done valid => simpa only [Nat.zero_add] using second
   | next valid step rest induction =>
     simpa only [Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using
-      DemandLinearTraversal.next valid step (induction second)
+      DemandUniformTraversal.next valid step (induction second)
 
 structure DemandFrameAt (cfg : Cfg) (env : Env) (cx : FnCtx)
     (world : Core.Sound.World) (typing : TEnv) (roots : PEnv) (future : List VarId)

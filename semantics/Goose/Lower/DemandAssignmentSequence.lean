@@ -14,8 +14,8 @@ def LiteralAssignmentSequenceDemand (cfg : Cfg) (env : Env) (cx : FnCtx)
     (point : DemandRuntimePoint) : Prop :=
   (∃ (state : St) (varId : VarId) (type : IntTy) (number : Int) (origin : OriginId)
       (source : StmtSource cfg env (.assign (.var varId) (.lit type number) origin) state)
-      (address : ValueId) (alias : RetainedAlias),
-    LiteralAssignmentDemand source cx address alias point ∧
+      (start : Pt) (address : ValueId) (alias : RetainedAlias),
+    LiteralAssignmentDemand source cx address alias start point ∧
       (literalAssignmentRhsContext source).inputFuture = source.context.outputFuture ∧
       (cfg.mod.profile = .shrink → alias ∈ (literalAssignmentRhsContext source).retained)) ∨
   (∃ (state : St) (source : StmtsSource cfg env [] state),
@@ -31,7 +31,7 @@ theorem accepted_literal_assignments_demand_traversal {cfg : Cfg} {env : Env} {s
     (point : ls.pp = some pt) (extended : ExtT ls' cx.fn.blocks)
     (related : Rel cfg env cx frame ls) :
     ∃ (after : St) (finalPoint : Pt) (finalFrame : GIR.Frame),
-      DemandLinearTraversal cx (LiteralAssignmentSequenceDemand cfg env cx) (stmts.length * 3)
+      DemandUniformTraversal cx (LiteralAssignmentSequenceDemand cfg env cx) (stmts.length * 3)
         ⟨pt, frame, state⟩ ⟨finalPoint, finalFrame, after⟩ ∧
       ls'.pp = some finalPoint ∧ Rel cfg env cx finalFrame ls' := by
   induction fragment generalizing state ls ls' pt frame with
@@ -39,7 +39,7 @@ theorem accepted_literal_assignments_demand_traversal {cfg : Cfg} {env : Env} {s
     simp only [lowerStmts, pure_run] at lowered
     obtain ⟨_, rfl⟩ := Prod.mk.inj lowered
     refine ⟨state, pt, frame, ?_, point, related⟩
-    apply DemandLinearTraversal.done
+    apply DemandUniformTraversal.done
     exact Or.inr ⟨state, source, ⟨⟨ls, point, related⟩, source.frame, by constructor <;> simp⟩⟩
   | @cons rest varId type number origin fragment induction =>
     obtain ⟨block, current, _, _⟩ := LS.pp_some point
@@ -59,13 +59,13 @@ theorem accepted_literal_assignments_demand_traversal {cfg : Cfg} {env : Env} {s
     obtain ⟨tail, _, _, _⟩ := next 2 .unit afterHead headDone
     obtain ⟨after, finalPoint, finalFrame, tailTraversal, finalPointAt, finalRelated⟩ :=
       induction tail tailLowered middlePointAt extended middleRelated
-    have first : DemandLinearTraversal cx (LiteralAssignmentSequenceDemand cfg env cx) 3
+    have first : DemandUniformTraversal cx (LiteralAssignmentSequenceDemand cfg env cx) 3
         ⟨pt, frame, state⟩ ⟨middlePoint, middleFrame, afterHead⟩ :=
       headTraversal.mono (fun point valid => by
         have query : head.rootsEnv.access.aliasPlace (head.path ++ [0]) (.var varId) = .ok [alias] := by
-          obtain ⟨stage, _, query, _⟩ := valid
+          obtain ⟨stage, _, _, query, _⟩ := valid
           exact query
-        exact Or.inl ⟨state, varId, type, number, origin, head, address, alias, valid,
+        exact Or.inl ⟨state, varId, type, number, origin, head, pt, address, alias, valid,
           literalAssignmentRhsContext.inputFuture head,
           fun shrink => literalAssignmentRhsContext.retains head shrink query⟩)
     refine ⟨after, finalPoint, finalFrame, ?_, finalPointAt, finalRelated⟩

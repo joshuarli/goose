@@ -308,14 +308,17 @@ private theorem blockStmt_shrinkFuture {path sc all value offset st rest}
   cases st <;> rfl
 
 
-theorem StmtsSource.split {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : List Stmt}
+theorem StmtsSource.splitDemand {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : List Stmt}
     {state : St} (source : StmtsSource cfg env (stmt :: rest) state) :
     ∃ head : StmtSource cfg env stmt state,
       head.typingEnv = source.typingEnv ∧ head.rootsEnv = source.rootsEnv ∧
+      head.world = source.world ∧
+      (∀ alias ∈ source.context.retained, alias ∈ head.context.retained) ∧
       ∀ fuel value after, execStmt fuel cfg env stmt state = .ok (.normal value) after →
         ∃ tail : StmtsSource cfg env rest after,
           tail.typingEnv = head.typingAfter ∧ tail.rootsEnv = source.rootsEnv ∧
-          tail.typingAfter = source.typingAfter := by
+          tail.typingAfter = source.typingAfter ∧ tail.world = source.world ∧
+          tail.context.retained = source.context.retained := by
   rcases cfg with ⟨prof, m⟩
   rcases source with ⟨accepted, plans, path, observation, W, tenv, tenv', penv,
     tn, tn', rst, rst', lo, sc, all, value, bc, offset, hOffset, hDrop, hActive, hAccess,
@@ -380,7 +383,10 @@ theorem StmtsSource.split {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : List Stm
     access := haccess, protection := hmay ▸ hProtected, observed := hmay ▸ hObserved,
     classified := hClass, permission := hp, frame := hinput, scopeHead := hsc,
     top := hT, bounded := hlo, typed := hts, rooted := hrs, effects := hm2.2.trans hE }
-  refine ⟨head, rfl, rfl, ?_⟩
+  refine ⟨head, rfl, rfl, rfl, ?_, ?_⟩
+  · intro alias member
+    exact bc.child_retained_subset rfl offset (.statement stmt) .statement hchild
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) member
   intro fuel runtimeValue after done
   have result := head.result fuel (.normal runtimeValue) done
   have hF1 := result.frame
@@ -407,11 +413,26 @@ theorem StmtsSource.split {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : List Stm
     offsetBounded := hnextBound, suffix := hrest, active := hActive1,
     access := ?_, protection := hProtected, observed := hSafe1, classified := result.classified,
     permission := hp, frame := hF1, scopeHead := ?_, top := hT1,
-    bounded := Nat.le_trans hlo hm1.1, typed := htr, rooted := hrr, effects := hE }, rfl, rfl, rfl⟩
+    bounded := Nat.le_trans hlo hm1.1, typed := htr, rooted := hrr, effects := hE }, rfl, rfl, rfl, rfl, rfl⟩
   · cases bc <;> simpa [EvaluationContext.AccessMatches, NodeContext.AccessMatches,
       hS1.mod, hS1.vars] using hAccess
   · rw [hS1.scopes]
     exact hsc
+
+
+theorem StmtsSource.split {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : List Stmt}
+    {state : St} (source : StmtsSource cfg env (stmt :: rest) state) :
+    ∃ head : StmtSource cfg env stmt state,
+      head.typingEnv = source.typingEnv ∧ head.rootsEnv = source.rootsEnv ∧
+      ∀ fuel value after, execStmt fuel cfg env stmt state = .ok (.normal value) after →
+        ∃ tail : StmtsSource cfg env rest after,
+          tail.typingEnv = head.typingAfter ∧ tail.rootsEnv = source.rootsEnv ∧
+          tail.typingAfter = source.typingAfter := by
+  obtain ⟨head, typing, roots, _, _, next⟩ := source.splitDemand
+  refine ⟨head, typing, roots, ?_⟩
+  intro fuel value after done
+  obtain ⟨tail, tailTyping, tailRoots, tailFinal, _, _⟩ := next fuel value after done
+  exact ⟨tail, tailTyping, tailRoots, tailFinal⟩
 
 structure BlockSource (cfg : Cfg) (env : Env) (pre : List (VarId × Val)) (block : Block) (state : St) where
   accepted : Core.validate cfg.mod = .ok ()

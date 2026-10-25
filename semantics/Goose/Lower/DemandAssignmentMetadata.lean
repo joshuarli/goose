@@ -41,6 +41,86 @@ theorem literalAssignmentRhsContext.inputFuture {cfg : Cfg} {env : Env} {state :
     rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, future]
     rfl
 
+theorem literalAssignmentRhsContext.outputFuture {cfg : Cfg} {env : Env} {state : St}
+    {varId : VarId} {type : IntTy} {number : Int} {origin : OriginId}
+    (source : StmtSource cfg env (.assign (.var varId) (.lit type number) origin) state) :
+    (literalAssignmentRhsContext source).outputFuture = source.context.outputFuture := by
+  have input := literalAssignmentRhsContext.inputFuture source
+  have same : (literalAssignmentRhsContext source).inputFuture =
+      (literalAssignmentRhsContext source).outputFuture := by
+    cases literalAssignmentRhsContext source <;>
+      simp [EvaluationContext.inputFuture, EvaluationContext.outputFuture, NodeContext.inputFuture,
+        NodeContext.outputFuture, DemandNode.variables, Expr.variables, DemandNode.visibleAfter]
+  exact same.symm.trans input
+
+noncomputable def literalAssignmentDestinationContext {cfg : Cfg} {env : Env} {state : St}
+    {varId : VarId} {type : IntTy} {number : Int} {origin : OriginId}
+    (source : StmtSource cfg env (.assign (.var varId) (.lit type number) origin) state) :
+    EvaluationContext cfg.mod source.plans (source.path ++ [0]) (.place (.var varId)) .place :=
+  source.context.child rfl 0 (.place (.var varId)) .place
+    (by simp [DemandNode.child?, DemandNode.children])
+    (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
+
+theorem literalAssignmentDestinationContext.inputFuture {cfg : Cfg} {env : Env} {state : St}
+    {varId : VarId} {type : IntTy} {number : Int} {origin : OriginId}
+    (source : StmtSource cfg env (.assign (.var varId) (.lit type number) origin) state) :
+    (literalAssignmentDestinationContext source).inputFuture = source.context.inputFuture := by
+  cases contextEq : source.context with
+  | pilot profile active =>
+    unfold literalAssignmentDestinationContext
+    rw [contextEq]
+    simp [EvaluationContext.child, EvaluationContext.inputFuture, DemandNode.variables,
+      Stmt.variables, Place.variables, Expr.variables, DemandNode.visibleForChild]
+  | shrink profile context =>
+    let transition := context.child rfl 0 (.place (.var varId)) .place
+      (by simp [DemandNode.child?, DemandNode.children])
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
+    have future := DemandNode.childFrame_future transition.childFrameEq
+      (show (DemandNode.statement (.assign (.var varId) (.lit type number) origin)).childExpectation?
+        _ ⟨source.path, .expression, context.expected.frame.active,
+          context.expected.frame.future, context.expected.frame.retained⟩ 0 =
+        some ⟨context.expected.frame.active, context.expected.frame.future⟩ from by
+        simp [DemandNode.childExpectation?, DemandNode.childFuture, DemandNode.child?, DemandNode.children,
+          DemandNode.visibleForChild, Expr.variables])
+    unfold literalAssignmentDestinationContext
+    rw [contextEq]
+    change transition.context.inputFuture = context.inputFuture
+    simp only [NodeContext.inputFuture, DemandNode.variables, Stmt.variables, Place.variables, Expr.variables,
+      List.append_nil]
+    rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, future]
+    rfl
+
+def AssignmentDemandStage.node (varId : VarId) (type : IntTy) (number : Int) (origin : OriginId) :
+    AssignmentDemandStage → DemandNode
+  | .destination => .place (.var varId)
+  | .rhs | .mutation => .expression (.lit type number)
+  | .continuation => .statement (.assign (.var varId) (.lit type number) origin)
+
+noncomputable def literalAssignmentStageContext {cfg : Cfg} {env : Env} {state : St}
+    {varId : VarId} {type : IntTy} {number : Int} {origin : OriginId}
+    (source : StmtSource cfg env (.assign (.var varId) (.lit type number) origin) state)
+    (stage : AssignmentDemandStage) :
+    EvaluationContext cfg.mod source.plans (stage.path source.path)
+      (stage.node varId type number origin) stage.phase := by
+  cases stage with
+  | destination => exact literalAssignmentDestinationContext source
+  | rhs => exact literalAssignmentRhsContext source
+  | mutation => exact literalAssignmentRhsContext source
+  | continuation => exact source.context
+
+theorem literalAssignmentStageContext.demand {cfg : Cfg} {env : Env} {state : St}
+    {varId : VarId} {type : IntTy} {number : Int} {origin : OriginId}
+    (source : StmtSource cfg env (.assign (.var varId) (.lit type number) origin) state)
+    (stage : AssignmentDemandStage) :
+    (match stage.boundary with
+      | .entry => (literalAssignmentStageContext source stage).inputFuture
+      | .exit => (literalAssignmentStageContext source stage).outputFuture) = stage.future source := by
+  cases stage with
+  | destination => exact literalAssignmentDestinationContext.inputFuture source
+  | rhs => exact literalAssignmentRhsContext.inputFuture source
+  | mutation => exact literalAssignmentRhsContext.outputFuture source
+  | continuation => rfl
+
 private theorem assignment_child_retains {m : Core.Module} {plans : Array (Array DemandPoint)}
     {pc : PlanContext m plans} {path : List Nat} {varId : VarId} {expr : Expr} {origin : OriginId}
     (context : NodeContext pc path (.statement (.assign (.var varId) expr origin)) .statement)
