@@ -81,6 +81,17 @@ structure ExprSource (cfg : Cfg) (env : Env) (expr : Expr) (state : St) where
   rooted : rpExpr rootsEnv expr rootsStart = .ok (roots, rootsEnd)
   effects : EffLe rootsEnd.eff world.E
 
+structure ExprSource.ChildAt {cfg : Cfg} {env : Env} {expression childExpression : Expr}
+    {state childState : St} (source : ExprSource cfg env expression state)
+    (child : ExprSource cfg env childExpression childState) (index : Nat)
+    (found : DemandNode.child? (.expression expression) index = some (.expression childExpression)) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [index]
+  plans : child.plans = source.plans
+  context : HEq child.context
+    (source.context.child rfl index (.expression childExpression) .expression found (by trivial))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+
 structure ExprResult {cfg : Cfg} {env : Env} {expr : Expr} {state : St}
     (source : ExprSource cfg env expr state) (value : Val) (after : St) : Prop where
   frame : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after
@@ -356,7 +367,7 @@ def TypedBoundClaim (n : Nat) (cfg : Cfg) (results : List Ty) (bound : Bound) : 
 theorem ExprSource.notChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St}
     (source : ExprSource cfg env (.not expr) state) :
     ∃ child : ExprSource cfg env expr state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv ∧ child.ty = .bool := by
+      child.rootsEnv = source.rootsEnv ∧ child.ty = .bool ∧ source.ChildAt child 0 rfl := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyExpr] at ht
@@ -396,7 +407,7 @@ theorem ExprSource.notChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St}
     typingEnd := finish, ty := .bool, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, rfl⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, ?_⟩⟩
   · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -405,11 +416,13 @@ theorem ExprSource.notChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St}
   · simpa [hshrink] using source.observed
   · simpa [hinput] using source.frame
   · simpa [hrootsEnd] using source.effects
+  · intro alias member
+    exact ec.child_retained_subset rfl 0 (.expression expr) .expression rfl (by trivial) member
 
 theorem ExprSource.unChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (op : UnOp) (origin : OriginId)
     (source : ExprSource cfg env (.un op expr origin) state) :
     ∃ child : ExprSource cfg env expr state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv ∧ ∃ intTy, child.ty = .int intTy := by
+      child.rootsEnv = source.rootsEnv ∧ ∃ intTy, child.ty = .int intTy ∧ source.ChildAt child 0 rfl := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyExpr] at ht
@@ -456,7 +469,7 @@ theorem ExprSource.unChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (o
     typingEnd := finish, ty := .int intTy, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, rfl⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, rfl, ⟨rfl, rfl, rfl, HEq.rfl, ?_⟩⟩
   · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -465,6 +478,8 @@ theorem ExprSource.unChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (o
   · simpa [hshrink] using source.observed
   · simpa [hinput] using source.frame
   · exact childEffects
+  · intro alias member
+    exact ec.child_retained_subset rfl 0 (.expression expr) .expression rfl (by trivial) member
 
 theorem BoundSource.expressionChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (fromEnd : Bool)
     (source : BoundSource cfg env (if fromEnd then .fromEnd expr else .expr expr) state) :
@@ -580,7 +595,7 @@ theorem ExprSource.lenChild {cfg : Cfg} {env : Env} {view : View} {state : St} (
 theorem ExprSource.fillChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (target : Ty)
     (source : ExprSource cfg env (.fill target expr) state) :
     ∃ element count, target = .arr element count ∧ ∃ child : ExprSource cfg env expr state,
-      child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧ child.ty = element := by
+      child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧ child.ty = element ∧ source.ChildAt child 0 rfl := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyExpr] at ht
@@ -627,7 +642,7 @@ theorem ExprSource.fillChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} 
     typingEnd := finish, ty := element, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, rfl⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, ?_⟩⟩
   · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -636,11 +651,13 @@ theorem ExprSource.fillChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} 
   · simpa [hshrink] using source.observed
   · simpa [hinput] using source.frame
   · exact childEffects
+  · intro alias member
+    exact ec.child_retained_subset rfl 0 (.expression expr) .expression rfl (by trivial) member
 
 theorem ExprSource.convChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (kind : ConvKind) (target : Ty) (origin : OriginId)
     (source : ExprSource cfg env (.conv kind target expr origin) state) :
     ∃ child : ExprSource cfg env expr state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv ∧ ∃ intTy targetTy, child.ty = .int intTy ∧ target = .int targetTy := by
+      child.rootsEnv = source.rootsEnv ∧ ∃ intTy targetTy, child.ty = .int intTy ∧ target = .int targetTy ∧ source.ChildAt child 0 rfl := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyExpr] at ht
@@ -690,7 +707,7 @@ theorem ExprSource.convChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} 
     typingEnd := finish, ty := .int intTy, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, targetInt, rfl, rfl⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, targetInt, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, ?_⟩⟩
   · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -699,6 +716,8 @@ theorem ExprSource.convChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} 
   · simpa [hshrink] using source.observed
   · simpa [hinput] using source.frame
   · exact childEffects
+  · intro alias member
+    exact ec.child_retained_subset rfl 0 (.expression expr) .expression rfl (by trivial) member
 
 theorem PlaceSource.derefChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St}
     (source : PlaceSource cfg env (.deref expr) state)
@@ -1084,10 +1103,10 @@ theorem ExprSource.refChild {cfg : Cfg} {env : Env} {place : Place} {state : St}
 theorem ExprSource.binChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     (op : BinOp) (origin : OriginId) (source : ExprSource cfg env (.bin op a b origin) state) :
     ∃ intTy, ∃ left : ExprSource cfg env a state,
-      left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧ left.ty = .int intTy ∧
+      left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧ left.ty = .int intTy ∧ source.ChildAt left 0 rfl ∧
       ∀ n value after, evalExpr n cfg env a state = .ok value after →
         ∃ right : ExprSource cfg env b after, right.typingEnv = source.typingEnv ∧
-          right.rootsEnv = source.rootsEnv ∧ right.ty = .int intTy := by
+          right.rootsEnv = source.rootsEnv ∧ right.ty = .int intTy ∧ source.ChildAt right 1 rfl := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyExpr] at ht
@@ -1168,7 +1187,10 @@ theorem ExprSource.binChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     observed := by simpa [hLeftShrink] using source.observed,
     classified := source.classified, permission := source.permission, frame := hLeftInput,
     typed := hta, rooted := hra, effects := (Core.Sound.rpExpr_mono hrb).2.trans hE2 }
-  refine ⟨intTy, left, rfl, rfl, rfl, ?_⟩
+  have leftMetadata : source.ChildAt left 0 rfl :=
+    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+      ec.child_retained_subset rfl 0 (.expression a) .expression rfl (by trivial) member⟩
+  refine ⟨intTy, left, rfl, rfl, rfl, leftMetadata, ?_⟩
   intro n value after hdone
   have output := left.result n value hdone
   have hF1 : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
@@ -1218,7 +1240,9 @@ theorem ExprSource.binChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     protection := by simpa [hRightShrink] using source.protection,
     observed := by simpa only [left, hLeftShrink, hRightShrink] using output.observed,
     classified := output.classified, permission := source.permission, frame := hFrameRight,
-    typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl, rfl⟩
+    typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl, rfl,
+    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+      ec.child_retained_subset rfl 1 (.expression b) .expression rfl (by trivial) member⟩⟩
 
 theorem PlaceSource.elemChildren {cfg : Cfg} {env : Env} {view : View} {index : Expr} {state : St}
     (origin : OriginId) (source : PlaceSource cfg env (.elem view index origin) state) :
@@ -1518,10 +1542,10 @@ theorem ExprSource.pushChildren {cfg : Cfg} {env : Env} {owner : Place} {argumen
 theorem ExprSource.cmpChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     (op : CmpOp) (source : ExprSource cfg env (.cmp op a b) state) :
     ∃ left : ExprSource cfg env a state,
-      left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧
+      left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧ source.ChildAt left 0 rfl ∧
       ∀ n value after, evalExpr n cfg env a state = .ok value after →
         ∃ right : ExprSource cfg env b after, right.typingEnv = source.typingEnv ∧
-          right.rootsEnv = source.rootsEnv := by
+          right.rootsEnv = source.rootsEnv ∧ source.ChildAt right 1 rfl := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyExpr] at ht
@@ -1600,7 +1624,10 @@ theorem ExprSource.cmpChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     observed := by simpa [hLeftShrink] using source.observed,
     classified := source.classified, permission := source.permission, frame := hLeftInput,
     typed := hta, rooted := hra, effects := (Core.Sound.rpExpr_mono hrb).2.trans hE2 }
-  refine ⟨left, rfl, rfl, ?_⟩
+  have leftMetadata : source.ChildAt left 0 rfl :=
+    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+      ec.child_retained_subset rfl 0 (.expression a) .expression rfl (by trivial) member⟩
+  refine ⟨left, rfl, rfl, leftMetadata, ?_⟩
   intro n value after hdone
   have output := left.result n value hdone
   have hF1 : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
@@ -1650,7 +1677,9 @@ theorem ExprSource.cmpChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     protection := by simpa [hRightShrink] using source.protection,
     observed := by simpa only [left, hLeftShrink, hRightShrink] using output.observed,
     classified := output.classified, permission := source.permission, frame := hFrameRight,
-    typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl⟩
+    typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl,
+    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+      ec.child_retained_subset rfl 1 (.expression b) .expression rfl (by trivial) member⟩⟩
 
 theorem ExprSource.shortCircuitChildrenDemand {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     (isAnd : Bool) (source : ExprSource cfg env (if isAnd then .and a b else .or a b) state) :
@@ -2192,7 +2221,7 @@ theorem typedExprClaim_bool (n : Nat) (cfg : Cfg) (results : List Ty) (value : B
 theorem typedExprClaim_not {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) : TypedExprClaim (n + 1) cfg results (.not expr) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨child, htyping, hroots, hbool⟩ := source.notChild
+  obtain ⟨child, htyping, hroots, hbool, _⟩ := source.notChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
@@ -2269,7 +2298,7 @@ theorem typedExprClaim_bin {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr
     (ha : TypedExprClaim n cfg results a) (hb : TypedExprClaim n cfg results b)
     (op : BinOp) (origin : OriginId) : TypedExprClaim (n + 1) cfg results (.bin op a b origin) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨intTy, left, htyping, hroots, htype, next⟩ := source.binChildren op origin
+  obtain ⟨intTy, left, htyping, hroots, htype, _, next⟩ := source.binChildren op origin
   have hleftMetadata : SourceResults left.typingEnv left.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
@@ -2286,7 +2315,7 @@ theorem typedExprClaim_bin {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr
   rw [htype] at hvalue
   obtain ⟨integer, rfl⟩ := Core.Sound.hasTy_int hvalue
   simp only [Goose.Core.expectInt, pure_bind]
-  obtain ⟨right, htypingRight, hrootsRight, htypeRight⟩ := next n (.int intTy integer) after hdone
+  obtain ⟨right, htypingRight, hrootsRight, htypeRight, _⟩ := next n (.int intTy integer) after hdone
   have hrightMetadata : SourceResults right.typingEnv right.rootsEnv results := by
     rw [htypingRight, hrootsRight]
     exact hmetadata
@@ -2478,7 +2507,7 @@ theorem typedExprClaim_cmp {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr
     (ha : TypedExprClaim n cfg results a) (hb : TypedExprClaim n cfg results b)
     (op : CmpOp) : TypedExprClaim (n + 1) cfg results (.cmp op a b) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨left, htyping, hroots, next⟩ := source.cmpChildren op
+  obtain ⟨left, htyping, hroots, _, next⟩ := source.cmpChildren op
   have hleftMetadata : SourceResults left.typingEnv left.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
@@ -2500,7 +2529,7 @@ theorem typedExprClaim_cmp {n : Nat} {cfg : Cfg} {results : List Ty} {a b : Expr
   simp only [evalExpr]
   refine SimEAt.bind (ha env state left hleftMetadata ls first x pt cx fr hfirst hpp
     hextFirst hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P1 => ?_
-  obtain ⟨right, htypingRight, hrootsRight⟩ := next n value after hdone
+  obtain ⟨right, htypingRight, hrootsRight, _⟩ := next n value after hdone
   have hrightMetadata : SourceResults right.typingEnv right.rootsEnv results := by
     rw [htypingRight, hrootsRight]
     exact hmetadata
@@ -2521,7 +2550,7 @@ theorem typedExprClaim_un {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr
     (he : TypedExprClaim n cfg results expr) (op : UnOp) (origin : OriginId) :
     TypedExprClaim (n + 1) cfg results (.un op expr origin) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨child, htyping, hroots, intTy, htype⟩ := source.unChild op origin
+  obtain ⟨child, htyping, hroots, intTy, htype, _⟩ := source.unChild op origin
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
@@ -2610,7 +2639,7 @@ theorem typedExprClaim_fill {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Ex
     (he : TypedExprClaim n cfg results expr) (target : Ty) :
     TypedExprClaim (n + 1) cfg results (.fill target expr) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨element, count, htarget, child, htyping, hroots, htype⟩ := source.fillChild target
+  obtain ⟨element, count, htarget, child, htyping, hroots, htype, _⟩ := source.fillChild target
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
@@ -2630,7 +2659,7 @@ theorem typedExprClaim_conv {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Ex
     (he : TypedExprClaim n cfg results expr) (kind : ConvKind) (target : Ty) (origin : OriginId) :
     TypedExprClaim (n + 1) cfg results (.conv kind target expr origin) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨child, htyping, hroots, intTy, targetInt, htype, htarget⟩ := source.convChild kind target origin
+  obtain ⟨child, htyping, hroots, intTy, targetInt, htype, htarget, _⟩ := source.convChild kind target origin
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata

@@ -45,7 +45,7 @@ theorem typedExprFuelBound_conv {sourceFuel fuel : Nat} {cfg : Cfg} {results : L
     (child : TypedExprFuelBound sourceFuel fuel cfg results expression) :
     TypedExprFuelBound (sourceFuel + 1) fuel cfg results (.conv kind target expression origin) := by
   intro env state source metadata ls after resultId pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨expressionSource,typing,roots,inputInt,targetInt,_,rfl⟩ := source.convChild kind target origin
+  obtain ⟨expressionSource,typing,roots,inputInt,targetInt,_,rfl,_⟩ := source.convChild kind target origin
   have expressionMetadata : SourceResults expressionSource.typingEnv expressionSource.rootsEnv results := by
     rw [typing,roots]
     exact metadata
@@ -163,7 +163,7 @@ theorem typedExprFuelBound_bin {cfg : Cfg} {results : List Ty} {left right : Exp
     (rightChild : ∀ residual, residual ≤ fuel → TypedExprFuelBound sourceFuel residual cfg results right) :
     TypedExprFuelBound (sourceFuel + 1) fuel cfg results (.bin operation left right origin) := by
   intro env state source metadata ls after id pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨integer,leftSource,leftTyping,leftRoots,leftType,rightSources⟩ := source.binChildren operation origin
+  obtain ⟨integer,leftSource,leftTyping,leftRoots,leftType,_,rightSources⟩ := source.binChildren operation origin
   have leftMetadata : SourceResults leftSource.typingEnv leftSource.rootsEnv results := by
     rw [leftTyping,leftRoots]
     exact metadata
@@ -191,7 +191,7 @@ theorem typedExprFuelBound_bin {cfg : Cfg} {results : List Ty} {left right : Exp
     have typed := (leftSource.result sourceFuel a done).typed
     rw [leftType] at typed
     obtain ⟨leftInteger,rfl⟩ := Core.Sound.hasTy_int typed
-    obtain ⟨rightSource,rightTyping,rightRoots,rightType⟩ := rightSources sourceFuel _ next done
+    obtain ⟨rightSource,rightTyping,rightRoots,rightType,_⟩ := rightSources sourceFuel _ next done
     have rightMetadata : SourceResults rightSource.typingEnv rightSource.rootsEnv results := by
       rw [rightTyping,rightRoots]
       exact metadata
@@ -227,7 +227,7 @@ theorem typedExprFuelBound_cmp {sourceFuel fuel : Nat} {cfg : Cfg} {results : Li
     (rightChild : ∀ residual, residual ≤ fuel → TypedExprFuelBound sourceFuel residual cfg results right) :
     TypedExprFuelBound (sourceFuel + 1) fuel cfg results (.cmp operation left right) := by
   intro env state source metadata ls after resultId pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨leftSource,leftTyping,leftRoots,rightSources⟩ := source.cmpChildren operation
+  obtain ⟨leftSource,leftTyping,leftRoots,_,rightSources⟩ := source.cmpChildren operation
   have leftMetadata : SourceResults leftSource.typingEnv leftSource.rootsEnv results := by
     rw [leftTyping,leftRoots]
     exact metadata
@@ -255,7 +255,7 @@ theorem typedExprFuelBound_cmp {sourceFuel fuel : Nat} {cfg : Cfg} {results : Li
       (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId,.val value)]) state := by
     refine first.bind ?_
     intro a next pt' fr' source post residual bound
-    obtain ⟨rightSource,rightTyping,rightRoots⟩ := rightSources sourceFuel a next source
+    obtain ⟨rightSource,rightTyping,rightRoots,_⟩ := rightSources sourceFuel a next source
     have rightMetadata : SourceResults rightSource.typingEnv rightSource.rootsEnv results := by
       rw [rightTyping,rightRoots]
       exact metadata

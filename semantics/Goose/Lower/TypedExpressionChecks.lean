@@ -103,8 +103,10 @@ theorem not_source_result (profile : NumProfile) :
 
 theorem not_child_source (profile : NumProfile) :
     ∃ child : ExprSource ⟨profile, sourceModule⟩ sourceEnv (.bool true) enteredState,
-      child.typingEnv = typingEnv ∧ child.rootsEnv = rootsEnv ∧ child.ty = .bool :=
-  (notSource profile).notChild
+      child.typingEnv = typingEnv ∧ child.rootsEnv = rootsEnv ∧ child.ty = .bool ∧
+      child.path = (notSource profile).path ++ [0] ∧ child.world = (notSource profile).world := by
+  obtain ⟨child, typing, roots, type, metadata⟩ := (notSource profile).notChild
+  exact ⟨child, typing, roots, type, metadata.path, metadata.world⟩
 
 theorem bool_source_result (profile : NumProfile) :
     ExprResult (boolSource profile) (.bool true) enteredState :=
@@ -223,8 +225,8 @@ theorem binary_children_source (artifact : ArtifactProfile) (profile : NumProfil
     (cfg := ⟨profile, binaryModule artifact⟩) (state := St.initial) (g := 0)
     (global := ⟨"sum", .int .i64, .mutable, binaryExpression, 0⟩)
     accepted rfl (InitializedGlobals.initial _).invariant
-  obtain ⟨intTy, left, hltyping, hlroots, hltype, next⟩ := source.binChildren .add 0
-  obtain ⟨right, hrtyping, hrroots, hrtype⟩ := next 4 (.int .i64 9223372036854775807)
+  obtain ⟨intTy, left, hltyping, hlroots, hltype, _, next⟩ := source.binChildren .add 0
+  obtain ⟨right, hrtyping, hrroots, hrtype, _⟩ := next 4 (.int .i64 9223372036854775807)
     { St.initial with nextAct := 1 } (by simp [evalExpr, pure_apply, St.initial])
   exact ⟨left, right, hltyping.trans hrtyping.symm, hlroots.trans hrroots.symm⟩
 
@@ -271,8 +273,8 @@ theorem comparison_children_source (artifact : ArtifactProfile) (profile : NumPr
     (global := ⟨"equal", .bool, .mutable,
       .cmp .eq (comparisonArguments booleans).1 (comparisonArguments booleans).2, 0⟩)
     accepted rfl (InitializedGlobals.initial _).invariant
-  obtain ⟨left, hltyping, hlroots, next⟩ := source.cmpChildren .eq
-  obtain ⟨right, hrtyping, hrroots⟩ := next 4 (if booleans then .bool true else .int .i64 1)
+  obtain ⟨left, hltyping, hlroots, _, next⟩ := source.cmpChildren .eq
+  obtain ⟨right, hrtyping, hrroots, _⟩ := next 4 (if booleans then .bool true else .int .i64 1)
     { St.initial with nextAct := 1 } (by cases booleans <;>
       simp [comparisonArguments, evalExpr, pure_apply, St.initial])
   exact ⟨left, right, hltyping.trans hrtyping.symm, hlroots.trans hrroots.symm⟩
@@ -372,7 +374,7 @@ theorem fill_child_source (artifact : ArtifactProfile) (profile : NumProfile)
     (cfg := ⟨profile, fillModule artifact⟩) (state := St.initial) (g := 0)
     (global := ⟨"filled", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩)
     accepted rfl (InitializedGlobals.initial _).invariant
-  obtain ⟨element, count, targetEq, child, hchildTyping, hchildRoots, childTy⟩ := source.fillChild _
+  obtain ⟨element, count, targetEq, child, hchildTyping, hchildRoots, childTy, _⟩ := source.fillChild _
   cases targetEq
   exact ⟨child, childTy⟩
 

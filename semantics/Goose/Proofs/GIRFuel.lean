@@ -102,6 +102,21 @@ private theorem all : ∀ (n k : Nat), n ≤ k → MonoG n k
   | n + 1, 0, h => absurd h (by omega)
   | n + 1, k + 1, h => step n k (all n k (by omega))
 
+theorem execOp_success_fuel_mono {n k : Nat} (bound : n ≤ k) {cx : FnCtx} {frame : Frame}
+    {op : Op} {before after : St} {value : RVal}
+    (success : execOp n cx frame op before = .ok value after) :
+    execOp k cx frame op before = .ok value after :=
+  ((all n k bound).op cx frame op before).1 value after success
+
+theorem execOp_stop_fuel_mono {n k : Nat} (bound : n ≤ k) {cx : FnCtx} {frame : Frame}
+    {op : Op} {before after : St} {stop : Stop} (nonTimeout : stop ≠ .timeout)
+    (stopped : execOp n cx frame op before = .stop stop after) :
+    execOp k cx frame op before = .stop stop after := by
+  have agreement := ((all n k bound).op cx frame op before).2 stop after stopped
+  rcases agreement with timeout | same
+  · cases stop <;> simp_all [isTimeout]
+  · exact same
+
 private theorem initGlobals_mono (n k : Nat) (h : MonoG n k) (cfg : GCfg)
     (gs : List GlobalId) :
     MonoM (Goose.GIR.initGlobals n cfg gs) (Goose.GIR.initGlobals k cfg gs) := by
