@@ -1,486 +1,96 @@
-# Lean 4.35 paranoid root audit handoff
+# Lean 4.35 paranoid semantic audit
 
-The Lean 4.35 upgrade is not qualified. The managed default remains 4.34 pending a complete root audit.
+The semantic dependency audit passes at source `27feef55` under Lean 4.35.0.
+All five independent kernels accept fresh official exports of the 171 registered theorems and the logical dependencies of `Main.main`.
+This qualifies the named semantics, not every declaration in the Lean distribution.
+The external managed default remains unchanged.
 
-## Coverage
+## Scope and result
 
-The selected source root set has 161,796 unique declaration names. The current export census found 161,340 names in exports paired with five-kernel acceptance logs. It found no accepted-export declaration for the 456 owner and target pairs below.
+`test/semantics/paranoid_roots.lean` derives theorem roots from `Goose.Audit.registry` and adds `main` from the `Main` module.
+It follows every type and body, including opaque bodies, mutual inductive declarations, constructors, and recursor rules.
+Missing source declarations fail the audit.
+Proof dependencies must use only `propext`, `Classical.choice`, and `Quot.sound`.
+Unsafe or partial proof dependencies fail the audit.
 
-The census read each current NDJSON export with `jaq` and matched its declared names against the selected root names. It counted a group export only when its corresponding log contained acceptance markers for Lean paranoid, lean4lean, nanoda, con-leche, and con-ron, with no nanoda rejection, and the export modification time was no later than the log. It also counted checked `part-000` and `part-016` exports. The group-007 export is byte-identical to the checked part-016 export.
+The 171 theorem roots have 34,593 dependency constants.
+`Main.main` has 16,502 dependency constants.
+Their union has 42,440 constants, all safe.
+The official exports contain 42,935 distinct constants because the exporter also includes induced recursor packages.
+Streaming name decoding verifies that the exports contain every root and all 42,440 dependencies.
+The decoder preserves name components containing dots and quoted syntax names.
 
-Group numbers and selector filenames are not evidence of export contents. They were reused during this campaign. For example, the current `group-050.ndjson` declares `Std.Time.Minute.Offset.ofWeeks`; its old selector filename referred to a different target. The census counts names decoded from the current export bytes.
+Both exports pass Lean paranoid, lean4lean, nanoda, con-leche, and con-ron:
 
-The check logs do not record an export digest. Matching paths and timestamps cannot prove that the bytes passed to each checker are identical to the current files. The census is therefore a conservative continuation boundary, not an immutable qualification receipt. The exports, logs, selected roots, and intersection used by the census remain under `.work/wt/resume-lean435/.work/tmp/` while that worktree is retained.
+| Export | Bytes | Largest checker RSS |
+|---|---:|---:|
+| 171 registered theorem roots | 1,056,637,573 | 3,967,102,976 |
+| `Main.main` | 79,203,464 | 572,989,440 |
 
-The audit ran in `.work/wt/resume-lean435` on branch `campaign/lean435`. Its source commit is `a28e202b`. The check logs predate that commit, and they do not identify a source digest. This root census does not qualify the current source snapshot, a fresh Main build, or the upgrade as a whole. No default-toolchain activation occurred.
+The replay uses the bundled checkers and their standard axiom allowlist.
+Nanoda uses one thread, with a 256 MiB Rust worker stack and a 256 MiB process stack limit.
+Guards enforce the 8 GiB checker budget and retain at least 16 GiB of host memory.
+No source definition or checker implementation was replaced.
+The exports and complete checker output are retained in `.work/wt/close-paranoid/.work/tmp/` as `relevant-claims.*` and `relevant-runtime.*`.
+`relevant-export-coverage.log` records the exact parsed union.
 
-## Resource evidence
+The `main` closure concerns logical Lean declarations.
+Native initialization, extern implementations, `implemented_by` replacements, code generation, and the compiled executable retain their separate trust and verification obligations.
+New theorem registrations or changed dependencies require fresh exports and replay.
 
-No group-095 export has all-five acceptance. Its current export is for `Std.Time.Week.Offset.ofNanoseconds`, and its nanoda log reports a stack overflow. The stack-probe, stack-128, and stack-256 logs also report stack overflow, but they contain no `nanoda_preexec_pid` or `RLIMIT_STACK` observation. Adapter configuration output alone does not show that those stack limits reached nanoda.
+## Reproduce the root selection
 
-A separate numeric diagnostic for the exact Nanosecond private proof reported a 64 MiB `RLIMIT_STACK` and a nanoda stack overflow. The Millisecond private-proof diagnostic stopped at its 20-second bound. Neither diagnostic qualifies an original source root. No 128 or 256 MiB limit is established.
+Run these commands from the repository root with source-qualified build artifacts in `semantics/.lake/build/lib/lean`.
+Select the explicit Lean 4.35 installation without changing the managed default.
 
-## Unqualified source roots
-
-Each row lists the owning module followed by the selected declaration name.
-
-```text
-Goose.Core.DeclarativeTyping	Goose.Core.Declarative.«tacticTyping_reflection[___]»
-Init.BinderPredicates	Lean.«binderPred<_»
-Init.BinderPredicates	Lean.«binderPred>_»
-Init.BinderPredicates	Lean.«binderPred∈_»
-Init.BinderPredicates	Lean.«binderPred∉_»
-Init.BinderPredicates	Lean.«binderPred≠_»
-Init.BinderPredicates	Lean.«binderPred≤_»
-Init.BinderPredicates	Lean.«binderPred≥_»
-Init.BinderPredicates	Lean.«binderPred⊂_»
-Init.BinderPredicates	Lean.«binderPred⊃_»
-Init.BinderPredicates	Lean.«binderPred⊆_»
-Init.BinderPredicates	Lean.«binderPred⊇_»
-Init.BinderPredicates	Lean.«termSatisfies_binder_pred%__»
-Init.BinderPredicates	Lean.«term∀__,_»
-Init.BinderPredicates	Lean.«term∃__,_»
-Init.ByCases	«tacticBy_cases_:_»
-Init.CbvSimproc	Lean.Parser.«command_Builtin_cbv_simproc_decl_(_):=_»
-Init.CbvSimproc	Lean.Parser.«command_Cbv_simproc_decl_(_):=_»
-Init.CbvSimproc	Lean.Parser.«command__Builtin_cbv_simproc____(_):=_»
-Init.CbvSimproc	Lean.Parser.«command__Cbv_simproc____(_):=_»
-Init.Control.Basic	«term_<&&>_»
-Init.Control.Basic	«term_<&>_»
-Init.Control.Basic	«term_<=<_»
-Init.Control.Basic	«term_<||>_»
-Init.Control.Basic	«term_=<<_»
-Init.Control.Basic	«term_>=>_»
-Init.Conv	Lean.Parser.Tactic.Conv.«convNext__=>_»
-Init.Conv	Lean.Parser.Tactic.Conv.«conv_<;>_»
-Init.Conv	Lean.Parser.Tactic.Conv.«conv·_»
-Init.Core	«term_!=_»
-Init.Core	«term_<->_»
-Init.Core	«term_\_»
-Init.Core	«term_↔_»
-Init.Core	«term_∩_»
-Init.Core	«term_∪_»
-Init.Core	«term_≈_»
-Init.Core	«term_≠_»
-Init.Core	«term_⊂_»
-Init.Core	«term_⊃_»
-Init.Core	«term_⊆_»
-Init.Core	«term_⊇_»
-Init.Core	«term_⊕'_»
-Init.Core	«term_⊕_»
-Init.Core	«term{}»
-Init.Core	«term∅»
-Init.Data.Array.Basic	Array.anyMUnsafe
-Init.Data.Array.Basic	Array.foldlMUnsafe
-Init.Data.Array.Basic	Array.foldrMUnsafe
-Init.Data.Array.Basic	Array.forIn'Unsafe
-Init.Data.Array.Basic	Array.mapFinIdxMUnsafe
-Init.Data.Array.Basic	Array.mapMUnsafe
-Init.Data.Array.Basic	Array.modifyMUnsafe
-Init.Data.Array.Basic	Array.ugetBorrowed
-Init.Data.Array.Basic	«term#[_,]»
-Init.Data.Array.Perm	Array.«term_~_»
-Init.Data.Array.Subarray	Array.«term__[:_]»
-Init.Data.Array.Subarray	Array.«term__[_:]»
-Init.Data.Array.Subarray	Array.«term__[_:_]»
-Init.Data.BitVec.Basic	BitVec.«term__#'__»
-Init.Data.BitVec.Basic	BitVec.«term__#__»
-Init.Data.Bool	Bool.«term_^^_»
-Init.Data.ByteArray.Basic	ByteArray.foldlMUnsafe
-Init.Data.ByteArray.Basic	ByteArray.foldlMUnsafe.fold
-Init.Data.ByteArray.Basic	ByteArray.forInUnsafe
-Init.Data.ByteArray.Basic	ByteArray.forInUnsafe.loop
-Init.Data.FloatArray.Basic	FloatArray.foldlMUnsafe
-Init.Data.FloatArray.Basic	FloatArray.forInUnsafe
-Init.Data.Int.Basic	Int.«term-[_+1]»
-Init.Data.List.Basic	List.«term_<+:_»
-Init.Data.List.Basic	List.«term_<+_»
-Init.Data.List.Basic	List.«term_<:+:_»
-Init.Data.List.Basic	List.«term_<:+_»
-Init.Data.List.Basic	List.«term_~_»
-Init.Data.List.Notation	«term%[_|_]»
-Init.Data.List.Notation	«term[_]»
-Init.Data.Range.Basic	Std.Legacy.Range.«term[:_:_]»
-Init.Data.Range.Basic	Std.Legacy.Range.«term[:_]»
-Init.Data.Range.Basic	Std.Legacy.Range.«term[_:_:_]»
-Init.Data.Range.Basic	Std.Legacy.Range.«term[_:_]»
-Init.Data.Range.Polymorphic.PRange	Std.«term*...*»
-Init.Data.Range.Polymorphic.PRange	Std.«term*...<_»
-Init.Data.Range.Polymorphic.PRange	Std.«term*...=_»
-Init.Data.Range.Polymorphic.PRange	Std.«term*..._»
-Init.Data.Range.Polymorphic.PRange	Std.«term_...*»
-Init.Data.Range.Polymorphic.PRange	Std.«term_...<_»
-Init.Data.Range.Polymorphic.PRange	Std.«term_...=_»
-Init.Data.Range.Polymorphic.PRange	Std.«term_..._»
-Init.Data.Range.Polymorphic.PRange	Std.«term_<...*»
-Init.Data.Range.Polymorphic.PRange	Std.«term_<...<_»
-Init.Data.Range.Polymorphic.PRange	Std.«term_<...=_»
-Init.Data.Range.Polymorphic.PRange	Std.«term_<..._»
-Init.Data.Rat.Basic	Rat.«term_/._»
-Init.Data.Vector.Basic	Vector.«term#v[_,]»
-Init.Data.Vector.Perm	Vector.«term_~_»
-Init.Dynamic	TypeName.mk
-Init.GetElem	«term__[_]'_»
-Init.GetElem	«term__[_]_!»
-Init.GetElem	«term__[_]_?»
-Init.GetElem	«term__[_]»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_<;>_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filter(_)»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filterGen!=_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filterGen<=_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filterGen<_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filterGen=_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filterGen>=_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filterGen>_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filterGen≤_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filterGen≥_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filter_&&_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_filter_||_»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind_ref__/__»
-Init.Grind.Interactive	Lean.Parser.Tactic.Grind.«grind·_»
-Init.Grind.Propagator	Lean.Parser.«command_Builtin_grind_propagator____:=_»
-Init.Grind.Propagator	Lean.Parser.«command_Grind_propagator___(_):=_»
-Init.Internal.Order.Basic	Lean.Order.«term_⊑_»
-Init.Internal.Order.Basic	Lean.Order.«term⊥»
-Init.MacroTrace	Lean.«termMacro.trace[_]_»
-Init.Notation	«prec(_)»
-Init.Notation	«prio(_)»
-Init.Notation	«stx_*»
-Init.Notation	«stx_+»
-Init.Notation	«stx_,*,?»
-Init.Notation	«stx_,*»
-Init.Notation	«stx_,+,?»
-Init.Notation	«stx_,+»
-Init.Notation	«stx_<|>_»
-Init.Notation	«term-_»
-Init.Notation	«term_$__»
-Init.Notation	«term_%_»
-Init.Notation	«term_&&&_»
-Init.Notation	«term_&&_»
-Init.Notation	«term_*>_»
-Init.Notation	«term_*_»
-Init.Notation	«term_++_»
-Init.Notation	«term_+_»
-Init.Notation	«term_-_»
-Init.Notation	«term_/_»
-Init.Notation	«term_::_»
-Init.Notation	«term_<$>_»
-Init.Notation	«term_<*>_»
-Init.Notation	«term_<*_»
-Init.Notation	«term_<<<_»
-Init.Notation	«term_<=_»
-Init.Notation	«term_<_»
-Init.Notation	«term_<|>_»
-Init.Notation	«term_<|_»
-Init.Notation	«term_==_»
-Init.Notation	«term_=_»
-Init.Notation	«term_>=_»
-Init.Notation	«term_>>=_»
-Init.Notation	«term_>>>_»
-Init.Notation	«term_>>_»
-Init.Notation	«term_>_»
-Init.Notation	«term_^^^_»
-Init.Notation	«term_^_»
-Init.Notation	«term_|>_»
-Init.Notation	«term_||_»
-Init.Notation	«term_|||_»
-Init.Notation	«term_×'_»
-Init.Notation	«term_×_»
-Init.Notation	«term_•_»
-Init.Notation	«term_⁻¹»
-Init.Notation	«term_∈_»
-Init.Notation	«term_∉_»
-Init.Notation	«term_∘_»
-Init.Notation	«term_∣_»
-Init.Notation	«term_∧_»
-Init.Notation	«term_∨_»
-Init.Notation	«term_≍_»
-Init.Notation	«term_≤_»
-Init.Notation	«term_≥_»
-Init.Notation	«term{_:_//_}»
-Init.Notation	«term~~~_»
-Init.Notation	«term¬_»
-Init.NotationExtra	Lean.«command__Unif_hint____Where_|_-⊢__»
-Init.NotationExtra	Lean.«term_Matches_|»
-Init.NotationExtra	«termExists_,_»
-Init.NotationExtra	«term_×'__1»
-Init.NotationExtra	«term_×__1»
-Init.NotationExtra	«term{_}»
-Init.NotationExtra	«termΣ'_,_»
-Init.NotationExtra	«termΣ_,_»
-Init.NotationExtra	«term∃_,_»
-Init.Prelude	Array.get!InternalBorrowed
-Init.Prelude	Array.getInternalBorrowed
-Init.Prelude	Lean.Macro.getMethodsImp
-Init.Prelude	Lean.Macro.mkMethodsImp
-Init.Prelude	Lean.TSyntaxArray.mkImpl
-Init.Prelude	Lean.TSyntaxArray.rawImpl
-Init.Prelude	Quot.lcInv
-Init.Prelude	isScalarObj
-Init.Prelude	lcAny
-Init.Prelude	lcCast
-Init.Prelude	lcErased
-Init.Prelude	lcProof
-Init.Prelude	lcUnreachable
-Init.Prelude	lcVoid
-Init.Prelude	unsafeCast
-Init.ShareCommon	ShareCommon.Object.eq
-Init.ShareCommon	ShareCommon.Object.hash
-Init.ShareCommon	ShareCommon.Object.ptrEq
-Init.ShareCommon	ShareCommon.Object.ptrHash
-Init.ShareCommon	ShareCommon.StateFactory.get
-Init.ShareCommon	ShareCommon.StateFactory.mkImpl
-Init.ShareCommon	ShareCommon.mkStateImpl
-Init.Simproc	Lean.Parser.«command_Builtin_dsimproc_decl_(_):=_»
-Init.Simproc	Lean.Parser.«command_Builtin_simproc_decl_(_):=_»
-Init.Simproc	Lean.Parser.«command_Dsimproc_decl_(_):=_»
-Init.Simproc	Lean.Parser.«command_Simproc_decl_(_):=_»
-Init.Simproc	Lean.Parser.«command__Builtin_dsimproc__[_]_(_):=_»
-Init.Simproc	Lean.Parser.«command__Builtin_simproc__[_]_(_):=_»
-Init.Simproc	Lean.Parser.«command__Dsimproc__[_]_(_):=_»
-Init.Simproc	Lean.Parser.«command__Simproc__[_]_(_):=_»
-Init.System.IO	Runtime.markPersistent
-Init.System.IO	unsafeBaseIO
-Init.System.IO	unsafeEIO
-Init.System.IO	unsafeIO
-Init.System.ST	ST.Prim.Ref.modifyGetUnsafe
-Init.System.ST	ST.Prim.Ref.modifyUnsafe
-Init.System.ST	ST.Prim.Ref.put
-Init.System.ST	ST.Prim.Ref.take
-Init.System.ST	ST.Ref.put
-Init.System.ST	ST.Ref.take
-Init.Tactics	Lean.Parser.Tactic.«tacticExists_,,»
-Init.Tactics	Lean.Parser.Tactic.«tacticNext_=>_»
-Init.Tactics	Lean.Parser.Tactic.«tacticNomatch_,,»
-Init.Tactics	Lean.Parser.Tactic.«tactic_<;>_»
-Init.Tactics	«term‹_›»
-Init.Try	«tactic∎»
-Init.Try	«term∎»
-Init.Util	isExclusiveUnsafe
-Init.Util	ptrAddrUnsafe
-Init.Util	ptrEq
-Init.Util	ptrEqList
-Init.Util	withPtrAddrUnsafe
-Init.Util	withPtrEqUnsafe
-Lean.Attributes	Lean.mkAttributeImplOfConstantUnsafe
-Lean.CompactedRegion	Lean.CompactedRegion.free
-Lean.CompactedRegion	Lean.CompactedRegion.read
-Lean.CompactedRegion	Lean.CompactedRegion.save
-Lean.Compiler.InitAttr	Lean.registerInitAttrUnsafe
-Lean.Compiler.InitAttr	Lean.runInit
-Lean.Compiler.InitAttr	Lean.runInitAttrsForModules
-Lean.Compiler.LCNF.Types	Lean.Compiler.«term◾»
-Lean.Data.Json.Elab	Lean.Json.«json-__1»
-Lean.Data.Json.Elab	Lean.Json.«json-_»
-Lean.Data.Json.Elab	Lean.Json.«json[_]»
-Lean.Data.Json.Elab	Lean.Json.«json{_}»
-Lean.Data.Json.Elab	Lean.Json.«termJson%_»
-Lean.Elab.BuiltinEvalCommand	Lean.Elab.Command.elabEvalCoreUnsafe
-Lean.Elab.Command	Lean.Elab.Command.registerStatefulLinterImpl
-Lean.Elab.ConfigEval.DeriveEvalExpr	Lean.Elab.ConfigEval.evalMetaEval
-Lean.Elab.Do.Basic	Lean.Elab.Do.ContInfo.toContInfoRefImpl
-Lean.Elab.Do.Basic	Lean.Elab.Do.ContInfoRef.toContInfoImpl
-Lean.Elab.Do.Basic	Lean.Elab.Do.DoOps.toDoOpsRefImpl
-Lean.Elab.Do.Basic	Lean.Elab.Do.DoOpsRef.toDoOpsImpl
-Lean.Elab.Do.Basic	Lean.Elab.Do.mkDoElemElabAttributeUnsafe
-Lean.Elab.Do.InferControlInfo	Lean.Elab.Do.mkControlInfoElemAttributeUnsafe
-Lean.Elab.Eval	Lean.Elab.Term.evalTerm
-Lean.Elab.Tactic.VCGen.FrameProcAttr	Lean.Elab.Tactic.VCGen.getFrameProcFromDeclImpl
-Lean.Elab.Term.TermElabM	Lean.Elab.Term.FixedTermElab.toFixedTermElabRefImpl
-Lean.Elab.Term.TermElabM	Lean.Elab.Term.FixedTermElabRef.toFixedTermElabImpl
-Lean.Elab.Term.TermElabM	Lean.Elab.Term.mkTermElabAttributeUnsafe
-Lean.Elab.Util	Lean.Elab.mkElabAttribute
-Lean.Elab.Util	Lean.Elab.mkMacroAttributeUnsafe
-Lean.Environment	Lean.Environment.evalConst
-Lean.Environment	Lean.Environment.evalConstCheck
-Lean.Environment	Lean.Environment.freeRegions
-Lean.Environment	Lean.registerPersistentEnvExtensionUnsafe
-Lean.Environment	Lean.withImportModules
-Lean.ImportingFlag	Lean.enableInitializersExecution
-Lean.KeyedDeclsAttribute	Lean.KeyedDeclsAttribute.init
-Lean.LibrarySuggestions.Basic	Lean.LibrarySuggestions.getSelectorImpl
-Lean.Linter.MissingDocs	Lean.Linter.MissingDocs.mkHandlerUnsafe
-Lean.Linter.Sets	Lean.Linter.«command_Register_linter_set_:=_»
-Lean.Linter.UnusedVariables	Lean.Linter.UnusedVariables.insertObjImpl
-Lean.Linter.UnusedVariables	Lean.Linter.mkIgnoreFnImpl
-Lean.LoadDynlib	Lean.Dynlib.Symbol.runAsInit
-Lean.Meta.Canonicalizer	Lean.Meta.Canonicalizer.instBEqExprVisited
-Lean.Meta.Canonicalizer	Lean.Meta.Canonicalizer.instHashableExprVisited
-Lean.Meta.Eval	Lean.Meta.evalExpr
-Lean.Meta.Eval	Lean.Meta.evalExpr'
-Lean.Meta.Eval	Lean.Meta.evalExprCore
-Lean.Meta.ExprDefEq	Lean.Meta.CheckAssignmentQuick.checkImpl
-Lean.Meta.Sym.DSimp.DSimpM	Lean.Meta.Sym.DSimp.Methods.toMethodsRefImpl
-Lean.Meta.Sym.DSimp.DSimpM	Lean.Meta.Sym.DSimp.MethodsRef.toMethodsImpl
-Lean.Meta.Sym.ExprPtr	Lean.Meta.Sym.hashPtrExpr.unsafe_1
-Lean.Meta.Sym.Simp.SimpM	Lean.Meta.Sym.Simp.Methods.toMethodsRefImpl
-Lean.Meta.Sym.Simp.SimpM	Lean.Meta.Sym.Simp.MethodsRef.toMethodsImpl
-Lean.Meta.Tactic.Cbv.CbvSimproc	Lean.Meta.Tactic.Cbv.getCbvSimprocFromDeclImpl
-Lean.Meta.Tactic.FunIndCollect	Lean.Meta.FunInd.Collector.Cache
-Lean.Meta.Tactic.FunIndCollect	Lean.Meta.FunInd.Collector.main
-Lean.Meta.Tactic.FunIndCollect	Lean.Meta.FunInd.Collector.visit
-Lean.Meta.Tactic.Grind.EMatchTheoremPtr	Lean.Meta.Grind.hashEMatchTheoremPtr.unsafe_1
-Lean.Meta.Tactic.Grind.Types	Lean.Meta.Grind.«doElemTrace_goal[_]__»
-Lean.Meta.Tactic.Simp.Simproc	Lean.Meta.Simp.getSimprocFromDeclImpl
-Lean.Meta.Tactic.Simp.Types	Lean.Meta.Simp.Methods.toMethodsRefImpl
-Lean.Meta.Tactic.Simp.Types	Lean.Meta.Simp.MethodsRef.toMethodsImpl
-Lean.Meta.Tactic.SplitIf	Lean.Meta.FindSplitImpl.FindM
-Lean.Meta.Tactic.SplitIf	Lean.Meta.FindSplitImpl.checkVisited
-Lean.Meta.Tactic.SplitIf	Lean.Meta.FindSplitImpl.visit
-Lean.Meta.Tactic.Try.Collect	Lean.Meta.Try.Collector.Cache
-Lean.Meta.Tactic.Try.Collect	Lean.Meta.Try.Collector.main
-Lean.Meta.Tactic.Try.Collect	Lean.Meta.Try.Collector.visit
-Lean.MonadEnv	Lean.evalConst
-Lean.MonadEnv	Lean.evalConstCheck
-Lean.Parser	Lean.PrettyPrinter.Formatter.interpretParserDescr
-Lean.Parser	Lean.PrettyPrinter.Parenthesizer.interpretParserDescr
-Lean.Parser.Extension	Lean.Parser.evalParserConstUnsafe
-Lean.Parser.Extension	Lean.Parser.mkParserOfConstantUnsafe
-Lean.Parser.Extra	Lean.«termRegister_parser_alias(Kind:=_)______»
-Lean.ParserCompiler	Lean.ParserCompiler.registerParserCompiler
-Lean.ParserCompiler.Attribute	Lean.ParserCompiler.CombinatorAttribute.runDeclFor
-Lean.PrettyPrinter	Lean.PrettyPrinter.registerParserCompilers
-Lean.PrettyPrinter.Basic	Lean.PrettyPrinter.runForNodeKind
-Lean.PrettyPrinter.Formatter	Lean.PrettyPrinter.Formatter.formatterForKindUnsafe
-Lean.PrettyPrinter.Parenthesizer	Lean.PrettyPrinter.Parenthesizer.parenthesizerForKindUnsafe
-Lean.ScopedEnvExtension	Lean.registerScopedEnvExtensionUnsafe
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.FoldM
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.casesOn
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.ctorIdx
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.mk
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.mk.noConfusion
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.noConfusion
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.noConfusionType
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.rec
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.recOn
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.visited
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.State.visitedConsts
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.fold
-Lean.Util.FoldConsts	Lean.Expr.FoldConstsImpl.foldUnsafe
-Lean.Util.ForEachExprWhere	Lean.ForEachExprWhere.initCache
-Lean.Util.ForEachExprWhere	Lean.ForEachExprWhere.visit
-Lean.Util.ForEachExprWhere	Lean.ForEachExprWhere.visited
-Lean.Util.HasConstCache	Lean.HasConstCache.containsUnsafe
-Lean.Util.NumApps	Lean.Expr.NumApps.M
-Lean.Util.NumApps	Lean.Expr.NumApps.State
-Lean.Util.NumApps	Lean.Expr.NumApps.State.casesOn
-Lean.Util.NumApps	Lean.Expr.NumApps.State.counters
-Lean.Util.NumApps	Lean.Expr.NumApps.State.ctorIdx
-Lean.Util.NumApps	Lean.Expr.NumApps.State.mk
-Lean.Util.NumApps	Lean.Expr.NumApps.State.mk.noConfusion
-Lean.Util.NumApps	Lean.Expr.NumApps.State.noConfusion
-Lean.Util.NumApps	Lean.Expr.NumApps.State.noConfusionType
-Lean.Util.NumApps	Lean.Expr.NumApps.State.rec
-Lean.Util.NumApps	Lean.Expr.NumApps.State.recOn
-Lean.Util.NumApps	Lean.Expr.NumApps.State.visited
-Lean.Util.NumApps	Lean.Expr.NumApps.main
-Lean.Util.NumApps	Lean.Expr.NumApps.visit
-Lean.Util.NumObjs	Lean.Expr.NumObjs.M
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.casesOn
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.counter
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.ctorIdx
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.mk
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.mk.noConfusion
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.noConfusion
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.noConfusionType
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.rec
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.recOn
-Lean.Util.NumObjs	Lean.Expr.NumObjs.State.visited
-Lean.Util.NumObjs	Lean.Expr.NumObjs.main
-Lean.Util.NumObjs	Lean.Expr.NumObjs.visit
-Lean.Util.Profile	Lean.profileitIOUnsafe
-Lean.Util.PtrSet	Lean.PtrMap
-Lean.Util.PtrSet	Lean.PtrMap.contains
-Lean.Util.PtrSet	Lean.PtrMap.find?
-Lean.Util.PtrSet	Lean.PtrMap.insert
-Lean.Util.PtrSet	Lean.PtrSet
-Lean.Util.PtrSet	Lean.PtrSet.contains
-Lean.Util.PtrSet	Lean.PtrSet.insert
-Lean.Util.PtrSet	Lean.instBEqPtr
-Lean.Util.PtrSet	Lean.instHashablePtr
-Lean.Util.PtrSet	Lean.mkPtrMap
-Lean.Util.PtrSet	Lean.mkPtrSet
-Lean.Util.ReplaceLevel	Lean.Expr.ReplaceLevelImpl.cache
-Lean.Util.ReplaceLevel	Lean.Expr.ReplaceLevelImpl.initCache
-Lean.Util.ReplaceLevel	Lean.Expr.ReplaceLevelImpl.replaceUnsafe
-Lean.Util.ReplaceLevel	Lean.Expr.ReplaceLevelImpl.replaceUnsafeM
-Lean.Util.TestExtern	Lean.elabTestExtern
-Lean.Util.Trace	Lean.«doElemTrace[_]__»
-Lean.Widget.InteractiveDiagnostic	Lean.Widget.instTypeNameInteractiveMessage.unsafe_1
-Std.Data.DHashMap.Basic	Std.DHashMap.«term_~m_»
-Std.Data.DHashMap.Internal.RawLemmas	Std.DHashMap.Internal.Raw₀.«tacticSimp_to_model[_]Using_»
-Std.Data.DHashMap.Raw	Std.DHashMap.Raw.«term_~m_»
-Std.Data.DTreeMap.Basic	Std.DTreeMap.«term_~m_»
-Std.Data.DTreeMap.Internal.Balancing	Std.DTreeMap.Internal.Impl.«term✓»
-Std.Data.DTreeMap.Internal.Lemmas	Std.DTreeMap.Internal.Impl.«tacticSimp_to_model[_]Using_»
-Std.Data.DTreeMap.Internal.Queries	Std.DTreeMap.Internal.Impl.«term_~m_»
-Std.Data.DTreeMap.Raw.Basic	Std.DTreeMap.Raw.«term_~m_»
-Std.Data.HashMap.Basic	Std.HashMap.«term_~m_»
-Std.Data.HashMap.Raw	Std.HashMap.Raw.«term_~m_»
-Std.Data.HashSet.Basic	Std.HashSet.«term_~m_»
-Std.Data.HashSet.Raw	Std.HashSet.Raw.«term_~m_»
-Std.Data.TreeMap.Basic	Std.TreeMap.«term_~m_»
-Std.Data.TreeMap.Raw.Basic	Std.TreeMap.Raw.«term_~m_»
-Std.Data.TreeSet.Basic	Std.TreeSet.«term_~m_»
-Std.Data.TreeSet.Raw.Basic	Std.TreeSet.Raw.«term_~m_»
-Std.Do.PostCond	Std.Do.«termPost⟨_,,⟩»
-Std.Do.PostCond	Std.Do.«term_→ₑ_»
-Std.Do.PostCond	Std.Do.«term_→ₚ_»
-Std.Do.PostCond	Std.Do.«term_⇓?_=>_»
-Std.Do.PostCond	Std.Do.«term_⇓_=>_»
-Std.Do.PostCond	Std.Do.«term_∧ₑ_»
-Std.Do.PostCond	Std.Do.«term_∧ₚ_»
-Std.Do.PostCond	Std.Do.«term_⊢ₑ_»
-Std.Do.PostCond	Std.Do.«term_⊢ₚ_»
-Std.Do.SPred.Notation	Std.Do.«term_⊢ₛ_»
-Std.Do.SPred.Notation	Std.Do.«term_⊣⊢ₛ_»
-Std.Do.SPred.Notation	Std.Do.«term⊢ₛ_»
-Std.Do.SPred.Notation	Std.Do.«term⌜_⌝»
-Std.Do.SPred.Notation.Basic	Std.Do.«termSpred(_)»
-Std.Do.SPred.Notation.Basic	Std.Do.«termTerm(_)»
-Std.Do.WP.Basic	Std.Do.«termWp⟦_:_⟧»
-Std.Internal.Order.Basic	Lean.Order.«term_⊓_»
-Std.Internal.Order.Basic	Lean.Order.«term_⊔_»
-Std.Internal.Order.Basic	Lean.Order.«term⊤»
-Std.Internal.Order.Basic	Lean.Order.«term⨅_,_»
-Std.Internal.Order.Basic	Lean.Order.«term⨆_,_»
-Std.Internal.Order.Heyting	Lean.Order.«term_⇨_»
-Std.Internal.Order.OfProp	Lean.Order.«term⌜_⌝»
-Std.Sat.AIG.Basic	Std.Sat.AIG.«term⟦_,_,_⟧»
-Std.Sat.AIG.Basic	Std.Sat.AIG.«term⟦_,_⟧»
-Std.Sat.CNF.Basic	Std.Sat.CNF.Clause.forIn'ImplUnsafe
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mcasesPat#_»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mcasesPat%_»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mcasesPat(_)»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mcasesPat-»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mcasesPat⌜_⌝»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mcasesPat□_»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mcasesPat⟨_⟩»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mintroPat∀_»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mrefinePat#_»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mrefinePat%_»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mrefinePat(_)»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mrefinePat⌜_⌝»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mrefinePat□_»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mrefinePat⟨_⟩»
-Std.Tactic.Do.Syntax	Lean.Parser.Tactic.«mrevertPat∀_»
-Std.Time.Date.Basic	Std.Time.Millisecond.Offset.toWeeks
-Std.Time.Date.Basic	Std.Time.Nanosecond.Offset.toWeeks
-Std.Time.Date.Unit.Week	Std.Time.Week.Offset.ofMilliseconds
-Std.Time.Date.Unit.Week	Std.Time.Week.Offset.ofNanoseconds
-Std.Time.Notation	Std.Time.«termDate(_)»
-Std.Time.Notation	Std.Time.«termDatetime(_)»
-Std.Time.Notation	Std.Time.«termOffset(_)»
-Std.Time.Notation	Std.Time.«termTime(_)»
-Std.Time.Notation	Std.Time.«termTimezone(_)»
-Std.Time.Notation	Std.Time.«termZoned(_)»
-Std.Time.Notation	Std.Time.«termZoned(_,_)»
-Std.Time.Notation.Spec	Std.Time.«termDatespec(_)»
-Std.Time.Notation.Spec	Std.Time.«termDatespec(_,_)»
-Std.WP.EStack	Std.WP.«termEStack⟨_⟩»
-Std.WP.EStack	Std.WP.«termEstack⟨_⟩»
+```sh
+export PATH="$HOME/.local/lib/lean4/v4.35.0/bin:$PATH"
+unset LEAN_SYSROOT ELAN_TOOLCHAIN LEAN_TOOLCHAIN
+export LEAN_PATH="$PWD/semantics/.lake/build/lib/lean"
+export TMPDIR="$PWD/.work/tmp"
+mkdir -p "$TMPDIR"
+lean --run test/semantics/paranoid_roots.lean roots > "$TMPDIR/paranoid-roots.tsv"
+mapfile -t proof_roots < <(jaq --from tsv -r 'select(.[1] != "main") | .[1]' "$TMPDIR/paranoid-roots.tsv")
+leanexport Main -- "${proof_roots[@]}" > "$TMPDIR/paranoid-claims.ndjson"
+leanexport Main -- main > "$TMPDIR/paranoid-main.ndjson"
+lean --run test/semantics/paranoid_roots.lean verify "$TMPDIR/paranoid-claims.ndjson" "$TMPDIR/paranoid-main.ndjson"
 ```
 
-Resume by producing uniquely named official exports for the residual roots and checking each export with all five kernels. Keep each export path tied to its own checker log. Complete the exact root union before claiming Lean 4.35 qualification or activating it as the managed default.
+`closure` prints the complete dependency selection with separate theorem and `main` membership.
+`verify` checks declaration coverage, not kernel acceptance.
+Replay each export with `leanchecker-paranoid --silent --from-export`, `lean4lean --import`, `nanoda_bin`, `con-leche`, and `con-ron`.
+Nanoda takes the standard Lake JSON configuration, with the export path and `num_threads` set to one.
+Run each checker under the memory guards above.
+
+The focused controls check valid proofs, opaque bodies, recursors, forbidden axioms, `sorry`, missing source dependencies, missing exports, and malformed name references:
+
+```sh
+lean -o "$TMPDIR/paranoid_roots.olean" test/semantics/paranoid_roots.lean
+LEAN_PATH="$TMPDIR:$LEAN_PATH" lean test/semantics/paranoid_roots_checks.lean
+```
+
+## Replaced imported-environment census
+
+The earlier 161,796-name selection enumerated all noninternal constants in imported environments.
+That included unused Lean parser, elaborator, runtime, and standard-library declarations.
+The binding theorem audit covers registered claims and their definitions.
+The corrected gate follows those dependencies and the logical executable entry point.
+It retains every dependency, rather than deleting failing declarations from an export.
+
+A fresh classification resolves the earlier 456-name residual as 191 unsafe definitions, 261 safe syntax definitions, and four safe time conversions.
+The official exporter deliberately omits unsafe declarations by default.
+The 261 syntax definitions pass all five kernels in a fresh export with no axioms.
+None of the 456 names occurs in either the registered-theorem closure or the `main` closure.
+
+The four unrelated time conversions remain outside this qualification:
+
+- `Std.Time.Millisecond.Offset.toWeeks`
+- `Std.Time.Nanosecond.Offset.toWeeks`
+- `Std.Time.Week.Offset.ofMilliseconds`
+- `Std.Time.Week.Offset.ofNanoseconds`
+
+A fresh export of those four definitions passes the other four kernels.
+With the Rust worker stack raised, nanoda reaches the guarded 8 GiB memory budget instead of the earlier stack overflow.
+Its replay is killed without acceptance.
+The original 28 GiB export collection remains retained under `.work/wt/resume-lean435/.work/tmp/`.
+Its old path and timestamp logs remain insufficient to qualify current source or export bytes.
