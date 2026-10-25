@@ -10,6 +10,20 @@ def ordinaryOperandFrame (frame : ConstructionSourceFrame) (fuel : Nat) : Constr
     typingFuel := fuel
     typing := { frame.typing with use := .ordinary, request := .value, resultRequests := [] } }
 
+theorem ordinaryOperandFrame_compatible {config : EvalConfig} (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (fuel : Nat) (valid : SourceFrameCompatible accepted frame) :
+    SourceFrameCompatible accepted (ordinaryOperandFrame frame fuel) := by
+  exact ⟨valid.module, valid.rootModule, valid.variables, valid.sourceVariables, valid.scopes,
+    valid.globalCount, valid.globals, valid.initialized, valid.declarations, valid.typingBound,
+    valid.visible, valid.initializing, valid.currentScope, valid.origin⟩
+
+theorem ordinaryOperandFrame_accepted {config : EvalConfig} (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (fuel : Nat) (state : ExecutionState) (types : RootTypes)
+    (valid : AcceptedFrame config accepted frame state types) :
+    AcceptedFrame config accepted (ordinaryOperandFrame frame fuel) state types :=
+  ⟨ordinaryOperandFrame_compatible accepted frame fuel valid.compatible,
+    valid.frontier, valid.aliases, valid.locals, valid.localTypes, valid.direct, valid.contents⟩
+
 theorem rpExpr_not_operand (environment : PEnv) (expression : Expr) (before after : RState)
     (roots : List RootRef) (checked : (rpExpr environment (.not expression)).run before = .ok (roots, after)) :
     roots = [] ∧ ∃ operandRoots, (rpExpr environment expression).run before = .ok (operandRoots, after) := by
