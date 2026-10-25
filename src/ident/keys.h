@@ -7,6 +7,7 @@
 #pragma once
 
 #include "sha256.h"
+#include "../node_visits.h"
 
 namespace goose {
 
@@ -223,11 +224,11 @@ class KeyMaker {
     void BuildFunVals() {
         if (funvalsbuilt) return;
         funvalsbuilt = true;
-        unordered_set<const Node *> seen;
+        NodeVisits seen;
         auto walk = [&](const string &owner, Node *root) {
             int next = 0;
             function<void(Node *)> go = [&](Node *n) {
-                if (!n || !seen.insert(n).second) return;
+                if (!n || !seen.Mark(*n)) return;
                 if (Is<FunVal>(n)) funvalnames[n] = cat(owner, "#", next++);
                 n->Children([&](Node *c) { go(c); });
             };

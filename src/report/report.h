@@ -141,46 +141,9 @@ inline unique_ptr<BuildReport> g_build_report;
 // the report together, and only a comparison of two reports needs it.
 inline bool report_dependencies = false;
 
-class ReportVisitedNodes {
-    vector<const Node *> slots;
-    size_t count = 0;
-
-    size_t Slot(const Node *node) const {
-        auto bits = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(node));
-        bits ^= bits >> 33;
-        bits *= UINT64_C(0xff51afd7ed558ccd);
-        bits ^= bits >> 33;
-        auto slot = static_cast<size_t>(bits) & (slots.size() - 1);
-        while (slots[slot] && slots[slot] != node)
-            slot = (slot + 1) & (slots.size() - 1);
-        return slot;
-    }
-
-    void Grow() {
-        auto previous = std::move(slots);
-        slots.assign(previous.size() * 2, nullptr);
-        for (auto node : previous)
-            if (node) slots[Slot(node)] = node;
-    }
-
-public:
-    bool Mark(const Node &node) {
-        if (slots.empty()) slots.assign(64, nullptr);
-        auto slot = Slot(&node);
-        if (slots[slot]) return false;
-        if (count == slots.size() / 2) {
-            Grow();
-            slot = Slot(&node);
-        }
-        slots[slot] = &node;
-        count++;
-        return true;
-    }
-};
-
 inline long long ReportCountNodes(Node *root) {
     if (!root) return 0;
-    ReportVisitedNodes seen;
+    NodeVisits seen;
     long long n = 0;
     function<void(Node *)> walk = [&](Node *node) {
         if (!node || !seen.Mark(*node)) return;
@@ -217,7 +180,7 @@ inline long long ReportEntryReachable(Ast &ast) {
     };
     if (auto mainsf = ast.MainFunction())
         for (auto spec : mainsf->specs) enqueue(spec);
-    ReportVisitedNodes seen;
+    NodeVisits seen;
     auto scan = [&](Node *root) {
         function<void(Node *)> walk = [&](Node *node) {
             if (!node || !seen.Mark(*node)) return;
