@@ -260,3 +260,98 @@ private def missingExitRoot : Module := {
 #guard rejectsWith missingExitRoot .result
 
 end Goose.Construct.ValidationChecks
+
+namespace Goose.Construct.ValidationChecks
+
+private def clearedOwner (owner : Ty) (aliasValue : Option (Ty × Expr) := none) : Module :=
+  let aliasVariables := aliasValue.toList.map fun (ty,_) => (⟨"alias",ty,.immutable,0,0⟩ : LocalVar)
+  let bindings := aliasValue.toList.map fun (_,expression) => Stmt.letS 1 expression 0
+  let uses := aliasValue.toList.map fun (ty,_) => Stmt.print [.expr (match ty with
+    | .ref .. => .read (.deref (.read (.var 1)))
+    | _ => .read (.var 1))] 0
+  let body := Block.mk 0 ([.letS 0 (.arrLit owner [.lit .i64 7] 0) 0] ++ bindings ++ [.clear (.var 0) 0] ++ uses) none
+  let main := implementation body (#[⟨"owner",owner,.mutable,0,0⟩] ++ aliasVariables.toArray) #[] .unknown
+  { (baseModule main) with contexts := #[⟨0,"main",if aliasValue.isSome then [(1,[.local 0])] else [],[],[]⟩] }
+
+private def elementAlias : Ty × Expr :=
+  ⟨.ref .readOnly (.int .i64),.ref .readOnly (.elem (.of (.var 0)) (.lit .i64 0) 0)⟩
+
+private def sliceAlias : Ty × Expr :=
+  ⟨.slice .readOnly (.int .i64),.slice .readOnly (.of (.var 0)) .omitted .omitted 0⟩
+
+#guard accepts (clearedOwner (.grow (.int .i64)))
+#guard accepts (clearedOwner (.growshrink (.int .i64)))
+#guard rejectsWith (clearedOwner (.growshrink (.int .i64)) (some elementAlias)) .shrink
+#guard rejectsWith (clearedOwner (.growshrink (.int .i64)) (some sliceAlias)) .shrink
+#guard rejectsWith (clearedOwner (.grow (.int .i64)) (some elementAlias)) .shrink
+
+private def clearedThroughCall : Module :=
+  let owner := Ty.growshrink (.int .i64)
+  let module := clearedOwner owner (some elementAlias)
+  let main := module.impls[0]
+  let main := { main with body := .mk 0 [
+    .letS 0 (.arrLit owner [.lit .i64 7] 0) 0,
+    .letS 1 elementAlias.2 0,
+    .expr (.call 1 [.byRef .mutable (.var 0)] 0) 0] none }
+  let helper : Impl := ⟨"clear",#[⟨0,.byRef⟩],#[],
+    #[⟨"owner",.ref .mutable owner,.immutable,0,0⟩],
+    .mk 0 [.clear (.deref (.read (.var 0))) 0] none,
+    .known { emptySummary with reads := [.param 0], shrinks := [.param 0] }⟩
+  { module with impls := #[main,helper], contexts := #[module.contexts[0],⟨1,"clear",[(0,[.param 0])],[],[]⟩] }
+
+#guard rejectsWith clearedThroughCall .shrink
+
+private def clearAfterAliasScope : Module :=
+  let owner := Ty.growshrink (.int .i64)
+  let main := implementation (.mk 0 [
+    .letS 0 (.arrLit owner [.lit .i64 7] 0) 0,
+    .ifS (.bool true) (.mk 1 [.letS 1 elementAlias.2 0] none) none 0,
+    .clear (.var 0) 0] none)
+    #[⟨"owner",owner,.mutable,0,0⟩,⟨"alias",elementAlias.1,.immutable,1,0⟩] #[] .unknown
+  { (baseModule main) with contexts := #[⟨0,"main",[(1,[.local 0])],[],[]⟩] }
+
+#guard accepts clearAfterAliasScope
+
+end Goose.Construct.ValidationChecks
+
+namespace Goose.Construct.ValidationChecks
+
+private def retainedShrink (body : Stmt) : Module :=
+  let owner := Ty.growshrink (.int .i64)
+  let original := clearedThroughCall
+  let main := { original.impls[0] with
+    vars := #[⟨"owner",owner,.mutable,0,0⟩]
+    body := .mk 0 [.letS 0 (.arrLit owner [.lit .i64 7] 0) 0,body] none }
+  let helper := { original.impls[1] with
+    results := #[⟨.int .i64,.register,none⟩]
+    body := .mk 0 [.clear (.deref (.read (.var 0))) 0,.retValues [.lit .i64 0] 0] none }
+  let sink : Impl := ⟨"sink",#[⟨0,.byRef⟩,⟨1,.byValue⟩],#[],
+    #[⟨"element",.ref .readOnly (.int .i64),.immutable,0,0⟩,⟨"scalar",.int .i64,.immutable,0,0⟩],
+    .mk 0 [] none,.known emptySummary⟩
+  { original with
+    impls := #[main,helper,sink], contexts := #[context,⟨1,"clear",[(0,[.param 0])],[[]],[]⟩,⟨2,"sink",[(0,[.param 0])],[],[]⟩] }
+
+private def clearCall : Expr := .call 1 [.byRef .mutable (.var 0)] 0
+private def firstElement : Place := .elem (.of (.var 0)) (.lit .i64 0) 0
+
+#guard rejectsWith (retainedShrink (.expr
+  (.call 2 [.byRef .readOnly firstElement,.byVal clearCall] 0) 0)) .shrink
+#guard rejectsWith (retainedShrink (.assign firstElement clearCall 0)) .shrink
+#guard rejectsWith (retainedShrink (.print
+  [.expr (.read (.elem (.of (.var 0)) clearCall 0))] 0)) .shrink
+
+end Goose.Construct.ValidationChecks
+
+namespace Goose.Construct.ValidationChecks
+
+private def clearIterationSource : Module :=
+  let owner := Ty.growshrink (.int .i64)
+  let main := implementation (.mk 0 [
+    .letS 0 (.arrLit owner [.lit .i64 7,.lit .i64 8] 0) 0,
+    .forEach 1 none (.of (.var 0)) false (.mk 1 [.clear (.var 0) 0] none) 0] none)
+    #[⟨"owner",owner,.mutable,0,0⟩,⟨"element",.int .i64,.immutable,1,0⟩] #[] .unknown
+  baseModule main
+
+#guard rejectsWith clearIterationSource .shrink
+
+end Goose.Construct.ValidationChecks

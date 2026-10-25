@@ -497,8 +497,7 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
       pure env
   | fuel + 1, env, .clear owner _ => do
       let (ty, _, writable) ← typePlace fuel env owner
-      require (writable && match ty with | .growshrink _ | .limited _ _ => true | _ => false)
-        .mut "clear requires writable shrinkable owner"
+      require (writable && ty.growing) .mut "clear requires writable growing owner"
       pure env
   | fuel + 1, env, .ifS condition left right _ => do
       requireBoolType (← one (← typeExpr fuel (ordinary env) condition))

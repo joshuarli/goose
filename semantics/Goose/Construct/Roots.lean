@@ -649,6 +649,39 @@ def checkContents (env : PEnv) (c : ContextId) (args : List Arg) (argRoots : Lis
   | none => pure ()
   | some cctx => forAll (List.range args.length) (checkContent env cctx args argRoots)
 
+private def interiorAliasType : Ty → Bool
+  | .ref _ (.grow _) | .ref _ (.growshrink _) | .ref _ (.limited _ _) => false
+  | .ref .. | .slice .. => true
+  | _ => false
+
+private def checkRetainedShrinks (env : PEnv) (retained : List RootRef) (effects : Eff) : P Unit :=
+  if overlaps env.aliases retained effects.storageShrinks || unknownGlobalAccess env retained effects then
+    rejP .shrink "shrink may invalidate a retained reference or slice"
+  else pure ()
+
+private def checkScopedShrinkAliases (env : PEnv) (effects : Eff) : P Unit := do
+  let declared := (← get).nextVar
+  for h : id in [0:env.impl.vars.size] do
+    let localVar := env.impl.vars[id]
+    if id < declared && env.scopes.contains localVar.scope && interiorAliasType localVar.ty then
+      let roots ← liftV (env.access.variableRoots id)
+      let roots := roots ++ (env.cont id).getD []
+      checkRetainedShrinks env roots effects
+
+private def checkDirectShrinkAliases (env : PEnv) (roots : List RootRef) : P Unit :=
+  checkScopedShrinkAliases env { storageShrinks := roots }
+
+private def argumentInteriorRoots (env : PEnv) (argument : Arg) (roots : List RootRef) : V (List RootRef) := do
+  match argument with
+  | .byVal expression =>
+      pure (if (env.access.exprType? expression).any interiorAliasType then roots else [])
+  | .construct _ => pure []
+  | .byRef mutability place =>
+      let some ty := env.access.placeType? place | reject .type "argument place type missing"
+      if interiorAliasType (.ref mutability ty) then
+        pure (roots ++ (← env.access.exprRoots (.read place)))
+      else pure []
+
 mutual
 
 def rpPlace (env : PEnv) : Place → P (List RootRef)
@@ -661,7 +694,8 @@ def rpPlace (env : PEnv) : Place → P (List RootRef)
   | .field owner _ => rpPlace env owner
   | .elem v i _ => do
     let rho ← rpView env v
-    let _ ← rpExpr env i
+    let (_, effects) ← captureEffects (rpExpr env i)
+    checkRetainedShrinks env rho effects
     noteAborts
     pure rho
 
@@ -690,8 +724,8 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
   | .ref _ p => rpPlace env p
   | .slice _ v lo hi _ => do
     let rho ← rpView env v
-    rpBound env lo
-    rpBound env hi
+    let (_, effects) ← captureEffects (do rpBound env lo; rpBound env hi)
+    checkRetainedShrinks env rho effects
     noteAborts
     pure rho
   | .len v => do
@@ -756,6 +790,7 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
   | .pop owner _ => do
     let rho ← rpPlace env owner
     addReads rho
+    checkDirectShrinkAliases env rho
     addShrinks rho
     noteAborts
     pure []
@@ -809,24 +844,49 @@ def rpExpr (env : PEnv) : Expr → P (List RootRef)
 def rpExprs (env : PEnv) : List Expr → P Unit
   | [] => pure ()
   | e :: rest => do
-    let _ ← rpExpr env e
-    rpExprs env rest
+    let roots ← rpExpr env e
+    let (_, effects) ← captureEffects (rpExprs env rest)
+    if (env.access.exprType? e).any interiorAliasType then checkRetainedShrinks env roots effects
 
 
 def rpArgs (env : PEnv) : List Arg → P (List (List RootRef))
   | [] => pure []
   | .byVal e :: rest | .construct e :: rest => do
     let rho ← rpExpr env e
-    pure (rho :: (← rpArgs env rest))
-  | .byRef _ p :: rest => do
+    let (remaining, effects) ← captureEffects (rpArgs env rest)
+    let retained ← liftV (argumentInteriorRoots env (.byVal e) rho)
+    checkRetainedShrinks env retained effects
+    pure (rho :: remaining)
+  | .byRef mutability p :: rest => do
     let rho ← rpPlace env p
-    pure (rho :: (← rpArgs env rest))
+    let (remaining, effects) ← captureEffects (rpArgs env rest)
+    let retained ← liftV (argumentInteriorRoots env (.byRef mutability p) rho)
+    checkRetainedShrinks env retained effects
+    pure (rho :: remaining)
 
 
 def rpCall (env : PEnv) (c : ContextId) (argRoots : List (List RootRef)) : P (List RootRef) := do
   let some cctx := env.mod.contexts[c]? | rejP .call s!"call of context {c}, outside the context table"
   let some callee := env.mod.impls[cctx.impl]? | rejP .call s!"context {c} names a missing implementation"
   liftV (forAll (List.range callee.params.size) (checkArgRoots callee cctx argRoots))
+  let rawEffects := callEffects callee cctx argRoots {}
+  let effects ← match callee.summary with
+    | .known _ => pure rawEffects
+    | .unknown => do
+      let mut invalidating := []
+      for (parameter, roots) in callee.params.toList.zip argRoots do
+        let some localVar := callee.vars[parameter.var]? | rejP .call "parameter outside variable table"
+        let mayShrink := match localVar.ty with
+          | .ref _ (.slice .mutable element) => element.nonfixed
+          | .ref _ ty => ty.nonfixed || (ty matches .limited ..)
+          | .slice .mutable element => element.nonfixed
+          | _ => false
+        if mayShrink then invalidating := invalidating ++ roots
+      pure { rawEffects with storageShrinks := invalidating }
+  checkScopedShrinkAliases env effects
+  for (parameter, roots) in callee.params.toList.zip argRoots do
+    let some localVar := callee.vars[parameter.var]? | rejP .call "parameter outside variable table"
+    if interiorAliasType localVar.ty then checkRetainedShrinks env roots effects
   modify fun state =>
     let effects := callEffects callee cctx argRoots state.eff
     { state with eff := { effects with
@@ -861,7 +921,8 @@ def rpReturnOperands (env : PEnv) : List (List RootRef) → List Expr → P Unit
       let actual ← rpExpr env operand
       liftV (checkNoLocal actual)
       if !subsetRoots actual roots then rejP .result "returned roots exceed declared channel roots"
-      rpReturnOperands env channels operands
+      let (_, effects) ← captureEffects (rpReturnOperands env channels operands)
+      if (env.access.exprType? operand).any interiorAliasType then checkRetainedShrinks env actual effects
   | _, _ => rejP .result "returned roots channel count mismatch"
 
 def rpNoLocalOperands (env : PEnv) : List Expr → P Unit
@@ -869,7 +930,8 @@ def rpNoLocalOperands (env : PEnv) : List Expr → P Unit
   | operand :: operands => do
       let roots ← rpExpr env operand
       liftV (checkNoLocal roots)
-      rpNoLocalOperands env operands
+      let (_, effects) ← captureEffects (rpNoLocalOperands env operands)
+      if (env.access.exprType? operand).any interiorAliasType then checkRetainedShrinks env roots effects
 
 def rpStmts (env : PEnv) : List Stmt → P Unit
   | [] => pure ()
@@ -900,14 +962,16 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     | none => rejP .root s!"variable {x} outside the variable table"
   | .assign p e _ => do
     let rho ← rpPlace env p
-    let stored ← rpExpr env e
+    let (stored, effects) ← captureEffects (rpExpr env e)
+    checkRetainedShrinks env rho effects
     liftV (checkStore env p stored)
     addWrites rho
 
     modify fun s => { s with eff := { s.eff with rebinds := addTargets s.eff.rebinds (storeRebinds env p) } }
   | .assignOp op p e _ => do
     let rho ← rpPlace env p
-    let _ ← rpExpr env e
+    let (_, effects) ← captureEffects (rpExpr env e)
+    checkRetainedShrinks env rho effects
     addReads rho
     addWrites rho
     if binOpMayAbort op then noteAborts
@@ -930,6 +994,7 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     let rho ← rpPlace env owner
     let _ ← rpExpr env count
     addReads rho
+    checkDirectShrinkAliases env rho
     addShrinks rho
     noteAborts
   | .resize owner size fill _ => do
@@ -942,15 +1007,18 @@ def rpStmt (env : PEnv) : Stmt → P Unit
       addWrites rho
       addGrows rho
     addReads rho
+    checkDirectShrinkAliases env rho
     addShrinks rho
     noteAborts
   | .clear owner _ => do
     let rho ← rpPlace env owner
     addReads rho
+    checkDirectShrinkAliases env rho
     addShrinks rho
   | .assignWhole owner replacement _ => do
     let rho ← rpPlace env owner
     addReads rho
+    checkDirectShrinkAliases env rho
     addShrinks rho
     let (_, effects) ← captureEffects (rpExpr env replacement)
     checkWholeAccess env rho effects
@@ -986,7 +1054,8 @@ def rpStmt (env : PEnv) : Stmt → P Unit
     let rho ← rpView env v
 
     if byRef then bindRoots env (b.scope :: env.scopes) x rho else addReads rho
-    let body ← rpBlockValue env [] b
+    let (body, effects) ← captureEffects (rpBlockValue env [] b)
+    checkRetainedShrinks env rho effects
     liftV (checkBlockValue st0.nextVar body.2.1 body.1)
   | .receive ids producer _ => do
     let _ ← rpExpr env producer
