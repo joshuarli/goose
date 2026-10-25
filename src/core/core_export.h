@@ -646,8 +646,6 @@ private:
 
     CoreMut MutOf(const TypeExpr *t) { return t && t->cq ? CoreMut::Const : CoreMut::Mut; }
 
-    // Capture mutability follows the checked effects: read-only owners stay
-    // const, while a callee that changes one needs writable contents.
     CoreMut CaptureMut(FnSpec *sp, VarDef *v) {
         if (v->isvar) return CoreMut::Mut;
         auto t = v->type;
@@ -655,6 +653,7 @@ private:
         auto grows = sp->record.growexternals.contains(v);
         auto shrinks = sp->record.shrinkexternals.contains(v);
         auto writes = sp->record.writeexternals.contains(v);
+        if (t->arr->akind == A_LIMITED) return CoreMut::Mut;
         if (!grows && !shrinks && !writes) return CoreMut::Const;
         switch (t->arr->akind) {
             case A_GROW:
@@ -663,8 +662,6 @@ private:
             case A_GROWSHRINK:
                 mod.profile = CoreWithShrink(mod.profile);
                 return CoreMut::Mut;
-            case A_LIMITED:
-                Fail("limited-capture-mutation", v->line);
             default: return CoreMut::Const;
         }
     }
@@ -1642,11 +1639,6 @@ private:
         auto vt = Pointee(recv->exprtype);
         if (!IsArrayTE(vt) || (vt->arr->akind != A_GROW && vt->arr->akind != A_GROWSHRINK &&
                                vt->arr->akind != A_LIMITED)) Fail("growth-receiver");
-        if (vt->arr->akind == A_LIMITED) {
-            if (auto id = Is<Ident>(recv); id && id->vdef && !id->vdef->isvar &&
-                id->vdef->ownerspec != cur.spec)
-                Fail("limited-capture-mutation", id->line);
-        }
         (void)Ty(vt);
         return ToPlace(recv, true);
     }

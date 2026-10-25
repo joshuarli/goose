@@ -120,7 +120,8 @@ theorem borrowTo_input_reference {module : GIR.Module} {func : Func}
   dsimp only at same
   subst middle
   let owner := match type with
-    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) |
+      .data (.ref .mutable (.limited _ _)) => true
     | _ => false
   change (if mode == .mutable && env.mod.profile == .shrink && owner then
     emitDef (.ownerBorrow input) else freezeTo mode input) env before = (value,after) at run

@@ -584,7 +584,7 @@ theorem recipesUnchangedB_borrowTo (mode : Mutability) (value : ValueId) :
               | readOnly => exact recipesUnchangedB_freezeTo .mutable value
               | mutable =>
                 cases target with
-                | grow _ | growshrink _ => exact recipesUnchangedB_emitDef (.ownerBorrow value)
+                | grow _ | growshrink _ | limited _ _ => exact recipesUnchangedB_emitDef (.ownerBorrow value)
                 | _ => exact recipesUnchangedB_freezeTo .mutable value
             | _ => exact recipesUnchangedB_freezeTo .mutable value
 
@@ -1223,7 +1223,8 @@ theorem borrowTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS}
     simp only at hs h
     subst hs
     let owner := match ty with
-      | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+      | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) |
+        .data (.ref .mutable (.limited _ _)) => true
       | _ => false
     change (if (m == .mutable && le.mod.profile == .shrink && owner) = true then
       emitDef (.ownerBorrow r) else freezeTo m r) le same = (r', ls') at h

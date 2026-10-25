@@ -479,7 +479,7 @@ private:
             return EmitDef(std::move(i));
         }
         if (m == CoreMut::Mut && mod.profile == CoreProfile::Shrink && t.kind == CoreType::Ref &&
-            t.mut == CoreMut::Mut && GirResizableKind(mod.Type(t.elem).kind)) {
+            t.mut == CoreMut::Mut && GirOwnerKind(mod.Type(t.elem).kind)) {
             GirInst borrow;
             borrow.op = GirOp::OwnerBorrow;
             borrow.a = r;

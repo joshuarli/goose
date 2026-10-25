@@ -339,7 +339,7 @@ def ownerElement (env : TEnv) (t : Ty) : T Ty := do
 def PlaceInfo.referenceWritable (info : PlaceInfo) (profile : ArtifactProfile) : Bool :=
   match info.ty with
   | .grow _ => info.contentsWritable
-  | .growshrink _ => if profile == .shrink then info.contentsWritable else info.bindingWritable
+  | .growshrink _ | .limited _ _ => if profile == .shrink then info.contentsWritable else info.bindingWritable
   | _ => info.bindingWritable
 
 /-- Pilot uses contents permission for grow owners; shrink uses it for every owner kind. -/

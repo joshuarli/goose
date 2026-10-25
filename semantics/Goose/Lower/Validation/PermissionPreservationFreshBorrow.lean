@@ -34,10 +34,11 @@ theorem borrowTo_owner_fresh_permissions {le : LEnv} {first : Nat} {before after
     (checked : before.DenseDefinitions) (bounded : LiveBound before)
     (live : before.cur = some current) (profile : le.mod.profile = .shrink)
     (typed : before.vals[owner]? = some (some (.data (.ref .mutable referent))))
-    (resizable : (∃ element, referent = .grow element) ∨ (∃ element, referent = .growshrink element))
+    (resizable : (∃ element, referent = .grow element) ∨ (∃ element, referent = .growshrink element) ∨
+        (∃ element capacity, referent = .limited element capacity))
     (run : borrowTo .mutable owner le before = (value, after)) :
     FreshWritableEvidence le first after value ∧ FreshContentsEvidence le first after value := by
-  rcases resizable with ⟨element, rfl⟩ | ⟨element, rfl⟩ <;>
+  rcases resizable with ⟨element, rfl⟩ | ⟨element, rfl⟩ | ⟨element, capacity, rfl⟩ <;>
     simp [borrowTo, bind_run, valTy_of_recorded typed, profile] at run <;>
     exact evidence.ownerBorrow_permissions checked bounded live run
 
@@ -48,7 +49,8 @@ theorem lowerExpr_ref_owner_fresh_permissions_of_place {le : LEnv} {first : Nat}
     (checked : middle.DenseDefinitions) (bounded : LiveBound middle)
     (live : middle.cur = some current) (profile : le.mod.profile = .shrink)
     (typed : middle.vals[owner]? = some (some (.data (.ref .mutable referent))))
-    (resizable : (∃ element, referent = .grow element) ∨ (∃ element, referent = .growshrink element))
+    (resizable : (∃ element, referent = .grow element) ∨ (∃ element, referent = .growshrink element) ∨
+        (∃ element capacity, referent = .limited element capacity))
     (run : lowerExpr (.ref .mutable place) le before = (value, after)) :
     FreshWritableEvidence le first after value ∧ FreshContentsEvidence le first after value := by
   simp only [lowerExpr, bind_run, placeRun] at run

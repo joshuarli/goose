@@ -17,10 +17,6 @@ inline bool GirResizableKind(CoreType::Kind kind) {
     return kind == CoreType::Grow || kind == CoreType::GrowShrink;
 }
 
-inline bool GirWholeOwnerBorrowUsesContents(CoreType::Kind kind) {
-    return kind == CoreType::Grow || kind == CoreType::GrowShrink;
-}
-
 // What typing an instruction may consult.
 struct GirTyEnv {
     GirModule &m;
@@ -268,14 +264,14 @@ public:
                 if (i.idx < 0 || i.idx >= (int)env.slots.size())
                     return GirTyErr(cat("slot ", i.idx, " outside the slot table"));
                 return GirTyOk(m.RefType(env.slots[i.idx].kind == CoreVarKind::Var ||
-                                         GirWholeOwnerBorrowUsesContents(m.Type(env.slots[i.idx].ty).kind)
+                                         GirOwnerKind(m.Type(env.slots[i.idx].ty).kind)
                                              ? CoreMut::Mut : CoreMut::Const,
                                          env.slots[i.idx].ty));
             case GirOp::Global:
                 if (i.idx < 0 || i.idx >= (int)m.globals.size())
                     return GirTyErr(cat("global ", i.idx, " outside the global table"));
                 return GirTyOk(m.RefType(m.globals[i.idx].kind == CoreVarKind::Var ||
-                                         GirWholeOwnerBorrowUsesContents(m.Type(m.globals[i.idx].ty).kind)
+                                         GirOwnerKind(m.Type(m.globals[i.idx].ty).kind)
                                              ? CoreMut::Mut : CoreMut::Const,
                                          m.globals[i.idx].ty));
             case GirOp::Elem: {
@@ -294,8 +290,8 @@ public:
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;
                 auto &reference = m.Type(r.ty);
-                if (reference.mut != CoreMut::Mut || !GirResizableKind(m.Type(reference.elem).kind))
-                    return GirTyErr("owner borrow requires a mutable grow or growshrink reference");
+                if (reference.mut != CoreMut::Mut || !GirOwnerKind(m.Type(reference.elem).kind))
+                    return GirTyErr("owner borrow requires a mutable grow, growshrink or limited reference");
                 return r;
             }
             case GirOp::Load: {

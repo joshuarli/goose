@@ -15,6 +15,10 @@ private def env (ty : Ty) : TyEnv :=
 #guard match (Op.ownerBorrow 0).resultTy (env (.ref .mutable (.growshrink (.int .i64)))) with
   | .ok ty => ty == .data (.ref .mutable (.growshrink (.int .i64)))
   | _ => false
+#guard match (Op.ownerBorrow 0).resultTy (env (.ref .mutable (.limited (.int .i64) 4))) with
+  | .ok ty => ty == .data (.ref .mutable (.limited (.int .i64) 4))
+  | _ => false
+#guard ((Op.ownerBorrow 0).resultTy (env (.ref .readOnly (.limited (.int .i64) 4)))).isOk == false
 #guard ((Op.ownerBorrow 0).resultTy (env (.ref .readOnly (.grow (.int .i64))))).isOk == false
 #guard ((Op.ownerBorrow 0).resultTy (env (.ref .mutable (.int .i64)))).isOk == false
 

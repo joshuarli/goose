@@ -20,12 +20,13 @@ theorem lowerArg_mutable_binding {env : Core.TEnv} {place : Place} {info : Place
   have middleLive := (dead_borrowTo .mutable owner).live_before borrowed live
   have middleGenerated := generated.lowerPlace place placeRun
   have typed := lowerPlace_generated_writable_typed place source writable placeRun middleLive (generated := generated)
-  by_cases resizable : (∃ element, info.ty = .grow element) ∨ (∃ element, info.ty = .growshrink element)
+  by_cases resizable : (∃ element, info.ty = .grow element) ∨ (∃ element, info.ty = .growshrink element) ∨
+      (∃ element capacity, info.ty = .limited element capacity)
   · have profile : env.mod.profile = .shrink := by
-      rcases resizable with ⟨element, same⟩ | ⟨element, same⟩ <;>
+      rcases resizable with ⟨element, same⟩ | ⟨element, same⟩ | ⟨element, capacity, same⟩ <;>
         simpa only [BindingTarget, same] using demand
     have container : ContentsTarget info.ty := by
-      rcases resizable with ⟨element, same⟩ | ⟨element, same⟩ <;> rw [same] <;> trivial
+      rcases resizable with ⟨element, same⟩ | ⟨element, same⟩ | ⟨element, capacity, same⟩ <;> rw [same] <;> trivial
     have contents := source_place_reference_contents source container reference writable
     have evidence := lowerPlace_generated_contents place source container contents placeRun middleLive (generated := generated)
     cases current : middle.cur with

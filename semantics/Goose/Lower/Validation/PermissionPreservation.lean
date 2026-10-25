@@ -6,9 +6,9 @@ namespace Goose.Lower.Validation
 open Goose.Core Goose.GIR
 
 def PermissionTransfer (profile : ArtifactProfile) (writable contents : ValueId → Prop) (value : ValueId) : Ty → Prop
-  | .ref .mutable (.grow _) | .ref .mutable (.growshrink _) =>
+  | .ref .mutable (.grow _) | .ref .mutable (.growshrink _) | .ref .mutable (.limited ..) =>
     if profile = .shrink then writable value ∧ contents value else contents value
-  | .ref .mutable (.structT ..) | .ref .mutable (.arr ..) | .ref .mutable (.limited ..) =>
+  | .ref .mutable (.structT ..) | .ref .mutable (.arr ..) =>
     writable value ∧ contents value
   | .ref .mutable _ => writable value
   | _ => True
@@ -47,8 +47,8 @@ theorem PermissionTransfer.check {profile : ArtifactProfile} {writable contents 
       | .ref .mutable referent =>
         let cap := permissionsAt caps value
         match (generalizing := false) referent with
-        | .grow _ | .growshrink _ => if profile == .shrink then cap.1 && cap.2 else cap.2
-        | .structT .. | .arr .. | .limited .. => cap.1 && cap.2
+        | .grow _ | .growshrink _ | .limited _ _ => if profile == .shrink then cap.1 && cap.2 else cap.2
+        | .structT .. | .arr .. => cap.1 && cap.2
         | _ => cap.1
       | _ => true) = true := by
   cases ty with

@@ -61,7 +61,8 @@ theorem SourceCanonicalTables.borrowTo_floor {env : PEnv} {func : Func}
   dsimp only at same
   subst middle
   let owner := match type with
-    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) |
+      .data (.ref .mutable (.limited _ _)) => true
     | _ => false
   change (if mode == .mutable && localEnv.mod.profile == .shrink && owner then
     emitDef (.ownerBorrow input) else freezeTo mode input) localEnv before = (value, after) at run

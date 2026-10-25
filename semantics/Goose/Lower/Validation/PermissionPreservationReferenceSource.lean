@@ -9,7 +9,8 @@ theorem referenceWritable_binding_or_owner {profile : ArtifactProfile} {info : P
     (writable : info.referenceWritable profile = true) (demand : BindingTarget profile info.ty) :
     info.bindingWritable = true ∨
       (profile = .shrink ∧ info.contentsWritable = true ∧
-        ((∃ element, info.ty = .grow element) ∨ (∃ element, info.ty = .growshrink element))) := by
+        ((∃ element, info.ty = .grow element) ∨ (∃ element, info.ty = .growshrink element) ∨
+          (∃ element capacity, info.ty = .limited element capacity))) := by
   cases shape : info.ty with
   | grow element =>
     have shrink : profile = .shrink := by simpa only [BindingTarget, shape] using demand
@@ -18,7 +19,11 @@ theorem referenceWritable_binding_or_owner {profile : ArtifactProfile} {info : P
   | growshrink element =>
     have shrink : profile = .shrink := by simpa only [BindingTarget, shape] using demand
     exact Or.inr ⟨shrink, by simpa only [PlaceInfo.referenceWritable, shape, shrink, beq_self_eq_true, ite_true] using writable,
-      Or.inr ⟨element, rfl⟩⟩
+      Or.inr (Or.inl ⟨element, rfl⟩)⟩
+  | limited element capacity =>
+    have shrink : profile = .shrink := by simpa only [BindingTarget, shape] using demand
+    exact Or.inr ⟨shrink, by simpa [PlaceInfo.referenceWritable, shape, shrink] using writable,
+      Or.inr (Or.inr ⟨element, capacity, rfl⟩)⟩
   | _ => exact Or.inl (by simpa only [PlaceInfo.referenceWritable, shape] using writable)
 
 theorem source_mutable_reference_binding {env : Core.TEnv} {place : Place} {referent : Ty}
@@ -29,7 +34,8 @@ theorem source_mutable_reference_binding {env : Core.TEnv} {place : Place} {refe
       info.canReference place = true ∧
       (info.bindingWritable = true ∨
         (env.mod.profile = .shrink ∧ info.contentsWritable = true ∧
-          ((∃ element, info.ty = .grow element) ∨ (∃ element, info.ty = .growshrink element)))) := by
+          ((∃ element, info.ty = .grow element) ∨ (∃ element, info.ty = .growshrink element) ∨
+            (∃ element capacity, info.ty = .limited element capacity)))) := by
   obtain ⟨info, next, placeSource, shape, reference, writable⟩ := source_mutable_reference_permissions source
   have same := (Ty.ref.inj shape).2
   refine ⟨info, next, placeSource, same.symm, reference, ?_⟩

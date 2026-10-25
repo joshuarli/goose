@@ -273,7 +273,8 @@ def borrowTo (m : Mutability) (r : ValueId) : B ValueId := do
   let env ← read
   let ty ← valTy r
   let owner := match ty with
-    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) |
+      .data (.ref .mutable (.limited _ _)) => true
     | _ => false
   if m == .mutable && env.mod.profile == .shrink && owner then emitDef (.ownerBorrow r)
   else freezeTo m r

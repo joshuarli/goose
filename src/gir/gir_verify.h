@@ -5862,7 +5862,7 @@ private:
             if (t.kind == CoreType::Ref && t.mut == CoreMut::Mut) {
                 vector<char> open(fn.nvalues, 0);
                 auto kind = m.Type(t.elem).kind;
-                if (GirWholeOwnerBorrowUsesContents(kind) && m.profile != CoreProfile::Shrink)
+                if (GirOwnerKind(kind) && m.profile != CoreProfile::Shrink)
                     return contentsMutable(value, open);
                 if (!writable(value, open)) return false;
                 if (kind == CoreType::Arr || kind == CoreType::Struct || kind == CoreType::Slice ||

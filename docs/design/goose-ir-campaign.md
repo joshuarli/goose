@@ -10,6 +10,8 @@ The owner redirected the campaign toward feature completeness using the test-pyr
 The compiler now exports static limited-array capacity queries and immutable reference
 captures in nested functions. Capacity queries evaluate their receiver exactly once,
 including effects and aborts. Captures preserve reference identity and pointee mutability.
+Nested functions can also mutate the contents and length of captured `let` limited arrays.
+Whole-owner borrows use contents permission without making the original binding rebindable.
 Rebindable reference slots remain explicitly unsupported.
 Existing independent Core evaluation and exact runtime expectations are the feature oracles.
 
@@ -17,6 +19,13 @@ The integrated Debug compiler passes three selected Core/GIR cases for these fea
 including receiver-abort ordering. The mutable-reference-slot control retains exactly
 the `captured-reference` rejection. New fixture layout and whitespace checks pass.
 The feature lanes also checked exact legacy output and existing capture controls.
+
+The two limited-capture cases match exact legacy and native GIR output.
+Core and GIR evaluation agree in both numeric profiles through the interpreted semantic commands.
+The C++ GIR verifier suite covers explicit limited-owner borrows and rejects raw binding addresses and readonly borrows.
+The rebindable-reference capture control retains its `captured-reference` rejection.
+The changed Lean modules and their 310-module dependency closure pass, including the limited-borrow guards and permission proofs.
+These checks do not qualify the whole project or its performance gates.
 
 [`accepted_callee_parameter_prologue`](../../semantics/Goose/Lower/DemandParameterPrologue.lean)
 connects every parameter prefix to actual GIR execution, including the empty and complete prefixes.

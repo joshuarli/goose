@@ -66,7 +66,7 @@ def Mutability.ofKind : VarKind → Mutability
 private def addressMutability (profile : ArtifactProfile) (kind : VarKind) (ty : Ty) : Mutability :=
   match ty with
   | .grow _ => .mutable
-  | .growshrink _ => if profile == .shrink then .mutable else Mutability.ofKind kind
+  | .growshrink _ | .limited _ _ => if profile == .shrink then .mutable else Mutability.ofKind kind
   | _ => Mutability.ofKind kind
 
 def TyEnv.boundTy (env : TyEnv) : Bnd → TyR Unit
@@ -128,7 +128,7 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     let (m, t) ← env.refTy r
     unless m == .mutable do tyErr "an owner borrow of a read-only reference"
     match t with
-    | .grow _ | .growshrink _ => pure (.data (.ref .mutable t))
+    | .grow _ | .growshrink _ | .limited _ _ => pure (.data (.ref .mutable t))
     | _ => tyErr "an owner borrow of a non-resizable reference"
   | .load r => do
     let (_, t) ← env.refTy r

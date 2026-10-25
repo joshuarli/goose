@@ -66,7 +66,8 @@ private theorem borrowTo_run_cases (mutability : Mutability) (value : ValueId) (
     borrowTo mutability value le ls = emitDef (.ownerBorrow value) le ls ∨
       borrowTo mutability value le ls = freezeTo mutability value le ls := by
   let owner := match (valTy value le ls).1 with
-    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) |
+      .data (.ref .mutable (.limited _ _)) => true
     | _ => false
   by_cases chosen : (mutability == .mutable && le.mod.profile == .shrink && owner) = true
   · left

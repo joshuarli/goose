@@ -39,13 +39,15 @@ theorem SourceReadyFrame.borrowTo (frame : SourceReadyFrame module callees func 
     Prod.ext rfl (valTy_eq rfl)
   change (if mutability == .mutable && env.mod.profile == .shrink &&
       (match (valTy input env before).1 with
-       | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+       | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) |
+         .data (.ref .mutable (.limited _ _)) => true
        | _ => false) then Lower.emitDef (.ownerBorrow input) else Lower.freezeTo mutability input)
       env (valTy input env before).2 = (output, after) at run
   rw [classification] at run
   by_cases borrowed : (mutability == .mutable && env.mod.profile == .shrink &&
       (match (valTy input env before).1 with
-       | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+       | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) |
+         .data (.ref .mutable (.limited _ _)) => true
        | _ => false)) = true
   · rw [if_pos borrowed] at run
     exact frame.emitDef run extension allocated bounded

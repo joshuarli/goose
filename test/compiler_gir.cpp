@@ -3874,7 +3874,7 @@ void LetLimitedOwnerSupportsDirectPushPopAndClear() {
     assert(Code(m) == "");
 }
 
-void RejectsPassingALetLimitedOwnerAsAMutableReference() {
+void RejectsPassingALetLimitedOwnerWithoutAnExplicitBorrow() {
     auto m = LetOwnerPush(CoreProfile::Shrink, CoreType::Limited);
     auto refTy = m.RefType(CoreMut::Mut, Main(m).slots[0].ty);
     GirFunc mutate;
@@ -3896,7 +3896,7 @@ void RejectsPassingALetLimitedOwnerAsAMutableReference() {
     call.vals = { 4 };
     call.org = 0;
     insts.insert(insts.end() - 2, { slot, call });
-    assert(Code(m) == "GIR-V010");
+    assert(Code(m) == "GIR-V030");
 }
 
 void ShrinkOperationsAndAbortTagsStayOutOfPilotGir() {
@@ -8847,11 +8847,11 @@ void ConstructionCompletedResultsSurviveLaterEscapingOperands() {
 }
 
 void OwnerBorrowsMakeMutableOwnerAuthorityExplicit() {
-    for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
+    for (auto kind : { CoreType::Grow, CoreType::GrowShrink, CoreType::Limited }) {
         auto m = Base();
         m.profile = CoreProfile::Shrink;
         auto integer = m.IntType(CoreIntTy::I64);
-        auto owner = m.Intern(CoreType { .kind = kind, .elem = integer });
+        auto owner = m.Intern(CoreType { .kind = kind, .elem = integer, .count = kind == CoreType::Limited ? 4 : 0 });
         auto reference = m.RefType(CoreMut::Mut, owner);
         Main(m).slots = { { owner, CoreVarKind::Let, 0, 0 }, { reference, CoreVarKind::Let, 0, 1 } };
         auto empty = Def(GirOp::Arr, 0);
@@ -8873,16 +8873,11 @@ void OwnerBorrowsMakeMutableOwnerAuthorityExplicit() {
         Main(readOnly).blocks[0].insts[4].a = freeze.res;
         Main(readOnly).blocks[0].insts.insert(Main(readOnly).blocks[0].insts.begin() + 4, freeze);
         assert(Code(readOnly) == "GIR-V010");
-        auto limited = m;
-        limited.types[owner].kind = CoreType::Limited;
-        limited.types[owner].count = 4;
-        Main(limited).slots[0].kind = CoreVarKind::Var;
-        assert(Code(limited) == "GIR-V010");
     }
 }
 
 void OwnerReferencesLowerThroughExplicitBorrowFormation() {
-    for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
+    for (auto kind : { CoreType::Grow, CoreType::GrowShrink, CoreType::Limited }) {
         auto core = CoreLengthModule(kind);
         core.profile = CoreProfile::Shrink;
         auto owner = core.impls[0].vars[0].type;
@@ -9351,7 +9346,7 @@ int main() {
     PilotPushWithoutOriginLowersToValidLowGir();
     PilotLetGrowPushUsesContentsPermission();
     LetLimitedOwnerSupportsDirectPushPopAndClear();
-    RejectsPassingALetLimitedOwnerAsAMutableReference();
+    RejectsPassingALetLimitedOwnerWithoutAnExplicitBorrow();
     ShrinkSummariesSerializeAndCoverPopEffects();
     AppendSummaryIncludesItsViewSourceRead();
     ShrinkOperationsAndAbortTagsStayOutOfPilotGir();

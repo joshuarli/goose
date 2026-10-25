@@ -11,7 +11,8 @@ theorem newPermissions_borrowTo {module : GIR.Module} {func : Func} {le : LEnv}
     {referent : Ty}
     (typed : before.vals[owner]? = some (some (.data (.ref actual referent))))
     (authority : requested = .mutable → le.mod.profile = .shrink →
-      ((∃ element, referent = .grow element) ∨ (∃ element, referent = .growshrink element)) →
+      ((∃ element, referent = .grow element) ∨ (∃ element, referent = .growshrink element) ∨
+        (∃ element capacity, referent = .limited element capacity)) →
       before.cur.isSome = true → FreshContentsEvidence le first before owner)
     (generated : GeneratedBuilderState before)
     (run : borrowTo requested owner le before = (value, after)) :
@@ -20,7 +21,8 @@ theorem newPermissions_borrowTo {module : GIR.Module} {func : Func} {le : LEnv}
   simp only [borrowTo, bind_run, read_apply] at lowering
   rw [valTy_of_recorded (le := le) typed] at lowering
   let ownerKind := match (VTy.data (.ref actual referent)) with
-    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) |
+      .data (.ref .mutable (.limited _ _)) => true
     | _ => false
   change (if (requested == .mutable && le.mod.profile == .shrink && ownerKind) = true
     then emitDef (.ownerBorrow owner) else freezeTo requested owner) le before = (value, after) at lowering
@@ -30,7 +32,8 @@ theorem newPermissions_borrowTo {module : GIR.Module} {func : Func} {le : LEnv}
     have earlier := Bool.and_eq_true_iff.mp flags.1
     have requestedMutable : requested = .mutable := by simpa using earlier.1
     have profile : le.mod.profile = .shrink := by simpa using earlier.2
-    have resizable : (∃ element, referent = .grow element) ∨ (∃ element, referent = .growshrink element) := by
+    have resizable : (∃ element, referent = .grow element) ∨ (∃ element, referent = .growshrink element) ∨
+        (∃ element capacity, referent = .limited element capacity) := by
       cases actual <;> cases referent <;> simp_all [ownerKind]
     apply NewPermissionInstructions.emitDef lowering
     intro live
@@ -69,7 +72,7 @@ theorem newPermissions_borrowTo_of_source_place {env : Core.TEnv} {place : Place
     apply newPermissions_borrowTo typed _ (generated.lowerPlace place placeRun) run
     intro requestedMutable profile resizable _
     have container : ContentsTarget info.ty := by
-      rcases resizable with ⟨element, same⟩ | ⟨element, same⟩ <;> rw [same] <;> trivial
+      rcases resizable with ⟨element, same⟩ | ⟨element, same⟩ | ⟨element, capacity, same⟩ <;> rw [same] <;> trivial
     have contents := source_place_reference_contents source container reference (writable requestedMutable)
     exact (lowerPlace_generated_contents place source container contents placeRun live
       (generated := generated)).weaken floor

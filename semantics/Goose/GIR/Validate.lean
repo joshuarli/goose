@@ -618,8 +618,8 @@ def checkPermissions (m : Module) (label : String) (f : Func) (vt : Array (Optio
     | .ref .mutable referent =>
       let c := caps[v]?.getD (false, false)
       match referent with
-      | .grow _ | .growshrink _ => if m.profile == .shrink then c.1 && c.2 else c.2
-      | .structT .. | .arr .. | .limited .. => c.1 && c.2
+      | .grow _ | .growshrink _ | .limited _ _ => if m.profile == .shrink then c.1 && c.2 else c.2
+      | .structT .. | .arr .. => c.1 && c.2
       | _ => c.1
     | _ => true
   for b in f.blocks do

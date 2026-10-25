@@ -6,7 +6,7 @@ open Goose.Core Goose.GIR
 
 private theorem ownerBorrow_resultTy {le : LEnv} {before : LS} {value : ValueId} {target : Ty}
     (typed : before.vals[value]? = some (some (.data (.ref .mutable target))))
-    (owner : (match target with | .grow _ | .growshrink _ => true | _ => false) = true) :
+    (owner : (match target with | .grow _ | .growshrink _ | .limited _ _ => true | _ => false) = true) :
     (Op.ownerBorrow value).resultTy (tyEnv le before) = .ok (.data (.ref .mutable target)) := by
   cases target <;> simp at owner
   all_goals
