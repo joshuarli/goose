@@ -119,6 +119,14 @@ theorem landingBytes_relocated (bytes : ByteArray) (receiving source : Nat)
     exact ByteArray.extract_append_eq_right (by exact prefixSize.symm)
       (by rw [prefixSize, suffixSize])
 
+theorem landingBytes_prefix (bytes : ByteArray) (receiving source : Nat)
+    (ordered : receiving ≤ source) (inside : source ≤ bytes.size) :
+    BytePrefixEqual bytes (landingBytes bytes receiving source) receiving := by
+  apply BytePrefixEqual.of_extract_eq _ _ _ (Nat.le_trans ordered inside)
+  unfold landingBytes
+  apply ByteArray.extract_append_eq_left
+  simp only [ByteArray.size_extract, Nat.sub_zero, Nat.min_eq_left (Nat.le_trans ordered inside)]
+
 theorem RelocatedBytes.elementInterval {before after : ByteArray} {source receiving count : Nat}
     (equal : RelocatedBytes before after source receiving count) (fuel : Nat) (layout : LayoutEnv)
     (element : Ty) (length runStart index start finish : Nat)
@@ -203,6 +211,7 @@ theorem landReceivingStorage_payload_backing (fuel : Nat) (layout : LayoutEnv) (
 #print axioms RelocatedBytes.packedEnd
 #print axioms RelocatedBytes.elementsEnd
 #print axioms landingBytes_relocated
+#print axioms landingBytes_prefix
 #print axioms RelocatedBytes.elementInterval
 #print axioms RelocatedBytes.samplePacked
 #print axioms landingBytes_elementsEnd
