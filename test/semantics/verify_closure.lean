@@ -6,6 +6,10 @@ open Lake
 def main (args : List String) : IO UInt32 := do
   let root :: config :: modules := args
     | throw <| IO.userError "expected semantics root, Lake config, and ordered modules"
+  let expected ← IO.FS.readFile ((System.FilePath.mk root) / "lean-toolchain")
+  let actual := s!"leanprover/lean4:v{Lean.versionString}"
+  unless expected.trimAscii.toString == actual do
+    throw <| IO.userError s!"Lean toolchain mismatch: expected {expected.trimAscii.toString}, running {actual}"
   let (elan, some lean, some lake) ← findInstall?
     | throw <| IO.userError "Lean and Lake installations could not be found"
   let env ← (Env.compute lake lean elan).toIO IO.userError

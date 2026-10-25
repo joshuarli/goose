@@ -35,6 +35,10 @@ class VerifyClosureTests(unittest.TestCase):
         self.project = Path(self.temporary.name)
         self.semantics = self.project / "semantics"
         self.semantics.mkdir()
+        (self.semantics / "lean-toolchain").write_text(
+            (REPO_ROOT / "semantics" / "lean-toolchain").read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
         (self.semantics / "lakefile.toml").write_text(
             'name = "fixture"\n\n[[lean_lib]]\nname = "Goose"\n',
             encoding="utf-8",
@@ -159,6 +163,16 @@ class VerifyClosureTests(unittest.TestCase):
             command.extend(["--module", module])
         return subprocess.run(command, text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, timeout=60)
+
+    def test_real_wrong_toolchain_stops_before_build(self):
+        self.write_module("Goose.Root", "example : True := True.intro\n")
+        (self.semantics / "lean-toolchain").write_text("leanprover/lean4:v0.0.0\n", encoding="utf-8")
+
+        result = self.run_verifier("Goose.Root")
+
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn("toolchain mismatch", result.stdout)
+        self.assertNotIn("built +Goose.", result.stdout)
 
     def test_real_lake_rehashes_cached_imports_and_stops_at_first_failure(self):
         base = self.write_module("Goose.Base", "def value : Nat := 1\n")
