@@ -8,6 +8,8 @@ theorem directGood : True := True.intro
 opaque hiddenGood : True := True.intro
 theorem throughOpaque : True := hiddenGood
 theorem throughAxiom : True := unapproved
+opaque hiddenBad : True := unapproved
+theorem throughOpaqueAxiom : True := hiddenBad
 
 #guard_msgs(drop warning) in
 theorem throughSorry : True := by sorry
@@ -29,6 +31,7 @@ run_cmd do
     unless names.contains name do throwError "omitted dependency {name}"
   for name in [``throughAxiom, ``throughSorry] do
     liftIO <| expectFailure "disallowed axiom:" (validateProofs env #[name])
+  liftIO <| expectFailure "disallowed axiom: unapproved" (validateProofs env #[``throughOpaqueAxiom])
   liftIO <| expectFailure "missing dependency:" (collect env #[`nonexistentDependency])
   liftIO <| expectFailure "missing exported dependency:" (verifyCoverage names {})
 
