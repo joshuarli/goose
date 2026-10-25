@@ -35,6 +35,8 @@ import Goose.Proofs.ConstructionRepresentationCalls
 import Goose.Proofs.ExitExecutionLandedChannels
 import Goose.Proofs.ExitExecutionLandingChecks
 import Goose.Lower.DemandCarriedSequence
+import Goose.Lower.DemandShortCircuit
+import Goose.Proofs.ConstructionFixedWidthStorageWrite
 import Goose.Construct.ParameterRebindChecks
 
 /-!
@@ -305,5 +307,15 @@ end Goose.Audit
 #audit Goose.Construct.ParameterRebindChecks.omitted_rebound_read_rejected
 #audit Goose.Construct.ParameterRebindChecks.inner_scope_rebind_rejected
 #audit Goose.Construct.ParameterRebindChecks.omitted_rebound_result_rejected
+
+#audit Goose.Lower.accepted_expression_demand_reflection
+#audit Goose.Lower.ExprSource.shortCircuitChildrenDemand
+#audit Goose.Lower.DemandInstructionStep.runAt
+#audit Goose.Lower.shortCircuit_control_step
+#audit Goose.Lower.accepted_shortCircuit_demand_step
+#audit Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.storage_count
+#audit Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.other_storage
+#audit Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.byte_count
+#audit Goose.Proofs.ConstructionStorage.writeElement_receiver_fixedWidth
 
 #audit_registry

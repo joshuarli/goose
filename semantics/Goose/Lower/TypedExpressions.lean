@@ -1652,13 +1652,21 @@ theorem ExprSource.cmpChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     classified := output.classified, permission := source.permission, frame := hFrameRight,
     typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl⟩
 
-theorem ExprSource.shortCircuitChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
+theorem ExprSource.shortCircuitChildrenDemand {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     (isAnd : Bool) (source : ExprSource cfg env (if isAnd then .and a b else .or a b) state) :
     ∃ left : ExprSource cfg env a state,
       left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧ left.ty = .bool ∧
+      left.world = source.world ∧ left.path = source.path ++ [0] ∧ left.plans = source.plans ∧
+      HEq left.context (source.context.child rfl 0 (.expression a) .expression
+        (by cases isAnd <;> rfl) (by trivial)) ∧
+      (∀ alias ∈ source.context.retained, alias ∈ left.context.retained) ∧
       ∀ n value after, evalExpr n cfg env a state = .ok value after →
         ∃ right : ExprSource cfg env b after, right.typingEnv = source.typingEnv ∧
-          right.rootsEnv = source.rootsEnv ∧ right.ty = .bool := by
+          right.rootsEnv = source.rootsEnv ∧ right.ty = .bool ∧
+          right.world = source.world ∧ right.path = source.path ++ [1] ∧ right.plans = source.plans ∧
+          HEq right.context (source.context.child rfl 1 (.expression b) .expression
+            (by cases isAnd <;> rfl) (by trivial)) ∧
+          (∀ alias ∈ source.context.retained, alias ∈ right.context.retained) := by
   cases isAnd
   all_goals (
     have ht := source.typed
@@ -1739,7 +1747,9 @@ theorem ExprSource.shortCircuitChildren {cfg : Cfg} {env : Env} {a b : Expr} {st
       observed := by simpa [hLeftShrink] using source.observed,
       classified := source.classified, permission := source.permission, frame := hLeftInput,
       typed := hta, rooted := hra, effects := (Core.Sound.rpExpr_mono hrb).2.trans hE2 }
-    refine ⟨left, rfl, rfl, rfl, ?_⟩
+    refine ⟨left, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl, ?_, ?_⟩
+    · intro alias member
+      exact ec.child_retained_subset rfl 0 (.expression a) .expression rfl (by trivial) member
     intro n value after hdone
     have output := left.result n value hdone
     have hF1 : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env
@@ -1789,8 +1799,24 @@ theorem ExprSource.shortCircuitChildren {cfg : Cfg} {env : Env} {a b : Expr} {st
       protection := by simpa [hRightShrink] using source.protection,
       observed := by simpa only [left, hLeftShrink, hRightShrink] using output.observed,
       classified := output.classified, permission := source.permission, frame := hFrameRight,
-      typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl, rfl⟩
+      typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl, ?_⟩
+    intro alias member
+    exact ec.child_retained_subset rfl 1 (.expression b) .expression rfl (by trivial) member
   )
+
+
+theorem ExprSource.shortCircuitChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
+    (isAnd : Bool) (source : ExprSource cfg env (if isAnd then .and a b else .or a b) state) :
+    ∃ left : ExprSource cfg env a state,
+      left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧ left.ty = .bool ∧
+      ∀ n value after, evalExpr n cfg env a state = .ok value after →
+        ∃ right : ExprSource cfg env b after, right.typingEnv = source.typingEnv ∧
+          right.rootsEnv = source.rootsEnv ∧ right.ty = .bool := by
+  obtain ⟨left, typing, roots, type, _, _, _, _, _, next⟩ := source.shortCircuitChildrenDemand isAnd
+  refine ⟨left, typing, roots, type, ?_⟩
+  intro fuel value after done
+  obtain ⟨right, rightTyping, rightRoots, rightType, _, _, _, _, _⟩ := next fuel value after done
+  exact ⟨right, rightTyping, rightRoots, rightType⟩
 
 theorem ExprSource.sliceChildren {cfg : Cfg} {env : Env} {view : View} {low high : Bound}
     {state : St} (mutability : Mutability) (origin : OriginId)

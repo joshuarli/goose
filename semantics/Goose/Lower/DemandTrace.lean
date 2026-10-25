@@ -23,19 +23,68 @@ structure DemandRuntimePoint where
   frame : GIR.Frame
   state : St
 
-inductive DemandLinearStep (cx : FnCtx) (fuel : Nat) : DemandRuntimePoint → DemandRuntimePoint → Prop
+inductive DemandBranch where
+  | jump (target : BlockId) (arguments : List ValueId)
+  | conditional (condition : ValueId) (yes : BlockId) (yesArguments : List ValueId)
+      (no : BlockId) (noArguments : List ValueId)
+
+def DemandBranch.term : DemandBranch → Term
+  | .jump target arguments => .br target arguments
+  | .conditional condition yes yesArguments no noArguments => .condbr condition yes yesArguments no noArguments
+
+def DemandBranch.enter (branch : DemandBranch) (fn : Func) (frame : GIR.Frame) :
+    M (BlockId × List Inst × GIR.Frame) :=
+  match branch with
+  | .jump target arguments => do
+    let values ← mapList (getCell frame) arguments
+    let (code, next) ← enterBlock fn frame target values
+    pure (target, code, next)
+  | .conditional condition yes yesArguments no noArguments => do
+    if (← expectBool (← getVal frame condition)) then
+      let values ← mapList (getCell frame) yesArguments
+      let (code, next) ← enterBlock fn frame yes values
+      pure (yes, code, next)
+    else
+      let values ← mapList (getCell frame) noArguments
+      let (code, next) ← enterBlock fn frame no values
+      pure (no, code, next)
+
+theorem DemandBranch.term_injective : Function.Injective DemandBranch.term := by
+  intro first second same
+  cases first <;> cases second <;> simp only [term, Term.br.injEq, Term.condbr.injEq, reduceCtorEq] at same
+  all_goals simpa only [DemandBranch.jump.injEq, DemandBranch.conditional.injEq] using same
+
+theorem DemandBranch.exec (branch : DemandBranch) (cx : FnCtx) (frame : GIR.Frame)
+    (fuel : Nat) (rest : List Inst) :
+    GIR.exec (fuel + 1) cx frame (.term branch.term :: rest) =
+      branch.enter cx.fn frame >>= fun result => GIR.exec fuel cx result.2.2 result.2.1 := by
+  cases branch with
+  | jump target arguments => simp only [term, enter, GIR.exec, bind_assoc, pure_bind]
+  | conditional condition yes yesArguments no noArguments =>
+    simp only [term, enter, GIR.exec, bind_assoc]
+    congr 1
+    funext value
+    congr 1
+    funext choice
+    cases choice <;> simp only [Bool.false_eq_true, ite_false, ite_true, bind_assoc, pure_bind]
+
+inductive DemandInstructionStep (cx : FnCtx) (fuel : Nat) : DemandRuntimePoint → DemandRuntimePoint → Prop
   | definition {point : Pt} {frame : GIR.Frame} {state after : St} {id : ValueId} {op : Op} {value : RVal}
       (instruction : instAt cx.fn point = some (.def id op))
       (execution : execOp fuel cx frame op state = .ok value after) :
-      DemandLinearStep cx fuel ⟨point, frame, state⟩
+      DemandInstructionStep cx fuel ⟨point, frame, state⟩
         ⟨(point.1, point.2 + 1), frame.set id value, after⟩
   | effect {point : Pt} {frame next : GIR.Frame} {state after : St} {effect : Effect}
       (instruction : instAt cx.fn point = some (.eff effect))
       (execution : execEff cx.fn frame effect state = .ok next after) :
-      DemandLinearStep cx fuel ⟨point, frame, state⟩ ⟨(point.1, point.2 + 1), next, after⟩
+      DemandInstructionStep cx fuel ⟨point, frame, state⟩ ⟨(point.1, point.2 + 1), next, after⟩
+  | control {point : Pt} {frame next : GIR.Frame} {state after : St} {branch : DemandBranch} {target : BlockId}
+      (instruction : instAt cx.fn point = some (.term branch.term))
+      (execution : branch.enter cx.fn frame state = .ok (target, instsAt cx.fn (target, 0), next) after) :
+      DemandInstructionStep cx fuel ⟨point, frame, state⟩ ⟨(target, 0), next, after⟩
 
-theorem DemandLinearStep.deterministic {cx : FnCtx} {fuel : Nat} {before left right : DemandRuntimePoint}
-    (first : DemandLinearStep cx fuel before left) (second : DemandLinearStep cx fuel before right) :
+theorem DemandInstructionStep.deterministic {cx : FnCtx} {fuel : Nat} {before left right : DemandRuntimePoint}
+    (first : DemandInstructionStep cx fuel before left) (second : DemandInstructionStep cx fuel before right) :
     left = right := by
   cases first with
   | definition instruction execution =>
@@ -46,23 +95,33 @@ theorem DemandLinearStep.deterministic {cx : FnCtx} {fuel : Nat} {before left ri
       have result := execution.symm.trans execution'
       cases result
       rfl
-    | effect instruction' execution' =>
-      have same := instruction.symm.trans instruction'
-      cases same
+    | effect instruction' execution' => cases instruction.symm.trans instruction'
+    | control instruction' execution' => cases instruction.symm.trans instruction'
   | effect instruction execution =>
     cases second with
-    | definition instruction' execution' =>
-      have same := instruction.symm.trans instruction'
-      cases same
+    | definition instruction' execution' => cases instruction.symm.trans instruction'
     | effect instruction' execution' =>
       have same := instruction.symm.trans instruction'
       cases same
       have result := execution.symm.trans execution'
       cases result
       rfl
+    | control instruction' execution' => cases instruction.symm.trans instruction'
+  | control instruction execution =>
+    cases second with
+    | definition instruction' execution' => cases instruction.symm.trans instruction'
+    | effect instruction' execution' => cases instruction.symm.trans instruction'
+    | control instruction' execution' =>
+      have same := instruction.symm.trans instruction'
+      simp only [Option.some.injEq, Inst.term.injEq] at same
+      have branches := DemandBranch.term_injective same
+      cases branches
+      have result := execution.symm.trans execution'
+      cases result
+      rfl
 
-theorem DemandLinearStep.runAt {cx : FnCtx} {fuel : Nat} {before after : DemandRuntimePoint}
-    (step : DemandLinearStep cx fuel before after) :
+theorem DemandInstructionStep.runAt {cx : FnCtx} {fuel : Nat} {before after : DemandRuntimePoint}
+    (step : DemandInstructionStep cx fuel before after) :
     runAt cx before.point before.frame (fuel + 1) before.state =
       runAt cx after.point after.frame fuel after.state := by
   cases step with
@@ -71,23 +130,25 @@ theorem DemandLinearStep.runAt {cx : FnCtx} {fuel : Nat} {before after : DemandR
       setCell_eq, pure_apply]
   | effect instruction execution =>
     simp only [GIR.runAt, instsAt_cons instruction, exec, bind_apply, execution]
+  | control instruction execution =>
+    simp only [GIR.runAt, instsAt_cons instruction, DemandBranch.exec, bind_apply, execution]
 
-inductive DemandLinearPrefix (cx : FnCtx) : Nat → Nat → DemandRuntimePoint → DemandRuntimePoint → Prop
-  | zero (fuel : Nat) (point : DemandRuntimePoint) : DemandLinearPrefix cx 0 fuel point point
+inductive DemandPrefix (cx : FnCtx) : Nat → Nat → DemandRuntimePoint → DemandRuntimePoint → Prop
+  | zero (fuel : Nat) (point : DemandRuntimePoint) : DemandPrefix cx 0 fuel point point
   | next {length fuel : Nat} {before middle after : DemandRuntimePoint}
-      (step : DemandLinearStep cx fuel before middle)
-      (rest : DemandLinearPrefix cx length fuel middle after) :
-      DemandLinearPrefix cx (length + 1) (fuel + 1) before after
+      (step : DemandInstructionStep cx fuel before middle)
+      (rest : DemandPrefix cx length fuel middle after) :
+      DemandPrefix cx (length + 1) (fuel + 1) before after
 
-theorem DemandLinearPrefix.fuel_bound {cx : FnCtx} {taken fuel : Nat}
-    {before after : DemandRuntimePoint} (steps : DemandLinearPrefix cx taken fuel before after) :
+theorem DemandPrefix.fuel_bound {cx : FnCtx} {taken fuel : Nat}
+    {before after : DemandRuntimePoint} (steps : DemandPrefix cx taken fuel before after) :
     taken ≤ fuel := by
   induction steps with
   | zero => omega
   | next step rest induction => omega
 
-theorem DemandLinearPrefix.runAt {cx : FnCtx} {taken fuel : Nat}
-    {before after : DemandRuntimePoint} (steps : DemandLinearPrefix cx taken fuel before after) :
+theorem DemandPrefix.runAt {cx : FnCtx} {taken fuel : Nat}
+    {before after : DemandRuntimePoint} (steps : DemandPrefix cx taken fuel before after) :
     GIR.runAt cx before.point before.frame fuel before.state =
       GIR.runAt cx after.point after.frame (fuel - taken) after.state := by
   induction steps with
@@ -101,7 +162,7 @@ inductive DemandTraversal (cx : FnCtx) (invariant : DemandRuntimePoint → Prop)
       DemandTraversal cx invariant 0 fuel point point
   | next {length fuel : Nat} {before middle after : DemandRuntimePoint}
       (valid : invariant before)
-      (step : DemandLinearStep cx fuel before middle)
+      (step : DemandInstructionStep cx fuel before middle)
       (rest : DemandTraversal cx invariant length fuel middle after) :
       DemandTraversal cx invariant (length + 1) (fuel + 1) before after
 
@@ -109,7 +170,7 @@ theorem DemandTraversal.prefix_invariant {cx : FnCtx} {invariant : DemandRuntime
     {length fuel : Nat} {before after : DemandRuntimePoint}
     (traversal : DemandTraversal cx invariant length fuel before after)
     {taken : Nat} {reached : DemandRuntimePoint}
-    (bounded : taken ≤ length) (steps : DemandLinearPrefix cx taken fuel before reached) :
+    (bounded : taken ≤ length) (steps : DemandPrefix cx taken fuel before reached) :
     invariant reached := by
   induction traversal generalizing taken reached with
   | done fuel valid =>
@@ -209,7 +270,7 @@ inductive DemandUniformTraversal (cx : FnCtx) (invariant : DemandRuntimePoint �
       DemandUniformTraversal cx invariant 0 point point
   | next {length : Nat} {before middle after : DemandRuntimePoint}
       (valid : invariant before)
-      (step : ∀ fuel, DemandLinearStep cx fuel before middle)
+      (step : ∀ fuel, DemandInstructionStep cx fuel before middle)
       (rest : DemandUniformTraversal cx invariant length middle after) :
       DemandUniformTraversal cx invariant (length + 1) before after
 
@@ -217,7 +278,7 @@ theorem DemandUniformTraversal.prefix_invariant {cx : FnCtx} {invariant : Demand
     {length : Nat} {before after : DemandRuntimePoint}
     (traversal : DemandUniformTraversal cx invariant length before after)
     {taken fuel : Nat} {reached : DemandRuntimePoint}
-    (bounded : taken ≤ length) (tracePrefix : DemandLinearPrefix cx taken fuel before reached) :
+    (bounded : taken ≤ length) (tracePrefix : DemandPrefix cx taken fuel before reached) :
     invariant reached := by
   induction traversal generalizing taken fuel reached with
   | done valid =>

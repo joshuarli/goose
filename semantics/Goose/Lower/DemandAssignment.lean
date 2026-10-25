@@ -211,7 +211,7 @@ private theorem literal_assignment_execution_traversal {cfg : Cfg} {env : Env} {
   · exact ⟨⟨.destination, rfl, aliasSite, aliasQuery, ⟨⟨ls, point, related⟩, source.frame, initialOperands⟩⟩,
       Same.refl _ _, Or.inl rfl⟩
   · intro fuel
-    apply DemandLinearStep.definition firstInstruction
+    apply DemandInstructionStep.definition firstInstruction
     have action : execOp fuel cx frame (.slotAddr varId) =
         evalPlace 1 cfg env (.var varId) >>= fun loc => pure (.val (.ref loc)) := by
       simp only [execOp, execPure, evalPlace, slotRoot_eq related, bind_assoc, pure_bind]
@@ -220,13 +220,13 @@ private theorem literal_assignment_execution_traversal {cfg : Cfg} {env : Env} {
     · exact ⟨⟨.rhs, rfl, aliasSite, aliasQuery, ⟨⟨addressed, first.pp, first.rel⟩, output_frame source, retainedFirst⟩⟩,
         first.same, Or.inl rfl⟩
     · intro fuel
-      apply DemandLinearStep.definition secondInstruction
+      apply DemandInstructionStep.definition secondInstruction
       simp only [execOp, execPure, pure_apply]
     · apply DemandUniformTraversal.next (middle := ⟨(pt.1, pt.2 + 3), (frame.set address (.val (.ref location))).set value (.val (.int type number)), after⟩)
       · exact ⟨⟨.mutation, rfl, aliasSite, aliasQuery, ⟨⟨evaluated, second.pp, second.rel⟩, output_frame source, retainedSecond⟩⟩,
           first.same.trans second.same first.mono, Or.inl rfl⟩
       · intro fuel
-        apply DemandLinearStep.effect lastInstruction
+        apply DemandInstructionStep.effect lastInstruction
         simp only [execEff, getVal_of addressCell', getVal_of valueCell,
           Core.expectRef, pure_bind, bind_apply, writeDone, pure_apply]
       · apply DemandUniformTraversal.done

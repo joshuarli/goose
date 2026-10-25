@@ -448,5 +448,35 @@
   "limits": "No general expression, call, control-flow, run-creation or whole-module demand transfer. TH-LOWER-03 remains deferred.",
   "reviewer": "Independent review identified and corrected the former uniform-fuel contract; final statements reviewed at a289f963.",
   "evidence": "Full source qualification, matching native/interpreted 183-claim audit and five independent kernels at a289f963."
+ },
+ {
+  "feature": "Accepted Core expression boundary demand transfer",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_expression_demand_reflection",
+  "statement": "Every accepted expression preserves the source output demand frame and incoming SSA operand and run maps at a reflected successful boundary. A successful checked aliasExpr query gives aliases realized by the result SSA cell. Reflection retains exact stopping outcomes and target residual fuel.",
+  "assumptions": "ExprSource acceptance and its source invariants. Actual lowering, generated builder state and source/target frame correspondence. Incoming maps are realized and bounded. Shrink maps occur in the actual source retained list.",
+  "limits": "Expression boundaries only. No interior prefix, nested call activation or whole-module demand traversal is proved. This component does not close TH-LOWER-03.",
+  "reviewer": "Independent review pending.",
+  "evidence": "Goose/Lower/DemandExpressionBoundary.lean; DemandExpressionBoundaryChecks.lean covers an accepted call, checked push-result roots and an invalid retained run; registered axiom audit."
+ },
+ {
+  "feature": "Accepted Core short-circuit control demand transfer",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
+  "statement": "The actual emitted conditional branch enters the canonical RHS source context or the skipped-expression join. It preserves incoming operand and run SSA cells. A skipped RHS writes the boolean result only to the fresh join parameter.",
+  "assumptions": "Accepted parent ExprSource, actual completed left evaluation and its ExpressionDemandBoundary. Canonical scFork emission extends into the target function. Incoming shrink aliases occur in the parent source retained list.",
+  "limits": "One actual control edge after the left expression completes. Operand interior prefixes, general branches and loops, nested call activations and whole-module traversal remain open. This component does not close TH-LOWER-03.",
+  "reviewer": "Independent review pending.",
+  "evidence": "Goose/Lower/DemandShortCircuit.lean; DemandShortCircuitChecks.lean rejects the opposite branch and checks all four branch choices with a retained sampled SSA run; registered axiom audit."
+ },
+ {
+  "feature": "Construction receiver fixed-width storage write",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.storage_count; Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.other_storage; Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.byte_count; Goose.Proofs.ConstructionStorage.writeElement_receiver_fixedWidth",
+  "statement": "A successful bounded receiver write changes the exact receiving storage row. The storage count, other storage rows, receiver byte count and published count are preserved.",
+  "assumptions": "The destination and storage row are found. The destination has open progress and receiver use. The payload fits within the existing storage bytes, and writeElement succeeds.",
+  "limits": "Bounds are explicit and are not derived from validation. The theorem frames only the storage array, not other ConstructionState fields. No whole-evaluation construction or TH-CON claim follows.",
+  "reviewer": "Independent review pending.",
+  "evidence": "Goose/Proofs/ConstructionFixedWidthStorageWrite.lean; registered axiom audit."
  }
 ]

@@ -90,7 +90,7 @@ theorem accepted_literal_assignments_carried_prefix_invariant {cfg : Cfg} {env :
     (point : ls.pp = some pt) (extended : ExtT ls' cx.fn.blocks)
     (related : Rel cfg env cx frame ls) :
     ∀ (taken fuel : Nat) (reached : DemandRuntimePoint), taken ≤ stmts.length * 3 →
-      DemandLinearPrefix cx taken fuel ⟨pt, frame, state⟩ reached →
+      DemandPrefix cx taken fuel ⟨pt, frame, state⟩ reached →
       LiteralAssignmentSequenceDemand cfg env cx reached ∧ map.Realizes cfg.mod source.world env reached := by
   obtain ⟨after, finalPoint, finalFrame, traversal, _, _⟩ :=
     accepted_literal_assignments_carried_traversal fragment source map admitted bounded realized
