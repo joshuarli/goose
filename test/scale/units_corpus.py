@@ -152,7 +152,7 @@ class Corpus:
         if self.pipeline:
             out = [("O0", ["--pipeline", self.pipeline], [], 0), ("O2", ["--pipeline", self.pipeline], [], 2)]
             if kind == "fixture" and run_tests.debug_fixture(f, line):
-                out.append(("O2-debug", ["--pipeline", self.pipeline], ["GS_DEBUG=1"], 2))
+                out.append(("O2-debug", ["--pipeline", self.pipeline, "-DGS_DEBUG=1"], ["GS_DEBUG=1"], 2))
             return out
         out = [("O0", ["-O0"], [], 0), ("O2", ["-O2"], [], 2), ("O2-share", ["-O2", "--share"], [], 2)]
         if kind == "fixture" and run_tests.debug_fixture(f, line):
