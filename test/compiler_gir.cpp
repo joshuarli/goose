@@ -9033,6 +9033,146 @@ void NonreturningConstructionCallsKeepTheirNormalEdgeProof() {
     assert(changed && Code(normal) == "GIR-V020");
 }
 
+CoreModule ConstructionScalarCallBeforeNamedOwnerModule() {
+    auto core = ConstructionNamedOwnerWithScalarResultModule();
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto integer = core.IntType(CoreIntTy::I64);
+    std::swap(core.impls[0].vars[0], core.impls[0].vars[1]);
+    std::swap(core.impls[1].results[0], core.impls[1].results[1]);
+    core.impls[1].summary.constructs = { 1 };
+    auto &returned = core.impls[1].body.stmts[1].values;
+    std::swap(returned[0], returned[1]);
+    returned[0] = make_unique<CoreExpr>();
+    returned[0]->kind = CoreExprKind::Call;
+    returned[0]->type = integer;
+    returned[0]->ctx = 2;
+    returned[0]->org = origin;
+    core.impls[0].body.stmts[0].expr->type = integer;
+    CoreImpl side;
+    side.name = "side";
+    side.body.scope = 0;
+    side.results = { { integer, CoreRequest::Register, nullopt } };
+    side.body.value = CoreInt(integer, "19");
+    core.impls.push_back(std::move(side));
+    core.contexts.push_back(CoreContext { .impl = 2, .resultroots = { {} } });
+    return core;
+}
+CoreModule ConstructionBorrowedScalarReadModule() {
+    auto core = CoreLengthModule(CoreType::Grow);
+    auto integer = core.IntType(CoreIntTy::I64);
+    auto owner = core.impls[0].vars[0].type;
+    auto reference = core.Intern(CoreType { .kind = CoreType::Ref, .mut = CoreMut::Const, .elem = owner });
+    auto origin = CoreOrigin { 0, 1, CoreOriginKind::Expr };
+    auto &call = core.impls[0].body.stmts[1].expr;
+    call = make_unique<CoreExpr>(); call->kind = CoreExprKind::Call; call->type = integer; call->ctx = 1; call->org = origin;
+    call->args.push_back(CoreArgReference { CoreMut::Const, CoreLocal(0) });
+    core.impls[0].summary.aborts = true;
+    CoreImpl reader;
+    reader.name = "first"; reader.body.scope = 0; reader.summary.aborts = true; reader.summary.reads = { { false, 0 } };
+    reader.vars = { { "items", reference, CoreVarKind::Let, 0, origin } };
+    reader.params = { { 0, true } };
+    reader.results = { { integer, CoreRequest::Register, nullopt } };
+    auto dereference = make_unique<CorePlace>(); dereference->kind = CorePlace::Deref;
+    dereference->expr = make_unique<CoreExpr>(); dereference->expr->kind = CoreExprKind::Read;
+    dereference->expr->type = reference; dereference->expr->place = CoreLocal(0);
+    auto element = make_unique<CorePlace>(); element->kind = CorePlace::Elem;
+    element->view = CorePlaceView(std::move(dereference)); element->expr = CoreInt(integer, "0"); element->org = origin;
+    reader.body.value = make_unique<CoreExpr>(); reader.body.value->kind = CoreExprKind::Read;
+    reader.body.value->type = integer; reader.body.value->place = std::move(element); reader.body.value->org = origin;
+    core.impls.push_back(std::move(reader));
+    core.contexts.push_back(CoreContext { .impl = 1, .varroots = { { 0, { { CoreRootRef::Param, 0 } } } }, .resultroots = { {} } });
+    return core;
+}
+
+void ConstructionScalarMailboxesRequirePrivateCallerStorage() {
+    auto core = ConstructionScalarCallBeforeNamedOwnerModule();
+    auto high = GirLowerer(core, core.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } }, [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    assert(Code(low) == "");
+    auto output = get<GirLowScalarResult>((*low.funcs[1].lowResults)[0].layout).output;
+    auto nextValue = [](const GirFunc &function) {
+        int next = 0;
+        for (auto &block : function.blocks) {
+            for (auto [value, type] : block.params) next = max(next, value + 1);
+            for (auto &inst : block.insts) if (GirDefinesValue(inst)) next = max(next, inst.res + 1);
+        }
+        return next;
+    };
+    for (bool exposeFrame : { false, true }) {
+        auto forged = low;
+        auto &caller = forged.funcs[0];
+        bool changed = false;
+        int header = -1;
+        for (auto &block : caller.blocks) {
+            for (size_t position = 0; position < block.insts.size(); position++) {
+                auto &inst = block.insts[position];
+                if (inst.op == GirOp::FrameAddr && caller.members[inst.idx].kind == GirMember::Header) header = inst.res;
+                if (inst.op != GirOp::Call || inst.idx != 1) continue;
+                assert(header >= 0);
+                GirInst alias;
+                if (exposeFrame) {
+                    alias.op = GirOp::HdrInit; alias.a = header; alias.b = inst.vals[output];
+                } else {
+                    alias = Def(GirOp::HdrBase, nextValue(caller)); alias.ty = forged.Intern(CoreType { .kind = CoreType::Ptr }); alias.a = header;
+                    inst.vals[output] = alias.res;
+                }
+                block.insts.insert(block.insts.begin() + position, alias);
+                changed = true; break;
+            }
+            if (changed) break;
+        }
+        assert(changed && Code(forged) == "GIR-V090");
+    }
+    for (bool rawStore : { false, true }) {
+        auto forged = low;
+        auto &callee = forged.funcs[1];
+        bool changed = false;
+        for (auto &block : callee.blocks) {
+            for (size_t position = 0; position < block.insts.size(); position++) {
+                auto &inst = block.insts[position];
+                if (inst.op != GirOp::HdrInit) continue;
+                GirInst expose;
+                expose.op = rawStore ? GirOp::PStore : GirOp::HdrInit;
+                expose.a = inst.a; expose.b = callee.blocks[0].params[output].first;
+                expose.ty = forged.Intern(CoreType { .kind = CoreType::Ptr });
+                block.insts.insert(block.insts.begin() + position + 1, expose);
+                changed = true; break;
+            }
+            if (changed) break;
+        }
+        assert(changed && Code(forged) == "GIR-V090");
+    }
+    auto borrowedCore = ConstructionBorrowedScalarReadModule();
+    auto borrowedHigh = GirLowerer(borrowedCore, borrowedCore.files, { CoreOrigin { 0, 1, CoreOriginKind::Expr } }, [](const CoreOrigin &) { return 0; }).Lower();
+    assert(Code(borrowedHigh) == "");
+    auto borrowed = GirToLow(borrowedHigh).Lower();
+    assert(Code(borrowed) == "");
+    auto borrowedOutput = get<GirLowScalarResult>((*borrowed.funcs[1].lowResults)[0].layout).output;
+    auto &borrower = borrowed.funcs[0];
+    bool aliased = false;
+    for (auto &block : borrower.blocks) {
+        for (size_t position = 0; position < block.insts.size(); position++) {
+            auto &inst = block.insts[position];
+            if (inst.op != GirOp::Call || inst.idx != 1) continue;
+            auto alias = Def(GirOp::HdrBase, nextValue(borrower));
+            alias.ty = borrowed.Intern(CoreType { .kind = CoreType::Ptr }); alias.a = inst.vals[1];
+            inst.vals[borrowedOutput] = alias.res;
+            block.insts.insert(block.insts.begin() + position, alias);
+            aliased = true; break;
+        }
+        if (aliased) break;
+    }
+    assert(aliased && Code(borrowed) == "GIR-V090");
+    auto premature = low;
+    auto &callee = premature.funcs[1];
+    auto read = Def(GirOp::PLoad, nextValue(callee));
+    read.ty = core.IntType(CoreIntTy::I64);
+    read.a = callee.blocks[0].params[output].first;
+    callee.blocks[0].insts.insert(callee.blocks[0].insts.begin(), read);
+    assert(Code(premature) == "GIR-V090");
+}
+
 void ConstructionGlobalOwnersInitializeTheirBackingBase() {
     for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
         auto high = Base();
@@ -9081,6 +9221,7 @@ int main() {
     ConstructionScalarIndexKeepsItsProgramValue();
     NonreturningConstructionCallsKeepTheirNormalEdgeProof();
     ConstructionGlobalOwnersInitializeTheirBackingBase();
+    ConstructionScalarMailboxesRequirePrivateCallerStorage();
     OwnerBorrowsMakeMutableOwnerAuthorityExplicit();
     OwnerReferencesLowerThroughExplicitBorrowFormation();
     ConstructionTargetDestinationsForwardProgressThroughCalls();

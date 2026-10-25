@@ -63,6 +63,7 @@ private:
     vector<vector<int>> lowPassedPairs, lowStackParams;
     vector<vector<pair<int, int>>> lowMarkParams;
     vector<bool> lowReturnedOwnerPairs;
+    vector<set<int>> lowPrivateScalarParameters, lowPrivateScalarFrames;
     vector<set<int>> constructionNeeds, constructionEscapes;
     set<pair<int, int>> checkedTargetUnreachable;
     struct LowReturnFlagEffect {
@@ -315,6 +316,7 @@ private:
                 lowPassedPairs = std::move(passed);
                 lowReturnedOwnerPairs = std::move(returned);
             }
+            if (CoreHasConstruction(m.profile)) ComputePrivateScalarOutputs();
             for (auto &fn : fns) CheckPlacement(fn);
             for (auto &fn : fns) CheckOrigins(fn);
             return;
@@ -3245,6 +3247,78 @@ private:
         }
     }
 
+    void ComputePrivateScalarOutputs() {
+        vector<map<int, GirTypeId>> directOutputs(m.funcs.size());
+        vector<map<int, vector<const GirInst *>>> usesByValue(m.funcs.size());
+        lowPrivateScalarParameters.assign(m.funcs.size(), {});
+        lowPrivateScalarFrames.assign(m.funcs.size(), {});
+        auto scalar = [&](GirTypeId type) {
+            auto kind = m.Type(type).kind;
+            return kind == CoreType::Int || kind == CoreType::Bool;
+        };
+        auto typedAccess = [&](const GirInst &inst, int address, GirTypeId type) {
+            return (inst.op == GirOp::PLoad || inst.op == GirOp::PStore) &&
+                inst.a == address && inst.ty == type && inst.b != address;
+        };
+        for (size_t index = 0; index < m.funcs.size(); index++) {
+            auto &function = m.funcs[index];
+            for (auto &block : function.blocks) for (auto &inst : block.insts) {
+                vector<int> uses;
+                Uses(inst, uses);
+                for (auto value : uses) usesByValue[index][value].push_back(&inst);
+            }
+            for (auto &result : *function.lowResults) {
+                auto output = get_if<GirLowScalarResult>(&result.layout);
+                if (!output || !scalar(output->type)) continue;
+                auto address = function.blocks[0].params[output->output].first;
+                bool direct = true;
+                for (auto inst : usesByValue[index][address])
+                    if (!typedAccess(*inst, address, output->type)) direct = false;
+                if (direct) directOutputs[index][output->output] = output->type;
+            }
+        }
+        for (size_t index = 0; index < m.funcs.size(); index++) {
+            auto &function = m.funcs[index];
+            map<int, set<int>> addresses;
+            for (auto &block : function.blocks) for (auto &inst : block.insts)
+                if (inst.op == GirOp::FrameAddr) addresses[inst.idx].insert(inst.res);
+            for (size_t member = 0; member < function.members.size(); member++) {
+                auto &storage = function.members[member];
+                if (storage.kind != GirMember::Bytes && (storage.kind != GirMember::Scalar || !scalar(storage.ty))) continue;
+                auto extent = storage.kind == GirMember::Bytes ? storage.size : FlatSize(storage.ty);
+                bool privateStorage = true;
+                for (auto address : addresses[(int)member]) for (auto instruction : usesByValue[index][address]) {
+                    auto &inst = *instruction;
+                    if ((inst.op == GirOp::PLoad || inst.op == GirOp::PStore) && scalar(inst.ty) &&
+                        FlatSize(inst.ty) == extent && typedAccess(inst, address, inst.ty)) continue;
+                    if (inst.op != GirOp::Call) { privateStorage = false; continue; }
+                    for (size_t parameter = 0; parameter < inst.vals.size(); parameter++) if (inst.vals[parameter] == address) {
+                        auto output = directOutputs[inst.idx].find((int)parameter);
+                        if (output == directOutputs[inst.idx].end() || FlatSize(output->second) != extent) privateStorage = false;
+                    }
+                }
+                if (privateStorage) lowPrivateScalarFrames[index].insert((int)member);
+            }
+        }
+        for (size_t index = 0; index < m.funcs.size(); index++) {
+            if ((int)index == m.entry || find(m.initfuncs.begin(), m.initfuncs.end(), (int)index) != m.initfuncs.end()) continue;
+            for (auto &output : directOutputs[index])
+                lowPrivateScalarParameters[index].insert(m.funcs[index].blocks[0].params[output.first].first);
+        }
+        for (size_t caller = 0; caller < m.funcs.size(); caller++) {
+            auto &function = m.funcs[caller];
+            map<int, int> frames;
+            for (auto &block : function.blocks) for (auto &inst : block.insts)
+                if (inst.op == GirOp::FrameAddr) frames[inst.res] = inst.idx;
+            for (auto &block : function.blocks) for (auto &inst : block.insts) if (inst.op == GirOp::Call)
+                for (auto &output : directOutputs[inst.idx]) {
+                    auto frame = frames.find(inst.vals[output.first]);
+                    if (frame == frames.end() || !lowPrivateScalarFrames[caller].count(frame->second))
+                        lowPrivateScalarParameters[inst.idx].erase(m.funcs[inst.idx].blocks[0].params[output.first].first);
+                }
+        }
+    }
+
     void CheckLowResultFlow(const Fn &fn) {
         auto &function = *fn.f;
         auto functionIndex = (int)(&function - m.funcs.data());
@@ -3344,8 +3418,12 @@ private:
         };
         auto read = [&](const State &state, Address address, int64_t bytes) {
             if (bytes == 0) return;
-            for (auto &blocked : state.blocked) if (blocked.call != -2 && overlaps(address, bytes, blocked))
+            for (auto &blocked : state.blocked) if (blocked.call != -2 && overlaps(address, bytes, blocked)) {
+                bool privateOutput = (blocked.address.kind == Address::Kind::Value && lowPrivateScalarParameters[functionIndex].count(blocked.address.root)) ||
+                    (blocked.address.kind == Address::Kind::Frame && lowPrivateScalarFrames[functionIndex].count(blocked.address.root));
+                if (address.kind == Address::Kind::Unknown && privateOutput) continue;
                 bad("normal output is read before its call completed or its target payload landed");
+            }
         };
         auto initialize = [&](State &state, Address address, int64_t bytes) {
             vector<Blocked> remaining;
