@@ -509,5 +509,25 @@
   "limits": "Does not establish reference or slice target validity, integer ranges, owner alias separation, or preservation through arbitrary initialization, reservation and landing. Universal TH-EXIT remains open.",
   "reviewer": "Independent review pending.",
   "evidence": "ConstructionRootedBacking.lean; registered axiom audit."
+ },
+{
+  "feature": "Demand proof strategy countermodels",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.DemandEndpointClosureChecks.accepted_endpoint_prefix_closure_is_false; Goose.Lower.DemandStateReflectionChecks.accepted_total_state_reflection_is_false",
+  "statement": "An accepted infinite loop refutes lifting successful endpoint observations alone to every reached instruction. An accepted two-parameter call has a GIR timeout after one binding that matches no Core timeout state.",
+  "assumptions": "The specified accepted loop and two-parameter call fixtures and their exact target lowering.",
+  "limits": "These countermodels refute two proposed proof strategies, not TH-LOWER-03. Universal cursor reconstruction remains open.",
+  "reviewer": "Independent review pending.",
+  "evidence": "DemandEndpointClosureChecks.lean and DemandStateReflectionChecks.lean; registered axiom audit."
+ },
+ {
+  "feature": "Accepted call parameter prefix demand cursors",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.BlockSource.parameterPrefix; Goose.Lower.ParameterPrefixCursor.retained; Goose.Lower.DemandParameterPrefixChecks.actual_partial_parameter_point; Goose.Lower.DemandParameterPrefixChecks.actual_timeout_prefix; Goose.Lower.DemandParameterPrefixChecks.accepted_partial_parameter_cursor; Goose.Lower.DemandParameterPrefixChecks.accepted_partial_call_retains_caller",
+  "statement": "Accepted block sources derive a typed demand frame at every parameter prefix, preserving existing roots and caller operand and run maps. The concrete two-parameter call connects its first binding cursor to an actual GIR point and fuel-13 timeout.",
+  "assumptions": "An accepted BlockSource with typed parameter bindings and its source frame. Caller maps are realized in the incoming state. The actual point and timeout correspondence use the specified two-parameter fixture.",
+  "limits": "The generic cursor is not yet reconstructed at arbitrary GIR points. General prologue correspondence, suspended caller stacks, expression and control phases, and whole-module demand traversal remain open. TH-LOWER-03 is not closed.",
+  "reviewer": "Independent review pending.",
+  "evidence": "DemandParameterPrefix.lean and DemandParameterPrefixChecks.lean; registered axiom audit."
  }
 ]

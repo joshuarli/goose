@@ -36,6 +36,8 @@ import Goose.Proofs.ExitExecutionLandedChannels
 import Goose.Proofs.ExitExecutionLandingChecks
 import Goose.Lower.DemandCarriedSequence
 import Goose.Lower.DemandShortCircuit
+import Goose.Lower.DemandEndpointClosureChecks
+import Goose.Lower.DemandParameterPrefixChecks
 import Goose.Proofs.ConstructionFixedWidthStorageWrite
 import Goose.Proofs.ConstructionInvocationReplay
 import Goose.Proofs.ConstructionRepeatedSourceSnapshot
@@ -339,5 +341,14 @@ end Goose.Audit
 #audit Goose.Proofs.ConstructionRepresentation.ValueStorageBacked.construction_frame
 #audit Goose.Proofs.ConstructionRepresentation.bindRoot_freshStored_backing
 #audit Goose.Proofs.ConstructionRepresentation.evalValue_rootedOwnerLength
+
+#audit Goose.Lower.DemandEndpointClosureChecks.accepted_endpoint_prefix_closure_is_false
+#audit Goose.Lower.DemandStateReflectionChecks.accepted_total_state_reflection_is_false
+#audit Goose.Lower.BlockSource.parameterPrefix
+#audit Goose.Lower.ParameterPrefixCursor.retained
+#audit Goose.Lower.DemandParameterPrefixChecks.actual_partial_parameter_point
+#audit Goose.Lower.DemandParameterPrefixChecks.actual_timeout_prefix
+#audit Goose.Lower.DemandParameterPrefixChecks.accepted_partial_parameter_cursor
+#audit Goose.Lower.DemandParameterPrefixChecks.accepted_partial_call_retains_caller
 
 #audit_registry
