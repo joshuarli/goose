@@ -31,6 +31,11 @@ import Goose.Evidence.Simulation
 import Goose.Evidence.SimulationChecks
 import Goose.Proofs.Construct
 import Goose.Proofs.Exit
+import Goose.Proofs.ConstructionRepresentationCalls
+import Goose.Proofs.ExitExecutionLandedChannels
+import Goose.Proofs.ExitExecutionLandingChecks
+import Goose.Lower.DemandCarriedSequence
+import Goose.Construct.ParameterRebindChecks
 
 /-!
 Axiom audit for the theorems the semantics claims.
@@ -287,5 +292,18 @@ end Goose.Audit
 #audit Goose.Proofs.Bounds.checked_fuel
 #audit Goose.Proofs.Bounds.checked_initGlobals
 #audit Goose.Proofs.Bounds.SimulationChecks.fixture_run_replacement
+
+#audit Goose.Construct.validated_implementation_typing
+#audit Goose.Proofs.ConstructionRepresentation.fixedInitializer_evaluation
+#audit Goose.Proofs.ConstructionRepresentation.accepted_integerArray_callValue
+#audit Goose.Proofs.ExitExecution.LandedResultChannels.finishChannels
+#audit Goose.Proofs.ExitExecution.finishActivation_catches_landed
+#audit Goose.Proofs.ExitExecutionLandingChecks.nestedNamedExit_execution
+#audit Goose.Proofs.ExitExecutionLandingChecks.nestedNamedExit_outside_storage
+#audit Goose.Lower.accepted_literal_assignments_carried_prefix_invariant
+#audit Goose.Lower.DemandStoppedTraversal.runAt
+#audit Goose.Construct.ParameterRebindChecks.omitted_rebound_read_rejected
+#audit Goose.Construct.ParameterRebindChecks.inner_scope_rebind_rejected
+#audit Goose.Construct.ParameterRebindChecks.omitted_rebound_result_rejected
 
 #audit_registry
