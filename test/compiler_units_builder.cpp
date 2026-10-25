@@ -44,6 +44,7 @@
 #include "../src/codegen_stacks.h"
 #include "../src/codegen_nodes.h"
 #include "../src/units/postpass.h"
+#include "../src/units/emit.h"
 #include "../src/report/report.h"
 #include "../src/units/share_report.h"
 #include "../src/report/deps_report.h"
@@ -437,7 +438,77 @@ static void TestEmittedSourceUnitBuilder(const string &goose, const string &sour
     assert(!ec);
 }
 
+static void TestSharedProgramSupport() {
+    auto root = AbsolutePath(".work/tmp/compiler_units_support");
+    std::error_code ec;
+    filesystem::remove_all(root, ec);
+    assert(!ec);
+    filesystem::create_directories(root, ec);
+    assert(!ec);
+    UnitSource source;
+    source.support.Type("typedef struct { uint8_t tag; int64_t amount; } support_argument;\n");
+    source.support.State("GS_TLS int64_t support_total;\n");
+    source.support.Function("int64_t support_add(support_argument argument)",
+                            "{ support_total += argument.tag == 1 ? argument.amount : 1000; return support_total; }\n");
+    source.support.Function("int64_t support_finish(void)",
+                            "{ int64_t total = support_total; support_total = 0; return total; }\n");
+    source.gblock = "    int64_t total_at_init;\n";
+    source.globals.push_back({ "globals_module", { "GS_GL->total_at_init" }, "GS_GL->total_at_init" });
+    source.segmodules = { "globals_module" };
+    source.unitinits = { { "globals_module", "initialize" } };
+    source.code = "static void initialize(void) {\n"
+                  "    GS_GL->total_at_init = support_add((support_argument){ 1, 2 });\n}\n"
+                  "static int64_t first(void) {\n"
+                  "    return support_add((support_argument){ 1, 3 });\n}\n"
+                  "static int64_t second(void) {\n"
+                  "    return support_add((support_argument){ 1, 4 });\n}\n"
+                  "int main(void) {\n"
+                  "    segment_globals_module = &segment_globals_module_main;\n"
+                  "    initialize();\n"
+                  "    int64_t a = first();\n"
+                  "    int64_t b = second();\n"
+                  "    int64_t end = support_finish();\n"
+                  "    printf(\"%lld %lld %lld %lld\\n\", (long long)GS_GL->total_at_init, (long long)a, (long long)b, (long long)end);\n"
+                  "    if (support_total != 0) return 1;\n"
+                  "    return 0;\n}\n";
+    source.functions["first"] = { "first_module", nullptr };
+    source.functions["second"] = { "second_module", nullptr };
+    source.fail = [](const string &message) { throw CompileError { message }; };
+    source.segname = [](const string &module) { return "segment_" + module; };
+    UnitInputs input;
+    input.runtime_header = "#ifndef GOOSE_RUNTIME_H\n#define GOOSE_RUNTIME_H\n"
+                           "#include <stdint.h>\n#include <stdio.h>\n"
+                           "#define GS_TLS _Thread_local\n#define GS_HIDDEN\n"
+                           "typedef struct { int unused; } gs_stack;\n";
+    WriteUnits(source, root + "/units", input);
+    Toolchain tc;
+    string why;
+    assert(FindToolchain("", tc, why));
+    auto header = "#include <stdint.h>\n#include <stdio.h>\n"
+                  "#define GS_TLS _Thread_local\n";
+    assert(UnitWriteFile(root + "/single.c", cat(header, source.support.single,
+                         "static int64_t global_total_at_init;\n",
+                         UnitReplace(UnitReplace(source.code, "    segment_globals_module = &segment_globals_module_main;\n", ""), "GS_GL->", "global_"))));
+    for (auto optimization : { "-O0", "-O2" }) {
+        vector<string> command = { tc.cc, optimization };
+        for (auto &unit : unit_stats.units) command.push_back(root + "/units/" + unit.file);
+        command.insert(command.end(), { "-o", root + "/support" });
+        auto compile = RunProcess(command, root);
+        if (!compile.started || compile.code) fputs(compile.output.c_str(), stderr);
+        assert(compile.started && compile.code == 0);
+        auto run = RunProcess({ root + "/support" }, root);
+        assert(run.started && run.code == 0 && run.output == "2 5 9 9\n");
+        auto single_compile = RunProcess({ tc.cc, optimization, root + "/single.c", "-o", root + "/single" }, root);
+        assert(single_compile.started && single_compile.code == 0);
+        auto single_run = RunProcess({ root + "/single" }, root);
+        assert(single_run.started && single_run.code == run.code && single_run.output == run.output);
+    }
+    filesystem::remove_all(root, ec);
+    assert(!ec);
+}
+
 int main(int argc, char **argv) {
+    TestSharedProgramSupport();
     TestNativeUnitBuilderContractDimensions();
     assert(argc == 1 || argc == 3);
     if (argc == 3) TestEmittedSourceUnitBuilder(argv[1], argv[2]);

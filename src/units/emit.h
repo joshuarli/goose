@@ -23,6 +23,7 @@
 #pragma once
 
 #include <filesystem>
+#include "support.h"
 
 namespace goose {
 
@@ -291,6 +292,7 @@ struct UnitGlobalNames {
 
 struct UnitSource {
     string tdecls, data, pdata, gblock, externtext, code, includetext;
+    UnitProgramSupport support;
     vector<string> interfacenames;             // The C names of the types a header may spell.
     vector<UnitGlobalNames> globals;
     vector<pair<string, string>> unitinits;    // Module and the function initializing its globals.
@@ -989,6 +991,11 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
             for (auto &m : chunks[ci].segbodies) scan(src.SegName(m) + "_s");
         }
         for (auto &d : u.defs) scan(d);
+        if (u.kind != UnitBuild::Locations && u.kind != UnitBuild::Literals) {
+            scan(src.support.types);
+            scan(src.support.declarations);
+        }
+        if (u.kind == UnitBuild::Program) scan(src.support.definitions);
         for (auto &r : u.roots) scan(r);
         while (!work.empty()) {
             auto name = work.back();
@@ -1048,6 +1055,11 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
                 parts.includes += (long long)src.includetext.size();
             }
         }
+        if (u.kind != UnitBuild::Locations && u.kind != UnitBuild::Literals) {
+            text += src.support.types + src.support.declarations;
+            parts.types += (long long)src.support.types.size();
+            parts.externs += (long long)src.support.declarations.size();
+        }
         text += "\n";
         for (auto &[name, decl] : externs) {
             text += decl + "\n";
@@ -1057,6 +1069,10 @@ inline void WriteUnits(const UnitSource &src, const string &dir, const UnitInput
         text += "\n";
         // Definitions: entities first, then functions in symbol order.
         for (auto &d : u.defs) { text += d; parts.definitions += (long long)d.size(); }
+        if (u.kind == UnitBuild::Program) {
+            text += src.support.definitions;
+            parts.definitions += (long long)src.support.definitions.size();
+        }
         vector<int> fns = u.chunks;
         for (auto &s : statics) fns.push_back(ents[entof[s]].chunk);
         sort(fns.begin(), fns.end(), [&](int a, int b) { return chunks[a].name < chunks[b].name; });

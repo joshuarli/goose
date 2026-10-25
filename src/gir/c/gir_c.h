@@ -62,58 +62,90 @@ public:
             Append(tdecls, "typedef char gir_pointer_bytes_check[(sizeof(void *) == ", m.pointerBytes,
                    ") ? 1 : -1];\n");
         for (auto size : blobs) Append(tdecls, "typedef struct { uint64_t w[", (size + 7) / 8, "]; } gir_blob_", size, ";\n");
-        string data;
+        UnitProgramSupport support;
         if (CoreHasConstruction(m.profile)) {
-            data += "static GS_TLS int64_t gir_return_flag;\n";
+            support.State("GS_TLS int64_t gir_return_flag;\n");
             for (size_t target = 0; target < m.lowtargets.size(); target++)
                 for (size_t cell = 0; cell < m.lowtargets[target].cells.size(); cell++)
-                    Append(data, "static GS_TLS ", CT(m.lowtargets[target].cells[cell]), " gir_target_", target, "_", cell, ";\n");
-            data += "static GS_TLS gs_stack **gir_stack_cells;\nstatic GS_TLS size_t gir_stack_capacity;\n";
-            data += "static gs_stack *gir_stack_at(int64_t base, int64_t offset) { if (base < 0 || offset < 0 || base > INT64_MAX - offset) gs_panic(\"invalid construction stack base\"); int64_t index = base + offset; if ((uint64_t)index >= SIZE_MAX / sizeof(gs_stack *)) gs_panic(\"invalid construction stack index\"); size_t needed = (size_t)index + 1; if (needed > gir_stack_capacity) { size_t capacity = gir_stack_capacity ? gir_stack_capacity : 8; while (capacity < needed) { if (capacity > SIZE_MAX / sizeof(gs_stack *) / 2) gs_panic(\"construction stack directory overflow\"); capacity *= 2; } gs_stack **cells = (gs_stack **)realloc(gir_stack_cells, capacity * sizeof(gs_stack *)); if (!cells) gs_panic(\"out of memory allocating construction stacks\"); memset(cells + gir_stack_capacity, 0, (capacity - gir_stack_capacity) * sizeof(gs_stack *)); gir_stack_cells = cells; gir_stack_capacity = capacity; } if (!gir_stack_cells[index]) { gir_stack_cells[index] = (gs_stack *)malloc(sizeof(gs_stack)); if (!gir_stack_cells[index]) gs_panic(\"out of memory allocating construction stack cell\"); gs_stack_init(gir_stack_cells[index]); } return gir_stack_cells[index]; }\n";
-            data += "static void gir_stack_cells_close(void) { for (size_t index = 0; index < gir_stack_capacity; index++) free(gir_stack_cells[index]); free(gir_stack_cells); gir_stack_cells = NULL; gir_stack_capacity = 0; }\n";
+                    support.State(cat("GS_TLS ", CT(m.lowtargets[target].cells[cell]), " gir_target_", target, "_", cell, ";\n"));
+            support.State("GS_TLS gs_stack **gir_stack_cells;\n");
+            support.State("GS_TLS size_t gir_stack_capacity;\n");
+            support.Function("gs_stack *gir_stack_at(int64_t base, int64_t offset)", R"GIRSUPPORT({ if (base < 0 || offset < 0 || base > INT64_MAX - offset) gs_panic("invalid construction stack base"); int64_t index = base + offset; if ((uint64_t)index >= SIZE_MAX / sizeof(gs_stack *)) gs_panic("invalid construction stack index"); size_t needed = (size_t)index + 1; if (needed > gir_stack_capacity) { size_t capacity = gir_stack_capacity ? gir_stack_capacity : 8; while (capacity < needed) { if (capacity > SIZE_MAX / sizeof(gs_stack *) / 2) gs_panic("construction stack directory overflow"); capacity *= 2; } gs_stack **cells = (gs_stack **)realloc(gir_stack_cells, capacity * sizeof(gs_stack *)); if (!cells) gs_panic("out of memory allocating construction stacks"); memset(cells + gir_stack_capacity, 0, (capacity - gir_stack_capacity) * sizeof(gs_stack *)); gir_stack_cells = cells; gir_stack_capacity = capacity; } if (!gir_stack_cells[index]) { gir_stack_cells[index] = (gs_stack *)malloc(sizeof(gs_stack)); if (!gir_stack_cells[index]) gs_panic("out of memory allocating construction stack cell"); gs_stack_init(gir_stack_cells[index]); } return gir_stack_cells[index]; }
+)GIRSUPPORT");
+            support.Function("void gir_stack_cells_close(void)", R"GIRSUPPORT({ for (size_t index = 0; index < gir_stack_capacity; index++) free(gir_stack_cells[index]); free(gir_stack_cells); gir_stack_cells = NULL; gir_stack_capacity = 0; }
+)GIRSUPPORT");
             if (constructionTrace) {
-                data += "static FILE *gir_trace_file;\nstatic int gir_trace_comma;\nstatic int64_t gir_trace_storage, gir_trace_destination;\n";
-                data += "static void gir_trace_fail(void) { perror(\"construction trace\"); _Exit(74); }\n";
-                data += "static void gir_source_close(void);\nstatic void gir_trace_close(void) { gir_source_close(); if (fclose(gir_trace_file) != 0) gir_trace_fail(); gir_trace_file = NULL; }\n";
-                Append(data, "static void gir_trace_open(void) { gir_trace_file = fopen(", CStr(*constructionTrace),
-                       ", \"wb\"); if (!gir_trace_file) gir_trace_fail(); if (atexit(gir_trace_close) != 0) gir_trace_fail(); if (fputs(\"[\\\"construction\\\",[]]\\n\", gir_trace_file) < 0 || fflush(gir_trace_file) != 0) gir_trace_fail(); }\n");
-                data += "static void gir_trace_record(const char *kind, const char *reason, size_t n, const int64_t *v) { if (!gir_trace_file) return; if (fseek(gir_trace_file, -3, SEEK_END) != 0) gir_trace_fail(); if (gir_trace_comma && fputc(',', gir_trace_file) == EOF) gir_trace_fail(); gir_trace_comma = 1; if (fprintf(gir_trace_file, \"[\\\"%s\\\"\", kind) < 0) gir_trace_fail(); if (strcmp(kind, \"copy\") == 0) { if (fprintf(gir_trace_file, \",[\\\"%s\\\",%lld\", reason, (long long)v[0]) < 0) gir_trace_fail(); if (strcmp(reason, \"storage\") == 0) { if (fputs(\",[\", gir_trace_file) < 0) gir_trace_fail(); for (size_t k = 1; k + 1 < n; k++) if (fprintf(gir_trace_file, \"%s%lld\", k > 1 ? \",\" : \"\", (long long)v[k]) < 0) gir_trace_fail(); if (fputc(']', gir_trace_file) == EOF) gir_trace_fail(); } if (fprintf(gir_trace_file, \"],%lld\", (long long)v[n - 1]) < 0) gir_trace_fail(); } else { for (size_t k = 0; k < n; k++) if (fprintf(gir_trace_file, \",%lld\", (long long)v[k]) < 0) gir_trace_fail(); if (*reason && fprintf(gir_trace_file, \",\\\"%s\\\"\", reason) < 0) gir_trace_fail(); } if (fputc(']', gir_trace_file) == EOF || fputs(\"]]\\n\", gir_trace_file) < 0 || fflush(gir_trace_file) != 0) gir_trace_fail(); }\n";
-                data += R"(
-typedef struct gir_source { size_t refs, count; int64_t storage; int64_t path[]; } gir_source;
-typedef struct gir_source_slot { uint8_t **value; struct gir_source_slot *next; } gir_source_slot;
-typedef struct gir_source_scope { struct gir_source_scope *previous; gir_source_slot *slots; } gir_source_scope;
-typedef struct gir_source_call { struct gir_source_call *previous; size_t count; gir_source **arguments, **results; } gir_source_call;
-static GS_TLS gir_source_scope *gir_source_scope_top;
-static GS_TLS gir_source_call *gir_source_call_top;
-static gir_source **gir_global_sources;
-static size_t gir_global_sources_count;
-static void *gir_source_alloc(size_t size) { void *value = calloc(1, size); if (!value) gs_panic("out of memory recording construction provenance"); return value; }
-static void gir_source_retain(gir_source *source) { if (source) { if (source->refs == SIZE_MAX) gir_trace_fail(); source->refs++; } }
-static void gir_source_release(gir_source *source) { if (source && --source->refs == 0) free(source); }
-static void gir_source_assign(uint8_t **value, gir_source *source) { if (!gir_source_scope_top) gir_trace_fail(); gir_source_slot *slot = gir_source_scope_top->slots; while (slot && slot->value != value) slot = slot->next; if (!slot) { slot = (gir_source_slot *)gir_source_alloc(sizeof(*slot)); slot->value = value; slot->next = gir_source_scope_top->slots; gir_source_scope_top->slots = slot; } gir_source_retain(source); gir_source_release((gir_source *)*value); *value = (uint8_t *)source; }
-static gir_source *gir_source_new(int64_t storage, size_t count, const int64_t *path) { if (storage < 0 || count > (SIZE_MAX - sizeof(gir_source)) / sizeof(int64_t)) gir_trace_fail(); gir_source *source = (gir_source *)gir_source_alloc(sizeof(*source) + count * sizeof(int64_t)); source->storage = storage; source->count = count; for (size_t index = 0; path && index < count; index++) { if (path[index] < 0) gir_trace_fail(); source->path[index] = path[index]; } return source; }
-static gir_source *gir_source_child(gir_source *parent, int64_t index) { if (!parent || index < 0 || parent->count == SIZE_MAX) gir_trace_fail(); gir_source *source = gir_source_new(parent->storage, parent->count + 1, NULL); if (parent->count) memcpy(source->path, parent->path, parent->count * sizeof(int64_t)); source->path[parent->count] = index; return source; }
-static uint8_t *gir_source_enter(void) { gir_source_scope *scope = (gir_source_scope *)gir_source_alloc(sizeof(*scope)); scope->previous = gir_source_scope_top; gir_source_scope_top = scope; return (uint8_t *)scope; }
-static void gir_source_leave(uint8_t *token) { gir_source_scope *scope = (gir_source_scope *)token; if (scope != gir_source_scope_top) gir_trace_fail(); while (scope->slots) { gir_source_slot *slot = scope->slots; scope->slots = slot->next; gir_source_release((gir_source *)*slot->value); *slot->value = NULL; free(slot); } gir_source_scope_top = scope->previous; free(scope); }
-static uint8_t *gir_source_call_push(size_t count, gir_source *const *arguments) { gir_source_call *call = (gir_source_call *)gir_source_alloc(sizeof(*call)); call->previous = gir_source_call_top; call->count = count; call->arguments = (gir_source **)gir_source_alloc((count + 1) * sizeof(gir_source *)); call->results = (gir_source **)gir_source_alloc((count + 1) * sizeof(gir_source *)); for (size_t position = 1; position <= count; position++) { call->arguments[position] = arguments[position - 1]; gir_source_retain(arguments[position - 1]); } gir_source_call_top = call; return (uint8_t *)call; }
-static gir_source *gir_source_param(size_t position) { gir_source_call *call = gir_source_call_top; if (!call || position == 0 || position > call->count || !call->arguments[position]) gir_trace_fail(); return call->arguments[position]; }
-static void gir_source_result(size_t position, gir_source *source) { gir_source_call *call = gir_source_call_top; if (!call || position == 0 || position > call->count || !source) gir_trace_fail(); gir_source_retain(source); gir_source_release(call->results[position]); call->results[position] = source; }
-static gir_source *gir_source_call_get(uint8_t *token, size_t position) { gir_source_call *call = (gir_source_call *)token; if (call != gir_source_call_top || position == 0 || position > call->count || !call->results[position]) gir_trace_fail(); return call->results[position]; }
-static void gir_source_call_pop(uint8_t *token) { gir_source_call *call = (gir_source_call *)token; if (call != gir_source_call_top) gir_trace_fail(); for (size_t position = 1; position <= call->count; position++) { gir_source_release(call->arguments[position]); gir_source_release(call->results[position]); } gir_source_call_top = call->previous; free(call->arguments); free(call->results); free(call); }
-static void gir_source_close(void) { if (gir_source_scope_top || gir_source_call_top) gir_trace_fail(); for (size_t position = 0; position < gir_global_sources_count; position++) gir_source_release(gir_global_sources[position]); free(gir_global_sources); }
-static void gir_source_global_set(size_t position, gir_source *source) { gir_source_retain(source); gir_source_release(gir_global_sources[position]); gir_global_sources[position] = source; }
-static void gir_source_copy(gir_source *source, int64_t destination) { if (!source || source->count > SIZE_MAX - 2) gir_trace_fail(); int64_t *values = (int64_t *)gir_source_alloc((source->count + 2) * sizeof(int64_t)); values[0] = source->storage; for (size_t index = 0; index < source->count; index++) values[index + 1] = source->path[index]; values[source->count + 1] = destination; gir_trace_record("copy", "storage", source->count + 2, values); free(values); }
-)";
+                support.State("FILE *gir_trace_file;\n");
+                support.State("int gir_trace_comma;\n");
+                support.State("int64_t gir_trace_storage, gir_trace_destination;\n");
+                support.Function("void gir_trace_fail(void)", R"GIRSUPPORT({ perror("construction trace"); _Exit(74); }
+)GIRSUPPORT");
+                support.Forward("void gir_source_close(void);\n");
+                support.Function("void gir_trace_close(void)", R"GIRSUPPORT({ gir_source_close(); if (fclose(gir_trace_file) != 0) gir_trace_fail(); gir_trace_file = NULL; }
+)GIRSUPPORT");
+                support.Function("void gir_trace_open(void)", cat("{ gir_trace_file = fopen(", CStr(*constructionTrace),
+                       ", \"wb\"); if (!gir_trace_file) gir_trace_fail(); if (atexit(gir_trace_close) != 0) gir_trace_fail(); if (fputs(\"[\\\"construction\\\",[]]\\n\", gir_trace_file) < 0 || fflush(gir_trace_file) != 0) gir_trace_fail(); }\n"));
+                support.Function("void gir_trace_record(const char *kind, const char *reason, size_t n, const int64_t *v)", R"GIRSUPPORT({ if (!gir_trace_file) return; if (fseek(gir_trace_file, -3, SEEK_END) != 0) gir_trace_fail(); if (gir_trace_comma && fputc(',', gir_trace_file) == EOF) gir_trace_fail(); gir_trace_comma = 1; if (fprintf(gir_trace_file, "[\"%s\"", kind) < 0) gir_trace_fail(); if (strcmp(kind, "copy") == 0) { if (fprintf(gir_trace_file, ",[\"%s\",%lld", reason, (long long)v[0]) < 0) gir_trace_fail(); if (strcmp(reason, "storage") == 0) { if (fputs(",[", gir_trace_file) < 0) gir_trace_fail(); for (size_t k = 1; k + 1 < n; k++) if (fprintf(gir_trace_file, "%s%lld", k > 1 ? "," : "", (long long)v[k]) < 0) gir_trace_fail(); if (fputc(']', gir_trace_file) == EOF) gir_trace_fail(); } if (fprintf(gir_trace_file, "],%lld", (long long)v[n - 1]) < 0) gir_trace_fail(); } else { for (size_t k = 0; k < n; k++) if (fprintf(gir_trace_file, ",%lld", (long long)v[k]) < 0) gir_trace_fail(); if (*reason && fprintf(gir_trace_file, ",\"%s\"", reason) < 0) gir_trace_fail(); } if (fputc(']', gir_trace_file) == EOF || fputs("]]\n", gir_trace_file) < 0 || fflush(gir_trace_file) != 0) gir_trace_fail(); }
+)GIRSUPPORT");
+                support.Space("\n");
+                support.Type(R"GIRSUPPORT(typedef struct gir_source { size_t refs, count; int64_t storage; int64_t path[]; } gir_source;
+)GIRSUPPORT");
+                support.Type(R"GIRSUPPORT(typedef struct gir_source_slot { uint8_t **value; struct gir_source_slot *next; } gir_source_slot;
+)GIRSUPPORT");
+                support.Type(R"GIRSUPPORT(typedef struct gir_source_scope { struct gir_source_scope *previous; gir_source_slot *slots; } gir_source_scope;
+)GIRSUPPORT");
+                support.Type(R"GIRSUPPORT(typedef struct gir_source_call { struct gir_source_call *previous; size_t count; gir_source **arguments, **results; } gir_source_call;
+)GIRSUPPORT");
+                support.State("GS_TLS gir_source_scope *gir_source_scope_top;\n");
+                support.State("GS_TLS gir_source_call *gir_source_call_top;\n");
+                support.State("gir_source **gir_global_sources;\n");
+                support.State("size_t gir_global_sources_count;\n");
+                support.Function("void *gir_source_alloc(size_t size)", R"GIRSUPPORT({ void *value = calloc(1, size); if (!value) gs_panic("out of memory recording construction provenance"); return value; }
+)GIRSUPPORT");
+                support.Function("void gir_source_retain(gir_source *source)", R"GIRSUPPORT({ if (source) { if (source->refs == SIZE_MAX) gir_trace_fail(); source->refs++; } }
+)GIRSUPPORT");
+                support.Function("void gir_source_release(gir_source *source)", R"GIRSUPPORT({ if (source && --source->refs == 0) free(source); }
+)GIRSUPPORT");
+                support.Function("void gir_source_assign(uint8_t **value, gir_source *source)", R"GIRSUPPORT({ if (!gir_source_scope_top) gir_trace_fail(); gir_source_slot *slot = gir_source_scope_top->slots; while (slot && slot->value != value) slot = slot->next; if (!slot) { slot = (gir_source_slot *)gir_source_alloc(sizeof(*slot)); slot->value = value; slot->next = gir_source_scope_top->slots; gir_source_scope_top->slots = slot; } gir_source_retain(source); gir_source_release((gir_source *)*value); *value = (uint8_t *)source; }
+)GIRSUPPORT");
+                support.Function("gir_source *gir_source_new(int64_t storage, size_t count, const int64_t *path)", R"GIRSUPPORT({ if (storage < 0 || count > (SIZE_MAX - sizeof(gir_source)) / sizeof(int64_t)) gir_trace_fail(); gir_source *source = (gir_source *)gir_source_alloc(sizeof(*source) + count * sizeof(int64_t)); source->storage = storage; source->count = count; for (size_t index = 0; path && index < count; index++) { if (path[index] < 0) gir_trace_fail(); source->path[index] = path[index]; } return source; }
+)GIRSUPPORT");
+                support.Function("gir_source *gir_source_child(gir_source *parent, int64_t index)", R"GIRSUPPORT({ if (!parent || index < 0 || parent->count == SIZE_MAX) gir_trace_fail(); gir_source *source = gir_source_new(parent->storage, parent->count + 1, NULL); if (parent->count) memcpy(source->path, parent->path, parent->count * sizeof(int64_t)); source->path[parent->count] = index; return source; }
+)GIRSUPPORT");
+                support.Function("uint8_t *gir_source_enter(void)", R"GIRSUPPORT({ gir_source_scope *scope = (gir_source_scope *)gir_source_alloc(sizeof(*scope)); scope->previous = gir_source_scope_top; gir_source_scope_top = scope; return (uint8_t *)scope; }
+)GIRSUPPORT");
+                support.Function("void gir_source_leave(uint8_t *token)", R"GIRSUPPORT({ gir_source_scope *scope = (gir_source_scope *)token; if (scope != gir_source_scope_top) gir_trace_fail(); while (scope->slots) { gir_source_slot *slot = scope->slots; scope->slots = slot->next; gir_source_release((gir_source *)*slot->value); *slot->value = NULL; free(slot); } gir_source_scope_top = scope->previous; free(scope); }
+)GIRSUPPORT");
+                support.Function("uint8_t *gir_source_call_push(size_t count, gir_source *const *arguments)", R"GIRSUPPORT({ gir_source_call *call = (gir_source_call *)gir_source_alloc(sizeof(*call)); call->previous = gir_source_call_top; call->count = count; call->arguments = (gir_source **)gir_source_alloc((count + 1) * sizeof(gir_source *)); call->results = (gir_source **)gir_source_alloc((count + 1) * sizeof(gir_source *)); for (size_t position = 1; position <= count; position++) { call->arguments[position] = arguments[position - 1]; gir_source_retain(arguments[position - 1]); } gir_source_call_top = call; return (uint8_t *)call; }
+)GIRSUPPORT");
+                support.Function("gir_source *gir_source_param(size_t position)", R"GIRSUPPORT({ gir_source_call *call = gir_source_call_top; if (!call || position == 0 || position > call->count || !call->arguments[position]) gir_trace_fail(); return call->arguments[position]; }
+)GIRSUPPORT");
+                support.Function("void gir_source_result(size_t position, gir_source *source)", R"GIRSUPPORT({ gir_source_call *call = gir_source_call_top; if (!call || position == 0 || position > call->count || !source) gir_trace_fail(); gir_source_retain(source); gir_source_release(call->results[position]); call->results[position] = source; }
+)GIRSUPPORT");
+                support.Function("gir_source *gir_source_call_get(uint8_t *token, size_t position)", R"GIRSUPPORT({ gir_source_call *call = (gir_source_call *)token; if (call != gir_source_call_top || position == 0 || position > call->count || !call->results[position]) gir_trace_fail(); return call->results[position]; }
+)GIRSUPPORT");
+                support.Function("void gir_source_call_pop(uint8_t *token)", R"GIRSUPPORT({ gir_source_call *call = (gir_source_call *)token; if (call != gir_source_call_top) gir_trace_fail(); for (size_t position = 1; position <= call->count; position++) { gir_source_release(call->arguments[position]); gir_source_release(call->results[position]); } gir_source_call_top = call->previous; free(call->arguments); free(call->results); free(call); }
+)GIRSUPPORT");
+                support.Function("void gir_source_close(void)", R"GIRSUPPORT({ if (gir_source_scope_top || gir_source_call_top) gir_trace_fail(); for (size_t position = 0; position < gir_global_sources_count; position++) gir_source_release(gir_global_sources[position]); free(gir_global_sources); }
+)GIRSUPPORT");
+                support.Function("void gir_source_global_set(size_t position, gir_source *source)", R"GIRSUPPORT({ gir_source_retain(source); gir_source_release(gir_global_sources[position]); gir_global_sources[position] = source; }
+)GIRSUPPORT");
+                support.Function("void gir_source_copy(gir_source *source, int64_t destination)", R"GIRSUPPORT({ if (!source || source->count > SIZE_MAX - 2) gir_trace_fail(); int64_t *values = (int64_t *)gir_source_alloc((source->count + 2) * sizeof(int64_t)); values[0] = source->storage; for (size_t index = 0; index < source->count; index++) values[index + 1] = source->path[index]; values[source->count + 1] = destination; gir_trace_record("copy", "storage", source->count + 2, values); free(values); }
+)GIRSUPPORT");
                 if (!m.lowtargets.empty()) {
-                    Append(data, "#define GIR_SOURCE_TARGETS ", m.lowtargets.size(), "\n");
-                    data += R"(
-typedef struct gir_source_target { struct gir_source_target *previous; gir_source_call *call; size_t target, count; int64_t *positions; gir_source **results; } gir_source_target;
-static GS_TLS gir_source_target *gir_source_targets[GIR_SOURCE_TARGETS];
-static uint8_t *gir_source_target_enter(size_t target, size_t count, const int64_t *positions) { if (target >= GIR_SOURCE_TARGETS) gir_trace_fail(); gir_source_target *record = (gir_source_target *)gir_source_alloc(sizeof(*record)); record->previous = gir_source_targets[target]; record->call = gir_source_call_top; record->target = target; record->count = count; record->positions = (int64_t *)gir_source_alloc((count + 1) * sizeof(int64_t)); record->results = (gir_source **)gir_source_alloc((count + 1) * sizeof(gir_source *)); for (size_t position = 0; position < count; position++) record->positions[position] = positions[position]; gir_source_targets[target] = record; return (uint8_t *)record; }
-static void gir_source_target_leave(uint8_t *token) { gir_source_target *record = (gir_source_target *)token; if (!record || record->target >= GIR_SOURCE_TARGETS || gir_source_targets[record->target] != record) gir_trace_fail(); for (size_t position = 0; position < record->count; position++) gir_source_release(record->results[position]); gir_source_targets[record->target] = record->previous; free(record->positions); free(record->results); free(record); }
-static void gir_source_target_result(size_t target, size_t position, gir_source *source) { if (target >= GIR_SOURCE_TARGETS || !source) gir_trace_fail(); gir_source_target *record = gir_source_targets[target]; if (!record || position >= record->count || record->positions[position] < 1 || !record->call || (uint64_t)record->positions[position] > record->call->count) gir_trace_fail(); gir_source_retain(source); gir_source_release(record->results[position]); record->results[position] = source; size_t output = (size_t)record->positions[position]; gir_source_retain(source); gir_source_release(record->call->results[output]); record->call->results[output] = source; }
-static gir_source *gir_source_target_get(uint8_t *token, size_t position) { gir_source_target *record = (gir_source_target *)token; if (!record || record->target >= GIR_SOURCE_TARGETS || gir_source_targets[record->target] != record || position >= record->count || !record->results[position]) gir_trace_fail(); return record->results[position]; }
-)";
+                    support.Type(cat("#define GIR_SOURCE_TARGETS ", m.lowtargets.size(), "\n"));
+                    support.Space("\n");
+                    support.Type(R"GIRSUPPORT(typedef struct gir_source_target { struct gir_source_target *previous; gir_source_call *call; size_t target, count; int64_t *positions; gir_source **results; } gir_source_target;
+)GIRSUPPORT");
+                    support.State("GS_TLS gir_source_target *gir_source_targets[GIR_SOURCE_TARGETS];\n");
+                    support.Function("uint8_t *gir_source_target_enter(size_t target, size_t count, const int64_t *positions)", R"GIRSUPPORT({ if (target >= GIR_SOURCE_TARGETS) gir_trace_fail(); gir_source_target *record = (gir_source_target *)gir_source_alloc(sizeof(*record)); record->previous = gir_source_targets[target]; record->call = gir_source_call_top; record->target = target; record->count = count; record->positions = (int64_t *)gir_source_alloc((count + 1) * sizeof(int64_t)); record->results = (gir_source **)gir_source_alloc((count + 1) * sizeof(gir_source *)); for (size_t position = 0; position < count; position++) record->positions[position] = positions[position]; gir_source_targets[target] = record; return (uint8_t *)record; }
+)GIRSUPPORT");
+                    support.Function("void gir_source_target_leave(uint8_t *token)", R"GIRSUPPORT({ gir_source_target *record = (gir_source_target *)token; if (!record || record->target >= GIR_SOURCE_TARGETS || gir_source_targets[record->target] != record) gir_trace_fail(); for (size_t position = 0; position < record->count; position++) gir_source_release(record->results[position]); gir_source_targets[record->target] = record->previous; free(record->positions); free(record->results); free(record); }
+)GIRSUPPORT");
+                    support.Function("void gir_source_target_result(size_t target, size_t position, gir_source *source)", R"GIRSUPPORT({ if (target >= GIR_SOURCE_TARGETS || !source) gir_trace_fail(); gir_source_target *record = gir_source_targets[target]; if (!record || position >= record->count || record->positions[position] < 1 || !record->call || (uint64_t)record->positions[position] > record->call->count) gir_trace_fail(); gir_source_retain(source); gir_source_release(record->results[position]); record->results[position] = source; size_t output = (size_t)record->positions[position]; gir_source_retain(source); gir_source_release(record->call->results[output]); record->call->results[output] = source; }
+)GIRSUPPORT");
+                    support.Function("gir_source *gir_source_target_get(uint8_t *token, size_t position)", R"GIRSUPPORT({ gir_source_target *record = (gir_source_target *)token; if (!record || record->target >= GIR_SOURCE_TARGETS || gir_source_targets[record->target] != record || position >= record->count || !record->results[position]) gir_trace_fail(); return record->results[position]; }
+)GIRSUPPORT");
                 }
 
             }
@@ -121,7 +153,8 @@ static gir_source *gir_source_target_get(uint8_t *token, size_t position) { gir_
         bool controls = false;
         for (auto &function : m.funcs) for (auto &block : function.blocks)
             for (auto &instruction : block.insts) if (GirControlOf(instruction.op)) controls = true;
-        if (controls) data += ControlRuntime();
+        if (controls) ControlRuntime(support);
+        string data = support.single;
         for (size_t i = 0; i < m.files.size(); i++)
             Append(data, "static const char ", filesym[i], "[] = ", CStr(i < m.diagfiles.size() ? m.diagfiles[i] : m.files[i]), ";\n");
         string gblock;
@@ -196,7 +229,8 @@ static gir_source *gir_source_target_get(uint8_t *token, size_t position) { gir_
         // For the unit assembler.
         auto &u = out.unit;
         u.tdecls = tdecls;
-        u.data = data;
+        u.data = data.substr(support.single.size());
+        u.support = std::move(support);
         u.pdata = pdata;
         u.gblock = gblock;
         u.code = code + initcode + program(true);
@@ -220,59 +254,86 @@ static gir_source *gir_source_target_get(uint8_t *token, size_t position) { gir_
     }
 
 private:
-    string ControlRuntime() const {
-        string out;
-        Append(out, "#define GIR_CONTROL_TARGET_COUNT ", m.lowtargets.size(), "\n");
-        Append(out, "enum { GIR_CONTROL_OPEN = ", (int64_t)GirConstructionProgress::Open, " };\n");
-        Append(out, "enum { GIR_CONTROL_SUSPENDED = ", (int64_t)GirConstructionProgress::Suspended, " };\n");
-        Append(out, "enum { GIR_CONTROL_BUILT = ", (int64_t)GirConstructionProgress::Built, " };\n");
-        Append(out, "enum { GIR_CONTROL_PUBLISHED = ", (int64_t)GirConstructionProgress::Published, " };\n");
-        Append(out, "enum { GIR_CONTROL_EXITING = ", (int64_t)GirConstructionProgress::Exiting, " };\n");
-        Append(out, "enum { GIR_CONTROL_ABANDONED = ", (int64_t)GirConstructionProgress::Abandoned, " };\n");
-        Append(out, "enum { GIR_CONTROL_CANCELLED = ", (int64_t)GirConstructionProgress::Cancelled, " };\n");
-        Append(out, "enum { GIR_CONTROL_ATTACHED = ", (int64_t)GirConstructionProgress::Attached, " };\n");
-        Append(out, "enum { GIR_CONTROL_RETIRED = ", (int64_t)GirConstructionProgress::Retired, " };\n");
+    void ControlRuntime(UnitProgramSupport &support) const {
+        support.Type(cat("#define GIR_CONTROL_TARGET_COUNT ", m.lowtargets.size(), "\n"));
+        support.Type(cat("enum { GIR_CONTROL_OPEN = ", (int64_t)GirConstructionProgress::Open, " };\n"));
+        support.Type(cat("enum { GIR_CONTROL_SUSPENDED = ", (int64_t)GirConstructionProgress::Suspended, " };\n"));
+        support.Type(cat("enum { GIR_CONTROL_BUILT = ", (int64_t)GirConstructionProgress::Built, " };\n"));
+        support.Type(cat("enum { GIR_CONTROL_PUBLISHED = ", (int64_t)GirConstructionProgress::Published, " };\n"));
+        support.Type(cat("enum { GIR_CONTROL_EXITING = ", (int64_t)GirConstructionProgress::Exiting, " };\n"));
+        support.Type(cat("enum { GIR_CONTROL_ABANDONED = ", (int64_t)GirConstructionProgress::Abandoned, " };\n"));
+        support.Type(cat("enum { GIR_CONTROL_CANCELLED = ", (int64_t)GirConstructionProgress::Cancelled, " };\n"));
+        support.Type(cat("enum { GIR_CONTROL_ATTACHED = ", (int64_t)GirConstructionProgress::Attached, " };\n"));
+        support.Type(cat("enum { GIR_CONTROL_RETIRED = ", (int64_t)GirConstructionProgress::Retired, " };\n"));
         if (constructionTrace) {
-            out += "static int64_t gir_control_identity(void) { return gir_trace_destination++; }\n";
-            out += "static void gir_control_event(const char *name, int64_t identity) { gir_trace_record(name, \"\", 1, &identity); }\n";
-            out += "static void gir_control_stage(int64_t identity) { gir_trace_record(\"stage\", \"capacity-check\", 1, &identity); }\n";
-            out += "static void gir_control_header_removal(int64_t identity) { gir_trace_record(\"relocate\", \"header-removal\", 1, &identity); }\n";
+            support.Function("int64_t gir_control_identity(void)", R"GIRSUPPORT({ return gir_trace_destination++; }
+)GIRSUPPORT");
+            support.Function("void gir_control_event(const char *name, int64_t identity)", R"GIRSUPPORT({ gir_trace_record(name, "", 1, &identity); }
+)GIRSUPPORT");
+            support.Function("void gir_control_stage(int64_t identity)", R"GIRSUPPORT({ gir_trace_record("stage", "capacity-check", 1, &identity); }
+)GIRSUPPORT");
+            support.Function("void gir_control_header_removal(int64_t identity)", R"GIRSUPPORT({ gir_trace_record("relocate", "header-removal", 1, &identity); }
+)GIRSUPPORT");
         } else {
-            out += "static int64_t gir_control_identity(void) { return 0; }\n";
-            out += "static void gir_control_event(const char *name, int64_t identity) { (void)name; (void)identity; }\n";
-            out += "static void gir_control_stage(int64_t identity) { (void)identity; }\n";
-            out += "static void gir_control_header_removal(int64_t identity) { (void)identity; }\n";
+            support.Function("int64_t gir_control_identity(void)", R"GIRSUPPORT({ return 0; }
+)GIRSUPPORT");
+            support.Function("void gir_control_event(const char *name, int64_t identity)", R"GIRSUPPORT({ (void)name; (void)identity; }
+)GIRSUPPORT");
+            support.Function("void gir_control_stage(int64_t identity)", R"GIRSUPPORT({ (void)identity; }
+)GIRSUPPORT");
+            support.Function("void gir_control_header_removal(int64_t identity)", R"GIRSUPPORT({ (void)identity; }
+)GIRSUPPORT");
         }
-        out += R"GIRCONTROL(
-typedef struct gir_control_graph gir_control_graph;
-typedef struct gir_control_receiving gir_control_receiving;
-typedef struct gir_control_attempt gir_control_attempt;
-typedef struct gir_control_ticket gir_control_ticket;
-typedef struct gir_control_scope gir_control_scope;
-typedef struct gir_control_call gir_control_call;
-typedef struct gir_control_lease gir_control_lease;
-typedef struct gir_control_owner gir_control_owner;
-typedef struct gir_control_owner_ref gir_control_owner_ref;
-typedef struct gir_control_call_output gir_control_call_output;
-typedef enum gir_control_binding_kind { GIR_CONTROL_NAMED_VALUE, GIR_CONTROL_MUTABLE_OWNER } gir_control_binding_kind;
-typedef enum gir_control_parent_kind { GIR_CONTROL_ROOT, GIR_CONTROL_CHILD, GIR_CONTROL_REPLACEMENT } gir_control_parent_kind;
-typedef enum gir_control_cleanup { GIR_CONTROL_NO_CLEANUP, GIR_CONTROL_RELEASE_STORAGE, GIR_CONTROL_PRESERVE_STORAGE, GIR_CONTROL_STORAGE_CLEANED, GIR_CONTROL_UNSELECTED_COMPLETION } gir_control_cleanup;
-typedef enum gir_control_ticket_state { GIR_CONTROL_TICKET_ACTIVE, GIR_CONTROL_TICKET_RESTORED } gir_control_ticket_state;
-typedef enum gir_control_ticket_role { GIR_CONTROL_WAITING, GIR_CONTROL_FRESH, GIR_CONTROL_NAMED_AWAITING, GIR_CONTROL_NAMED_READY, GIR_CONTROL_NAMED_MATERIALIZED } gir_control_ticket_role;
-typedef enum gir_control_ticket_kind { GIR_CONTROL_TICKET_RESERVED, GIR_CONTROL_TICKET_SELECTED, GIR_CONTROL_TICKET_RECEIVED } gir_control_ticket_kind;
-typedef enum gir_control_ticket_authority { GIR_CONTROL_ORDINARY_TICKET, GIR_CONTROL_WAITING_RECEIPT } gir_control_ticket_authority;
-typedef struct gir_control_metadata { int64_t count, identity; } gir_control_metadata;
-typedef struct gir_control_snapshot {
+        support.Space("\n");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_graph gir_control_graph;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_receiving gir_control_receiving;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_attempt gir_control_attempt;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_ticket gir_control_ticket;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_scope gir_control_scope;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_call gir_control_call;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_lease gir_control_lease;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_owner gir_control_owner;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_owner_ref gir_control_owner_ref;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_call_output gir_control_call_output;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef enum gir_control_binding_kind { GIR_CONTROL_NAMED_VALUE, GIR_CONTROL_MUTABLE_OWNER } gir_control_binding_kind;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef enum gir_control_parent_kind { GIR_CONTROL_ROOT, GIR_CONTROL_CHILD, GIR_CONTROL_REPLACEMENT } gir_control_parent_kind;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef enum gir_control_cleanup { GIR_CONTROL_NO_CLEANUP, GIR_CONTROL_RELEASE_STORAGE, GIR_CONTROL_PRESERVE_STORAGE, GIR_CONTROL_STORAGE_CLEANED, GIR_CONTROL_UNSELECTED_COMPLETION } gir_control_cleanup;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef enum gir_control_ticket_state { GIR_CONTROL_TICKET_ACTIVE, GIR_CONTROL_TICKET_RESTORED } gir_control_ticket_state;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef enum gir_control_ticket_role { GIR_CONTROL_WAITING, GIR_CONTROL_FRESH, GIR_CONTROL_NAMED_AWAITING, GIR_CONTROL_NAMED_READY, GIR_CONTROL_NAMED_MATERIALIZED } gir_control_ticket_role;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef enum gir_control_ticket_kind { GIR_CONTROL_TICKET_RESERVED, GIR_CONTROL_TICKET_SELECTED, GIR_CONTROL_TICKET_RECEIVED } gir_control_ticket_kind;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef enum gir_control_ticket_authority { GIR_CONTROL_ORDINARY_TICKET, GIR_CONTROL_WAITING_RECEIPT } gir_control_ticket_authority;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_metadata { int64_t count, identity; } gir_control_metadata;
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_snapshot {
     uint8_t *start, *receiving_start, *write_end, *rollback_end;
     int64_t count, progress, prefix, receiving_prefix;
     gir_control_attempt *expected;
 } gir_control_snapshot;
-typedef struct gir_control_staging {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_staging {
     gs_stack *cursor;
     uint8_t *base, *end;
     int64_t capacity, element_bytes;
 } gir_control_staging;
-struct gir_control_attempt {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_attempt {
     gir_control_metadata metadata;
     int64_t progress;
     gir_control_graph *graph;
@@ -289,12 +350,14 @@ struct gir_control_attempt {
     gir_control_snapshot resumption, extension_snapshot;
     gir_control_staging staging;
 };
-struct gir_control_graph {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_graph {
     size_t references;
     gir_control_attempt *attempts;
     gir_control_ticket *tickets;
 };
-struct gir_control_receiving {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_receiving {
     gir_control_graph *graph;
     gir_control_attempt *boundary, *handoff;
     gir_control_scope *scope;
@@ -305,7 +368,8 @@ struct gir_control_receiving {
     ptrdiff_t view_offset;
     int64_t view_prefix;
 };
-struct gir_control_lease {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_lease {
     gir_control_metadata metadata;
     int64_t progress;
     uint8_t *start, *end;
@@ -317,7 +381,8 @@ struct gir_control_lease {
     size_t sequence;
     struct gir_control_lease *next;
 };
-struct gir_control_owner {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_owner {
     size_t references;
     gir_control_binding_kind kind;
     gir_control_graph *graph;
@@ -327,11 +392,13 @@ struct gir_control_owner {
     uint8_t *base, *value_end;
     int64_t value_count;
 };
-struct gir_control_owner_ref {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_owner_ref {
     gir_control_owner *owner;
     gir_control_owner_ref *next;
 };
-struct gir_control_scope {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_scope {
     gir_control_scope *previous;
     gir_control_call *call;
     gir_control_receiving *receivers;
@@ -340,7 +407,8 @@ struct gir_control_scope {
     size_t next_lease;
     gir_control_owner_ref *owners;
 };
-struct gir_control_ticket {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_ticket {
     gir_control_receiving *receiving;
     gir_control_graph *graph;
     gir_control_owner *source;
@@ -360,7 +428,8 @@ struct gir_control_ticket {
     size_t protected_count;
     uint8_t **protected_metadata;
 };
-struct gir_control_call_output {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_call_output {
     gir_control_attempt *attempt;
     gir_control_receiving *receiving;
     uint8_t mode, claimed;
@@ -368,30 +437,37 @@ struct gir_control_call_output {
     int64_t view_prefix;
     gir_control_cleanup completion;
 };
-struct gir_control_call {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(struct gir_control_call {
     gir_control_call *previous;
     size_t count;
     gir_control_call_output *outputs;
     size_t binding_count;
     gir_control_owner **bindings, **owner_results;
 };
-static GS_TLS gir_control_attempt *gir_control_live_attempts;
-static void gir_control_ticket_destroy(gir_control_ticket *ticket);
-static GS_TLS gir_control_scope *gir_control_scope_top;
-static GS_TLS gir_control_call *gir_control_call_top;
-typedef char gir_control_metadata_size[(sizeof(gir_control_metadata) == 16) ? 1 : -1];
-typedef char gir_control_progress_size[(sizeof(((gir_control_attempt *)0)->progress) == 8) ? 1 : -1];
-static void gir_control_require(int condition) { if (!condition) gs_panic("invalid construction receiver protocol"); }
-static void *gir_control_alloc(size_t size) {
+)GIRSUPPORT");
+        support.State("GS_TLS gir_control_attempt *gir_control_live_attempts;\n");
+        support.Forward("void gir_control_ticket_destroy(gir_control_ticket *ticket);\n");
+        support.State("GS_TLS gir_control_scope *gir_control_scope_top;\n");
+        support.State("GS_TLS gir_control_call *gir_control_call_top;\n");
+        support.Type(R"GIRSUPPORT(typedef char gir_control_metadata_size[(sizeof(gir_control_metadata) == 16) ? 1 : -1];
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef char gir_control_progress_size[(sizeof(((gir_control_attempt *)0)->progress) == 8) ? 1 : -1];
+)GIRSUPPORT");
+        support.Function("void gir_control_require(int condition)", R"GIRSUPPORT({ if (!condition) gs_panic("invalid construction receiver protocol"); }
+)GIRSUPPORT");
+        support.Function("void *gir_control_alloc(size_t size)", R"GIRSUPPORT({
     void *memory = calloc(1, size);
     if (!memory) gs_panic("out of memory managing construction receivers");
     return memory;
 }
-static gir_control_attempt *gir_control_node(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("gir_control_attempt *gir_control_node(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_require(metadata != NULL);
     return ((gir_control_lease *)metadata)->attempt;
 }
-static void gir_control_capture(gir_control_attempt *attempt) {
+)GIRSUPPORT");
+        support.Function("void gir_control_capture(gir_control_attempt *attempt)", R"GIRSUPPORT({
     if (!attempt->active) return;
     gir_control_lease *lease = attempt->active;
     gir_control_require(lease->metadata.identity == attempt->metadata.identity);
@@ -404,38 +480,45 @@ static void gir_control_capture(gir_control_attempt *attempt) {
         lease->end = attempt->write_end;
     }
 }
-static void gir_control_progress(gir_control_attempt *attempt, int64_t progress) {
+)GIRSUPPORT");
+        support.Function("void gir_control_progress(gir_control_attempt *attempt, int64_t progress)", R"GIRSUPPORT({
     attempt->progress = progress;
     if (attempt->active) attempt->active->progress = progress;
 }
-static void gir_control_graph_retain(gir_control_graph *graph) {
+)GIRSUPPORT");
+        support.Function("void gir_control_graph_retain(gir_control_graph *graph)", R"GIRSUPPORT({
     gir_control_require(graph && graph->references != SIZE_MAX);
     graph->references++;
 }
-static void gir_control_node_retain(gir_control_attempt *attempt) {
+)GIRSUPPORT");
+        support.Function("void gir_control_node_retain(gir_control_attempt *attempt)", R"GIRSUPPORT({
     gir_control_require(attempt && attempt->references != SIZE_MAX);
     attempt->references++;
 }
-static void gir_control_graph_release(gir_control_graph *graph) {
+)GIRSUPPORT");
+        support.Function("void gir_control_graph_release(gir_control_graph *graph)", R"GIRSUPPORT({
     gir_control_require(graph && graph->references);
     if (--graph->references) return;
     gir_control_require(!graph->attempts && !graph->tickets);
     free(graph);
 }
-static void gir_control_node_release(gir_control_attempt *attempt);
-static void gir_control_parent_retain(gir_control_attempt *owner, gir_control_attempt *parent) {
+)GIRSUPPORT");
+        support.Forward("void gir_control_node_release(gir_control_attempt *attempt);\n");
+        support.Function("void gir_control_parent_retain(gir_control_attempt *owner, gir_control_attempt *parent)", R"GIRSUPPORT({
     if (!parent) return;
     gir_control_node_retain(parent);
     if (owner->graph != parent->graph) gir_control_graph_retain(parent->graph);
 }
-static void gir_control_parent_release(gir_control_attempt *owner, gir_control_attempt *parent) {
+)GIRSUPPORT");
+        support.Function("void gir_control_parent_release(gir_control_attempt *owner, gir_control_attempt *parent)", R"GIRSUPPORT({
     if (!parent) return;
     gir_control_graph *graph = parent->graph;
     uint8_t other = owner->graph != graph;
     gir_control_node_release(parent);
     if (other) gir_control_graph_release(graph);
 }
-static void gir_control_unlink_successor(gir_control_attempt *attempt) {
+)GIRSUPPORT");
+        support.Function("void gir_control_unlink_successor(gir_control_attempt *attempt)", R"GIRSUPPORT({
     gir_control_attempt *successor = attempt->successor;
     if (!successor) return;
     if (attempt->predecessor_previous) attempt->predecessor_previous->predecessor_next = attempt->predecessor_next;
@@ -444,7 +527,8 @@ static void gir_control_unlink_successor(gir_control_attempt *attempt) {
     attempt->successor = attempt->predecessor_next = attempt->predecessor_previous = NULL;
     gir_control_node_release(successor);
 }
-static void gir_control_node_release(gir_control_attempt *attempt) {
+)GIRSUPPORT");
+        support.Function("void gir_control_node_release(gir_control_attempt *attempt)", R"GIRSUPPORT({
     gir_control_require(attempt && attempt->references);
     if (--attempt->references) return;
     gir_control_require(!attempt->predecessors);
@@ -460,12 +544,14 @@ static void gir_control_node_release(gir_control_attempt *attempt) {
     gir_control_unlink_successor(attempt);
     free(attempt);
 }
-static gir_control_attempt *gir_control_resolve(gir_control_attempt *attempt) {
+)GIRSUPPORT");
+        support.Function("gir_control_attempt *gir_control_resolve(gir_control_attempt *attempt)", R"GIRSUPPORT({
     gir_control_require(attempt != NULL);
     while (attempt->successor) attempt = attempt->successor;
     return attempt;
 }
-static void gir_control_link_direct(gir_control_attempt *attempt, gir_control_attempt *successor) {
+)GIRSUPPORT");
+        support.Function("void gir_control_link_direct(gir_control_attempt *attempt, gir_control_attempt *successor)", R"GIRSUPPORT({
     gir_control_require(attempt != successor && attempt->graph == successor->graph && !successor->successor);
     gir_control_node_retain(successor);
     gir_control_unlink_successor(attempt);
@@ -474,13 +560,15 @@ static void gir_control_link_direct(gir_control_attempt *attempt, gir_control_at
     if (successor->predecessors) successor->predecessors->predecessor_previous = attempt;
     successor->predecessors = attempt;
 }
-static void gir_control_link_successor(gir_control_attempt *attempt, gir_control_attempt *successor) {
+)GIRSUPPORT");
+        support.Function("void gir_control_link_successor(gir_control_attempt *attempt, gir_control_attempt *successor)", R"GIRSUPPORT({
     gir_control_node_retain(attempt);
     while (attempt->predecessors) gir_control_link_direct(attempt->predecessors, successor);
     gir_control_link_direct(attempt, successor);
     gir_control_node_release(attempt);
 }
-static gir_control_snapshot gir_control_snapshot_of(gir_control_attempt *attempt) {
+)GIRSUPPORT");
+        support.Function("gir_control_snapshot gir_control_snapshot_of(gir_control_attempt *attempt)", R"GIRSUPPORT({
     gir_control_capture(attempt);
     gir_control_snapshot snapshot;
     snapshot.start = attempt->start;
@@ -494,13 +582,15 @@ static gir_control_snapshot gir_control_snapshot_of(gir_control_attempt *attempt
     snapshot.expected = attempt->expected;
     return snapshot;
 }
-static int gir_control_snapshot_matches(gir_control_attempt *attempt, const gir_control_snapshot *snapshot) {
+)GIRSUPPORT");
+        support.Function("int gir_control_snapshot_matches(gir_control_attempt *attempt, const gir_control_snapshot *snapshot)", R"GIRSUPPORT({
     return attempt->start == snapshot->start && attempt->receiving_start == snapshot->receiving_start &&
         attempt->write_end == snapshot->write_end && attempt->rollback_end == snapshot->rollback_end &&
         attempt->metadata.count == snapshot->count && attempt->prefix == snapshot->prefix &&
         attempt->receiving_prefix == snapshot->receiving_prefix;
 }
-static void gir_control_restore(gir_control_attempt *attempt, const gir_control_snapshot *snapshot) {
+)GIRSUPPORT");
+        support.Function("void gir_control_restore(gir_control_attempt *attempt, const gir_control_snapshot *snapshot)", R"GIRSUPPORT({
     attempt->start = snapshot->start;
     attempt->receiving_start = snapshot->receiving_start;
     attempt->write_end = snapshot->write_end;
@@ -517,14 +607,16 @@ static void gir_control_restore(gir_control_attempt *attempt, const gir_control_
         attempt->active->prefix = attempt->prefix;
     }
 }
-static uint8_t *gir_control_enter(void) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_enter(void)", R"GIRSUPPORT({
     gir_control_scope *scope = (gir_control_scope *)gir_control_alloc(sizeof(*scope));
     scope->previous = gir_control_scope_top;
     scope->call = gir_control_call_top;
     gir_control_scope_top = scope;
     return (uint8_t *)scope;
 }
-static gir_control_receiving *gir_control_handle(gir_control_attempt *boundary, ptrdiff_t offset, int64_t prefix) {
+)GIRSUPPORT");
+        support.Function("gir_control_receiving *gir_control_handle(gir_control_attempt *boundary, ptrdiff_t offset, int64_t prefix)", R"GIRSUPPORT({
     gir_control_require(gir_control_scope_top != NULL);
     gir_control_receiving *receiving = (gir_control_receiving *)gir_control_alloc(sizeof(*receiving));
     receiving->graph = boundary->graph;
@@ -538,7 +630,8 @@ static gir_control_receiving *gir_control_handle(gir_control_attempt *boundary, 
     gir_control_node_retain(boundary);
     return receiving;
 }
-static void gir_control_handle_close(gir_control_receiving *receiving) {
+)GIRSUPPORT");
+        support.Function("void gir_control_handle_close(gir_control_receiving *receiving)", R"GIRSUPPORT({
     for (gir_control_scope *scope = gir_control_scope_top; scope; scope = scope->previous)
         for (gir_control_lease *lease = scope->leases; lease; lease = lease->next)
             if (lease->receiving == receiving) lease->receiving = NULL;
@@ -561,7 +654,8 @@ static void gir_control_handle_close(gir_control_receiving *receiving) {
     free(receiving);
     gir_control_graph_release(graph);
 }
-static gir_control_attempt *gir_control_boundary(gir_control_receiving *receiving) {
+)GIRSUPPORT");
+        support.Function("gir_control_attempt *gir_control_boundary(gir_control_receiving *receiving)", R"GIRSUPPORT({
     gir_control_attempt *current = gir_control_resolve(receiving->boundary);
     if (current != receiving->boundary) {
         gir_control_node_retain(current);
@@ -570,15 +664,16 @@ static gir_control_attempt *gir_control_boundary(gir_control_receiving *receivin
     }
     return current;
 }
-static gir_control_lease *gir_control_find_lease(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("gir_control_lease *gir_control_find_lease(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_require(gir_control_scope_top != NULL);
     for (gir_control_lease *lease = gir_control_scope_top->leases; lease; lease = lease->next)
         if ((uint8_t *)&lease->metadata == metadata) return lease;
     gir_control_require(0);
     return NULL;
 }
-static uint8_t *gir_control_add_lease_view(gir_control_receiving *receiving, gir_control_attempt *attempt,
-                                          uint8_t mode, ptrdiff_t offset, int64_t prefix) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_add_lease_view(gir_control_receiving *receiving, gir_control_attempt *attempt,\n                                          uint8_t mode, ptrdiff_t offset, int64_t prefix)", R"GIRSUPPORT({
     gir_control_require(gir_control_scope_top != NULL && receiving->graph == attempt->graph);
     gir_control_capture(attempt);
     gir_control_lease *lease = (gir_control_lease *)gir_control_alloc(sizeof(*lease));
@@ -599,12 +694,14 @@ static uint8_t *gir_control_add_lease_view(gir_control_receiving *receiving, gir
     gir_control_graph_retain(attempt->graph);
     return (uint8_t *)&lease->metadata;
 }
-static uint8_t *gir_control_add_lease(gir_control_receiving *receiving, gir_control_attempt *attempt, uint8_t mode) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_add_lease(gir_control_receiving *receiving, gir_control_attempt *attempt, uint8_t mode)", R"GIRSUPPORT({
     gir_control_capture(attempt);
     return gir_control_add_lease_view(receiving, attempt, mode,
         attempt->start - attempt->receiving_start, attempt->prefix);
 }
-static gir_control_lease *gir_control_take_lease(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("gir_control_lease *gir_control_take_lease(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_require(gir_control_scope_top != NULL);
     gir_control_lease **position = &gir_control_scope_top->leases;
     while (*position && (uint8_t *)&(*position)->metadata != metadata) position = &(*position)->next;
@@ -617,17 +714,20 @@ static gir_control_lease *gir_control_take_lease(uint8_t *metadata) {
     }
     return lease;
 }
-static void gir_control_release_lease(gir_control_lease *lease) {
+)GIRSUPPORT");
+        support.Function("void gir_control_release_lease(gir_control_lease *lease)", R"GIRSUPPORT({
     gir_control_attempt *attempt = lease->attempt;
     gir_control_graph *graph = attempt->graph;
     free(lease);
     gir_control_node_release(attempt);
     gir_control_graph_release(graph);
 }
-static void gir_control_drop_lease(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("void gir_control_drop_lease(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_release_lease(gir_control_take_lease(metadata));
 }
-static uint8_t *gir_control_rebase_lease(gir_control_lease *previous) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_rebase_lease(gir_control_lease *previous)", R"GIRSUPPORT({
     gir_control_attempt *attempt = previous->attempt;
     gir_control_lease *lease = (gir_control_lease *)gir_control_alloc(sizeof(*lease));
     lease->metadata = attempt->metadata;
@@ -649,12 +749,14 @@ static uint8_t *gir_control_rebase_lease(gir_control_lease *previous) {
     gir_control_release_lease(previous);
     return (uint8_t *)&lease->metadata;
 }
-static void gir_control_owner_retain(gir_control_owner *owner) {
+)GIRSUPPORT");
+        support.Function("void gir_control_owner_retain(gir_control_owner *owner)", R"GIRSUPPORT({
     if (!owner) return;
     gir_control_require(owner->references != SIZE_MAX);
     owner->references++;
 }
-static void gir_control_owner_release(gir_control_owner *owner) {
+)GIRSUPPORT");
+        support.Function("void gir_control_owner_release(gir_control_owner *owner)", R"GIRSUPPORT({
     if (!owner) return;
     gir_control_require(owner->references != 0);
     if (--owner->references) return;
@@ -663,7 +765,8 @@ static void gir_control_owner_release(gir_control_owner *owner) {
     free(owner);
     gir_control_graph_release(graph);
 }
-static uint8_t *gir_control_owner_hold(gir_control_owner *owner) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_owner_hold(gir_control_owner *owner)", R"GIRSUPPORT({
     if (!owner) return NULL;
     gir_control_require(gir_control_scope_top != NULL);
     for (gir_control_owner_ref *reference = gir_control_scope_top->owners; reference; reference = reference->next)
@@ -675,8 +778,10 @@ static uint8_t *gir_control_owner_hold(gir_control_owner *owner) {
     gir_control_owner_retain(owner);
     return (uint8_t *)owner;
 }
-static uint8_t *gir_control_owner_none(void) { return NULL; }
-static uint8_t *gir_control_named_bind(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_owner_none(void)", R"GIRSUPPORT({ return NULL; }
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_named_bind(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *attempt = lease->attempt;
     gir_control_capture(attempt);
@@ -693,11 +798,13 @@ static uint8_t *gir_control_named_bind(uint8_t *metadata) {
     gir_control_node_retain(attempt);
     return gir_control_owner_hold(binding);
 }
-static uint8_t gir_control_owner_is_named(uint8_t *token) {
+)GIRSUPPORT");
+        support.Function("uint8_t gir_control_owner_is_named(uint8_t *token)", R"GIRSUPPORT({
     gir_control_owner *binding = (gir_control_owner *)token;
     return binding && binding->kind == GIR_CONTROL_NAMED_VALUE;
 }
-static gir_control_owner *gir_control_named_value(uint8_t *token, uint8_t *reference) {
+)GIRSUPPORT");
+        support.Function("gir_control_owner *gir_control_named_value(uint8_t *token, uint8_t *reference)", R"GIRSUPPORT({
     gir_control_owner *binding = (gir_control_owner *)token;
     gir_control_require(binding && binding->kind == GIR_CONTROL_NAMED_VALUE && reference == binding->base);
     gir_control_attempt *attempt = binding->boundary;
@@ -708,14 +815,17 @@ static gir_control_owner *gir_control_named_value(uint8_t *token, uint8_t *refer
         binding->base + attempt->prefix <= attempt->write_end);
     return binding;
 }
-static uint8_t *gir_control_named_base(uint8_t *token, uint8_t *reference) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_named_base(uint8_t *token, uint8_t *reference)", R"GIRSUPPORT({
     gir_control_owner *binding = gir_control_named_value(token, reference);
     return binding->base + binding->boundary->prefix;
 }
-static int64_t gir_control_named_count(uint8_t *token, uint8_t *reference) {
+)GIRSUPPORT");
+        support.Function("int64_t gir_control_named_count(uint8_t *token, uint8_t *reference)", R"GIRSUPPORT({
     return gir_control_named_value(token, reference)->value_count;
 }
-static uint8_t *gir_control_owner_bind(uint8_t *control, uint8_t *header, uint8_t *stack) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_owner_bind(uint8_t *control, uint8_t *header, uint8_t *stack)", R"GIRSUPPORT({
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     gir_control_attempt *boundary = gir_control_boundary(receiving);
     gir_control_capture(boundary);
@@ -746,7 +856,8 @@ static uint8_t *gir_control_owner_bind(uint8_t *control, uint8_t *header, uint8_
     gir_control_node_retain(boundary);
     return gir_control_owner_hold(owner);
 }
-static void gir_control_owner_check(uint8_t *binding) {
+)GIRSUPPORT");
+        support.Function("void gir_control_owner_check(uint8_t *binding)", R"GIRSUPPORT({
     gir_control_owner *owner = (gir_control_owner *)binding;
     if (!owner) return;
     gir_control_require(owner->kind == GIR_CONTROL_MUTABLE_OWNER);
@@ -756,8 +867,9 @@ static void gir_control_owner_check(uint8_t *binding) {
         owner->header->len == attempt->metadata.count && owner->header->base == owner->base && owner->header->base >= attempt->receiving_start &&
         owner->header->base <= attempt->write_end);
 }
-static void gir_control_set_parent(gir_control_attempt *, gir_control_attempt *, gir_control_parent_kind);
-static void gir_control_owner_extend(uint8_t *binding, uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Forward("void gir_control_set_parent(gir_control_attempt *, gir_control_attempt *, gir_control_parent_kind);\n");
+        support.Function("void gir_control_owner_extend(uint8_t *binding, uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_owner *owner = (gir_control_owner *)binding;
     if (!owner) return;
     gir_control_owner_check(binding);
@@ -775,7 +887,8 @@ static void gir_control_owner_extend(uint8_t *binding, uint8_t *metadata) {
     parent->expected = child;
     gir_control_progress(parent, GIR_CONTROL_SUSPENDED);
 }
-static void gir_control_owner_update(uint8_t *binding, int64_t count, uint8_t *end) {
+)GIRSUPPORT");
+        support.Function("void gir_control_owner_update(uint8_t *binding, int64_t count, uint8_t *end)", R"GIRSUPPORT({
     gir_control_owner *owner = (gir_control_owner *)binding;
     if (!owner) return;
     gir_control_require(owner->kind == GIR_CONTROL_MUTABLE_OWNER);
@@ -795,17 +908,20 @@ static void gir_control_owner_update(uint8_t *binding, int64_t count, uint8_t *e
     attempt->write_end = end;
     attempt->active = NULL;
 }
-static uint8_t *gir_control_owner_param(size_t position) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_owner_param(size_t position)", R"GIRSUPPORT({
     gir_control_call *call = gir_control_call_top;
     gir_control_require(call && position > 0 && position <= call->binding_count);
     return gir_control_owner_hold(call->bindings[position - 1]);
 }
-static uint8_t *gir_control_owner_get(uint8_t *token, size_t position) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_owner_get(uint8_t *token, size_t position)", R"GIRSUPPORT({
     gir_control_call *call = (gir_control_call *)token;
     gir_control_require(call == gir_control_call_top && position > 0 && position <= call->binding_count);
     return gir_control_owner_hold(call->owner_results[position - 1]);
 }
-static void gir_control_owner_result(uint8_t *binding, size_t position) {
+)GIRSUPPORT");
+        support.Function("void gir_control_owner_result(uint8_t *binding, size_t position)", R"GIRSUPPORT({
     gir_control_call *call = gir_control_scope_top->call;
     gir_control_require(call && position > 0 && position <= call->binding_count);
     gir_control_owner *owner = (gir_control_owner *)binding;
@@ -813,15 +929,17 @@ static void gir_control_owner_result(uint8_t *binding, size_t position) {
     gir_control_owner_release(call->owner_results[position - 1]);
     call->owner_results[position - 1] = owner;
 }
-typedef struct gir_control_owner_target {
+)GIRSUPPORT");
+        support.Type(R"GIRSUPPORT(typedef struct gir_control_owner_target {
     struct gir_control_owner_target *previous;
     gir_control_call *call;
     size_t target, count;
     int64_t *positions;
     gir_control_owner **results;
 } gir_control_owner_target;
-static GS_TLS gir_control_owner_target *gir_control_owner_targets[GIR_CONTROL_TARGET_COUNT ? GIR_CONTROL_TARGET_COUNT : 1];
-static uint8_t *gir_control_owner_target_enter(size_t target, size_t count, const int64_t *positions) {
+)GIRSUPPORT");
+        support.State("GS_TLS gir_control_owner_target *gir_control_owner_targets[GIR_CONTROL_TARGET_COUNT ? GIR_CONTROL_TARGET_COUNT : 1];\n");
+        support.Function("uint8_t *gir_control_owner_target_enter(size_t target, size_t count, const int64_t *positions)", R"GIRSUPPORT({
     gir_control_require(target < GIR_CONTROL_TARGET_COUNT && count <= SIZE_MAX / sizeof(int64_t));
     gir_control_owner_target *record = (gir_control_owner_target *)gir_control_alloc(sizeof(*record));
     record->previous = gir_control_owner_targets[target];
@@ -834,7 +952,8 @@ static uint8_t *gir_control_owner_target_enter(size_t target, size_t count, cons
     gir_control_owner_targets[target] = record;
     return (uint8_t *)record;
 }
-static void gir_control_owner_target_result(uint8_t *binding, size_t target, size_t result) {
+)GIRSUPPORT");
+        support.Function("void gir_control_owner_target_result(uint8_t *binding, size_t target, size_t result)", R"GIRSUPPORT({
     gir_control_require(target < GIR_CONTROL_TARGET_COUNT);
     gir_control_owner_target *record = gir_control_owner_targets[target];
     gir_control_require(record && result < record->count && record->positions[result] > 0 && record->call &&
@@ -848,13 +967,15 @@ static void gir_control_owner_target_result(uint8_t *binding, size_t target, siz
     gir_control_owner_release(record->call->owner_results[position]);
     record->call->owner_results[position] = owner;
 }
-static uint8_t *gir_control_owner_target_get(uint8_t *token, size_t result) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_owner_target_get(uint8_t *token, size_t result)", R"GIRSUPPORT({
     gir_control_owner_target *record = (gir_control_owner_target *)token;
     gir_control_require(record->target < GIR_CONTROL_TARGET_COUNT && gir_control_owner_targets[record->target] == record &&
         result < record->count && record->positions[result] > 0);
     return gir_control_owner_hold(record->results[result]);
 }
-static void gir_control_owner_target_leave(uint8_t *token) {
+)GIRSUPPORT");
+        support.Function("void gir_control_owner_target_leave(uint8_t *token)", R"GIRSUPPORT({
     gir_control_owner_target *record = (gir_control_owner_target *)token;
     gir_control_require(record->target < GIR_CONTROL_TARGET_COUNT && gir_control_owner_targets[record->target] == record);
     for (size_t result = 0; result < record->count; result++) gir_control_owner_release(record->results[result]);
@@ -863,7 +984,8 @@ static void gir_control_owner_target_leave(uint8_t *token) {
     free(record->results);
     free(record);
 }
-static uint8_t *gir_control_call_push(size_t count, uint8_t *const *metadata, size_t binding_count, uint8_t *const *bindings) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_call_push(size_t count, uint8_t *const *metadata, size_t binding_count, uint8_t *const *bindings)", R"GIRSUPPORT({
     gir_control_call *call = (gir_control_call *)gir_control_alloc(sizeof(*call));
     gir_control_require(count <= SIZE_MAX / sizeof(*call->outputs));
     call->outputs = (gir_control_call_output *)gir_control_alloc((count ? count : 1) * sizeof(*call->outputs));
@@ -890,7 +1012,8 @@ static uint8_t *gir_control_call_push(size_t count, uint8_t *const *metadata, si
     gir_control_call_top = call;
     return (uint8_t *)call;
 }
-static uint8_t *gir_control_call_param(size_t position) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_call_param(size_t position)", R"GIRSUPPORT({
     gir_control_call *call = gir_control_call_top;
     gir_control_require(call && position < call->count && call->outputs[position].attempt && !call->outputs[position].claimed);
     call->outputs[position].claimed = 1;
@@ -899,7 +1022,8 @@ static uint8_t *gir_control_call_param(size_t position) {
     receiving->input = &call->outputs[position];
     return (uint8_t *)receiving;
 }
-static uint8_t *gir_control_call_get(uint8_t *token, size_t position) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_call_get(uint8_t *token, size_t position)", R"GIRSUPPORT({
     gir_control_call *call = (gir_control_call *)token;
     gir_control_require(call == gir_control_call_top && position < call->count && call->outputs[position].claimed);
     gir_control_call_output *output = &call->outputs[position];
@@ -913,7 +1037,8 @@ static uint8_t *gir_control_call_get(uint8_t *token, size_t position) {
         lease->cleanup = GIR_CONTROL_STORAGE_CLEANED;
     return metadata;
 }
-static void gir_control_call_pop(uint8_t *token) {
+)GIRSUPPORT");
+        support.Function("void gir_control_call_pop(uint8_t *token)", R"GIRSUPPORT({
     gir_control_call *call = (gir_control_call *)token;
     gir_control_require(call == gir_control_call_top);
     for (size_t position = 0; position < call->count; position++) {
@@ -934,7 +1059,8 @@ static void gir_control_call_pop(uint8_t *token) {
     free(call->outputs);
     free(call);
 }
-static void gir_control_leave(uint8_t *token) {
+)GIRSUPPORT");
+        support.Function("void gir_control_leave(uint8_t *token)", R"GIRSUPPORT({
     gir_control_scope *scope = (gir_control_scope *)token;
     gir_control_require(scope == gir_control_scope_top && !scope->tickets && scope->call == gir_control_call_top);
     while (scope->leases) gir_control_drop_lease((uint8_t *)&scope->leases->metadata);
@@ -948,8 +1074,8 @@ static void gir_control_leave(uint8_t *token) {
     gir_control_scope_top = scope->previous;
     free(scope);
 }
-static gir_control_attempt *gir_control_new_attempt(gir_control_graph *graph, gs_stack *stack, uint8_t *start,
-                                                   int64_t identity, int64_t prefix) {
+)GIRSUPPORT");
+        support.Function("gir_control_attempt *gir_control_new_attempt(gir_control_graph *graph, gs_stack *stack, uint8_t *start,\n                                                   int64_t identity, int64_t prefix)", R"GIRSUPPORT({
     gir_control_require(prefix == 0 || prefix == 4);
     gir_control_attempt *attempt = (gir_control_attempt *)gir_control_alloc(sizeof(*attempt));
     attempt->graph = graph;
@@ -967,12 +1093,14 @@ static gir_control_attempt *gir_control_new_attempt(gir_control_graph *graph, gs
     gir_control_live_attempts = attempt;
     return attempt;
 }
-static uint8_t *gir_control_receiving_new(uint8_t *stack, uint8_t *start, int64_t identity, int64_t prefix) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_receiving_new(uint8_t *stack, uint8_t *start, int64_t identity, int64_t prefix)", R"GIRSUPPORT({
     gir_control_graph *graph = (gir_control_graph *)gir_control_alloc(sizeof(*graph));
     gir_control_attempt *attempt = gir_control_new_attempt(graph, (gs_stack *)stack, start, identity, prefix);
     return (uint8_t *)gir_control_handle(attempt, 0, prefix);
 }
-static uint8_t *gir_control_receiving_current(uint8_t *control) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_receiving_current(uint8_t *control)", R"GIRSUPPORT({
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     if (receiving->handoff) {
         gir_control_attempt *attempt = receiving->handoff;
@@ -981,7 +1109,8 @@ static uint8_t *gir_control_receiving_current(uint8_t *control) {
     }
     return gir_control_add_lease(receiving, gir_control_boundary(receiving), receiving->outward_mode);
 }
-static uint8_t *gir_control_receiving_open(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_receiving_open(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *attempt = lease->attempt;
     gir_control_capture(attempt);
@@ -995,19 +1124,26 @@ static uint8_t *gir_control_receiving_open(uint8_t *metadata) {
     gir_control_drop_lease(metadata);
     return (uint8_t *)receiving;
 }
-static uint8_t *gir_control_attempt_stack(uint8_t *metadata) { return (uint8_t *)gir_control_node(metadata)->stack; }
-static uint8_t *gir_control_attempt_start(uint8_t *metadata) { return gir_control_find_lease(metadata)->start; }
-static uint8_t *gir_control_attempt_progress(uint8_t *metadata) { return (uint8_t *)&gir_control_find_lease(metadata)->progress; }
-static uint8_t *gir_control_attempt_receiving(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_attempt_stack(uint8_t *metadata)", R"GIRSUPPORT({ return (uint8_t *)gir_control_node(metadata)->stack; }
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_attempt_start(uint8_t *metadata)", R"GIRSUPPORT({ return gir_control_find_lease(metadata)->start; }
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_attempt_progress(uint8_t *metadata)", R"GIRSUPPORT({ return (uint8_t *)&gir_control_find_lease(metadata)->progress; }
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_attempt_receiving(uint8_t *metadata)", R"GIRSUPPORT({
     return (uint8_t *)gir_control_find_lease(metadata)->receiving;
 }
-static uint8_t gir_control_attempt_mode(uint8_t *metadata) { return gir_control_find_lease(metadata)->mode; }
-static int64_t gir_control_attempt_prefix(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("uint8_t gir_control_attempt_mode(uint8_t *metadata)", R"GIRSUPPORT({ return gir_control_find_lease(metadata)->mode; }
+)GIRSUPPORT");
+        support.Function("int64_t gir_control_attempt_prefix(uint8_t *metadata)", R"GIRSUPPORT({
     int64_t prefix = gir_control_find_lease(metadata)->prefix;
     gir_control_require(prefix == 0 || prefix == 4);
     return prefix;
 }
-static void gir_control_pack_lease(gir_control_lease *lease) {
+)GIRSUPPORT");
+        support.Function("void gir_control_pack_lease(gir_control_lease *lease)", R"GIRSUPPORT({
     gir_control_attempt *attempt = lease->attempt;
     gir_control_capture(attempt);
     gir_control_require(attempt->active == lease && lease->progress == GIR_CONTROL_OPEN &&
@@ -1018,7 +1154,8 @@ static void gir_control_pack_lease(gir_control_lease *lease) {
     lease->end = attempt->stack->top;
     gir_control_capture(attempt);
 }
-static void gir_control_remove_header_lease(gir_control_lease *lease) {
+)GIRSUPPORT");
+        support.Function("void gir_control_remove_header_lease(gir_control_lease *lease)", R"GIRSUPPORT({
     gir_control_attempt *attempt = lease->attempt;
     gir_control_capture(attempt);
     gir_control_require(attempt->active == lease && lease->progress == GIR_CONTROL_BUILT &&
@@ -1032,13 +1169,16 @@ static void gir_control_remove_header_lease(gir_control_lease *lease) {
     gir_control_capture(attempt);
     gir_control_header_removal(attempt->metadata.identity);
 }
-static void gir_control_attempt_pack(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_pack(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_pack_lease(gir_control_find_lease(metadata));
 }
-static void gir_control_attempt_remove_header(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_remove_header(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_remove_header_lease(gir_control_find_lease(metadata));
 }
-static void gir_control_attempt_prepare_named(uint8_t *metadata, int64_t prefix) {
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_prepare_named(uint8_t *metadata, int64_t prefix)", R"GIRSUPPORT({
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *attempt = lease->attempt;
     gir_control_capture(attempt);
@@ -1048,7 +1188,8 @@ static void gir_control_attempt_prepare_named(uint8_t *metadata, int64_t prefix)
         attempt->stack->top == lease->start + lease->prefix);
     if (prefix == 4 && lease->prefix == 0) gir_control_pack_lease(lease);
 }
-static void gir_control_attempt_normalize(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_normalize(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *attempt = lease->attempt;
     gir_control_capture(attempt);
@@ -1059,8 +1200,8 @@ static void gir_control_attempt_normalize(uint8_t *metadata) {
     gir_control_require(attempt->receiving_prefix == 0);
     gir_control_remove_header_lease(lease);
 }
-static uint8_t *gir_control_attempt_stage(uint8_t *metadata, uint8_t *scratch_stack,
-                                          uint8_t *inline_end, int64_t capacity, int64_t element_bytes) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_attempt_stage(uint8_t *metadata, uint8_t *scratch_stack,\n                                          uint8_t *inline_end, int64_t capacity, int64_t element_bytes)", R"GIRSUPPORT({
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *attempt = lease->attempt;
     gir_control_receiving *receiving = lease->receiving;
@@ -1092,7 +1233,8 @@ static uint8_t *gir_control_attempt_stage(uint8_t *metadata, uint8_t *scratch_st
     attempt->start = attempt->receiving_start = attempt->write_end = attempt->rollback_end = scratch->top;
     return gir_control_rebase_lease(lease);
 }
-static uint8_t *gir_control_attempt_fit(uint8_t *metadata, uint8_t *inline_cursor) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_attempt_fit(uint8_t *metadata, uint8_t *inline_cursor)", R"GIRSUPPORT({
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *attempt = lease->attempt;
     gir_control_capture(attempt);
@@ -1120,7 +1262,8 @@ static uint8_t *gir_control_attempt_fit(uint8_t *metadata, uint8_t *inline_curso
     memset(&attempt->staging, 0, sizeof(attempt->staging));
     return gir_control_rebase_lease(lease);
 }
-static void gir_control_receiving_transfer(uint8_t *control, uint8_t *metadata, uint8_t mode) {
+)GIRSUPPORT");
+        support.Function("void gir_control_receiving_transfer(uint8_t *control, uint8_t *metadata, uint8_t mode)", R"GIRSUPPORT({
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     gir_control_attempt *attempt = gir_control_node(metadata);
     gir_control_capture(attempt);
@@ -1133,16 +1276,19 @@ static void gir_control_receiving_transfer(uint8_t *control, uint8_t *metadata, 
     receiving->handoff = attempt;
     receiving->handoff_mode = mode;
 }
-static int gir_control_active(gir_control_attempt *attempt) {
+)GIRSUPPORT");
+        support.Function("int gir_control_active(gir_control_attempt *attempt)", R"GIRSUPPORT({
     gir_control_capture(attempt);
     return attempt->progress == GIR_CONTROL_OPEN || attempt->progress == GIR_CONTROL_SUSPENDED ||
            attempt->progress == GIR_CONTROL_BUILT || attempt->progress == GIR_CONTROL_EXITING;
 }
-static int gir_control_descendant(gir_control_attempt *ancestor, gir_control_attempt *attempt) {
+)GIRSUPPORT");
+        support.Function("int gir_control_descendant(gir_control_attempt *ancestor, gir_control_attempt *attempt)", R"GIRSUPPORT({
     for (; attempt; attempt = attempt->parent) if (attempt == ancestor) return 1;
     return 0;
 }
-static void gir_control_set_parent(gir_control_attempt *attempt, gir_control_attempt *parent, gir_control_parent_kind kind) {
+)GIRSUPPORT");
+        support.Function("void gir_control_set_parent(gir_control_attempt *attempt, gir_control_attempt *parent, gir_control_parent_kind kind)", R"GIRSUPPORT({
     gir_control_parent_retain(attempt, parent);
     gir_control_attempt *old = attempt->parent;
     if (old && old->expected == attempt) old->expected = NULL;
@@ -1150,16 +1296,19 @@ static void gir_control_set_parent(gir_control_attempt *attempt, gir_control_att
     attempt->parent_kind = kind;
     gir_control_parent_release(attempt, old);
 }
-static int gir_control_carried(gir_control_attempt *attempt, size_t count, uint8_t *const *carried) {
+)GIRSUPPORT");
+        support.Function("int gir_control_carried(gir_control_attempt *attempt, size_t count, uint8_t *const *carried)", R"GIRSUPPORT({
     for (size_t index = 0; index < count; index++) if (gir_control_node(carried[index]) == attempt) return 1;
     return 0;
 }
-static int gir_control_carried_descendant(gir_control_attempt *attempt, size_t count, uint8_t *const *carried) {
+)GIRSUPPORT");
+        support.Function("int gir_control_carried_descendant(gir_control_attempt *attempt, size_t count, uint8_t *const *carried)", R"GIRSUPPORT({
     for (size_t index = 0; index < count; index++)
         if (gir_control_descendant(attempt, gir_control_node(carried[index]))) return 1;
     return 0;
 }
-static void gir_control_abandon_tree(gir_control_attempt *attempt, size_t count, uint8_t *const *carried) {
+)GIRSUPPORT");
+        support.Function("void gir_control_abandon_tree(gir_control_attempt *attempt, size_t count, uint8_t *const *carried)", R"GIRSUPPORT({
     for (gir_control_attempt *node = gir_control_live_attempts; node; node = node->live_next) {
         if (!gir_control_descendant(attempt, node) || !gir_control_active(node)) continue;
         uint8_t protected = 0;
@@ -1170,7 +1319,8 @@ static void gir_control_abandon_tree(gir_control_attempt *attempt, size_t count,
         gir_control_event("abandon", node->metadata.identity);
     }
 }
-static void gir_control_restore_top(gir_control_attempt *attempt, size_t count, uint8_t *const *carried) {
+)GIRSUPPORT");
+        support.Function("void gir_control_restore_top(gir_control_attempt *attempt, size_t count, uint8_t *const *carried)", R"GIRSUPPORT({
     uint8_t *end = attempt->rollback_end;
     for (size_t index = 0; index < count; index++) {
         gir_control_lease *payload = gir_control_find_lease(carried[index]);
@@ -1179,8 +1329,8 @@ static void gir_control_restore_top(gir_control_attempt *attempt, size_t count, 
     gir_control_require(end <= attempt->stack->top);
     attempt->stack->top = end;
 }
-static gir_control_attempt *gir_control_renew_node(gir_control_receiving *receiving, gir_control_attempt *attempt,
-                                                  ptrdiff_t offset, int64_t prefix) {
+)GIRSUPPORT");
+        support.Function("gir_control_attempt *gir_control_renew_node(gir_control_receiving *receiving, gir_control_attempt *attempt,\n                                                  ptrdiff_t offset, int64_t prefix)", R"GIRSUPPORT({
     attempt = gir_control_resolve(attempt);
     gir_control_capture(attempt);
     if (attempt->progress != GIR_CONTROL_ABANDONED && attempt->progress != GIR_CONTROL_CANCELLED) return attempt;
@@ -1219,13 +1369,15 @@ static gir_control_attempt *gir_control_renew_node(gir_control_receiving *receiv
     gir_control_node_release(renewed);
     return renewed;
 }
-static void gir_control_receiving_selectable(gir_control_receiving *receiving) {
+)GIRSUPPORT");
+        support.Function("void gir_control_receiving_selectable(gir_control_receiving *receiving)", R"GIRSUPPORT({
     gir_control_require(!receiving->unselected);
     for (gir_control_ticket *ticket = receiving->graph->tickets; ticket; ticket = ticket->previous)
         gir_control_require(ticket->receiving != receiving || ticket->scope != gir_control_scope_top ||
             ticket->role != GIR_CONTROL_WAITING);
 }
-static uint8_t *gir_control_receiving_renew(uint8_t *control) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_receiving_renew(uint8_t *control)", R"GIRSUPPORT({
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     gir_control_receiving_selectable(receiving);
     gir_control_attempt *attempt = gir_control_renew_node(receiving, gir_control_boundary(receiving),
@@ -1233,7 +1385,8 @@ static uint8_t *gir_control_receiving_renew(uint8_t *control) {
     gir_control_require(attempt->progress == GIR_CONTROL_OPEN);
     return gir_control_add_lease(receiving, attempt, receiving->outward_mode);
 }
-static uint8_t *gir_control_receiving_refresh(uint8_t *control, uint8_t *metadata, uint8_t *view_start, int64_t prefix) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_receiving_refresh(uint8_t *control, uint8_t *metadata, uint8_t *view_start, int64_t prefix)", R"GIRSUPPORT({
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     gir_control_receiving_selectable(receiving);
     gir_control_lease *lease = gir_control_find_lease(metadata);
@@ -1254,7 +1407,8 @@ static uint8_t *gir_control_receiving_refresh(uint8_t *control, uint8_t *metadat
     gir_control_drop_lease(metadata);
     return after;
 }
-static gir_control_ticket *gir_control_ticket_allocate(gir_control_receiving *receiving) {
+)GIRSUPPORT");
+        support.Function("gir_control_ticket *gir_control_ticket_allocate(gir_control_receiving *receiving)", R"GIRSUPPORT({
     gir_control_require(gir_control_scope_top != NULL);
     gir_control_ticket *ticket = (gir_control_ticket *)gir_control_alloc(sizeof(*ticket));
     ticket->receiving = receiving;
@@ -1271,8 +1425,8 @@ static gir_control_ticket *gir_control_ticket_allocate(gir_control_receiving *re
     gir_control_graph_retain(receiving->graph);
     return ticket;
 }
-static void gir_control_ticket_snapshot(gir_control_ticket *ticket, gir_control_attempt *boundary,
-                                        gir_control_attempt *snapshot_attempt, gir_control_attempt *selected) {
+)GIRSUPPORT");
+        support.Function("void gir_control_ticket_snapshot(gir_control_ticket *ticket, gir_control_attempt *boundary,\n                                        gir_control_attempt *snapshot_attempt, gir_control_attempt *selected)", R"GIRSUPPORT({
     ticket->boundary = boundary;
     ticket->snapshot_attempt = snapshot_attempt;
     ticket->selected = selected;
@@ -1283,14 +1437,15 @@ static void gir_control_ticket_snapshot(gir_control_ticket *ticket, gir_control_
     gir_control_node_retain(selected);
     gir_control_parent_retain(snapshot_attempt, ticket->snapshot.expected);
 }
-static gir_control_ticket *gir_control_ticket_new(gir_control_receiving *receiving, gir_control_attempt *boundary,
-                                                 gir_control_attempt *snapshot_attempt, gir_control_attempt *selected) {
+)GIRSUPPORT");
+        support.Function("gir_control_ticket *gir_control_ticket_new(gir_control_receiving *receiving, gir_control_attempt *boundary,\n                                                 gir_control_attempt *snapshot_attempt, gir_control_attempt *selected)", R"GIRSUPPORT({
     gir_control_ticket *ticket = gir_control_ticket_allocate(receiving);
     gir_control_ticket_snapshot(ticket, boundary, snapshot_attempt, selected);
     ticket->role = GIR_CONTROL_FRESH;
     return ticket;
 }
-static void gir_control_drop_ticket_leases(gir_control_ticket *ticket, size_t count, uint8_t *const *carried) {
+)GIRSUPPORT");
+        support.Function("void gir_control_drop_ticket_leases(gir_control_ticket *ticket, size_t count, uint8_t *const *carried)", R"GIRSUPPORT({
     gir_control_scope *scope = ticket->scope;
     gir_control_lease **position = &scope->leases;
     while (*position) {
@@ -1311,7 +1466,8 @@ static void gir_control_drop_ticket_leases(gir_control_ticket *ticket, size_t co
         } else position = &lease->next;
     }
 }
-static void gir_control_cancel_ticket(gir_control_ticket *ticket, size_t count, uint8_t *const *carried) {
+)GIRSUPPORT");
+        support.Function("void gir_control_cancel_ticket(gir_control_ticket *ticket, size_t count, uint8_t *const *carried)", R"GIRSUPPORT({
     gir_control_require(ticket->kind != GIR_CONTROL_TICKET_RECEIVED && ticket->role != GIR_CONTROL_WAITING);
     if (ticket->state == GIR_CONTROL_TICKET_RESTORED) return;
     if (ticket->role != GIR_CONTROL_FRESH) {
@@ -1335,14 +1491,16 @@ static void gir_control_cancel_ticket(gir_control_ticket *ticket, size_t count, 
     gir_control_drop_ticket_leases(ticket, count, carried);
     ticket->state = GIR_CONTROL_TICKET_RESTORED;
 }
-static void gir_control_restore_named(gir_control_receiving *receiving, gir_control_attempt *named) {
+)GIRSUPPORT");
+        support.Function("void gir_control_restore_named(gir_control_receiving *receiving, gir_control_attempt *named)", R"GIRSUPPORT({
     for (gir_control_ticket *ticket = receiving->graph->tickets; ticket; ticket = ticket->previous) {
         if (ticket->state != GIR_CONTROL_TICKET_ACTIVE || ticket->role != GIR_CONTROL_FRESH ||
             ticket->kind == GIR_CONTROL_TICKET_RECEIVED || ticket->selected == named) continue;
         if (gir_control_descendant(named, ticket->snapshot_attempt)) gir_control_cancel_ticket(ticket, 0, NULL);
     }
 }
-static uint8_t *gir_control_exit_wait(uint8_t *control) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_exit_wait(uint8_t *control)", R"GIRSUPPORT({
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     gir_control_require(receiving->scope == gir_control_scope_top && !receiving->consumed && !receiving->unselected);
     for (gir_control_ticket *ticket = receiving->graph->tickets; ticket; ticket = ticket->previous)
@@ -1351,7 +1509,8 @@ static uint8_t *gir_control_exit_wait(uint8_t *control) {
     ticket->authority = GIR_CONTROL_WAITING_RECEIPT;
     return (uint8_t *)ticket;
 }
-static void gir_control_exit_select(uint8_t *token, uint8_t alias, uint8_t *binding) {
+)GIRSUPPORT");
+        support.Function("void gir_control_exit_select(uint8_t *token, uint8_t alias, uint8_t *binding)", R"GIRSUPPORT({
     gir_control_ticket *ticket = (gir_control_ticket *)token;
     gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->role == GIR_CONTROL_WAITING &&
         ticket->kind == GIR_CONTROL_TICKET_RESERVED && ticket->scope == gir_control_scope_top && ticket->receiving);
@@ -1401,19 +1560,22 @@ static void gir_control_exit_select(uint8_t *token, uint8_t alias, uint8_t *bind
         gir_control_event("begin", selected->metadata.identity);
     }
 }
-static uint8_t *gir_control_exit_reserve(uint8_t *control, uint8_t alias, uint8_t *binding) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_exit_reserve(uint8_t *control, uint8_t alias, uint8_t *binding)", R"GIRSUPPORT({
     gir_control_require(!((gir_control_receiving *)control)->unselected);
     gir_control_ticket *ticket = gir_control_ticket_allocate((gir_control_receiving *)control);
     gir_control_exit_select((uint8_t *)ticket, alias, binding);
     return (uint8_t *)ticket;
 }
-static uint8_t gir_control_exit_is_named(uint8_t *token) {
+)GIRSUPPORT");
+        support.Function("uint8_t gir_control_exit_is_named(uint8_t *token)", R"GIRSUPPORT({
     gir_control_ticket *ticket = (gir_control_ticket *)token;
     gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->kind == GIR_CONTROL_TICKET_RESERVED &&
         ticket->role != GIR_CONTROL_WAITING);
     return ticket->role != GIR_CONTROL_FRESH;
 }
-static void gir_control_exit_mark_named(uint8_t *token) {
+)GIRSUPPORT");
+        support.Function("void gir_control_exit_mark_named(uint8_t *token)", R"GIRSUPPORT({
     gir_control_ticket *ticket = (gir_control_ticket *)token;
     gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->role == GIR_CONTROL_NAMED_AWAITING &&
         ticket->kind == GIR_CONTROL_TICKET_RESERVED);
@@ -1435,7 +1597,8 @@ static void gir_control_exit_mark_named(uint8_t *token) {
     ticket->snapshot = snapshot;
     ticket->role = GIR_CONTROL_NAMED_READY;
 }
-static void gir_control_materialize_named(gir_control_ticket *ticket) {
+)GIRSUPPORT");
+        support.Function("void gir_control_materialize_named(gir_control_ticket *ticket)", R"GIRSUPPORT({
     gir_control_require(ticket->role == GIR_CONTROL_NAMED_READY && ticket->receiving);
     gir_control_attempt *selected = ticket->selected;
     gir_control_restore_named(ticket->receiving, selected);
@@ -1455,7 +1618,8 @@ static void gir_control_materialize_named(gir_control_ticket *ticket) {
     gir_control_restore(selected, snapshot);
     ticket->role = GIR_CONTROL_NAMED_MATERIALIZED;
 }
-static uint8_t *gir_control_exit_selected(uint8_t *token) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_exit_selected(uint8_t *token)", R"GIRSUPPORT({
     gir_control_ticket *ticket = (gir_control_ticket *)token;
     gir_control_require(ticket->state == GIR_CONTROL_TICKET_ACTIVE && ticket->kind == GIR_CONTROL_TICKET_RESERVED &&
         ticket->role != GIR_CONTROL_WAITING && ticket->receiving);
@@ -1465,7 +1629,8 @@ static uint8_t *gir_control_exit_selected(uint8_t *token) {
     uint8_t mode = ticket->outward_mode || selected != gir_control_resolve(ticket->boundary);
     return gir_control_add_lease(ticket->receiving, selected, mode);
 }
-static uint8_t *gir_control_exit_adopt(uint8_t *control, uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_exit_adopt(uint8_t *control, uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     gir_control_attempt *selected = gir_control_node(metadata);
     gir_control_capture(selected);
@@ -1477,7 +1642,8 @@ static uint8_t *gir_control_exit_adopt(uint8_t *control, uint8_t *metadata) {
     gir_control_node_release(selected);
     return (uint8_t *)ticket;
 }
-static void gir_control_ticket_detach(gir_control_ticket *ticket) {
+)GIRSUPPORT");
+        support.Function("void gir_control_ticket_detach(gir_control_ticket *ticket)", R"GIRSUPPORT({
     gir_control_graph *graph = ticket->graph;
     gir_control_ticket **scope_position = &ticket->scope->tickets;
     while (*scope_position && *scope_position != ticket) scope_position = &(*scope_position)->scope_next;
@@ -1488,7 +1654,8 @@ static void gir_control_ticket_detach(gir_control_ticket *ticket) {
     gir_control_require(*graph_position == ticket);
     *graph_position = ticket->previous;
 }
-static void gir_control_ticket_clear_selection(gir_control_ticket *ticket) {
+)GIRSUPPORT");
+        support.Function("void gir_control_ticket_clear_selection(gir_control_ticket *ticket)", R"GIRSUPPORT({
     if (ticket->snapshot_attempt) {
         gir_control_parent_release(ticket->snapshot_attempt, ticket->snapshot.expected);
         gir_control_node_release(ticket->snapshot_attempt);
@@ -1505,13 +1672,15 @@ static void gir_control_ticket_clear_selection(gir_control_ticket *ticket) {
     memset(&ticket->snapshot, 0, sizeof(ticket->snapshot));
     ticket->boundary_start = ticket->payload_start = ticket->payload_end = NULL;
 }
-static void gir_control_ticket_destroy(gir_control_ticket *ticket) {
+)GIRSUPPORT");
+        support.Function("void gir_control_ticket_destroy(gir_control_ticket *ticket)", R"GIRSUPPORT({
     gir_control_graph *graph = ticket->graph;
     gir_control_ticket_clear_selection(ticket);
     free(ticket);
     gir_control_graph_release(graph);
 }
-static void gir_control_exit_rearm(uint8_t *token) {
+)GIRSUPPORT");
+        support.Function("void gir_control_exit_rearm(uint8_t *token)", R"GIRSUPPORT({
     gir_control_ticket *ticket = (gir_control_ticket *)token;
     gir_control_receiving *receiving = ticket->receiving;
     gir_control_require(ticket->authority == GIR_CONTROL_WAITING_RECEIPT && ticket->role != GIR_CONTROL_WAITING &&
@@ -1539,12 +1708,14 @@ static void gir_control_exit_rearm(uint8_t *token) {
     ticket->state = GIR_CONTROL_TICKET_ACTIVE;
     ticket->lease_boundary = gir_control_scope_top->next_lease;
 }
-static void gir_control_exit_release(uint8_t *token) {
+)GIRSUPPORT");
+        support.Function("void gir_control_exit_release(uint8_t *token)", R"GIRSUPPORT({
     gir_control_ticket *ticket = (gir_control_ticket *)token;
     gir_control_ticket_detach(ticket);
     gir_control_ticket_destroy(ticket);
 }
-static void gir_control_exit_discard(uint8_t *token, size_t count, uint8_t *const *carried) {
+)GIRSUPPORT");
+        support.Function("void gir_control_exit_discard(uint8_t *token, size_t count, uint8_t *const *carried)", R"GIRSUPPORT({
     gir_control_ticket *ticket = (gir_control_ticket *)token;
     if (ticket->role == GIR_CONTROL_WAITING) {
         gir_control_receiving *receiving = ticket->receiving;
@@ -1566,7 +1737,8 @@ static void gir_control_exit_discard(uint8_t *token, size_t count, uint8_t *cons
     gir_control_cancel_ticket(ticket, count, carried);
     gir_control_exit_release(token);
 }
-static uint8_t *gir_control_exit_prepare(uint8_t *token, uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_exit_prepare(uint8_t *token, uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_ticket *ticket = (gir_control_ticket *)token;
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *payload = lease->attempt;
@@ -1597,7 +1769,8 @@ static uint8_t *gir_control_exit_prepare(uint8_t *token, uint8_t *metadata) {
     }
     return ticket->boundary_start;
 }
-static uint8_t *gir_control_exit_commit(uint8_t *token, uint8_t *metadata, uint8_t *start) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_exit_commit(uint8_t *token, uint8_t *metadata, uint8_t *start)", R"GIRSUPPORT({
     gir_control_ticket *ticket = (gir_control_ticket *)token;
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *payload = lease->attempt;
@@ -1642,7 +1815,8 @@ static uint8_t *gir_control_exit_commit(uint8_t *token, uint8_t *metadata, uint8
     payload->active = lease;
     return metadata;
 }
-static uint8_t *gir_control_receiving_cancel(uint8_t *control, size_t count, uint8_t *const *carried) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_receiving_cancel(uint8_t *control, size_t count, uint8_t *const *carried)", R"GIRSUPPORT({
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     gir_control_attempt *attempt = gir_control_boundary(receiving);
     if (receiving->unselected) {
@@ -1725,7 +1899,8 @@ static uint8_t *gir_control_receiving_cancel(uint8_t *control, size_t count, uin
     gir_control_find_lease(metadata)->cleanup = GIR_CONTROL_STORAGE_CLEANED;
     return metadata;
 }
-static uint8_t *gir_control_attempt_abandon(uint8_t *metadata, size_t count, uint8_t *const *carried) {
+)GIRSUPPORT");
+        support.Function("uint8_t *gir_control_attempt_abandon(uint8_t *metadata, size_t count, uint8_t *const *carried)", R"GIRSUPPORT({
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *attempt = lease->attempt;
     int64_t before = lease->progress;
@@ -1737,7 +1912,8 @@ static uint8_t *gir_control_attempt_abandon(uint8_t *metadata, size_t count, uin
         if (gir_control_node(carried[index])->stack == attempt->stack) lease->cleanup = GIR_CONTROL_PRESERVE_STORAGE;
     return metadata;
 }
-static void gir_control_receiving_drop(uint8_t *control) {
+)GIRSUPPORT");
+        support.Function("void gir_control_receiving_drop(uint8_t *control)", R"GIRSUPPORT({
     gir_control_receiving *receiving = (gir_control_receiving *)control;
     uint8_t owning = receiving->scope == gir_control_scope_top;
     if (owning) gir_control_require(!receiving->handoff && !receiving->unselected);
@@ -1756,7 +1932,8 @@ static void gir_control_receiving_drop(uint8_t *control) {
     }
     if (owning) gir_control_handle_close(receiving);
 }
-static void gir_control_close_graph_handles(gir_control_graph *graph) {
+)GIRSUPPORT");
+        support.Function("void gir_control_close_graph_handles(gir_control_graph *graph)", R"GIRSUPPORT({
     gir_control_graph_retain(graph);
     for (gir_control_scope *scope = gir_control_scope_top; scope; scope = scope->previous) {
         gir_control_receiving *receiving = scope->receivers;
@@ -1773,7 +1950,8 @@ static void gir_control_close_graph_handles(gir_control_graph *graph) {
     }
     gir_control_graph_release(graph);
 }
-static void gir_control_attempt_cancel(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_cancel(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_lease *lease = gir_control_find_lease(metadata);
     gir_control_attempt *attempt = lease->attempt;
     gir_control_receiving *receiving = lease->receiving;
@@ -1796,7 +1974,8 @@ static void gir_control_attempt_cancel(uint8_t *metadata) {
     gir_control_drop_lease(metadata);
     if (close) gir_control_handle_close(receiving);
 }
-static void gir_control_attempt_child(uint8_t *parent_metadata, uint8_t *child_metadata) {
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_child(uint8_t *parent_metadata, uint8_t *child_metadata)", R"GIRSUPPORT({
     gir_control_attempt *parent = gir_control_node(parent_metadata);
     gir_control_attempt *child = gir_control_node(child_metadata);
     gir_control_capture(parent);
@@ -1808,7 +1987,8 @@ static void gir_control_attempt_child(uint8_t *parent_metadata, uint8_t *child_m
     parent->expected = child;
     gir_control_progress(parent, GIR_CONTROL_SUSPENDED);
 }
-static void gir_control_attempt_finish(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_finish(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_attempt *attempt = gir_control_node(metadata);
     gir_control_capture(attempt);
     gir_control_require(attempt->progress == GIR_CONTROL_OPEN);
@@ -1816,7 +1996,8 @@ static void gir_control_attempt_finish(uint8_t *metadata) {
     gir_control_find_lease(metadata)->end = attempt->write_end;
     gir_control_progress(attempt, GIR_CONTROL_BUILT);
 }
-static void gir_control_attempt_attach(uint8_t *parent_metadata, uint8_t *child_metadata) {
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_attach(uint8_t *parent_metadata, uint8_t *child_metadata)", R"GIRSUPPORT({
     gir_control_attempt *parent = gir_control_node(parent_metadata);
     gir_control_attempt *child = gir_control_node(child_metadata);
     gir_control_capture(parent);
@@ -1833,7 +2014,8 @@ static void gir_control_attempt_attach(uint8_t *parent_metadata, uint8_t *child_
     gir_control_close_graph_handles(graph);
     gir_control_drop_lease(child_metadata);
 }
-static void gir_control_attempt_publish(uint8_t *metadata) {
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_publish(uint8_t *metadata)", R"GIRSUPPORT({
     gir_control_attempt *attempt = gir_control_node(metadata);
     gir_control_capture(attempt);
     gir_control_require(attempt->progress == GIR_CONTROL_BUILT && !attempt->graph->tickets && !attempt->staging.cursor);
@@ -1842,9 +2024,9 @@ static void gir_control_attempt_publish(uint8_t *metadata) {
     gir_control_close_graph_handles(graph);
     gir_control_drop_lease(metadata);
 }
-static void gir_control_attempt_return(uint8_t *metadata) { gir_control_drop_lease(metadata); }
-)GIRCONTROL";
-        return out;
+)GIRSUPPORT");
+        support.Function("void gir_control_attempt_return(uint8_t *metadata)", R"GIRSUPPORT({ gir_control_drop_lease(metadata); }
+)GIRSUPPORT");
     }
 
 

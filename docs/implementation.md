@@ -7324,6 +7324,13 @@ the standalone runtime and the C interface visible to those headers: types
 reachable from `extern` or export signatures, plus `extern` entry points.
 Other generated types and program globals remain in their own units.
 
+`UnitSource::support` carries program support through `UnitProgramSupport`.
+The emitter supplies types, state declarations, and function signatures with
+bodies. Unit output declares the support interface in each code, globals,
+and program unit, with definitions emitted once in `program.c`. GIR construction
+stacks, return channels, control scopes, and trace state therefore belong to
+one program. Single-file output keeps static definitions in their original order.
+
 Object reuse requires the unit text, reported C compiler inputs and build
 contract (compiler identity, version, target and flags) to match. Builds lock
 the store and publish objects atomically. `--rebuild` replaces existing
