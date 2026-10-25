@@ -114,6 +114,26 @@ theorem sampledStored_storage_transport (stored : StoredValue) (before after : E
               progressCount, fault, EvalM.stop, count] at sampled ⊢ <;>
             first | (solve | cases sampled) | (cases sampled; rfl)
 
+theorem sampledStored_detached_of_samplePacked (state : ExecutionState) (id : Nat)
+    (storage : ReceivingStorage) (start : Nat) (ty : Ty) (run : SampledRun)
+    (object : Option Nat) (path : List Nat)
+    (present : state.construction.storage[id]? = some storage)
+    (sampled : samplePacked ty storage.bytes start = .ok run) :
+    sampledStored ⟨id, start, ty, run.count, none, object, path, run.count⟩ state =
+      .ok (storage.bytes, run) state := by
+  cases ty <;> try (solve | cases sampled)
+  case arr element count =>
+    cases sampled
+    simp only [sampledStored, getStorage, EvalM.get, bind, present, pure, elementType]
+    rfl
+  case varr element =>
+    cases counted : readCount storage.bytes start with
+    | error reason => simp only [samplePacked, counted, bind, Except.bind] at sampled; cases sampled
+    | ok count =>
+      simp only [samplePacked, counted, bind, Except.bind] at sampled
+      cases sampled
+      simp only [sampledStored, getStorage, EvalM.get, bind, present, pure, elementType]
+
 theorem readStoredElement_prefix_success (fuel backingFuel : Nat) (layout : LayoutEnv)
     (fields : FixedLayoutFieldBounds layout) (stored : StoredValue) (index : Nat)
     (before after : ExecutionState) (original current : ByteArray) (run : SampledRun)
@@ -190,6 +210,7 @@ theorem readStoredElement_prefix_observation (fuel backingFuel : Nat) (layout : 
       cases fixedValue fuel layout run.element original start <;> rfl
 
 #print axioms sampledStored_storage_transport
+#print axioms sampledStored_detached_of_samplePacked
 #print axioms readStoredElement_prefix_success
 #print axioms readStoredElement_prefix_observation
 

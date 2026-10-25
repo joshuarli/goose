@@ -20,6 +20,13 @@ theorem BytePrefixEqual.of_extract_eq (before after : ByteArray) (finish : Nat)
   simp only [ByteArray.size_extract, Nat.sub_zero, Nat.min_eq_left bound] at sizes
   exact ⟨bound, by omega, bytes⟩
 
+theorem BytePrefixEqual.restrict {before after : ByteArray} {limit : Nat}
+    (equal : BytePrefixEqual before after limit) (finish : Nat) (inside : finish ≤ limit) :
+    BytePrefixEqual before after finish := by
+  refine ⟨Nat.le_trans inside equal.beforeBound, Nat.le_trans inside equal.afterBound, ?_⟩
+  have bytes := congrArg (fun data : ByteArray => data.extract 0 finish) equal.bytes
+  simpa only [ByteArray.extract_extract, Nat.zero_add, Nat.min_eq_left inside] using bytes
+
 theorem BytePrefixEqual.getElem? {before after : ByteArray} {finish : Nat}
     (equal : BytePrefixEqual before after finish) (index : Nat) (inside : index < finish) :
     after.data[index]? = before.data[index]? := by
