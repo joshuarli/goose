@@ -12,6 +12,14 @@ structure BytePrefixEqual (before after : ByteArray) (finish : Nat) : Prop where
   afterBound : finish ≤ after.size
   bytes : after.extract 0 finish = before.extract 0 finish
 
+theorem BytePrefixEqual.of_extract_eq (before after : ByteArray) (finish : Nat)
+    (bound : finish ≤ before.size)
+    (bytes : after.extract 0 finish = before.extract 0 finish) :
+    BytePrefixEqual before after finish := by
+  have sizes := congrArg ByteArray.size bytes
+  simp only [ByteArray.size_extract, Nat.sub_zero, Nat.min_eq_left bound] at sizes
+  exact ⟨bound, by omega, bytes⟩
+
 theorem BytePrefixEqual.getElem? {before after : ByteArray} {finish : Nat}
     (equal : BytePrefixEqual before after finish) (index : Nat) (inside : index < finish) :
     after.data[index]? = before.data[index]? := by
