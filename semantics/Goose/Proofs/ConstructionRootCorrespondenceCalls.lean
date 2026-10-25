@@ -33,6 +33,36 @@ theorem mapCalleeRoots_rooted (caller : RootInterpretation) (callee : RuntimeAct
     subst mapped
     exact rooted
 
+theorem mapCalleeRoots_reflects (caller : RootInterpretation) (callee : RuntimeActivation)
+    (arguments : List (List RootRef)) (symbolic : RootRef) (mapped : List RootRef)
+    (checked : mapCalleeRoots arguments symbolic = .ok mapped) (root : RootInst)
+    (rooted : RootIn caller mapped root) : Instantiates (CallInterpretation caller callee arguments) symbolic root := by
+  cases symbolic with
+  | param index =>
+    cases supplied : arguments[index]? with
+    | none => simp [mapCalleeRoots, supplied, Goose.Core.reject] at checked
+    | some roots =>
+      simp only [mapCalleeRoots, supplied, pure, Except.pure, Except.ok.injEq] at checked
+      subst mapped
+      exact .parameter index root ⟨roots, supplied, rooted⟩
+  | «local» id => simp [mapCalleeRoots, Goose.Core.reject] at checked
+  | global id =>
+    simp only [mapCalleeRoots, pure, Except.pure, Except.ok.injEq] at checked
+    subst mapped
+    obtain ⟨symbolic, member, actual⟩ := rooted
+    have equal := List.mem_singleton.mp member
+    subst symbolic
+    cases actual with
+    | global id declared => exact .global id declared
+  | static =>
+    simp only [mapCalleeRoots, pure, Except.pure, Except.ok.injEq] at checked
+    subst mapped
+    obtain ⟨symbolic, member, actual⟩ := rooted
+    have equal := List.mem_singleton.mp member
+    subst symbolic
+    cases actual with
+    | static id synthetic => exact .static id synthetic
+
 theorem mem_unionRoots (root : RootRef) (left right : List RootRef) :
     root ∈ unionRoots left right ↔ root ∈ left ∨ root ∈ right := by
   unfold unionRoots
@@ -83,6 +113,29 @@ theorem mapResultRoots_rooted (caller : RootInterpretation) (callee : RuntimeAct
             (.inr (mapCalleeRoots_rooted caller callee arguments head roots mapping root instantiated)))
         · exact Or.inr ⟨symbolic, member, instantiated⟩
 
+theorem mapResultRoots_reflects (caller : RootInterpretation) (callee : RuntimeActivation)
+    (arguments : List (List RootRef)) (declared accumulator mapped : List RootRef)
+    (checked : mapResultRoots arguments accumulator declared = .ok mapped) (root : RootInst)
+    (rooted : RootIn caller mapped root) :
+    RootIn caller accumulator root ∨ RootIn (CallInterpretation caller callee arguments) declared root := by
+  induction declared generalizing accumulator with
+  | nil =>
+    simp only [mapResultRoots, pure, Except.pure, Except.ok.injEq] at checked
+    subst mapped
+    exact Or.inl rooted
+  | cons head rest ih =>
+    simp only [mapResultRoots] at checked
+    cases mapping : mapCalleeRoots arguments head with
+    | error reason => simp [mapping, bind, Except.bind] at checked
+    | ok roots =>
+      simp only [mapping, bind, Except.bind] at checked
+      rcases ih (unionRoots accumulator roots) checked with inherited | ⟨symbolic, member, actual⟩
+      · rcases (rootIn_unionRoots caller accumulator roots root).mp inherited with old | added
+        · exact Or.inl old
+        · exact Or.inr ⟨head, by simp,
+            mapCalleeRoots_reflects caller callee arguments head roots mapping root added⟩
+      · exact Or.inr ⟨symbolic, List.mem_cons_of_mem head member, actual⟩
+
 theorem checkArgRoots_annotation (callee : Impl) (context : Context)
     (arguments : List (List RootRef)) (index : Nat) (parameter : Param) (descriptor : LocalVar)
     (roots : List RootRef) (parameterAt : callee.params[index]? = some parameter)
@@ -122,6 +175,60 @@ private theorem forAll_success_member {α : Type} (rows : List α) (action : α 
     · subst selected
       exact first
     · exact ih rest selected member
+
+theorem checkContent_variableRooted (caller : RootInterpretation) (callee : RuntimeActivation)
+    (environment : PEnv) (context : Context) (arguments : List Arg) (argumentRoots : List (List RootRef))
+    (index holder : Nat) (mutability : Goose.Core.Mutability) (contents annotation : List RootRef) (value : Value)
+    (contentAt : (context.contentRoots.find? (·.1 == index)).map Prod.snd = some contents)
+    (argumentAt : arguments[index]? = some (.byRef mutability (.var holder)))
+    (annotationAt : environment.ann holder = some annotation)
+    (checked : checkContent environment context arguments argumentRoots index = .ok ())
+    (rooted : DirectValueRooted caller annotation value) :
+    DirectValueRooted (CallInterpretation caller callee argumentRoots) contents value := by
+  unfold checkContent at checked
+  simp only [contentAt] at checked
+  obtain ⟨mapped, substituted, checked⟩ := (rootCheck_bind_success _ _ _).mp checked
+  simp only [argumentAt, annotationAt] at checked
+  have included : annotation ⊆ mapped := by
+    cases covered : subsetRoots annotation mapped with
+    | false => simp [covered, Goose.Core.reject, bind, Except.bind] at checked
+    | true =>
+      have members : ∀ root, root ∈ annotation → root ∈ mapped := by simpa [subsetRoots] using covered
+      exact fun {_} member => members _ member
+  intro location reference
+  have reflected := mapResultRoots_reflects caller callee argumentRoots contents [] mapped substituted location.root
+    (rootIn_mono included (rooted location reference))
+  rcases reflected with ⟨symbolic, absent, _⟩ | actual
+  · cases absent
+  · exact actual
+
+theorem checkContent_referenceRooted (caller : RootInterpretation) (callee : RuntimeActivation)
+    (environment : PEnv) (context : Context) (arguments : List Arg) (argumentRoots : List (List RootRef))
+    (index holder : Nat) (mutability : Goose.Core.Mutability) (contents annotation : List RootRef) (value : Value)
+    (contentAt : (context.contentRoots.find? (·.1 == index)).map Prod.snd = some contents)
+    (argumentAt : arguments[index]? = some (.byRef mutability (.deref (.read (.var holder)))))
+    (annotationAt : environment.cont holder = some annotation)
+    (checked : checkContent environment context arguments argumentRoots index = .ok ())
+    (rooted : DirectValueRooted caller annotation value) :
+    DirectValueRooted (CallInterpretation caller callee argumentRoots) contents value := by
+  unfold checkContent at checked
+  simp only [contentAt] at checked
+  obtain ⟨mapped, substituted, checked⟩ := (rootCheck_bind_success _ _ _).mp checked
+  simp only [argumentAt, annotationAt] at checked
+  have covered : (subsetRoots mapped annotation && subsetRoots annotation mapped) = true := by
+    cases covered : subsetRoots mapped annotation && subsetRoots annotation mapped with
+    | false => simp [covered, Goose.Core.reject] at checked
+    | true => rfl
+  have included : annotation ⊆ mapped := by
+    have members : ∀ root, root ∈ annotation → root ∈ mapped := by
+      simpa [subsetRoots] using ((Bool.and_eq_true _ _).mp covered).2
+    exact fun {_} member => members _ member
+  intro location reference
+  have reflected := mapResultRoots_reflects caller callee argumentRoots contents [] mapped substituted location.root
+    (rootIn_mono included (rooted location reference))
+  rcases reflected with ⟨symbolic, absent, _⟩ | actual
+  · cases absent
+  · exact actual
 
 theorem parameterAnnotation_external (module : Module) (implementation : Impl) (context : Context)
     (checked : checkAnnotationShape module implementation context = .ok ())

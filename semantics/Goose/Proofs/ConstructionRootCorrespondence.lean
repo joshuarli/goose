@@ -160,6 +160,26 @@ theorem evalValue_localReference_rooted (fuel : Nat) (config : EvalConfig)
   refine ⟨?_, RootRef.local id, by simp, rootOf_instantiates interpretation id state root resolved⟩
   simp only [evalValue, evalPlace, bind, resolved, pure]
 
+theorem evalValue_referenceSlice_rooted (fuel : Nat) (config : EvalConfig)
+    (interpretation : RootInterpretation) (context : Context) (visible : List VarId) (state : ExecutionState)
+    (valid : ContentRootCorrespondence interpretation context visible (fuel + 3) config.layout state)
+    (id : VarId) (member : id ∈ visible) (root : RootInst) (location : Loc) (value : Value)
+    (resolved : rootOf interpretation.environment id state = .ok root state)
+    (found : state.objects.lookup root = some (.ref location))
+    (read : readLoc (fuel + 3) config.layout location state = .ok value state)
+    (interior : Loc) (reference : DirectReference value interior) :
+    evalValue (fuel + 4) config interpretation.environment (.read (.deref (.read (.var id)))) state = .ok value state ∧
+      ∃ roots, (context.contentRoots.find? (·.1 == id)).map Prod.snd = some roots ∧
+        RootIn interpretation roots interior.root := by
+  have holder : evalValue (fuel + 2) config interpretation.environment (.read (.var id)) state =
+      .ok (.ref location) state := by
+    simp only [evalValue, evalPlace, bind, resolved, pure, readLoc, EvalM.get, found, readValuePath]
+  have address : evalPlace (fuel + 3) config interpretation.environment (.deref (.read (.var id))) state =
+      .ok location state := by
+    simp only [evalPlace, bind, holder, expectRef, pure]
+  refine ⟨?_, valid id member root location value resolved found read interior reference⟩
+  simp only [evalValue, bind, address, read]
+
 def AliasComplete (interpretation : RootInterpretation) (aliases : List (RootRef × RootRef)) : Prop :=
   ∀ left right root, Instantiates interpretation left root → Instantiates interpretation right root →
     RootAlias aliases left right

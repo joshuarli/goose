@@ -84,6 +84,19 @@ theorem freshAct_callFrontier (caller : RootInterpretation) (callee : RuntimeAct
   · simp only [freshAct, bind, EvalM.get, EvalM.set, pure]
   · exact call_rootFrontier caller { callee with act := state.nextAct } arguments _ frontier (Nat.lt_succ_self _)
 
+theorem mappedResultRoot_outsideActivation (caller : RootInterpretation) (callee : RuntimeActivation)
+    (arguments : List (List RootRef)) (declared mapped : List RootRef)
+    (checked : mapResultRoots arguments [] declared = .ok mapped) (root : RootInst)
+    (rooted : RootIn (CallInterpretation caller callee arguments) declared root)
+    (frontier : RootFrontier caller callee.act) :
+    ∀ scope variableId, root ≠ .local callee.act scope variableId := by
+  have inherited := mapResultRoots_rooted caller callee arguments declared [] mapped checked root (Or.inr rooted)
+  obtain ⟨symbolic, member, actual⟩ := inherited
+  intro scope variableId equal
+  rw [equal] at actual
+  have before := instantiates_before frontier symbolic callee.act scope variableId actual
+  exact Nat.lt_irrefl callee.act before
+
 theorem call_aliasComplete (caller : RootInterpretation) (callee : RuntimeActivation)
     (arguments : List (List RootRef)) (callerAliases calleeAliases : List (RootRef × RootRef))
     (complete : AliasComplete caller callerAliases)

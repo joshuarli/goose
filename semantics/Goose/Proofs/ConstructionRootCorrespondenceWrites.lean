@@ -89,6 +89,15 @@ theorem bindRoot_objects (root : RootInst) (value : Value) (before : ExecutionSt
       liftConstruction, reserveStorage, ConstructionM.get, ConstructionM.set, bindStaticRoot] <;>
     exact ⟨_, rfl, rfl⟩
 
+theorem bindRoot_lookup_other (root other : RootInst) (value : Value) (before after : ExecutionState)
+    (checked : bindRoot root value before = .ok () after) (different : other ≠ root) :
+    after.objects.lookup other = before.objects.lookup other := by
+  obtain ⟨result, evaluated, objects⟩ := bindRoot_objects root value before
+  rw [checked] at evaluated
+  cases evaluated
+  rw [objects]
+  exact lookup_rebound before.objects root other value different
+
 theorem bindRoot_localCorrespondence (interpretation : RootInterpretation) (context : Context)
     (visible : List VarId) (before : ExecutionState) (id : VarId) (root : RootInst)
     (value : Value) (annotation : List RootRef)
