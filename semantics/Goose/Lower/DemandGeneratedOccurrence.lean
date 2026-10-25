@@ -108,6 +108,14 @@ inductive GeneratedDemandOccurrence (m : Core.Module) :
       {operation : CmpOp} {left right : Expr}
       (occurrence : GeneratedDemandOccurrence m function le root path (.expression (.cmp operation left right)) before) :
       GeneratedDemandOccurrence m function le root (path ++ [1]) (.expression right) (lowerExpr left le before).2
+  | shortCircuitRight {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {isAnd : Bool} {left right : Expr}
+      (occurrence : GeneratedDemandOccurrence m function le root path
+        (.expression (if isAnd then .and left right else .or left right)) before)
+      (live : (lowerExpr left le before).2.cur.isSome = true) :
+      GeneratedDemandOccurrence m function le root (path ++ [1]) (.expression right)
+        { (scFork isAnd (lowerExpr left le before).1 le (lowerExpr left le before).2).2 with
+          cur := some (scFork isAnd (lowerExpr left le before).1 le (lowerExpr left le before).2).1.1 }
   | index {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {view : View} {index : Expr} {origin : OriginId}
       (occurrence : GeneratedDemandOccurrence m function le root path (.place (.elem view index origin)) before) :
@@ -161,6 +169,8 @@ theorem GeneratedDemandOccurrence.source {m : Core.Module} {function : Func} {le
   | first occurrence first induction => exact induction.snoc 0 first.source
   | binaryRight occurrence induction => exact induction.snoc 1 rfl
   | comparisonRight occurrence induction => exact induction.snoc 1 rfl
+  | @shortCircuitRight function le root path before isAnd left right occurrence live induction =>
+    cases isAnd <;> exact induction.snoc 1 rfl
   | index occurrence induction => exact induction.snoc 1 rfl
   | pushValue occurrence induction => exact induction.snoc 1 rfl
   | @argument function le root path before context arguments origin index argument occurrence argumentAt induction =>

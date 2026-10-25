@@ -42,6 +42,15 @@ inductive GeneratedDemandRows (m : Core.Module) (access : AccessEnv) :
       (query : access.aliasExpr (path ++ [0]) left = .ok aliases) :
       GeneratedDemandRows m access (.comparisonRight occurrence)
         (required.addValues (lowerExpr left le before).1 aliases)
+  | shortCircuitRight {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {isAnd : Bool} {left right : Expr}
+      {occurrence : GeneratedDemandOccurrence m function le root path
+        (.expression (if isAnd then .and left right else .or left right)) before}
+      {live : (lowerExpr left le before).2.cur.isSome = true} {required : RetainedSsaMap} {aliases : List RetainedAlias}
+      (rows : GeneratedDemandRows m access occurrence required)
+      (query : access.aliasExpr (path ++ [0]) left = .ok aliases) :
+      GeneratedDemandRows m access (.shortCircuitRight occurrence live)
+        (required.addValues (lowerExpr left le before).1 aliases)
   | index {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {view : View} {index : Expr} {origin : OriginId}
       {occurrence : GeneratedDemandOccurrence m function le root path (.place (.elem view index origin)) before}
