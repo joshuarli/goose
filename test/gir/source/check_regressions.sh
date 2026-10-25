@@ -83,6 +83,32 @@ check_named_result_later_operand() {
         "$core" >/dev/null || fail "$name Core export retained a named-local result"
 }
 
+check_result_channel_lifetimes() {
+    for name in gir_named_duplicate_result gir_global_empty_owner gir_discard_multiple_results; do
+        case "$name" in
+            gir_named_duplicate_result) expected='[99, 15] [14, 15]' ;;
+            gir_global_empty_owner) expected='x []' ;;
+            gir_discard_multiple_results) expected='pair' ;;
+        esac
+        for opt in 0 2; do
+            if ! "$goose" "-O$opt" --pipeline gir --jit -DGS_DEBUG=1 "$here/$name.goose" \
+                >"$work/$name-O$opt.out" 2>"$work/$name-O$opt.err"; then
+                cat "$work/$name-O$opt.out" "$work/$name-O$opt.err" >&2
+                fail "$name failed under GIR debug O$opt"
+            fi
+            [ "$(tail -n 1 "$work/$name-O$opt.out")" = "$expected" ] || {
+                cat "$work/$name-O$opt.out" >&2
+                fail "$name returned another result under GIR debug O$opt"
+            }
+        done
+    done
+    core=$work/gir_discard_multiple_results.core
+    "$goose" --emit-core "$core" --check "$here/gir_discard_multiple_results.goose" \
+        >"$work/gir_discard_multiple_results-core.out" 2>"$work/gir_discard_multiple_results-core.err"
+    "$jaq" -e '.[2] == "core-construction"' "$core" >/dev/null ||
+        fail "multiple scalar results did not select the construction profile"
+}
+
 check_fixed_append() (
     name=$1
     profile=$2
@@ -158,5 +184,6 @@ check_static_root gir_static_root_global stored-reference
 check_static_root gir_static_root_holder struct-whole-const
 check_named_bitnot
 check_named_result_later_operand
+check_result_channel_lifetimes
 
-echo "GIR static-root, named-bitnot, and named-result regressions passed"
+echo "GIR static-root, named-bitnot, and result-channel regressions passed"

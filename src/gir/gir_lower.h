@@ -1635,6 +1635,14 @@ private:
         return normalValues;
     }
 
+    GirExitSource ResultExitSource(const CoreExpr &expression, size_t position) const {
+        if (currentResults && position < currentResults->size() &&
+            expression.kind == CoreExprKind::ResultLocal && boundNamedSlots.count(expression.var) &&
+            (*currentResults)[position].namedLocal == expression.var)
+            return GirExitNamedAlias { expression.var };
+        return GirExitNewValue {};
+    }
+
     void LowerExitOperands(const vector<const CoreExpr *> &operands, const vector<int> &tickets,
                            const vector<int> &receivings, const vector<GirExitSource> &sources,
                            size_t position, vector<int> values,
@@ -1716,8 +1724,8 @@ private:
                 receiving[result] = EmitDef(std::move(channel));
                 receivingParents[receiving[result]] = -1;
             }
-            if (!operands.empty() && operands[result]->kind == CoreExprKind::ResultLocal &&
-                boundNamedSlots.count(operands[result]->var)) sources[result] = GirExitNamedAlias { operands[result]->var };
+            if (!operands.empty() && HandlesTarget(statement.target))
+                sources[result] = ResultExitSource(*operands[result], result);
             tickets[result] = ReserveExit(receiving[result], sources[result], org);
         }
         vector<int> values;
@@ -2062,8 +2070,7 @@ private:
                     GirExitSource source = GirExitNewValue {};
                     const CoreExpr *sourceExpression = &operand;
                     if (operand.kind == CoreExprKind::Values) sourceExpression = operand.values[index].get();
-                    if (sourceExpression->kind == CoreExprKind::ResultLocal && boundNamedSlots.count(sourceExpression->var))
-                        source = GirExitNamedAlias { sourceExpression->var };
+                    source = ResultExitSource(*sourceExpression, position);
                     breakSources[position] = source;
                     breakTickets[position] = ReserveExit(receiver, source, breakOrigin);
                 }
@@ -2121,8 +2128,7 @@ private:
         }
         auto source = sources[position];
         if (waitingExits.count(tickets[position])) {
-            source = expression.kind == CoreExprKind::ResultLocal && boundNamedSlots.count(expression.var)
-                ? GirExitSource { GirExitNamedAlias { expression.var } } : GirExitSource { GirExitNewValue {} };
+            source = ResultExitSource(expression, position);
             SelectExit(tickets[position], source, org);
         }
         sources[position] = source;
@@ -2190,8 +2196,7 @@ private:
             auto &descriptor = (*currentResults)[result];
             if (!GirNonfixed(mod, descriptor.type)) continue;
             auto &expression = *operands[result];
-            if (expression.kind == CoreExprKind::ResultLocal && boundNamedSlots.count(expression.var))
-                sources[result] = GirExitNamedAlias { expression.var };
+            sources[result] = ResultExitSource(expression, result);
             tickets[result] = ReserveExit(resultReceivings[result], sources[result], org);
         }
         LowerExitOperands(operands, tickets, resultReceivings, sources, 0, {}, [&](vector<int> completed) {
@@ -2990,6 +2995,7 @@ private:
         auto [b0, ps] = NewBlock(nonfixed ? vector<GirTypeId> { mod.CarrierType(CoreType::Dest, g.type, CoreRequest::Value) } : vector<GirTypeId> {});
         cur = b0;
         auto v = nonfixed ? LowerConstruct(*g.init, ps[0], Org(g.org)) : LowerExpr(*g.init);
+        if (nonfixed && cur >= 0) DropCompletedReceiving(v);
         GirInst r;
         r.op = GirOp::Ret;
         r.vals = { v };

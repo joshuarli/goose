@@ -50,6 +50,7 @@ public:
             if (implementationscomplete) {
                 try {
                     ExpandGlobalClasses();
+                    FillDiscardedReferenceRoots();
                     ComputeContentRoots();
                 } catch (CoreUnsupported &u) {
                     Remember(u);
@@ -58,6 +59,7 @@ public:
             return std::move(mod);
         }
         ExpandGlobalClasses();
+        FillDiscardedReferenceRoots();
         ComputeContentRoots();
         mod.entry = 0;
         return std::move(mod);
@@ -97,7 +99,8 @@ private:
     struct Cur {
         FnSpec *spec = nullptr;          // Null in a global initializer.
         CoreImpl *impl = nullptr;
-        vector<VarDef *> vardefs;        // Aligned with impl->vars; null for a free variable's parameter.
+        vector<VarDef *> vardefs;
+        unordered_map<int, const CoreExpr *> discardedReferences;
         unordered_map<const VarDef *, int> varid;
         int nextscope = 0;
         vector<VarDef *> *free = nullptr;
@@ -755,6 +758,7 @@ private:
     }
 
     int ContextOf(FnSpec *spec, const vector<CoreRequest> &requests) {
+        if (spec->rets.size() > 1) mod.profile = CoreProfile::Construction;
         if (requests.size() != spec->rets.size()) Fail("result-request");
         for (size_t i = 0; i < requests.size(); i++) {
             auto type = ResultTy(spec, i);
@@ -1168,6 +1172,18 @@ private:
     }
 
     void ExprStmt(Node *n, CoreBlock &out) {
+        if (auto call = Is<Call>(n); call && call->spec && call->spec->rets.size() > 1) {
+            auto s = MakeStmt(CoreStmtKind::Receive, n->line, CoreOriginKind::Let);
+            s.expr = CallValue(call, true);
+            for (size_t result = 0; result < call->spec->rets.size(); result++) {
+                auto type = ResultTy(call->spec, result);
+                auto id = NewVar(nullptr, "discarded_result", type, CoreVarKind::Let, out.scope, s.org);
+                s.vars.push_back(id);
+                if (mod.IsRefOrSlice(type)) cur.discardedReferences.emplace(id, s.expr.get());
+            }
+            out.stmts.push_back(std::move(s));
+            return;
+        }
         auto s = MakeStmt(CoreStmtKind::Expr, n->line, CoreOriginKind::Expr);
         s.expr = Value(n);
         out.stmts.push_back(std::move(s));
@@ -2335,6 +2351,8 @@ private:
                     all_of(roots.begin(), roots.end(),
                            [](const CoreRootRef &r) { return r.kind == CoreRootRef::Param; }))
                     roots = { CoreRootRef { CoreRootRef::Param, (int)i } };
+            } else if (auto discarded = cur.discardedReferences.find((int)i); discarded != cur.discardedReferences.end()) {
+                discardedReferenceResults.emplace_back(k, (int)i, discarded->second);
             } else {
                 roots.push_back({ CoreRootRef::Param, (int)i });
             }
@@ -2433,6 +2451,16 @@ private:
             default: break;
         }
         return out;
+    }
+
+    vector<tuple<int, int, const CoreExpr *>> discardedReferenceResults;
+
+    void FillDiscardedReferenceRoots() {
+        for (auto &[context, variable, producer] : discardedReferenceResults) {
+            auto roots = ExprRoots(*producer, context);
+            for (auto &row : mod.contexts[context].varroots)
+                if (row.first == variable) row.second.assign(roots.begin(), roots.end());
+        }
     }
 
     // ---------------------------------------------------------------------
