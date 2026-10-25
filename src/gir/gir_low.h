@@ -998,7 +998,10 @@ private:
                         destination.receiverGlobal = global;
                         destination.source = NewSource(TraceId(GirTraceKind::Storage));
                         SimpleE(GirOp::SourceGlobalSet, destination.source, -1, global);
-                        if (receiver == GirMember::Header) destination.header = Simple(GirOp::GlobalAddr, Ptr(), -1, -1, global);
+                        if (receiver == GirMember::Header) {
+                            destination.header = Simple(GirOp::GlobalAddr, Ptr(), -1, -1, global);
+                            SimpleE(GirOp::HdrInit, destination.header, destination.base);
+                        }
                         destination.mode = ConstBool(false);
                         shape[value].w = { destination.stack, destination.base, destination.metadata, destination.progress, destination.mode };
                         destinations[carrierRoots[value]] = destination;

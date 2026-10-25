@@ -9033,9 +9033,54 @@ void NonreturningConstructionCallsKeepTheirNormalEdgeProof() {
     assert(changed && Code(normal) == "GIR-V020");
 }
 
+void ConstructionGlobalOwnersInitializeTheirBackingBase() {
+    for (auto kind : { CoreType::Grow, CoreType::GrowShrink }) {
+        auto high = Base();
+        high.profile = CoreProfile::Construction;
+        auto integer = high.IntType(CoreIntTy::I64);
+        auto owner = high.Intern(CoreType { .kind = kind, .elem = integer });
+        auto destination = high.CarrierType(CoreType::Dest, owner, CoreRequest::Value);
+        GirGlobal global;
+        global.name = "values";
+        global.ty = owner;
+        global.kind = CoreVarKind::Var;
+        global.org = 0;
+        global.init.name = "values";
+        global.init.results = { owner };
+        global.init.resultProtocols = { { CoreRequest::Value, nullopt } };
+        global.init.roots.results = { {} };
+        global.init.summary.unknown = true;
+        global.init.org = 0;
+        auto receiving = Def(GirOp::ReceivingOpen, 1); receiving.a = 0;
+        auto renewed = Def(GirOp::DestRenew, 2); renewed.a = 1;
+        auto refresh = Def(GirOp::DestRefresh, 3); refresh.a = 1; refresh.b = 2;
+        auto built = Def(GirOp::DestFinish, 4); built.a = 3;
+        GirInst drop; drop.op = GirOp::ReceivingDrop; drop.a = 1;
+        global.init.blocks = { GirBlock { { { 0, destination } },
+            { receiving, renewed, refresh, built, drop, Ret({ 4 }) } } };
+        high.globals.push_back(std::move(global));
+        assert(Code(high) == "");
+        auto low = GirToLow(high).Lower();
+        assert(Code(low) == "");
+        set<int> headers, stackMarks;
+        bool initialized = false;
+        for (auto &block : low.funcs[low.initfuncs[0]].blocks) for (auto &instruction : block.insts) {
+            if (instruction.op == GirOp::GlobalAddr && instruction.idx == 0) headers.insert(instruction.res);
+            if (instruction.op == GirOp::StackMark) stackMarks.insert(instruction.res);
+            if (instruction.op == GirOp::HdrInit && headers.count(instruction.a)) {
+                assert(stackMarks.count(instruction.b));
+                initialized = true;
+            }
+            if (instruction.op == GirOp::HdrSetLen && headers.count(instruction.a)) assert(initialized);
+        }
+        assert(initialized);
+    }
+}
+
 int main() {
     ConstructionScalarIndexKeepsItsProgramValue();
     NonreturningConstructionCallsKeepTheirNormalEdgeProof();
+    ConstructionGlobalOwnersInitializeTheirBackingBase();
     OwnerBorrowsMakeMutableOwnerAuthorityExplicit();
     OwnerReferencesLowerThroughExplicitBorrowFormation();
     ConstructionTargetDestinationsForwardProgressThroughCalls();
