@@ -1724,8 +1724,9 @@ private:
                 receiving[result] = EmitDef(std::move(channel));
                 receivingParents[receiving[result]] = -1;
             }
-            if (!operands.empty() && HandlesTarget(statement.target))
-                sources[result] = ResultExitSource(*operands[result], result);
+            if (!operands.empty() && operands[result]->kind == CoreExprKind::ResultLocal &&
+                boundNamedSlots.count(operands[result]->var))
+                sources[result] = GirExitNamedAlias { operands[result]->var };
             tickets[result] = ReserveExit(receiving[result], sources[result], org);
         }
         vector<int> values;
