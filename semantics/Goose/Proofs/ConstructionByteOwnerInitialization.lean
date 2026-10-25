@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionRootedBackingAllocation
+import Goose.Proofs.ConstructionFixedElementGeometry
 
 set_option Elab.async false
 
@@ -190,16 +191,8 @@ private theorem byteOwner_initGlobals (fuel : Nat) (data : List UInt8) (profile 
 private theorem byteOwner_elementsEnd (layout : LayoutEnv) (raw : ByteArray) (count start : Nat)
     (bounded : start + count ≤ raw.size) :
     elementsEnd (count + 1) layout (.int .u8) count raw start = .ok (start + count) := by
-  induction count generalizing start with
-  | zero => rfl
-  | succ count ih =>
-      have width : fixedByteSize? layout (.int .u8) = some 1 := rfl
-      have one : ¬start + 1 > raw.size := by omega
-      have step : packedEnd (count + 1) layout (.int .u8) raw start = .ok (start + 1) := by
-        simp only [packedEnd, width, one, ↓reduceIte, pure, Except.pure]
-      rw [elementsEnd, step]
-      simpa only [bind, Except.bind, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using
-        ih (start + 1) (by omega)
+  simpa only [Nat.mul_one] using elementsEnd_fixed layout raw (.int .u8) 1 rfl count start
+    (by simpa only [Nat.mul_one] using bounded)
 
 private theorem byteOwner_storedBacking (layout : LayoutEnv) (raw : ByteArray) (total : Nat)
     (events : List Goose.Core.ConstructionEvent) :
