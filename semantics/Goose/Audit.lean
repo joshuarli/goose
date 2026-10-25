@@ -37,6 +37,7 @@ import Goose.Proofs.ExitExecutionLandingChecks
 import Goose.Lower.DemandCarriedSequence
 import Goose.Lower.DemandShortCircuit
 import Goose.Proofs.ConstructionFixedWidthStorageWrite
+import Goose.Proofs.ConstructionInvocationReplay
 import Goose.Construct.ParameterRebindChecks
 
 /-!
@@ -317,5 +318,9 @@ end Goose.Audit
 #audit Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.other_storage
 #audit Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.byte_count
 #audit Goose.Proofs.ConstructionStorage.writeElement_receiver_fixedWidth
+
+#audit Goose.Proofs.ConstructionInvocationReplay.derive
+#audit Goose.Proofs.ConstructionInvocationReplay.OperandReplay.once
+#audit Goose.Proofs.ConstructionInvocationReplay.fixedArray_replay
 
 #audit_registry
