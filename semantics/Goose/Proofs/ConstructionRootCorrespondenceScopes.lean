@@ -1,5 +1,6 @@
 import Goose.Proofs.ConstructionRootCorrespondenceWrites
 import Goose.Proofs.ConstructionRootCorrespondenceAliases
+import Goose.Construct.Validate
 
 set_option Elab.async false
 
@@ -59,6 +60,28 @@ theorem freshScope_localRoot (interpretation : RootInterpretation) (scope : Nat)
           { state with nextScope := state.nextScope + 1 } =
         .ok (.local interpretation.environment.act state.nextScope id) { state with nextScope := state.nextScope + 1 } :=
   ⟨rfl, rootOf_enterScope_current interpretation scope state.nextScope id descriptor _ declared localScope⟩
+
+theorem validated_parameter_initialRoot (module : Module) (implementationId : Nat) (implementation : Impl)
+    (index : Nat) (parameter : Param) (descriptor : LocalVar) (interpretation : RootInterpretation)
+    (state : ExecutionState) (accepted : validate module = .ok ())
+    (present : module.impls[implementationId]? = some implementation)
+    (parameterAt : implementation.params[index]? = some parameter)
+    (descriptorAt : implementation.vars[index]? = some descriptor)
+    (variables : interpretation.environment.vars = implementation.vars) :
+    freshScope state = .ok state.nextScope { state with nextScope := state.nextScope + 1 } ∧
+      rootOf (interpretation.enterScope implementation.body.scope state.nextScope).environment parameter.var
+          { state with nextScope := state.nextScope + 1 } =
+        .ok (.local interpretation.environment.act state.nextScope parameter.var)
+          { state with nextScope := state.nextScope + 1 } := by
+  have parameterId := validated_parameter_variable module implementationId implementation index parameter accepted present parameterAt
+  have parameterScope := validated_parameter_scope module implementationId implementation index parameter descriptor
+    accepted present parameterAt descriptorAt
+  have bodyScope := validated_body_scope module implementationId implementation accepted present
+  have declared : interpretation.environment.vars[parameter.var]? = some descriptor := by
+    rw [variables, parameterId]
+    exact descriptorAt
+  exact freshScope_localRoot interpretation implementation.body.scope parameter.var descriptor state declared
+    (parameterScope.trans bodyScope.symm)
 
 theorem localRootCorrespondence_enterScope (interpretation : RootInterpretation) (context : Context)
     (scope : Nat) (scopeInstance : ScopeInst) (visible : List VarId) (state : ExecutionState)

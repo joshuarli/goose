@@ -573,10 +573,9 @@ theorem validated_implementation_typing (module : Module) (id : ImplId) (impleme
       exact ⟨bodyTypes, declared, replay⟩
   · cases checked
 
-theorem validated_parameter_variable (module : Module) (id : ImplId) (implementation : Impl)
-    (index : Nat) (parameter : Param) (accepted : validate module = .ok ())
-    (present : module.impls[id]? = some implementation)
-    (parameterAt : implementation.params[index]? = some parameter) : parameter.var = index := by
+private theorem validated_parameter_check (module : Module) (id : ImplId) (implementation : Impl)
+    (index : Nat) (bound : index < implementation.params.size) (accepted : validate module = .ok ())
+    (present : module.impls[id]? = some implementation) : checkParameter module implementation index = .ok () := by
   have checked := validated_implementation_check module id implementation accepted present
   unfold checkImplementation at checked
   obtain ⟨token, parameters, _⟩ := (validation_bind_ok _ _ _).mp checked
@@ -586,11 +585,43 @@ theorem validated_parameter_variable (module : Module) (id : ImplId) (implementa
     obtain ⟨value, _, tail⟩ := (validation_bind_ok _ _ _).mp checked
     cases value
     exact (Except.ok.inj tail).symm)
-  have checked := eachParameter index (List.mem_range.mpr (Array.getElem?_eq_some_iff.mp parameterAt).1)
+  have checked := eachParameter index (List.mem_range.mpr bound)
   obtain ⟨value, checked, _⟩ := (validation_bind_ok _ _ _).mp checked
   cases value
+  exact checked
+
+theorem validated_parameter_variable (module : Module) (id : ImplId) (implementation : Impl)
+    (index : Nat) (parameter : Param) (accepted : validate module = .ok ())
+    (present : module.impls[id]? = some implementation)
+    (parameterAt : implementation.params[index]? = some parameter) : parameter.var = index := by
+  have checked := validated_parameter_check module id implementation index
+    (Array.getElem?_eq_some_iff.mp parameterAt).1 accepted present
   by_cases same : parameter.var = index
   · exact same
   · simp [checkParameter, parameterAt, same, reject, bind, Except.bind] at checked
+
+theorem validated_parameter_scope (module : Module) (id : ImplId) (implementation : Impl)
+    (index : Nat) (parameter : Param) (descriptor : LocalVar) (accepted : validate module = .ok ())
+    (present : module.impls[id]? = some implementation)
+    (parameterAt : implementation.params[index]? = some parameter)
+    (descriptorAt : implementation.vars[index]? = some descriptor) : descriptor.scope = 0 := by
+  have checked := validated_parameter_check module id implementation index
+    (Array.getElem?_eq_some_iff.mp parameterAt).1 accepted present
+  have variableId := validated_parameter_variable module id implementation index parameter accepted present parameterAt
+  by_cases same : descriptor.scope = 0
+  · exact same
+  · simp [checkParameter, parameterAt, variableId, descriptorAt, same, reject, bind, Except.bind] at checked
+
+theorem validated_body_scope (module : Module) (id : ImplId) (implementation : Impl)
+    (accepted : validate module = .ok ()) (present : module.impls[id]? = some implementation) :
+    implementation.body.scope = 0 := by
+  have checked := validated_implementation_check module id implementation accepted present
+  unfold checkImplementation at checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  by_cases same : implementation.body.scope = 0
+  · exact same
+  · simp [same, reject, bind, Except.bind] at checked
 
 end Goose.Construct
