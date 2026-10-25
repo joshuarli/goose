@@ -865,6 +865,8 @@ Each change made is appended to §8.
 - `goose --pipeline legacy|gir` (default `legacy`): with `gir`, `-o`, `--standalone` and `--jit` produce C from the IR pipeline; features outside the profile fail with `error: unsupported in pipeline gir: <feature-id>`. `goose --emit-gir-low FILE`: writes a `gir-l/0.2` module (specification §12.3; no reader exists for it).
 - `goose-semantics` (new tool, test-time only): `audit`, `run`, `validate`, `share`, `lower`, `gir-validate`, `gir-run`, `gir-reencode`, `agree`.
 - `fuzz/driver.py`: `--semantics TOOL`, `--pipeline NAME`.
+- `Construct.Roots`: source-owned `RootAlias`, `RootSetsOverlap`, `AliasClosure` and accepted module/body root facts replace provisional proof-only alias vocabulary; runtime checking and errors remain equivalent.
+- `Lower`: canonical child metadata, exact retained rows and generated instruction occurrences strengthen source-demand proof interfaces; scoped static coverage does not establish the full runtime demand theorem.
 
 ## 9. Non-goals and deferrals
 
