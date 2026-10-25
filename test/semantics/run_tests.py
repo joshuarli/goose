@@ -90,6 +90,7 @@ ABORT_KINDS = frozenset(DIAGNOSTICS) | {"user_abort"}
 
 # Tool answer tag, and the exit status that goes with it.
 TOOL_EXIT = {"done": 0, "timeout": 3, "fault": 4, "malformed": 2, "rejected": 5}
+CORE_PROFILES = frozenset({"core-pilot", "core-shrink", "core-construction"})
 
 UNSUPPORTED_PATTERN = re.compile(r"unsupported in core-pilot: (\S+)")
 FEATURE_REPORT_EXPECTATIONS = {
@@ -178,6 +179,20 @@ def stdout_bytes(value, construction: bool) -> bytes:
         return bytes(value)
     expected = "a byte array" if construction else "text"
     raise HarnessFailure(f"tool stdout is not {expected}: {value!r}")
+
+
+def core_profile(core: Path) -> str:
+    try:
+        module = json.loads(core.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        raise HarnessFailure(f"Core export is not valid JSON: {error}") from error
+    if (not isinstance(module, list) or len(module) < 3 or module[0] != "module"
+            or module[1] != "goose-core/0.2"):
+        raise HarnessFailure("Core export is not a goose-core module record")
+    profile = module[2]
+    if not isinstance(profile, str) or profile not in CORE_PROFILES:
+        raise HarnessFailure(f"Core export has an unsupported profile: {profile!r}")
+    return profile
 
 
 def modes_for(source: Path) -> tuple[str, ...]:
@@ -376,6 +391,19 @@ def export(goose: Path, fixture: Fixture, work: Path, timeout: float) -> tuple[P
     return core, gir if fixture.construction else None, None
 
 
+def export_high_gir(goose: Path, fixture: Fixture, work: Path, timeout: float) -> Path:
+    gir = work / "program.gir"
+    args = [goose, *fixture.args, *map("-D{}".format, fixture.defines),
+            "--emit-gir-high", gir, "--check", fixture.source]
+    done = run(args, timeout)
+    diagnostic = "\n".join(part.strip() for part in (text(done.stdout), text(done.stderr)) if part.strip())
+    if done.returncode != 0:
+        raise HarnessFailure(f"high GIR export failed (exit {done.returncode}): {diagnostic.strip()[:300]}")
+    if not gir.is_file():
+        raise HarnessFailure("high GIR export succeeded but wrote no file")
+    return gir
+
+
 def feature_report(goose: Path, fixture: Fixture, timeout: float) -> tuple[str, ...]:
     """Ask the report-only exporter for the complete sorted feature set."""
     done = run([goose, *fixture.args, *map("-D{}".format, fixture.defines), "--emit-core-report",
@@ -478,15 +506,25 @@ def parse_tool_answer(returncode: int, stdout: str, stderr: str = "", constructi
     if returncode != TOOL_EXIT[tag]:
         raise HarnessFailure(f"tool answered {tag!r} but exited {returncode}, "
                              f"not {TOOL_EXIT[tag]}")
-    shapes = {"done": (3, 4), "timeout": (2, 3), "fault": (2,), "malformed": (2,), "rejected": (3,)}
-    if len(answer) not in shapes[tag]:
+    shapes = {"fault": (2,), "malformed": (2,), "rejected": (3,)}
+    if tag not in ("done", "timeout") and len(answer) not in shapes[tag]:
         raise HarnessFailure(f"tool answer {tag!r} has {len(answer)} elements, not {shapes[tag]}")
     if tag == "done":
-        if len(answer) == 4 and not isinstance(answer[3], list):
+        expected_length = 4 if construction else 3
+        if len(answer) != expected_length:
+            profile = "construction" if construction else "non-construction"
+            raise HarnessFailure(f"tool {profile} answer 'done' has {len(answer)} elements, "
+                                 f"not {expected_length}")
+        if construction and not isinstance(answer[3], list):
             raise HarnessFailure("tool construction trace is not an array")
         return ("done", parse_outcome(answer[1]), stdout_bytes(answer[2], construction))
     if tag == "timeout":
-        if len(answer) == 3 and not isinstance(answer[2], list):
+        expected_length = 3 if construction else 2
+        if len(answer) != expected_length:
+            profile = "construction" if construction else "non-construction"
+            raise HarnessFailure(f"tool {profile} answer 'timeout' has {len(answer)} elements, "
+                                 f"not {expected_length}")
+        if construction and not isinstance(answer[2], list):
             raise HarnessFailure("tool construction trace is not an array")
         return ("timeout", stdout_bytes(answer[1], construction))
     return tuple(answer)
@@ -649,6 +687,16 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
         return Verdict(UNSUPPORTED, ",".join(reported or (feature,)), features=reported or (feature,))
     if reported:
         return Verdict(HARNESS_FAILURE, f"export succeeded with unsupported features reported: {reported!r}")
+    profile = guarded(lambda: core_profile(core_file))
+    if profile is None:
+        return verdicts[0]
+    construction = profile == "core-construction"
+    if fixture.construction and not construction:
+        return Verdict(HARNESS_FAILURE, f"construction fixture exported as {profile}")
+    if construction and pipeline is not None and gir_file is None:
+        gir_file = guarded(lambda: export_high_gir(goose, fixture, work, timeout))
+        if gir_file is None:
+            return verdicts[0]
     for mode in fixture.modes:
         def check_validation():
             answer = validate_result(tool, core_file, timeout)
@@ -659,12 +707,12 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
             guarded(check_validation)
 
         def check_tool():
-            answer = tool_result(tool, core_file, mode, timeout, fixture.construction)
+            answer = tool_result(tool, core_file, mode, timeout, construction)
             verdicts.append(judge_tool(fixture, mode, answer, outcome, stdout))
         guarded(check_tool)
         if pipeline is not None:
             def check_pipeline():
-                if fixture.construction:
+                if construction:
                     if gir_file is None:
                         raise HarnessFailure("construction fixture has no high GIR artifact")
                     if mode == fixture.modes[0]:
@@ -673,7 +721,7 @@ def run_case(fixture: Fixture, goose: Path, tool: Path, cc: str, pipeline: str |
                             verdicts.append(Verdict(MISMATCH,
                                 f"[{mode}] GIR validation answered {json.dumps(list(answer))}"))
                         verdicts.append(check_gir_reencode(tool, gir_file, timeout))
-                    answer = gir_tool_result(tool, gir_file, mode, timeout, fixture.construction)
+                    answer = gir_tool_result(tool, gir_file, mode, timeout, construction)
                     verdicts.append(judge_tool(fixture, mode, answer, outcome, stdout))
                     verdicts.append(agree_result(tool, core_file, gir_file, fixture, mode,
                                                  outcome, stdout, timeout))
@@ -737,6 +785,7 @@ def self_test() -> int:
     """Run the harness against the fake tools, one case per outcome class."""
     import contextlib
     import io
+    from unittest.mock import patch
 
     def fixture(name, out, source="fn main() {}\n", *, stderr=None, aborts=False, expect=None,
                 golden=False):
@@ -863,12 +912,17 @@ def self_test() -> int:
               construction_names == {"construction_bytes"})
 
         fake_goose, fake_tool = FAKE / "goose.py", FAKE / "semantics.py"
+
+        def fake_main(*args, **kwargs):
+            with patch.object(sys.modules[__name__], "core_profile", return_value="core-pilot"):
+                return main(*args, **kwargs)
+
         names = sorted(expected_class)
         write_script()
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            status = main(["--goose", str(fake_goose), "--semantics", str(fake_tool),
-                           "--timeout", "2"], root=tree / "semantics")
+            status = fake_main(["--goose", str(fake_goose), "--semantics", str(fake_tool),
+                                "--timeout", "2"], root=tree / "semantics")
         report = stdout.getvalue().splitlines()
         reported = {line.split(" ", 2)[1].rstrip(":"): line.split(" ", 1)[0] for line in report[:-1]}
         summary = json.loads(report[-1])
@@ -882,7 +936,7 @@ def self_test() -> int:
         check("a failing run exits 1", status == 1)
         check("the summary is the last line", list(summary) == list(CLASSES))
 
-        binary = json.dumps(["done", ["exited", 19], [65, 0, 255, 66, 10]])
+        binary = json.dumps(["done", ["exited", 19], [65, 0, 255, 66, 10], []])
         check("tool byte arrays preserve NUL and non-UTF8 bytes",
               parse_tool_answer(0, binary, construction=True)
               == ("done", ("exited", 19), b"A\x00\xffB\n"))
@@ -890,6 +944,18 @@ def self_test() -> int:
         check("construction tool answers retain byte stdout shape",
               parse_tool_answer(0, construction, construction=True)
               == ("done", ("exited", 19), b"A\x00\xffB\n"))
+        try:
+            parse_tool_answer(0, json.dumps(["done", ["returned"], []]), construction=True)
+            missing_trace_rejected = False
+        except HarnessFailure:
+            missing_trace_rejected = True
+        check("construction tool answers require an event trace", missing_trace_rejected)
+        try:
+            parse_tool_answer(0, json.dumps(["done", ["returned"], "", []]))
+            unexpected_trace_rejected = False
+        except HarnessFailure:
+            unexpected_trace_rejected = True
+        check("non-construction tool answers reject event traces", unexpected_trace_rejected)
         try:
             parse_tool_answer(0, json.dumps(["done", ["returned"], [65, True, 256]]),
                               construction=True)
@@ -910,11 +976,67 @@ def self_test() -> int:
             pilot_byte_array_rejected = True
         check("core-pilot tool answers reject construction byte arrays", pilot_byte_array_rejected)
 
+        construction_root = Path(temporary) / "auto-construction"
+        construction_root.mkdir()
+        construction_source = construction_root / "auto_construction.goose"
+        construction_source.write_text("fn main() {}\n")
+        construction_out = construction_root / "auto_construction.out"
+        construction_stdout = b"A\x00\xffB\n"
+        construction_out.write_bytes(construction_stdout)
+        construction_core = construction_root / "auto_construction.core"
+        construction_core.write_text(json.dumps(["module", "goose-core/0.2", "core-construction"]))
+        construction_gir = construction_root / "auto_construction.gir"
+        construction_events = [["write", 0, 0]]
+        construction_fixture = Fixture("auto_construction", construction_source, construction_out, None,
+                                       False, None, (RELEASE,))
+        construction_calls = []
+        gir_exports = []
+        agreements = []
+
+        def construction_answer(tool, artifact, mode, timeout, construction):
+            construction_calls.append(construction)
+            return parse_tool_answer(0, json.dumps(["done", ["returned"], list(construction_stdout),
+                                                    construction_events]), construction=construction)
+
+        with patch.object(sys.modules[__name__], "export", return_value=(construction_core, None, None)), \
+                patch.object(sys.modules[__name__], "export_high_gir",
+                             side_effect=lambda *args: gir_exports.append(args) or construction_gir), \
+                patch.object(sys.modules[__name__], "validate_result", return_value=("valid",)), \
+                patch.object(sys.modules[__name__], "tool_result", side_effect=construction_answer), \
+                patch.object(sys.modules[__name__], "validate_gir_result", return_value=("valid",)), \
+                patch.object(sys.modules[__name__], "check_gir_reencode", return_value=Verdict(AGREE)), \
+                patch.object(sys.modules[__name__], "gir_tool_result", side_effect=construction_answer), \
+                patch.object(sys.modules[__name__], "agree_result",
+                             side_effect=lambda *args: agreements.append(args) or Verdict(AGREE)), \
+                patch.object(sys.modules[__name__], "build_and_run_pipeline",
+                             return_value=[(label, 0, construction_stdout, "")
+                                           for label in ("-O0", "-O2", "jit")]):
+            construction_verdict = run_case(construction_fixture, Path("goose"), Path("semantics"),
+                                            "clang", "gir", construction_root, 2)
+        check("exported construction profile selects bytes, GIR, and exact agreement",
+              construction_verdict.cls == AGREE and construction_calls == [True, True]
+              and len(gir_exports) == 1 and len(agreements) == 1)
+
+        construction_core.write_text(json.dumps(["module", "goose-core/0.2", "other"]))
+        try:
+            core_profile(construction_core)
+            invalid_profile_rejected = False
+        except HarnessFailure:
+            invalid_profile_rejected = True
+        check("Core profile reader rejects unknown profiles", invalid_profile_rejected)
+        construction_core.write_text(json.dumps(["module", "goose-core/0.2", []]))
+        try:
+            core_profile(construction_core)
+            invalid_profile_type_rejected = False
+        except HarnessFailure:
+            invalid_profile_type_rejected = True
+        check("Core profile reader rejects non-text profiles", invalid_profile_type_rejected)
+
         # An all-agreeing selection exits 0, and --case narrows the run.
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            status = main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "2",
-                           "--case", "agree_returned", "--case", "agree_golden"], root=tree / "semantics")
+            status = fake_main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "2",
+                                "--case", "agree_returned", "--case", "agree_golden"], root=tree / "semantics")
         check("agreeing cases exit 0", status == 0)
         check("--case selects exactly the named cases",
               json.loads(stdout.getvalue().splitlines()[-1])[AGREE] == 2)
@@ -941,8 +1063,8 @@ def self_test() -> int:
         write_script(gir_runs=gir_runs)
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            status = main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "10",
-                           "--pipeline", "gir", *selection], root=tree / "semantics")
+            status = fake_main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "10",
+                                "--pipeline", "gir", *selection], root=tree / "semantics")
         report = stdout.getvalue().splitlines()
         reported = {line.split(" ", 2)[1].rstrip(":"): line.split(" ", 1)[0] for line in report[:-1]}
         for name, want in gir_class.items():
@@ -954,8 +1076,8 @@ def self_test() -> int:
         write_script(gir="reject", gir_runs=gir_runs)
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            status = main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "10",
-                           "--pipeline", "gir", "--case", "agree_returned"], root=tree / "semantics")
+            status = fake_main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "10",
+                                "--pipeline", "gir", "--case", "agree_returned"], root=tree / "semantics")
         report = stdout.getvalue().splitlines()
         check("a rejected --pipeline is a harness-failure",
               status == 1 and json.loads(report[-1])[HARNESS_FAILURE] == 1
@@ -1018,8 +1140,8 @@ def self_test() -> int:
         write_script(run=corpus_runs, export=corpus_exports, validate=corpus_validate)
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            status = main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "5",
-                           "--corpus"], root=tree / "semantics", repo=repo)
+            status = fake_main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "5",
+                                "--corpus"], root=tree / "semantics", repo=repo)
         report = stdout.getvalue().splitlines()
         summary = json.loads(report[-1])
         listed = {line.split(" ", 2)[1].rstrip(":"): line.split(" ", 1)[0]
@@ -1054,9 +1176,9 @@ def self_test() -> int:
         # Unsupported programs alone do not fail the corpus.
         stdout = io.StringIO()
         with contextlib.redirect_stdout(stdout):
-            status = main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "5",
-                           "--corpus", "--case", "plain", "--case", "core/uses_struct",
-                           "--case", "samples/tour"], root=tree / "semantics", repo=repo)
+            status = fake_main(["--goose", str(fake_goose), "--semantics", str(fake_tool), "--timeout", "5",
+                                "--corpus", "--case", "plain", "--case", "core/uses_struct",
+                                "--case", "samples/tour"], root=tree / "semantics", repo=repo)
         check("corpus without mismatches exits 0", status == 0)
         check("--case selects corpus programs by stem or name",
               json.loads(stdout.getvalue().splitlines()[-1])["exported"] == 2)
