@@ -171,6 +171,21 @@ theorem GeneratedDemandInstruction.globalAddress_auto {module : Core.Module} {ac
     simpa only [lowerPlace] using extended
   simpa only [lowerPlace, instAt_eq] using (emitDef_facts emitted atPoint extension).2.2.2.2
 
+theorem GeneratedDemandInstruction.slotAddress_auto {module : Core.Module} {access : AccessEnv} {function : Func}
+    {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS} {slot : VarId}
+    {point : Pt} {required : RetainedSsaMap}
+    (occurrence : GeneratedDemandOccurrence module function le root path (.place (.var slot)) before)
+    (rows : GeneratedDemandRows module access occurrence required) (atPoint : before.pp = some point)
+    (extended : ExtT (lowerPlace (.var slot) le before).2 function.blocks) :
+    GeneratedDemandInstruction module access function required ⟨path, .place, .entry⟩ point
+      (.def (lowerPlace (.var slot) le before).1 (.slotAddr slot)) := by
+  apply GeneratedDemandInstruction.slotAddress occurrence rows atPoint
+  have emitted : emitDef (.slotAddr slot) le before =
+      ((emitDef (.slotAddr slot) le before).1, (emitDef (.slotAddr slot) le before).2) := rfl
+  have extension : ExtT (emitDef (.slotAddr slot) le before).2 function.blocks := by
+    simpa only [lowerPlace] using extended
+  simpa only [lowerPlace, instAt_eq] using (emitDef_facts emitted atPoint extension).2.2.2.2
+
 theorem GeneratedDemandInstruction.snapshot_auto {module : Core.Module} {access : AccessEnv} {function : Func}
     {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS} {place : Place}
     {point : Pt} {required : RetainedSsaMap}
