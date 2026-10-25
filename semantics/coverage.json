@@ -479,5 +479,35 @@
   "reviewer": "Independent review pending.",
   "evidence": "Goose/Proofs/ConstructionFixedWidthStorageWrite.lean; registered axiom audit."
  },
- {"feature":"Construction operand invocation replay","label":"model-proved","theorem":"Goose.Proofs.ConstructionInvocationReplay.derive; Goose.Proofs.ConstructionInvocationReplay.OperandReplay.once; Goose.Proofs.ConstructionInvocationReplay.fixedArray_replay","statement":"Actual operand-loop evaluation derives consecutive invocation indices and exact source order, including stop, escape and jump outcomes. Fixed-array evaluation uses the same replay.","assumptions":"The relation exposes each actual operand evaluator result and state. Fixed-array linkage requires a fixed element type and the stated fuel.","limits":"Does not derive replay for all construction evaluator families or preserve the completed fill-source byte snapshot. Universal C-ONCE and TH-CON-01 remain open.","reviewer":"Independent review pending.","evidence":"ConstructionInvocationReplay.lean includes duplicate-syntax state changes and hostile skipped, repeated and post-stop invocation controls; registered axiom audit."}
+ {"feature":"Construction operand invocation replay","label":"model-proved","theorem":"Goose.Proofs.ConstructionInvocationReplay.derive; Goose.Proofs.ConstructionInvocationReplay.OperandReplay.once; Goose.Proofs.ConstructionInvocationReplay.fixedArray_replay","statement":"Actual operand-loop evaluation derives consecutive invocation indices and exact source order, including stop, escape and jump outcomes. Fixed-array evaluation uses the same replay.","assumptions":"The relation exposes each actual operand evaluator result and state. Fixed-array linkage requires a fixed element type and the stated fuel.","limits":"Does not derive replay for all construction evaluator families or preserve the completed fill-source byte snapshot. Universal C-ONCE and TH-CON-01 remain open.","reviewer":"Independent review pending.","evidence":"ConstructionInvocationReplay.lean includes duplicate-syntax state changes and hostile skipped, repeated and post-stop invocation controls; registered axiom audit."},
+{
+  "feature": "Repeated construction source byte frames",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionRepeatedSourceSnapshot.writeElement_sourceFrame; Goose.Proofs.ConstructionRepeatedSourceSnapshot.recordCopy_sourceFrame; Goose.Proofs.ConstructionRepeatedSourceSnapshot.repeatElement_sourceFrame; Goose.Proofs.ConstructionRepeatedSourceSnapshot.repeatElement_readsSnapshot; Goose.Proofs.ConstructionRepeatedSourceSnapshot.retireRepeatedSource_consumes",
+  "statement": "Actual repeatElement preserves a distinct built source destination and its complete storage bytes through every outcome. A repetition reads the completed snapshot. Successful retirement clears the source storage and preserves the parent storage.",
+  "assumptions": "Actual destination lookup, open parent, built source, and explicit distinct backing for the preservation theorem. Retirement assumes the specified receiver backing and successful execution.",
+  "limits": "Does not derive separation after arbitrary initialization or prove the complete fill loop and all evaluator families. The source snapshot is consumed at retirement. Universal C-ONCE remains open.",
+  "reviewer": "Independent review pending.",
+  "evidence": "ConstructionRepeatedSourceSnapshot.lean includes exact-byte controls and a hostile shared-storage example; registered axiom audit."
+ },
+ {
+  "feature": "Construction representation backing boundary",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionRepresentation.ownershipExecutionContext_objects; Goose.Proofs.ConstructionRepresentation.acceptedInput_typedLength_canFault",
+  "statement": "The existing AcceptedRepresentationInput and OwnershipExecutionContext permit an object whose stored backing is absent. A typed positive-fuel owner-length expression then faults.",
+  "assumptions": "A validated configuration and an explicitly constructed input environment and state.",
+  "limits": "This input state is not shown reachable from an accepted initial run. The countermodel identifies an insufficient induction contract and does not refute TH-EXIT or validated whole-program safety.",
+  "reviewer": "Independent review pending.",
+  "evidence": "ConstructionRepresentationBackingBoundary.lean; registered axiom audit."
+ },
+ {
+  "feature": "Retained root owner backing components",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionRepresentation.initial_rootedBackingState; Goose.Proofs.ConstructionRepresentation.initial_acceptedBackedInput; Goose.Proofs.ConstructionRepresentation.StoredValueBacking.sampled; Goose.Proofs.ConstructionRepresentation.StoredValueBacking.construction_frame; Goose.Proofs.ConstructionRepresentation.ValueStorageBacked.construction_frame; Goose.Proofs.ConstructionRepresentation.bindRoot_freshStored_backing; Goose.Proofs.ConstructionRepresentation.evalValue_rootedOwnerLength",
+  "statement": "The new owner-backing predicate holds initially after validation. Its stored values resolve to actual sampled storage with an explicit canonical byte interval. Fresh stored-root binding preserves retained backing, and backed owner-length evaluation succeeds without changing state.",
+  "assumptions": "Explicit retained roots and backed stored values. Binding requires a fresh root ordinal. Length evaluation requires actual root resolution and an existing stored object. Construction frames require unchanged construction state.",
+  "limits": "Does not establish reference or slice target validity, integer ranges, owner alias separation, or preservation through arbitrary initialization, reservation and landing. Universal TH-EXIT remains open.",
+  "reviewer": "Independent review pending.",
+  "evidence": "ConstructionRootedBacking.lean; registered axiom audit."
+ }
 ]

@@ -38,6 +38,8 @@ import Goose.Lower.DemandCarriedSequence
 import Goose.Lower.DemandShortCircuit
 import Goose.Proofs.ConstructionFixedWidthStorageWrite
 import Goose.Proofs.ConstructionInvocationReplay
+import Goose.Proofs.ConstructionRepeatedSourceSnapshot
+import Goose.Proofs.ConstructionRootedBacking
 import Goose.Construct.ParameterRebindChecks
 
 /-!
@@ -322,5 +324,20 @@ end Goose.Audit
 #audit Goose.Proofs.ConstructionInvocationReplay.derive
 #audit Goose.Proofs.ConstructionInvocationReplay.OperandReplay.once
 #audit Goose.Proofs.ConstructionInvocationReplay.fixedArray_replay
+
+#audit Goose.Proofs.ConstructionRepeatedSourceSnapshot.writeElement_sourceFrame
+#audit Goose.Proofs.ConstructionRepeatedSourceSnapshot.recordCopy_sourceFrame
+#audit Goose.Proofs.ConstructionRepeatedSourceSnapshot.repeatElement_sourceFrame
+#audit Goose.Proofs.ConstructionRepeatedSourceSnapshot.repeatElement_readsSnapshot
+#audit Goose.Proofs.ConstructionRepeatedSourceSnapshot.retireRepeatedSource_consumes
+#audit Goose.Proofs.ConstructionRepresentation.ownershipExecutionContext_objects
+#audit Goose.Proofs.ConstructionRepresentation.acceptedInput_typedLength_canFault
+#audit Goose.Proofs.ConstructionRepresentation.initial_rootedBackingState
+#audit Goose.Proofs.ConstructionRepresentation.initial_acceptedBackedInput
+#audit Goose.Proofs.ConstructionRepresentation.StoredValueBacking.sampled
+#audit Goose.Proofs.ConstructionRepresentation.StoredValueBacking.construction_frame
+#audit Goose.Proofs.ConstructionRepresentation.ValueStorageBacked.construction_frame
+#audit Goose.Proofs.ConstructionRepresentation.bindRoot_freshStored_backing
+#audit Goose.Proofs.ConstructionRepresentation.evalValue_rootedOwnerLength
 
 #audit_registry
