@@ -937,11 +937,17 @@ private:
             auto id = NewVar(vd, vd->name, ty, vd->isvar ? CoreVarKind::Var : CoreVarKind::Let, 0, porg);
             impl.params.push_back({ id, mod.Type(ty).kind == CoreType::Ref });
         }
-        // A free variable is a trailing by-reference parameter: a reference to
-        // the caller's variable, writable only where the variable is.
         for (auto fv : *cur.free) {
             here = sp->sf->line;
-            if (fv->type->kind == TY_REF) ReportOrFail("captured-reference", sp->sf->line);
+            if (fv->type->kind == TY_REF) {
+                if (fv->isvar) ReportOrFail("captured-reference", sp->sf->line);
+                auto type = Ty(fv->type);
+                if (!fv->ref.writable) type = Constify(type);
+                auto id = NewVar(nullptr, fv->name, type, CoreVarKind::Let, 0, porg);
+                cur.varid[fv] = id;
+                impl.params.push_back({ id, true });
+                continue;
+            }
             CoreType rt;
             rt.kind = CoreType::Ref;
             rt.mut = CaptureMut(sp, fv);
@@ -1528,8 +1534,6 @@ private:
     // ---------------------------------------------------------------------
     // Places and views.
 
-    // The place a variable's storage is: a local, a global, or, for a free
-    // variable, what the trailing parameter refers to.
     CorePlaceP VarPlace(VarDef *v) {
         auto p = make_unique<CorePlace>();
         if (v->isglobal) {
@@ -1544,7 +1548,7 @@ private:
         }
         auto it = cur.varid.find(v);
         if (it == cur.varid.end()) Fail("unknown-variable");
-        if (v->ownerspec == cur.spec) {
+        if (v->ownerspec == cur.spec || (v->type->kind == TY_REF && !v->isvar)) {
             p->kind = CorePlace::Local;
             p->index = it->second;
             return p;
@@ -2198,11 +2202,15 @@ private:
             }
             e->args.push_back(std::move(arg));
         }
-        // The callee's free variables follow, as references to this
-        // activation's variables of the same name.
         for (auto fv : freevars[callee]) {
             CoreArg arg;
-            arg = CoreArgReference { CaptureMut(callee, fv), VarPlace(fv) };
+            if (fv->type->kind == TY_REF && !fv->isvar) {
+                auto type = VarCoreType(fv);
+                arg = CoreArgReference { mod.Type(type).mut,
+                                        DerefOf(ReadOf(VarPlace(fv), type)) };
+            } else {
+                arg = CoreArgReference { CaptureMut(callee, fv), VarPlace(fv) };
+            }
             e->args.push_back(std::move(arg));
         }
         coerceorg = savedorg;
@@ -2284,6 +2292,14 @@ private:
         vector<CoreRootRef> out;
         for (auto &alt : r.alts) {
             auto v = alt.root;
+            auto captured = out.size();
+            for (auto fv : *cur.free) {
+                if (fv->type->kind != TY_REF || fv->isvar) continue;
+                if (any_of(fv->ref.alts.begin(), fv->ref.alts.end(),
+                           [&](const RootAlt &a) { return a.root == v; }))
+                    out.push_back({ CoreRootRef::Param, cur.varid.at(fv) });
+            }
+            auto capturedRoot = out.size() != captured;
             if (!v) {
                 out.push_back({ CoreRootRef::Static, 0 });
                 continue;
@@ -2304,8 +2320,11 @@ private:
             if (v->ownerspec) {
                 // A variable of an enclosing activation: its trailing parameter.
                 auto it = cur.varid.find(v);
-                if (it == cur.varid.end()) Fail("unknown-variable", sp->sf->line);
-                out.push_back({ CoreRootRef::Param, it->second });
+                if (it == cur.varid.end()) {
+                    if (!capturedRoot) Fail("unknown-variable", sp->sf->line);
+                } else {
+                    out.push_back({ CoreRootRef::Param, it->second });
+                }
                 continue;
             }
             // The root a parameter's class stands for at the call: a global
@@ -2322,7 +2341,7 @@ private:
             for (size_t i = 0; i < sp->params.size(); i++)
                 for (auto &pa : sp->params[i]->ref.alts)
                     if (pa.root == v) { out.push_back({ CoreRootRef::Param, (int)i }); break; }
-            if (out.size() == before) Fail("unknown-root", sp->sf->line);
+            if (out.size() == before && !capturedRoot) Fail("unknown-root", sp->sf->line);
         }
         sort(out.begin(), out.end());
         out.erase(unique(out.begin(), out.end()), out.end());

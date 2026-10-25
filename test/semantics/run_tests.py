@@ -102,6 +102,7 @@ FEATURE_REPORT_EXPECTATIONS = {
     "semantics/sem_core_report_import_std": (),
     "semantics/sem_core_shrink_nonflat_element": ("nonflat-element",),
     "core/core_export_report_limited_capture": ("limited-capture-mutation",),
+    "core/core_export_report_mutable_ref_capture": ("captured-reference",),
     "core/core_export_report_limited_element_write": ("limited-capture-mutation", "limited-value"),
     "core/core_export_shrink_exit": ("shrink-exit-exception",),
     "core/core_export_shrink_balanced": ("shrink-balanced-call",),
