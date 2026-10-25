@@ -168,6 +168,55 @@ theorem evalValue_checkedGlobalRead (fuel : Nat) (config : EvalConfig)
   subst ty
   exact ⟨value, evaluated, represented, pointers, backed⟩
 
+theorem typeExpr_globalReference_type (fuel : Nat) (environment : TypingEnv) (id : Nat)
+    (descriptor : Global) (declared : environment.module.globals[id]? = some descriptor)
+    (mutability : Goose.Core.Mutability) (before after : Nat) (ty : Ty)
+    (checked : typeExpr fuel environment (.ref mutability (.global id)) before = .ok ([ty], after)) :
+    ty = .ref mutability descriptor.ty := by
+  cases fuel with
+  | zero => change Except.error _ = Except.ok _ at checked; cases checked
+  | succ fuel =>
+    cases fuel with
+    | zero => change Except.error _ = Except.ok _ at checked; cases checked
+    | succ fuel =>
+      by_cases available : id ≥ environment.globalLimit
+      · simp only [typeExpr, typePlace, available, ↓reduceIte, bind, StateT.bind] at checked
+        change Except.error _ = Except.ok _ at checked
+        cases checked
+      · simp only [typeExpr, typePlace, available, ↓reduceIte, declared, bind, StateT.bind,
+          pure, StateT.pure, Except.bind] at checked
+        obtain ⟨_, _, checked⟩ := except_bind_success _ _ _ checked
+        obtain ⟨_, _, checked⟩ := except_bind_success _ _ _ checked
+        cases checked
+        rfl
+
+theorem evalValue_checkedGlobalReference (fuel : Nat) (config : EvalConfig)
+    (accepted : AcceptedModule config) (frame : ConstructionSourceFrame) (state : ExecutionState)
+    (ambient : Goose.Proofs.ConstructionExecutionOwnership.OwnershipAmbient) (types : RootTypes)
+    (liveRoots : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion)
+    (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config frame.initialized state ambient types liveRoots regions pending)
+    (compatible : SourceFrameCompatible accepted frame) (id : Nat) (descriptor : Global)
+    (declared : config.module.globals[id]? = some descriptor) (mutability : Goose.Core.Mutability)
+    (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue frame (.ref mutability (.global id)) ty roots typingAfter rootsAfter) :
+    evalValue (fuel + 2) config frame.interpretation.environment (.ref mutability (.global id)) state =
+      .ok (.ref ⟨.global id, []⟩) state ∧
+      AcceptedValue config.layout types frame.interpretation state ty roots (.ref ⟨.global id, []⟩) := by
+  have sourceDeclared : frame.typing.module.globals[id]? = some descriptor := by
+    rw [compatible.module]
+    exact declared
+  have type := typeExpr_globalReference_type frame.typingFuel frame.typing id descriptor sourceDeclared
+    mutability frame.typingCounter typingAfter ty checked.typing
+  have extracted := congrArg
+    (fun result : Except Goose.Core.Rejection (List RootRef × RState) => result.toOption.map Prod.fst)
+    checked.provenance
+  change some [.global id] = some roots at extracted
+  have rootList := (Option.some.inj extracted).symm
+  subst ty roots
+  exact evalValue_globalReference fuel config frame.interpretation frame.initialized state ambient types liveRoots
+    regions pending world compatible.globalCount id descriptor declared mutability
+
 #print axioms rpExpr_not_operand
 #print axioms typeExpr_not_operand
 #print axioms checkedValue_not_operand
@@ -175,5 +224,6 @@ theorem evalValue_checkedGlobalRead (fuel : Nat) (config : EvalConfig)
 #print axioms checkedValue_globalRead_available
 #print axioms typeExpr_globalRead_type
 #print axioms evalValue_checkedGlobalRead
+#print axioms evalValue_checkedGlobalReference
 
 end Goose.Proofs.ConstructionAcceptedExecution
