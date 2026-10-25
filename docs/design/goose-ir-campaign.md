@@ -7,9 +7,25 @@
 ## Feature-completion priority (2026-10-25)
 
 The owner redirected the campaign toward feature completeness using the test-pyramid philosophy.
-The current implementation work covers limited-array capacity queries, immutable reference
-captures in nested functions, and generic parameter-prologue correspondence.
+The compiler now exports static limited-array capacity queries and immutable reference
+captures in nested functions. Capacity queries evaluate their receiver exactly once,
+including effects and aborts. Captures preserve reference identity and pointee mutability.
+Rebindable reference slots remain explicitly unsupported.
 Existing independent Core evaluation and exact runtime expectations are the feature oracles.
+
+The integrated Debug compiler passes three selected Core/GIR cases for these features,
+including receiver-abort ordering. The mutable-reference-slot control retains exactly
+the `captured-reference` rejection. New fixture layout and whitespace checks pass.
+The feature lanes also checked exact legacy output and existing capture controls.
+
+[`accepted_callee_parameter_prologue`](../../semantics/Goose/Lower/DemandParameterPrologue.lean)
+connects every parameter prefix to actual GIR execution, including the empty and complete prefixes.
+It derives the prefix cursor and preserves realized suspended caller value and run maps.
+The focused Lean check compiles the two new modules and reuses 117 unchanged qualified imports.
+Boolean and readonly-reference call checks cover every prefix. The boolean check also
+connects its partial prefix to the actual fuel-13 timeout.
+Integration leaves these semantic sources and dependencies unchanged, so that evidence is reused.
+The new component has not undergone the manual whole-project axiom and independent-kernel qualification.
 
 Normal iteration runs the changed regression and relevant controls through exact native selectors.
 A compiler change may rebuild the Debug `goose` target. A proof change checks its changed
@@ -81,8 +97,9 @@ They do not refute the requested lifetime theorem.
 
 The remaining proof work is substantive:
 
-- `TH-LOWER-03` needs generic prologue correspondence and reconstruction of canonical
-  source cursors at every `Evidence.RuntimePoint`, including suspended caller and run maps.
+- `TH-LOWER-03` still needs reconstruction of canonical source cursors through bodies,
+  control flow, calls and returns at every `Evidence.RuntimePoint`.
+  Generic parameter-prologue correspondence now preserves incoming caller value and run maps.
 - `TH-CON-01` needs separation and byte geometry derived after arbitrary accepted
   initialization, the complete fill loop, and invocation replay through all 23 evaluator families.
 - `TH-EXIT-01` needs the accepted owner-to-storage bridge through reservation and landing,
