@@ -27,7 +27,8 @@ class UnitsMatrixTests(unittest.TestCase):
         session = SimpleNamespace(home=self.scratch / "home", dir=self.scratch,
                                   clean=lambda *args, **kwargs: clean)
         incremental = SimpleNamespace(exit=0, stdout="incremental\n", stderr="",
-                                      exe=self.scratch / "incremental.exe")
+                                      exe=self.scratch / "incremental.exe",
+                                      runtime_cache_snapshot=None)
 
         with contextlib.redirect_stdout(io.StringIO()):
             matrix.equal_to_clean("stdout", session, incremental)
@@ -45,28 +46,59 @@ class UnitsMatrixTests(unittest.TestCase):
         session = SimpleNamespace(home=self.scratch / "home", dir=directory,
                                   clean=lambda *args, **kwargs: clean)
         incremental = SimpleNamespace(exit=1, stdout=f"built {incremental_exe}\n", stderr="",
-                                      exe=incremental_exe)
+                                      exe=incremental_exe, runtime_cache_snapshot=None)
 
         matrix.equal_to_clean("executable path", session, incremental)
 
         self.assertEqual(matrix.failures, [])
 
-    def test_warm_contract_store_allows_verified_frontend_recheck(self):
+    def test_contract_store_reuses_all_objects_even_when_it_relinks(self):
         native = {"no_op": False, "frontend_phases": ["parse"],
                   "native_compiler_invocations": [], "objects_missed": 0,
-                  "link": {"ran": False}}
+                  "link": {"ran": True}}
 
-        self.assertTrue(units_matrix.Matrix.is_warm(native))
+        self.assertTrue(units_matrix.Matrix.reuses_all_objects(native))
 
-    def test_unavailable_contract_dimensions_make_matrix_incomplete(self):
+    def test_runtime_version_is_read_from_the_build_report(self):
+        build = units_matrix.Build.__new__(units_matrix.Build)
+        build.report = {"runtime_version": "runtime-a",
+                        "extensions": {"native_compile": {}}}
+
+        self.assertEqual(build.runtime_version, "runtime-a")
+
+    def test_failed_or_missing_builder_boundary_probe_is_nonpass(self):
+        cases = (
+            (1, "\n".join(units_matrix.BUILDER_PROBE_CHECKS), "fail", 1),
+            (0, "ok   compiler compiler_units_builder\n", "incomplete", 2),
+        )
+        for exit_code, output, expected_status, expected_exit in cases:
+            with self.subTest(exit_code=exit_code, output=output):
+                matrix = units_matrix.Matrix("unused", self.scratch)
+                matrix.e10_started = True
+                with contextlib.redirect_stdout(io.StringIO()):
+                    matrix.record_builder_boundary_result(exit_code, output)
+
+                if expected_status == "fail":
+                    self.assertEqual(matrix.records, [])
+                    self.assertEqual(len(matrix.failures), 1)
+                else:
+                    self.assertEqual(matrix.records[0]["status"], "unavailable")
+                    self.assertIn("units-last-record", matrix.records[0]["dimensions"]["required_tests"])
+                self.assertEqual(matrix.completion(), (expected_status, expected_exit))
+
+    def test_builder_boundary_and_cli_probes_allow_matrix_completion(self):
         matrix = units_matrix.Matrix("unused", self.scratch)
+        matrix.e10_started = True
+        output = "\n".join(units_matrix.BUILDER_PROBE_CHECKS)
         with contextlib.redirect_stdout(io.StringIO()):
-            matrix.record_unavailable("E10", {"target": "no target option"})
+            matrix.record_builder_boundary_result(0, output)
 
-        record = matrix.records[0]
-        self.assertEqual(record["status"], "unavailable")
-        self.assertNotIn("ok", record)
+        self.assertTrue(matrix.e10_builder_boundary_passed)
+        self.assertEqual(matrix.records[0]["status"], "builder-boundary")
+        self.assertEqual(set(matrix.records[0]["dimensions"]), set(units_matrix.E10_BUILDER_BOUNDARY))
         self.assertEqual(matrix.completion(), ("incomplete", 2))
+        matrix.e10_cli_dimensions_passed = True
+        self.assertEqual(matrix.completion(), ("ok", 0))
 
     def test_random_non_error_build_failure_is_reported_for_edits_and_warning(self):
         class SequenceRng:
@@ -91,7 +123,7 @@ class UnitsMatrixTests(unittest.TestCase):
                 self.edit = None
                 self.calls = 0
 
-            def build(self, *flags):
+            def build(self, *flags, **kwargs):
                 self.calls += 1
                 return FakeBuild(0 if self.calls == 1 else 1)
 
@@ -110,6 +142,41 @@ class UnitsMatrixTests(unittest.TestCase):
 
                 self.assertEqual(len(matrix.failures), 1)
                 self.assertIn("unexpected build failure", matrix.failures[0])
+
+    def test_random_sequence_forces_reuse_verification(self):
+        class FixedRandom:
+            def choice(self, options):
+                return "nothing"
+
+        class FakeBuild:
+            exit = 0
+            stdout = ""
+            stderr = ""
+            native = {}
+
+            def record(self, row):
+                return {"row": row, "exit": self.exit}
+
+        class FakeSession:
+            verification = []
+
+            def __init__(self, goose, work, name):
+                self.edit = None
+                type(self).verification = []
+
+            def build(self, *flags, verify=False):
+                type(self).verification.append(verify)
+                return FakeBuild()
+
+        matrix = units_matrix.Matrix("unused", self.scratch)
+        with patch.object(units_matrix, "Session", FakeSession), \
+                patch.object(units_matrix.random, "Random", lambda seed: FixedRandom()), \
+                patch.object(units_matrix.Matrix, "equal_to_clean", lambda *args, **kwargs: None), \
+                contextlib.redirect_stdout(io.StringIO()):
+            matrix.random_sequence(1, seed=1)
+
+        self.assertEqual(matrix.failures, [])
+        self.assertEqual(FakeSession.verification, [True, True])
 
     def test_build_kills_only_after_predicate(self):
         with tempfile.TemporaryDirectory(dir=self.scratch) as temp:
@@ -168,6 +235,145 @@ class UnitsMatrixTests(unittest.TestCase):
 
             self.assertEqual(len(matrix.failures), 1)
             self.assertIn("E16 edit", matrix.failures[0])
+
+    def test_edit_error_is_compared_with_a_clean_build(self):
+        class FakeBuild:
+            def __init__(self, exit_code, stderr="", no_op=False, store=None, exe=None,
+                         runtime_cache_snapshot=None):
+                self.exit = exit_code
+                self.stdout = ""
+                self.stderr = stderr
+                self.native = {"no_op": no_op}
+                self.store = store
+                self.exe = exe
+                self.home = None
+                self.runtime_cache_snapshot = runtime_cache_snapshot
+
+            def record(self, row):
+                return {"row": row, "exit": self.exit}
+
+        class FakeSession:
+            instances = []
+
+            def __init__(self, goose, work, name):
+                self.calls = 0
+                self.clean_calls = []
+                self.dir = work / "program"
+                units_matrix.shutil.rmtree(self.dir, ignore_errors=True)
+                self.dir.mkdir(parents=True)
+                self.home = work / "home"
+                self.output = None
+                type(self).instances.append(self)
+
+            def build(self, *args, **kwargs):
+                self.calls += 1
+                snapshot = None
+                if self.calls > 1:
+                    snapshot = self.dir / f"runtime-cache-before-{self.calls}"
+                    snapshot.mkdir()
+                if self.calls == 2:
+                    return FakeBuild(1, stderr=units_matrix.edits.EDITS["E15a"].message,
+                                     runtime_cache_snapshot=snapshot)
+                return FakeBuild(0, no_op=self.calls == 3,
+                                 store=self.dir / "store", exe=self.dir / "prog.exe",
+                                 runtime_cache_snapshot=snapshot)
+
+            def write(self, edit):
+                self.edit = edit
+
+            def clean(self, *flags, runtime_snapshot=None, **kwargs):
+                self.clean_calls.append(runtime_snapshot)
+                if len(self.clean_calls) == 1:
+                    return FakeBuild(1, stderr="different clean diagnostic")
+                return FakeBuild(0, store=self.dir / "clean-store", exe=self.dir / "clean.exe")
+
+            def run(self, exe):
+                return 0, "", ""
+
+        matrix = units_matrix.Matrix("unused", self.scratch)
+        with patch.object(units_matrix, "Session", FakeSession), \
+                contextlib.redirect_stdout(io.StringIO()):
+            matrix.edit_row("E15a", "E15a", lambda *args: None)
+
+        self.assertEqual(len(matrix.failures), 1)
+        self.assertIn("diagnostics differ", matrix.failures[0])
+        self.assertEqual(FakeSession.instances[-1].clean_calls, [
+            self.scratch / "program" / "runtime-cache-before-2",
+            self.scratch / "program" / "runtime-cache-before-3",
+        ])
+
+    def test_edit_case_selection_runs_only_requested_failure_rows(self):
+        matrix = units_matrix.Matrix("unused", self.scratch)
+        called = []
+        with patch.object(matrix, "edit_row", lambda row, edit, check: called.append(row)), \
+                patch.object(matrix, "row_E16", lambda: called.append("E16")), \
+                patch.object(matrix, "ok_build", lambda row, build: False), \
+                patch.object(units_matrix, "Session", lambda *args: SimpleNamespace(build=lambda: object())), \
+                contextlib.redirect_stdout(io.StringIO()):
+            matrix.run_all({"E15a", "E07c"})
+
+        self.assertEqual(called, ["E07c", "E15a"])
+
+    def test_warning_warm_build_must_succeed(self):
+        matrix, _ = self.run_warning_case(1)
+
+        self.assertEqual(len(matrix.failures), 1)
+        self.assertIn("E15b warm: build failed", matrix.failures[0])
+
+    def test_warning_warm_build_is_compared_with_clean(self):
+        matrix, compared = self.run_warning_case(0)
+
+        self.assertEqual(matrix.failures, [])
+        self.assertEqual(compared, ["edit", "warm"])
+
+    def run_warning_case(self, warm_exit):
+        warning = units_matrix.edits.EDITS["E15b"].message
+        compared = []
+
+        class FakeBuild:
+            def __init__(self, label, scratch, exit_code=0):
+                self.label = label
+                self.exit = exit_code
+                self.stdout = ""
+                self.stderr = warning if label != "initial" else ""
+                self.native = {"native_compiler_invocations": [], "link": {"ran": False}}
+                self.store = scratch / f"{label}-store"
+                self.exe = scratch / f"{label}.exe"
+                self.runtime_cache_snapshot = None
+
+            def record(self, row):
+                return {"row": row, "exit": self.exit}
+
+        class FakeSession:
+            def __init__(self, goose, work, name):
+                self.scratch = work
+                self.output = None
+                self.calls = 0
+                self.edit = None
+
+            def build(self, *args, **kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return FakeBuild("initial", self.scratch)
+                if self.calls == 2:
+                    return FakeBuild("edit", self.scratch)
+                return FakeBuild("warm", self.scratch, warm_exit)
+
+            def write(self, edit):
+                self.edit = edit
+
+        matrix = units_matrix.Matrix("unused", self.scratch)
+
+        def compare(self, row, session, build, *args, **kwargs):
+            compared.append(build.label)
+
+        with patch.object(units_matrix, "Session", FakeSession), \
+                patch.object(units_matrix, "units_of", lambda store: {"main.c": b"same"}), \
+                patch.object(units_matrix.Matrix, "equal_to_clean", compare), \
+                contextlib.redirect_stdout(io.StringIO()):
+            matrix.edit_row("E15b", "E15b", lambda *args: None)
+
+        return matrix, compared
 
 
 if __name__ == "__main__":

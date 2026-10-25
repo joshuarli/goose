@@ -139,7 +139,9 @@ theorem ifE_core_symbolRun_of {le : LEnv} {sc : Nat} {t f : Core.Block}
       setCur (some eb)
       let vf ← lowerBlock none [] true f
       let endF ← curBlock
-      joinValue endT vt endF vf) := by
+      let result ← joinValue endT vt endF vf
+      recordValueRootRecipe result (sourceBlockScope t)
+      pure result) := by
   intro hw hc r out hr
   cases hs : ls.cur with
   | none =>
@@ -151,7 +153,7 @@ theorem ifE_core_symbolRun_of {le : LEnv} {sc : Nat} {t f : Core.Block}
     simp only [bind_eq] at hr
     obtain ⟨⟨tb, eb⟩, s1, hfork, u1, s2, hsetT, vt, s3, hthen,
       endT, s4, hcurT, u2, s5, hsetF, vf, s6, helse,
-      endF, s7, hcurF, hjoin⟩ := hr
+      endF, s7, hcurF, joined, s8, hjoin, u8, s9, hrecipe, hpure⟩ := hr
     have hw1 : LS.SymbolWF le sc s1 := by
       have hh := hw.fork hs (hc b hs) (hcv (by simp [hs]))
       rw [hfork] at hh
@@ -187,14 +189,29 @@ theorem ifE_core_symbolRun_of {le : LEnv} {sc : Nat} {t f : Core.Block}
       intro x hx
       have hx' : s7.cur = some x := heF.symm.trans hx
       exact ⟨hc6 x hx', hvF (by simp [hx']) vf (by simp)⟩
-    obtain ⟨hw7, hc7, hv7⟩ := joinValue_symbols hw6 bt bf hjoin
-    refine ⟨hw7, hc7, ?_, ?_⟩
+    obtain ⟨hw8, hc8, hv8⟩ := joinValue_symbols hw6 bt bf hjoin
+    rw [recordValueRootRecipe_run] at hrecipe
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hrecipe
+    rw [pure_run] at hpure
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj hpure
+    refine ⟨?_, ?_, ?_, ?_⟩
+    · cases s8 with
+      | mk blocks vals cur stack valueRootRecipes =>
+        cases hw8 with
+        | mk definitions instructions =>
+          constructor
+          · exact definitions
+          · intro i member
+            exact instructions i member
+    · cases s8 with
+      | mk blocks vals cur stack valueRootRecipes =>
+        simpa [LS.CurrentBlocks] using hc8
     · intro hd
       simp at hd
     · intro hl v hv
       simp only [List.mem_singleton] at hv
       subst v
-      exact hv7 hl
+      exact hv8 (by simpa using hl)
 
 /-- The condition and both particular arms must preserve symbols; no premise
 quantifies over arbitrary unchecked source syntax. -/
@@ -215,7 +232,9 @@ theorem lowerExpr_ifE_symbolRunAt_of {le : LEnv} {sc : Nat} {c : Core.Expr} {t f
       setCur (some eb)
       let vf ← lowerBlock none [] true f
       let endF ← curBlock
-      joinValue endT vt endF vf)
+      let result ← joinValue endT vt endF vf
+      recordValueRootRecipe result (sourceBlockScope t)
+      pure result)
   apply LS.SymbolRun.bind (hc ls)
   intro cv mid _ _ hv
   exact ifE_core_symbolRun_of ht hf (fun hl => hv hl cv (by simp))
@@ -291,6 +310,40 @@ theorem lowerBlock_value_symbolRun_of {le : LEnv} {sc scope : Nat}
     | none => have hd := hd3 hh; simp [hd] at hl
     | some b => simp
   exact Nat.lt_of_lt_of_le (hv hl2 v (by simp)) ha.vals
+
+inductive V001Block (scopeCount : Nat) (env : Core.TEnv) : Core.Block → Prop where
+  | value {scope : Nat} {value : Core.Expr}
+      (typed : HasTypedBlock env (.mk scope [] (some value)))
+      (scopeBound : scope < scopeCount) (valueShape : V001Expr env value) :
+      V001Block scopeCount env (.mk scope [] (some value))
+
+theorem lowerBlock_v001_symbolRun {le : LEnv} {scopeCount : Nat}
+    {env : Core.TEnv} {block : Core.Block} (shape : V001Block scopeCount env block)
+    (slots : env.vars.size = le.slots.size)
+    (globals : env.globalLimit ≤ le.globals.size)
+    (origins : le.mod.origins.size = env.mod.origins.size) :
+    ∀ ls, LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerBlock none [] true block) := by
+  cases shape with
+  | value typed scopeBound valueShape =>
+    apply lowerBlock_value_symbolRun_of scopeBound
+    · intro ls
+      exact LS.SymbolRun.stable ⟨(), rfl⟩
+    · exact lowerExpr_v001_symbolRun valueShape slots globals origins
+
+theorem lowerExpr_ifE_v001_symbolRunAt {le : LEnv} {scopeCount : Nat}
+    {env : Core.TEnv} {condition : Core.Expr} {thenBlock elseBlock : Core.Block}
+    (conditionShape : V001Expr env condition)
+    (thenShape : V001Block scopeCount (Core.exprEnv env) thenBlock)
+    (elseShape : V001Block scopeCount (Core.exprEnv env) elseBlock)
+    (slots : env.vars.size = le.slots.size)
+    (globals : env.globalLimit ≤ le.globals.size)
+    (origins : le.mod.origins.size = env.mod.origins.size) :
+    ∀ ls, LS.SymbolRunAt le scopeCount ls (LS.valueRefs fun v => [v])
+      (lowerExpr (.ifE condition thenBlock elseBlock)) := by
+  apply lowerExpr_ifE_symbolRunAt_of
+  · exact lowerExpr_v001_symbolRun conditionShape slots globals origins
+  · exact lowerBlock_v001_symbolRun thenShape slots globals origins
+  · exact lowerBlock_v001_symbolRun elseShape slots globals origins
 
 def conditionalArm (scope : Nat) (stop : Bool) (org : Core.OriginId) (n : Int) : Core.Block :=
   .mk scope (if stop then [.abort "stop" org] else []) (some (.lit .i64 n))

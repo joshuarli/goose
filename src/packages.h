@@ -28,10 +28,14 @@ inline string PackageDir(const string &dir) {
     return abs + "/";
 }
 
-inline bool IsPathSource(const string &text) {
-    return text.rfind("./", 0) == 0 || text.rfind("../", 0) == 0 || text.rfind(".\\", 0) == 0 ||
-           text.rfind("..\\", 0) == 0 || text[0] == '/' || text[0] == '\\' ||
+inline bool IsAbsoluteSource(const string &text) {
+    return (!text.empty() && (text[0] == '/' || text[0] == '\\')) ||
            (text.size() > 1 && text[1] == ':');
+}
+
+inline bool IsPathSource(const string &text) {
+    return text == "." || text == ".." || text.rfind("./", 0) == 0 || text.rfind("../", 0) == 0 ||
+           text.rfind(".\\", 0) == 0 || text.rfind("..\\", 0) == 0 || IsAbsoluteSource(text);
 }
 
 // Reads a source as written in a file in `fromdir`. A path is resolved from
@@ -44,8 +48,7 @@ inline PackageSource ParsePackageSource(const string &text, const string &fromdi
     if (text.empty()) throw CompileError { "a package source is a path or a git repository" };
     if (IsPathSource(text)) {
         s.ispath = true;
-        auto absolute = text[0] == '/' || text[0] == '\\' || (text.size() > 1 && text[1] == ':');
-        s.dir = PackageDir(absolute ? text : cat(fromdir, text));
+        s.dir = PackageDir(IsAbsoluteSource(text) ? text : cat(fromdir, text));
         return s;
     }
     auto at = text.rfind('@');
@@ -119,9 +122,10 @@ inline string GitCacheDir(const PackageSource &s) {
 
 // Reads the package's sidecar, `<name>.build` beside its entry, if there is
 // one: the C it compiles, where to find headers, what to define and
-// link, or the CMake target to build; and for the program its executable's
-// name. Lists take a _windows, _linux or _macos suffix for a platform's own
-// part. Paths are relative to the package root.
+// link, or the CMake target to build; the directories that are none of its
+// own; and for the program its executable's name. Lists take a _windows,
+// _linux or _macos suffix for a platform's own part. Paths are relative to
+// the package root.
 inline void LoadSidecar(Package &pkg, bool isprogram) {
     pkg.sidecar = cat(pkg.root, pkg.name, ".build");
     auto bf = LoadBuildFile(pkg.sidecar, pkg.hassidecar);
@@ -129,7 +133,7 @@ inline void LoadSidecar(Package &pkg, bool isprogram) {
     if (!pkg.hassidecar) return;
     const char *lists[] = { "c_sources", "c_include", "c_defines", "c_flags_cc", "c_flags_msvc",
                             "c_libs" };
-    vector<string> known = { "cmake_target", "cmake_options", "main_thread_only" };
+    vector<string> known = { "cmake_target", "cmake_options", "main_thread_only", "exclude" };
     for (auto key : lists)
         for (auto suffix : { "", "_windows", "_linux", "_macos" }) known.push_back(cat(key, suffix));
     if (isprogram) known.push_back("output");
@@ -146,8 +150,7 @@ inline void LoadSidecar(Package &pkg, bool isprogram) {
         for (auto &e : bf.Strings(cat(key, platform))) v.push_back(e);
         if (paths)
             for (auto &e : v)
-                if (!IsPathSource(e) || e.rfind("./", 0) == 0 || e.rfind("../", 0) == 0)
-                    e = ForwardSlashes(AbsolutePath(cat(pkg.root, e)));
+                if (!IsAbsoluteSource(e)) e = ForwardSlashes(AbsolutePath(cat(pkg.root, e)));
         return v;
     };
     pkg.csources = list("c_sources", true);
@@ -159,6 +162,7 @@ inline void LoadSidecar(Package &pkg, bool isprogram) {
     pkg.cmake_target = bf.Str("cmake_target");
     pkg.cmake_options = bf.Strings("cmake_options");
     pkg.main_thread_only = bf.Bool("main_thread_only");
+    for (auto &e : bf.Strings("exclude")) pkg.exclude.push_back(PackageDir(cat(pkg.root, e)));
     if (isprogram) pkg.output = bf.Str("output");
     if (!pkg.csources.empty() && !pkg.cmake_target.empty())
         throw CompileError { cat(pkg.sidecar, ": a package has either c_sources or a cmake_target") };
@@ -178,15 +182,31 @@ inline void RemoveTree(const string &path) {
     filesystem::remove_all(p, ec);
 }
 
+// What a terminal shows of `output`, where a carriage return alone starts
+// the line over: the last of each line's redraws, as git prints progress.
+inline string AsShown(const string &output) {
+    string shown;
+    for (size_t i = 0; i < output.size();) {
+        auto end = output.find('\n', i);
+        if (end == string::npos) end = output.size();
+        auto line = output.substr(i, end - i);
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        Append(shown, line.substr(line.find_last_of('\r') + 1), end < output.size() ? "\n" : "");
+        i = end + 1;
+    }
+    return shown;
+}
+
 // Runs git with `args`, and throws what it printed when it failed. A
 // checkout in the cache can lie deep, past the path length Windows allows
-// git by default.
+// git by default. A checkout at a tag is detached by design, which git
+// would otherwise explain even with -q.
 inline void RunGit(const string &git, const vector<string> &args) {
-    vector<string> argv = { git, "-c", "core.longpaths=true" };
+    vector<string> argv = { git, "-c", "core.longpaths=true", "-c", "advice.detachedHead=false" };
     for (auto &a : args) argv.push_back(a);
     auto r = RunProcess(argv);
     if (r.started && r.code == 0) return;
-    throw CompileError { cat(CommandLineText(argv), "\n", r.output) };
+    throw CompileError { cat(CommandLineText(argv), "\n", AsShown(r.output)) };
 }
 
 // The checkout of the git source `s` for the package `name`, fetched into
@@ -217,7 +237,7 @@ inline string FetchPackage(const PackageSource &s, const string &name,
         if (ec) throw CompileError { cat("cannot create ", parent.string(), ": ", ec.message()) };
         // The lock stays outside both the temporary and final checkout, so
         // cleanup and publication never remove a lock another process holds.
-        FileLock lock(dir + ".lock");
+        FileLock lock(dir + ".lock", cat("waiting for another goose fetching the package ", name));
         have = ProbeDirectory(dir);
         update = have && package_update && !IsCommitHash(s.ref);
         if (have && !update) return dir + "/";
@@ -227,14 +247,13 @@ inline string FetchPackage(const PackageSource &s, const string &name,
                                      " from ", s.text, ". Install git, or clone that repository "
                                      "yourself and declare it as\n    import ", name,
                                      " from \"<the directory>\";") };
-        if (policy != PackageFetchPolicy::LintAllowFetch) {
-            fprintf(stderr, "%s the package %s from %s\n", update ? "updating" : "fetching",
-                    name.c_str(), s.text.c_str());
-            fflush(stderr);
-        }
+        ProgressStep step(cat(update ? "updating" : "fetching", " the package ", name, " from ", s.text),
+                          policy != PackageFetchPolicy::LintAllowFetch);
+        // Quiet, but for the progress a live line can show.
+        auto progress = ProgressLive() ? "--progress" : "--no-progress";
         try {
             if (update) {
-                RunGit(git, { "-C", dir, "fetch", "-q", "--depth", "1", s.url, s.ref });
+                RunGit(git, { "-C", dir, "fetch", "-q", progress, "--depth", "1", s.url, s.ref });
                 RunGit(git, { "-C", dir, "checkout", "-q", "--detach", "FETCH_HEAD" });
                 RunGit(git, { "-C", dir, "submodule", "update", "-q", "--init", "--recursive",
                               "--depth", "1" });
@@ -244,20 +263,22 @@ inline string FetchPackage(const PackageSource &s, const string &name,
                 try {
                     if (IsCommitHash(s.ref)) {
                         RunGit(git, { "init", "-q", tmp });
-                        RunGit(git, { "-C", tmp, "fetch", "-q", "--depth", "1", s.url, s.ref });
+                        RunGit(git, { "-C", tmp, "fetch", "-q", progress, "--depth", "1", s.url,
+                                      s.ref });
                         RunGit(git, { "-C", tmp, "checkout", "-q", "--detach", "FETCH_HEAD" });
                         RunGit(git, { "-C", tmp, "submodule", "update", "-q", "--init",
                                       "--recursive", "--depth", "1" });
                     } else {
-                        RunGit(git, { "clone", "-q", "--depth", "1", "--branch", s.ref,
+                        RunGit(git, { "clone", "-q", progress, "--depth", "1", "--branch", s.ref,
                                       "--recurse-submodules", "--shallow-submodules", s.url, tmp });
                     }
                 } catch (CompileError &) {
                     RemoveTree(tmp);
                     throw;
                 }
-                filesystem::rename(filesystem::path(tmp), filesystem::path(dir), ec);
-                if (ec) throw CompileError { cat("cannot move ", tmp, " to ", dir) };
+                ec = RenamePath(tmp, dir);
+                if (ec)
+                    throw CompileError { cat("cannot move ", tmp, " to ", dir, ": ", ec.message()) };
             }
         } catch (CompileError &e) {
             throw CompileError { cat("cannot fetch the package ", name, " from ", s.text, ":\n",

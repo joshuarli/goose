@@ -12,8 +12,8 @@
         "message": "redundant `as i32`: a is already i32",
         "primary": {
           "path": "test/typing/redundant_casts.goose",
-          "start_byte": 1774,
-          "end_byte": 1782,
+          "start_byte": 1766,
+          "end_byte": 1774,
           "start_line": 40,
           "start_column": 18,
           "end_line": 40,

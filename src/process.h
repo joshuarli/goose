@@ -24,7 +24,8 @@ struct ProcessResult {
 // Runs argv (argv[0] the program: a path, or a name looked up on PATH) in
 // `cwd`, or in this process's working directory when that is empty, with
 // this process's environment, and collects what it prints. With `echo` the
-// output is also written to stderr as it arrives, for -v.
+// output is also written to stderr as it arrives, for -v; either way the
+// live line (progress.h) sees it.
 ProcessResult RunProcess(const vector<string> &argv, const string &cwd = "", bool echo = false,
                          struct ProcessUsage *usage = nullptr);
 
@@ -32,11 +33,12 @@ ProcessResult RunProcess(const vector<string> &argv, const string &cwd = "", boo
 // platform supports them. The caller owns removal of the returned path.
 bool CreatePrivateTempFile(string &path, string &error);
 
-// The full path of the program `name` on PATH, or "" when there is none. On
-// Windows a name without an extension is tried with the ones PATHEXT lists
-// (.exe, .cmd, .bat, ...). A name holding a path separator is returned as it
-// is when it exists.
-string FindOnPath(const string &name);
+// The full path of the program `name` on PATH, or on `path` (a list in PATH's
+// form) where that is given, or "" when there is none. On Windows a name
+// without an extension is tried with the ones PATHEXT lists (.exe, .cmd,
+// .bat, ...). A name holding a path separator is returned as it is when it
+// exists.
+string FindOnPath(const string &name, const char *path = nullptr);
 
 // Sets a variable in this process's environment, where getenv and every
 // process started from here see it.
@@ -44,11 +46,12 @@ void SetEnvVar(const string &name, const string &value);
 
 // An exclusive cross-process lock on a persistent file. The OS releases it
 // when this object (or the process) exits; children do not inherit it. The
-// file must not be removed, since waiters may already have it open.
+// file must not be removed, since waiters may already have it open. While
+// another process holds it, the live line (progress.h) says `waiting`.
 class FileLock {
     intptr_t handle = -1;
 public:
-    explicit FileLock(const string &path);
+    FileLock(const string &path, const string &waiting);
     ~FileLock();
     FileLock(const FileLock &) = delete;
     FileLock &operator=(const FileLock &) = delete;
@@ -59,6 +62,10 @@ public:
 // the package's C functions and their addresses, appended to `out`. False,
 // with `err` saying why, when it cannot be loaded or has no such table.
 bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &out, string &err);
+
+// The macOS SDK this machine has active, where the C library's headers are;
+// "" elsewhere, or where none is installed.
+string MacSdkPath();
 
 // argv as one line a shell would read back as argv, for printing a command
 // (-v, --dry-run): arguments with spaces or shell characters are quoted.

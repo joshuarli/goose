@@ -20,7 +20,9 @@ whether the link ran, and the time and peak memory the compiler and the
 largest native compiler process took), then a table. With --random N runs N
 seeded random edits, contract changes and store damages with --verify-reuse,
 each compared with a clean build. Exits 1 if any row or step fails and 2 if
-any qualification dimension is unavailable.
+any required qualification probe is missing. E10's raw C flags, target and
+runtime identity are qualified at the production native-builder boundary
+using Goose-emitted C units; this does not claim CLI selectors or cross-compilation.
 """
 
 import argparse
@@ -45,11 +47,37 @@ import gen  # noqa: E402
 FAMILY = dict(helpers=1, contexts=2, types=gen.INT_TYPES[:1], shareable=1, root_params=2, distinct=True,
               edit_targets=True)
 SOURCE_EDITS = ("E02", "E03", "E04", "E05", "E06", "E07a", "E07b", "E08", "E09a", "E09b", "E09c")
-E10_UNAVAILABLE = {
-    "independent_c_flags": "the build command exposes no raw C flag override; --debug changes numeric mode and C flags together (-D is tested separately)",
-    "target": "the compiler has no target option; a cross compiler also changes C compiler identity",
-    "runtime_text_only": "runtime text is embedded in the Goose binary, so changing it also changes compiler binary identity",
+EDIT_CASES = set(SOURCE_EDITS) | {"E07c", "E15a", "E15b", "E16"}
+E10_BUILDER_BOUNDARY = {
+    "raw_c_flags": {
+        "field": "UnitContractValues.c_flags",
+        "proves": "production MakeContract and BuildUnitObjects compile actual Goose-emitted C units into an isolated contract store, then verify the original store remains reusable",
+        "limit": "raw C flags are injected at the native-builder boundary; this does not qualify a goose build CLI flag selector",
+    },
+    "target_identity": {
+        "field": "UnitContractValues.target",
+        "proves": "production MakeContract and BuildUnitObjects compile actual Goose-emitted C units under a target-only identity change, then verify both stores remain reusable",
+        "limit": "the probe uses the host compiler under synthetic target identity; it makes no cross-compilation or CLI target-option claim",
+    },
+    "runtime_identity": {
+        "field": "UnitContractValues.runtime_version",
+        "proves": "production MakeContract and BuildUnitObjects compile actual Goose-emitted C units under a runtime-identity-only change, then verify both stores remain reusable",
+        "limit": "runtime text is embedded in the Goose binary; this is a builder-boundary identity probe, not a production runtime-text-only full-build variant",
+    },
 }
+BUILDER_PROBE_CHECKS = (
+    "ok   compiler compiler_units_builder",
+    "ok   units-last-record",
+)
+
+
+def builder_probe_result(exit_code, output):
+    if exit_code != 0:
+        return "fail", f"focused compiler-units tests failed (exit {exit_code}): {output[-600:]}"
+    missing = [line for line in BUILDER_PROBE_CHECKS if line not in output.splitlines()]
+    if missing:
+        return "incomplete", "focused compiler-units tests omitted: " + ", ".join(missing)
+    return "ok", ""
 
 
 def make_compiler_variant(goose, destination):
@@ -121,6 +149,10 @@ class Build:
         return (self.report or {}).get("extensions", {}).get("native_compile") or {}
 
     @property
+    def runtime_version(self):
+        return (self.report or {}).get("runtime_version")
+
+    @property
     def store(self):
         s = self.native.get("store")
         return Path(s) if s else None
@@ -178,22 +210,35 @@ class Session:
     def build(self, *flags, label=None, goose=None, env_overrides=None,
               kill_when=None, on_kill=None, kill_timeout=30, verify=True):
         self.counter += 1
-        return Build(self, list(flags), label or f"b{self.counter}", goose, env_overrides,
-                     kill_when, on_kill, kill_timeout, verify)
+        runtime_cache = self.home / "build" / "runtime"
+        runtime_snapshot = None
+        try:
+            if runtime_cache.exists():
+                runtime_snapshot = self.dir / f"runtime-cache-before-{self.counter}"
+                shutil.copytree(runtime_cache, runtime_snapshot)
+            build = Build(self, list(flags), label or f"b{self.counter}", goose, env_overrides,
+                          kill_when, on_kill, kill_timeout, verify)
+        except BaseException as error:
+            remove_runtime_snapshot(runtime_snapshot, error)
+            raise
+        build.runtime_cache_snapshot = runtime_snapshot
+        return build
 
     def run(self, exe):
         r = subprocess.run([str(exe)], capture_output=True, text=True, errors="replace",
                            cwd=self.dir)
         return r.returncode, r.stdout, r.stderr
 
-    def clean(self, *flags, goose=None):
+    def clean(self, *flags, goose=None, runtime_snapshot=None):
         """A build of the same sources in a store of its own."""
         other = Session.__new__(Session)
         other.goose, other.dir, other.counter = self.goose, self.dir, 0
         other.exe_name = f"clean{self.counter}"
         other.home = self.dir / f"home-clean{self.counter}"
         shutil.rmtree(other.home, ignore_errors=True)
-        b = Build(other, list(flags), f"clean{self.counter}", goose=goose)
+        if runtime_snapshot is not None:
+            shutil.copytree(runtime_snapshot, other.home / "build" / "runtime")
+        b = Build(other, list(flags), f"clean{self.counter}", goose=goose, verify=True)
         b.home = other.home
         return b
 
@@ -213,11 +258,25 @@ def normalized(text, *paths):
     return re.sub(r"/[^ \n]*home[^ \n]*", "<home>", text)
 
 
+def remove_runtime_snapshot(snapshot, primary_error=None):
+    if snapshot is None or not snapshot.exists():
+        return
+    try:
+        shutil.rmtree(snapshot)
+    except OSError as cleanup_error:
+        if primary_error is None:
+            raise
+        print(f"failed to remove runtime cache snapshot {snapshot}: {cleanup_error}", file=sys.stderr)
+
+
 class Matrix:
     def __init__(self, goose, work):
         self.goose, self.work = goose, work
         self.failures, self.records = [], []
         self.unavailable = []
+        self.e10_started = False
+        self.e10_cli_dimensions_passed = False
+        self.e10_builder_boundary_passed = False
 
     def fail(self, row, why):
         self.failures.append(f"{row}: {why}")
@@ -229,38 +288,81 @@ class Matrix:
         self.records.append(record)
         print(json.dumps(record))
 
+    def record_builder_boundary(self):
+        record = {"row": "E10 native builder boundary", "status": "builder-boundary",
+                  "dimensions": E10_BUILDER_BOUNDARY}
+        self.records.append(record)
+        print(json.dumps(record))
+        self.e10_builder_boundary_passed = True
+
+    def record_builder_boundary_result(self, exit_code, output):
+        status, detail = builder_probe_result(exit_code, output)
+        if status == "ok":
+            self.record_builder_boundary()
+        elif status == "incomplete":
+            self.record_unavailable("E10 native builder boundary", {
+                "required_tests": detail,
+                "scope": "production MakeContract/BuildUnitObjects on Goose-emitted C units plus the R0 CLI regression",
+            })
+        else:
+            self.fail("E10 native builder boundary", detail)
+
+    def run_builder_boundary_probe(self):
+        scratch = self.work.parent / "tmp"
+        scratch.mkdir(parents=True, exist_ok=True)
+        try:
+            result = subprocess.run(
+                [sys.executable, str(ROOT / "test" / "run_tests.py"), "--exe", self.goose,
+                 "--cc", "native", "--only", "extra/compiler_units", "-v"],
+                cwd=ROOT, env=dict(os.environ, TMPDIR=str(scratch)), capture_output=True,
+                text=True, errors="replace")
+        except OSError as error:
+            self.fail("E10 native builder boundary", f"cannot run focused compiler-units tests: {error}")
+            return
+        output = result.stdout + result.stderr
+        self.record_builder_boundary_result(result.returncode, output)
+
     def completion(self):
         if self.failures:
             return "fail", 1
         if self.unavailable:
             return "incomplete", 2
+        if self.e10_started and not (self.e10_cli_dimensions_passed and
+                                     self.e10_builder_boundary_passed):
+            return "incomplete", 2
         return "ok", 0
 
     def equal_to_clean(self, row, s, b, flags=(), goose=None):
         """L-EQ: the incremental build `b`, against a clean build."""
-        c = s.clean(*flags, goose=goose)
-        if b.exit != c.exit:
-            return self.fail(row, f"exit {b.exit} against a clean build's {c.exit}")
-        if normalized(b.stdout, b.exe, s.home, s.dir) != normalized(c.stdout, c.exe, c.home, s.dir):
-            return self.fail(row, "stdout differs from a clean build's:\n--- incremental\n"
-                                  f"{b.stdout[-300:]}\n--- clean\n{c.stdout[-300:]}")
-        if normalized(b.stderr, b.exe, s.home, s.dir) != normalized(c.stderr, c.exe, c.home, s.dir):
-            return self.fail(row, "diagnostics differ from a clean build's:\n--- incremental\n"
-                                  f"{b.stderr[-300:]}\n--- clean\n{c.stderr[-300:]}")
-        if b.exit != 0:
-            return None
-        if b.store is None or c.store is None:
-            return self.fail(row, "no store reported")
-        ub, uc = units_of(b.store), units_of(c.store)
-        if ub != uc:
-            return self.fail(row, "unit texts differ from a clean build's: "
-                                  f"{sorted(k for k in ub.keys() | uc.keys() if ub.get(k) != uc.get(k))}")
-        want = s.run(c.exe)
-        got = s.run(b.exe)
-        if got != want:
-            return self.fail(row, f"the program differs from a clean build's: {got[:2]} / {want[:2]}")
-        if s.output is not None and got[1] != s.output:
-            return self.fail(row, "the program's output is not the expected one")
+        runtime_snapshot = b.runtime_cache_snapshot
+        try:
+            c = s.clean(*flags, goose=goose, runtime_snapshot=runtime_snapshot)
+            if b.exit != c.exit:
+                return self.fail(row, f"exit {b.exit} against a clean build's {c.exit}")
+            if normalized(b.stdout, b.exe, s.home, s.dir) != normalized(c.stdout, c.exe, c.home, s.dir):
+                return self.fail(row, "stdout differs from a clean build's:\n--- incremental\n"
+                                      f"{b.stdout[-300:]}\n--- clean\n{c.stdout[-300:]}")
+            if normalized(b.stderr, b.exe, s.home, s.dir) != normalized(c.stderr, c.exe, c.home, s.dir):
+                return self.fail(row, "diagnostics differ from a clean build's:\n--- incremental\n"
+                                      f"{b.stderr[-300:]}\n--- clean\n{c.stderr[-300:]}")
+            if b.exit != 0:
+                return None
+            if b.store is None or c.store is None:
+                return self.fail(row, "no store reported")
+            ub, uc = units_of(b.store), units_of(c.store)
+            if ub != uc:
+                return self.fail(row, "unit texts differ from a clean build's: "
+                                      f"{sorted(k for k in ub.keys() | uc.keys() if ub.get(k) != uc.get(k))}")
+            want = s.run(c.exe)
+            got = s.run(b.exe)
+            if got != want:
+                return self.fail(row, f"the program differs from a clean build's: {got[:2]} / {want[:2]}")
+            if s.output is not None and got[1] != s.output:
+                return self.fail(row, "the program's output is not the expected one")
+        finally:
+            if runtime_snapshot is not None:
+                remove_runtime_snapshot(runtime_snapshot, sys.exc_info()[1])
+                b.runtime_cache_snapshot = None
         return None
 
     def record(self, row, b, **extra):
@@ -323,7 +425,7 @@ class Matrix:
                 self.fail(row, f"an error was expected; exit {b.exit}")
             if "built " in b.stdout:
                 self.fail(row, "a failed build reported an executable")
-            # Nothing was recorded, so the original is still a warm build.
+            self.equal_to_clean(row, s, b)
             s.write(None)
             w = s.build(verify=False)
             if not w.native.get("no_op"):
@@ -343,8 +445,12 @@ class Matrix:
         self.equal_to_clean(row, s, b)
         if e.outcome == "warning":
             w = s.build()
-            if e.message not in w.stderr:
-                self.fail(row, "a warm build does not replay the warning")
+            warm_row = f"{row} warm"
+            self.record(warm_row, w)
+            if self.ok_build(warm_row, w):
+                if e.message not in w.stderr:
+                    self.fail(warm_row, "a warm build does not replay the warning")
+                self.equal_to_clean(warm_row, s, w)
 
     def holders(self, b, names):
         """The units that hold an implementation of any of the functions."""
@@ -381,25 +487,30 @@ class Matrix:
         if stray:
             self.fail("E08", f"L-ADD: units recompiled that hold neither the new function nor its caller: {stray}")
 
-    def rows_edits(self):
-        self.edit_row("E02", "E02", self.check_loc)
-        self.edit_row("E03", "E03", self.check_leaf)
+    def rows_edits(self, cases=None):
+        selected = EDIT_CASES if cases is None else set(cases)
+        if "E02" in selected:
+            self.edit_row("E02", "E02", self.check_loc)
+        if "E03" in selected:
+            self.edit_row("E03", "E03", self.check_leaf)
         for row in ("E04", "E05", "E06", "E07a", "E07b", "E07c", "E09a", "E09b", "E09c", "E15a", "E15b"):
-            self.edit_row(row, row, lambda s, f, b: None)
-        # E08 needs the symbols of the original.
-        s = Session(self.goose, self.work, "e-E08")
-        first = s.build()
-        if self.ok_build("E08", first):
-            self.symbols_before = set()
-            for text in units_of(first.store).values():
-                self.symbols_before |= set(re.findall(r"^GS_HIDDEN [^(\n]*?(\w+)\(", text.decode(errors="replace"), re.M))
-            s.write("E08")
-            b = s.build()
-            self.record("E08", b)
-            if self.ok_build("E08", b):
-                self.check_add(s, first, b)
-                self.equal_to_clean("E08", s, b)
-        self.row_E16()
+            if row in selected:
+                self.edit_row(row, row, lambda s, f, b: None)
+        if "E08" in selected:
+            s = Session(self.goose, self.work, "e-E08")
+            first = s.build()
+            if self.ok_build("E08", first):
+                self.symbols_before = set()
+                for text in units_of(first.store).values():
+                    self.symbols_before |= set(re.findall(r"^GS_HIDDEN [^(\n]*?(\w+)\(", text.decode(errors="replace"), re.M))
+                s.write("E08")
+                b = s.build()
+                self.record("E08", b)
+                if self.ok_build("E08", b):
+                    self.check_add(s, first, b)
+                    self.equal_to_clean("E08", s, b)
+        if "E16" in selected:
+            self.row_E16()
 
     def row_E16(self):
         s = Session(self.goose, self.work, "e-E16")
@@ -424,6 +535,8 @@ class Matrix:
                 self.equal_to_clean("E16", s, b)
 
     def row_E10(self):
+        self.e10_started = True
+        failure_count = len(self.failures)
         s = Session(self.goose, self.work, "e10")
         base = s.build()
         if not self.ok_build("E10", base):
@@ -461,28 +574,28 @@ class Matrix:
                 continue
             if n["objects_reused"] != 0 or n["objects_missed"] != n["units_written"]:
                 self.fail("E10", f"a new contract reused objects ({label}): {before.record('E10')}")
-            if label == "compiler binary" and n.get("runtime_version") != base.record("base").get("runtime_version"):
+            if label == "compiler binary" and before.runtime_version != base.runtime_version:
                 self.fail("E10", "a binary-only compiler variant changed runtime text")
             self.equal_to_clean(f"E10 {label}", s, before, flags, goose)
             back = s.build()
             self.record(f"E10 back from {label}", back)
             n = back.native
-            if not self.is_warm(n):
+            if not self.reuses_all_objects(n):
                 self.fail("E10", f"returning to the first contract is not warm ({label}): {back.record('E10')}")
             self.equal_to_clean("E10 back", s, back)
             again = s.build(*flags, goose=goose)
             self.record(f"E10 back to {label}", again)
-            if not self.is_warm(again.native):
+            if not self.reuses_all_objects(again.native):
                 self.fail("E10", f"the {label} store was not left warm: {again.record('E10')}")
             self.equal_to_clean(f"E10 back to {label}", s, again, flags, goose)
 
-        self.record_unavailable("E10 unavailable dimensions", E10_UNAVAILABLE)
+        self.e10_cli_dimensions_passed = len(self.failures) == failure_count
+        self.run_builder_boundary_probe()
 
     @staticmethod
-    def is_warm(native):
+    def reuses_all_objects(native):
         return bool(not native.get("native_compiler_invocations")
-                    and not (native.get("link") or {}).get("ran")
-                    and (native.get("no_op") or native.get("objects_missed") == 0))
+                    and native.get("objects_missed") == 0)
 
     def row_E11(self):
         s = Session(self.goose, self.work, "e11")
@@ -651,8 +764,9 @@ class Matrix:
         want = set(cases)
         if not want or want & {"E00", "E01"}:
             self.row_E00_E01(None)
-        if not want or want & (set(SOURCE_EDITS) | {"E16", "E15a", "E15b", "E07c"}):
-            self.rows_edits()
+        selected_edits = want & EDIT_CASES
+        if not want or selected_edits:
+            self.rows_edits(selected_edits if want else None)
         for name, fn in steps[2:]:
             if not want or name in want:
                 fn()
@@ -662,7 +776,7 @@ class Matrix:
     def random_sequence(self, steps, seed):
         rng = random.Random(seed)
         s = Session(self.goose, self.work, "random")
-        initial = s.build()
+        initial = s.build(verify=True)
         if not self.ok_build("random initial build", initial):
             return
         self.equal_to_clean("random initial build", s, initial)
@@ -702,7 +816,7 @@ class Matrix:
                     label += f" {kind}"
                 if not damaged:
                     self.fail(label, "the damage action found no cached object to damage")
-            b = s.build(*flags)
+            b = s.build(*flags, verify=True)
             self.record(label, b, action=action, damage_applied=damaged)
             expected_error = s.edit in ("E15a", "E07c")
             if expected_error:
@@ -757,8 +871,7 @@ def main():
               f"{r['objects_reused']!s:<7} {r['objects_missed']!s:<7} {r['link_ran']}")
     status, exit_code = m.completion()
     if status == "incomplete":
-        dimensions = sum(len(record["dimensions"]) for record in m.unavailable)
-        detail = f"incomplete ({dimensions} unavailable dimension(s))"
+        detail = "incomplete (a required E10 builder-boundary or R0 test did not run)"
     elif status == "fail":
         detail = f"{len(m.failures)} failure(s)"
     else:

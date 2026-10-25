@@ -1,5 +1,5 @@
 import Lean.Data.Json
-import Goose.Core.Syntax
+import Goose.Core.Origins
 
 /-!
 Strict decoder for the `goose-core/0.2` pilot and flat fixed-struct encodings.
@@ -833,12 +833,12 @@ def decOrigin (nFiles : Nat) (j : Json) : Except String Origin := do
   let (tag, fs) ← record j "origin"
   unless tag == "origin" do fail s!"expected an origin, found tag {tag.quote}"
   arity tag fs 3
-  let file ← checkIndex (← asNat fs[0]! "origin file") nFiles "file"
+  let file ← asNat fs[0]! "origin file"
   let line ← asNat fs[1]! "origin line"
-  if line < 1 then fail "origin: line below 1"
   let kind ← asStr fs[2]! "origin kind"
-  unless originKinds.contains kind do fail s!"origin: unknown node kind {kind.quote}"
-  pure { file, line, kind }
+  let origin : Origin := { file, line, kind }
+  checkOriginRecord nFiles origin
+  pure origin
 
 /-- Prefix a failure with the table entry it came from. -/
 def inEntry (what : String) (i : Nat) (r : Except String α) : Except String α :=

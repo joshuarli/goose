@@ -40,6 +40,8 @@ private:
 
     struct Effects {
         set<CoreTarget> reads, writes, grows, shrinks, rebinds;
+        set<CoreResultId> constructs;
+        set<CoreTargetId> needs, escapes;
         bool aborts = false, outputs = false, unknown = false;
     };
 
@@ -66,14 +68,207 @@ private:
 
     CoreImpl &Impl() { return m.impls[ci]; }
 
+    bool Flat(CoreTypeId type) const {
+        auto &t = m.Type(type);
+        if (t.kind == CoreType::Int || t.kind == CoreType::Bool || t.kind == CoreType::Struct) return true;
+        return t.kind == CoreType::Arr && t.count > 0 && Flat(t.elem);
+    }
+
+    bool VariableElement(CoreTypeId type) const {
+        auto &t = m.Type(type);
+        if (t.kind == CoreType::Arr) return VariableElement(t.elem);
+        if (t.kind == CoreType::VarArr) return Flat(t.elem) || VariableElement(t.elem);
+        return false;
+    }
+
+    bool Nonfixed(CoreTypeId type) const {
+        auto &t = m.Type(type);
+        if (t.kind == CoreType::VarArr || t.kind == CoreType::Grow || t.kind == CoreType::GrowShrink)
+            return true;
+        return t.kind == CoreType::Arr && VariableElement(type);
+    }
+
+    bool HandlesTarget(CoreTargetId target, CoreImplId impl) const {
+        return target >= 0 && target < (int)m.targets.size() &&
+               find(m.targets[target].members.begin(), m.targets[target].members.end(), impl) !=
+                   m.targets[target].members.end();
+    }
+
+    void NoteResultConstruction() {
+        for (size_t i = 0; i < Impl().results.size(); i++)
+            if (Nonfixed(Impl().results[i].type)) fx->constructs.insert((CoreResultId)i);
+    }
+
+    void NoteTargetTransfer(CoreTargetId target) {
+        if (HandlesTarget(target, (CoreImplId)ci)) NoteResultConstruction();
+        else {
+            fx->needs.insert(target);
+            fx->escapes.insert(target);
+        }
+    }
+
     bool IsLimitedOwner(const CorePlace &place) const {
         auto type = m.PlaceType((int)ci, place);
         return type && m.Type(*type).kind == CoreType::Limited;
     }
 
+    optional<uint64_t> MaximumElements(CoreTypeId type) const {
+        if (type < 0 || type >= (int)m.types.size()) return {};
+        auto &t = m.Type(type);
+        if (t.kind == CoreType::Arr || t.kind == CoreType::Limited)
+            return t.count >= 0 ? optional<uint64_t>(t.count) : nullopt;
+        if (t.kind == CoreType::VarArr) return uint64_t(UINT32_MAX);
+        return {};
+    }
+
+    optional<uint64_t> DescriptorMaximum(const CoreResultDescriptor &descriptor) const {
+        if (m.Type(descriptor.type).kind == CoreType::VarArr &&
+            descriptor.request == CoreRequest::ElementRun) return {};
+        return MaximumElements(descriptor.type);
+    }
+
+    optional<uint64_t> ExpressionMaximum(const CoreExpr &expression) const {
+        switch (expression.kind) {
+            case CoreExprKind::Bytes: return expression.bytes.size();
+            case CoreExprKind::Arr: return expression.elems.size();
+            case CoreExprKind::Fill: return MaximumElements(expression.type);
+            case CoreExprKind::Copy: {
+                auto type = m.PlaceType((int)ci, *expression.place);
+                return type ? MaximumElements(*type) : nullopt;
+            }
+            case CoreExprKind::If: {
+                auto left = BlockMaximum(*expression.then);
+                auto right = BlockMaximum(*expression.otherwise);
+                return left && right ? optional<uint64_t>(max(*left, *right)) : nullopt;
+            }
+            case CoreExprKind::Block: return BlockMaximum(*expression.then);
+            case CoreExprKind::String: {
+                uint64_t count = 0;
+                for (auto &part : expression.print) {
+                    if (part.kind != CorePrintArg::Text) return {};
+                    if (part.str.size() > UINT64_MAX - count) return {};
+                    count += part.str.size();
+                }
+                return count;
+            }
+            case CoreExprKind::Call: {
+                auto &callee = m.impls[m.contexts[expression.ctx].impl];
+                return callee.results.size() == 1 ? DescriptorMaximum(callee.results[0]) : nullopt;
+            }
+            case CoreExprKind::Values: return {};
+            case CoreExprKind::Read: {
+                auto type = m.PlaceType((int)ci, *expression.place);
+                return type ? MaximumElements(*type) : nullopt;
+            }
+            case CoreExprKind::ResultLocal:
+                return MaximumElements(m.impls[ci].vars[expression.var].type);
+            default: return MaximumElements(expression.type);
+        }
+    }
+
+    optional<uint64_t> BlockMaximum(const CoreBlock &block) const {
+        return block.value ? ExpressionMaximum(*block.value) : nullopt;
+    }
+
+    using ChannelMaxima = vector<optional<uint64_t>>;
+
+    static optional<ChannelMaxima> MergeProducerMaxima(optional<ChannelMaxima> left,
+                                                      optional<ChannelMaxima> right) {
+        if (!left || !right) return {};
+        if (left->empty()) return right;
+        if (right->empty()) return left;
+        if (left->size() != right->size()) return {};
+        for (size_t i = 0; i < left->size(); i++)
+            (*left)[i] = (*left)[i] && (*right)[i]
+                             ? optional<uint64_t>(max(*(*left)[i], *(*right)[i])) : nullopt;
+        return left;
+    }
+
+    optional<ChannelMaxima> ProducerMaximum(const CoreExpr &producer) const {
+        switch (producer.kind) {
+            case CoreExprKind::Values: {
+                ChannelMaxima maxima;
+                for (auto &value : producer.values) maxima.push_back(ExpressionMaximum(*value));
+                return maxima;
+            }
+            case CoreExprKind::Call: {
+                ChannelMaxima maxima;
+                for (auto &descriptor : m.impls[m.contexts[producer.ctx].impl].results)
+                    maxima.push_back(DescriptorMaximum(descriptor));
+                return maxima;
+            }
+            case CoreExprKind::If:
+                return MergeProducerMaxima(BlockProducerMaximum(*producer.then),
+                                           BlockProducerMaximum(*producer.otherwise));
+            case CoreExprKind::Block: {
+                auto maxima = BlockProducerMaximum(*producer.then);
+                if (maxima && maxima->empty()) return {};
+                return maxima;
+            }
+            default: return ChannelMaxima {ExpressionMaximum(producer)};
+        }
+    }
+
+    optional<ChannelMaxima> BlockProducerMaximum(const CoreBlock &block) const {
+        auto breaks = StatementBreakMaximum(block.stmts);
+        auto normal = block.value ? ProducerMaximum(*block.value) : optional<ChannelMaxima>(ChannelMaxima {});
+        return MergeProducerMaxima(std::move(breaks), std::move(normal));
+    }
+
+    optional<ChannelMaxima> StatementBreakMaximum(const vector<CoreStmt> &statements) const {
+        optional<ChannelMaxima> maxima = ChannelMaxima {};
+        for (auto &statement : statements) {
+            optional<ChannelMaxima> current = ChannelMaxima {};
+            if (statement.kind == CoreStmtKind::BreakValue) current = ProducerMaximum(*statement.expr);
+            else if (statement.kind == CoreStmtKind::If) {
+                current = StatementBreakMaximum(statement.then->stmts);
+                if (statement.otherwise)
+                    current = MergeProducerMaxima(std::move(current),
+                                                   StatementBreakMaximum(statement.otherwise->stmts));
+            } else if (statement.kind == CoreStmtKind::While || statement.kind == CoreStmtKind::ForRange ||
+                       statement.kind == CoreStmtKind::ForEach)
+                current = StatementBreakMaximum(statement.then->stmts);
+            maxima = MergeProducerMaxima(std::move(maxima), std::move(current));
+        }
+        return maxima;
+    }
+
+    optional<uint64_t> ReceivingCapacity(CoreTypeId type, CoreRequest request) const {
+        auto &t = m.Type(type);
+        if (t.kind == CoreType::Limited) return MaximumElements(type);
+        if (t.kind == CoreType::VarArr && request == CoreRequest::Value) return uint64_t(UINT32_MAX);
+        return {};
+    }
+
+    void NoteReceivingCapacity(CoreTypeId type, CoreRequest request, const CoreExpr &expression) {
+        if (!CoreHasConstruction(m.profile)) return;
+        auto capacity = ReceivingCapacity(type, request);
+        if (!capacity) return;
+        auto maximum = ExpressionMaximum(expression);
+        if (!maximum || *maximum > *capacity) fx->aborts = true;
+    }
+
+    void NoteProducerCapacities(const vector<CoreResultDescriptor> &descriptors, const CoreExpr &producer) {
+        if (!CoreHasConstruction(m.profile)) return;
+        auto maxima = ProducerMaximum(producer);
+        for (size_t i = 0; i < descriptors.size(); i++) {
+            auto capacity = ReceivingCapacity(descriptors[i].type, descriptors[i].request);
+            if (!capacity) continue;
+            if (!maxima || maxima->size() != descriptors.size() || !(*maxima)[i] ||
+                *(*maxima)[i] > *capacity) fx->aborts = true;
+        }
+    }
+
+    void NoteOperandCapacities(const vector<CoreResultDescriptor> &descriptors,
+                               const vector<CoreExprP> &operands) {
+        for (size_t i = 0; i < min(descriptors.size(), operands.size()); i++)
+            NoteReceivingCapacity(descriptors[i].type, descriptors[i].request, *operands[i]);
+    }
+
     static bool Same(const CoreSummary &a, const CoreSummary &b) {
         return a.unknown == b.unknown && a.reads == b.reads && a.writes == b.writes &&
                a.grows == b.grows && a.shrinks == b.shrinks && a.rebinds == b.rebinds &&
+               a.constructs == b.constructs && a.needs == b.needs && a.escapes == b.escapes &&
                a.aborts == b.aborts &&
                a.outputs == b.outputs;
     }
@@ -118,6 +313,10 @@ private:
         flow = false;
         fx = &e;
         Block(Impl().body);
+        if (Impl().body.value) {
+            NoteResultConstruction();
+            NoteProducerCapacities(Impl().results, *Impl().body.value);
+        }
         // Again as the lowered form is judged; what that finds is declared as
         // found, and joins what the annotated traversal declares.
         Effects g;
@@ -131,6 +330,10 @@ private:
             flowchanged = false;
             g = Effects {};
             Block(Impl().body);
+            if (Impl().body.value) {
+                NoteResultConstruction();
+                NoteProducerCapacities(Impl().results, *Impl().body.value);
+            }
         } while (flowchanged);
         flow = false;
         fx = nullptr;
@@ -183,9 +386,21 @@ private:
         join(s.shrinks, g.shrinks);
         s.rebinds.assign(e.rebinds.begin(), e.rebinds.end());
         join(s.rebinds, g.rebinds);
+        s.constructs.assign(e.constructs.begin(), e.constructs.end());
+        s.constructs.insert(s.constructs.end(), g.constructs.begin(), g.constructs.end());
+        sort(s.constructs.begin(), s.constructs.end());
+        s.constructs.erase(unique(s.constructs.begin(), s.constructs.end()), s.constructs.end());
+        s.needs.assign(e.needs.begin(), e.needs.end());
+        s.needs.insert(s.needs.end(), g.needs.begin(), g.needs.end());
+        sort(s.needs.begin(), s.needs.end());
+        s.needs.erase(unique(s.needs.begin(), s.needs.end()), s.needs.end());
+        s.escapes.assign(e.escapes.begin(), e.escapes.end());
+        s.escapes.insert(s.escapes.end(), g.escapes.begin(), g.escapes.end());
+        sort(s.escapes.begin(), s.escapes.end());
+        s.escapes.erase(unique(s.escapes.begin(), s.escapes.end()), s.escapes.end());
         s.aborts = e.aborts || g.aborts;
         s.outputs = e.outputs || g.outputs;
-        if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, {}, false, false };
+        if (s.unknown) s = CoreSummary { true, {}, {}, {}, {}, {}, {}, {}, {}, false, false };
         return s;
     }
 
@@ -202,7 +417,10 @@ private:
 
     void Stmt(const CoreStmt &s) {
         switch (s.kind) {
-            case CoreStmtKind::Let: Bind(s.var, Ex(*s.expr)); break;
+            case CoreStmtKind::Let:
+                Bind(s.var, Ex(*s.expr));
+                NoteReceivingCapacity(Impl().vars[s.var].type, CoreRequest::Value, *s.expr);
+                break;
             case CoreStmtKind::Assign: {
                 auto rho = Pl(*s.place);
                 Ex(*s.expr);
@@ -231,7 +449,7 @@ private:
             case CoreStmtKind::Append: {
                 auto rho = Pl(*s.place);
                 Vw(*s.view);
-                if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
+                if (CoreHasShrink(m.profile)) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
                 if (IsLimitedOwner(*s.place)) fx->aborts = true;
                 break;
@@ -239,6 +457,8 @@ private:
             case CoreStmtKind::AssignWhole: {
                 auto rho = Pl(*s.place);
                 Ex(*s.expr);
+                if (auto type = m.PlaceType((int)ci, *s.place))
+                    NoteReceivingCapacity(*type, CoreRequest::Value, *s.expr);
                 AddTargets(fx->reads, rho);
                 AddTargets(fx->shrinks, rho);
                 AddTargets(fx->writes, rho);
@@ -295,12 +515,65 @@ private:
                 Block(*s.then);
                 break;
             }
+            case CoreStmtKind::Receive: {
+                vector<Roots> results;
+                if (s.expr->kind == CoreExprKind::Call) Call(*s.expr, &results);
+                else if (s.expr->kind == CoreExprKind::Values) {
+                    for (auto &value : s.expr->values) results.push_back(Ex(*value));
+                } else Ex(*s.expr);
+                for (size_t i = 0; i < s.vars.size() && i < results.size(); i++) Bind(s.vars[i], results[i]);
+                vector<CoreResultDescriptor> descriptors;
+                for (auto var : s.vars) {
+                    auto type = Impl().vars[var].type;
+                    descriptors.push_back({type, Nonfixed(type) ? CoreRequest::Value : CoreRequest::Register});
+                }
+                NoteProducerCapacities(descriptors, *s.expr);
+                break;
+            }
+            case CoreStmtKind::AppendValue:
+            case CoreStmtKind::AppendConstruct: {
+                auto rho = Pl(*s.place);
+                Ex(*s.expr);
+                if (CoreHasShrink(m.profile)) AddTargets(fx->writes, rho);
+                AddTargets(fx->grows, rho);
+                if (IsLimitedOwner(*s.place)) fx->aborts = true;
+                break;
+            }
             case CoreStmtKind::Ret:
                 if (s.expr) Ex(*s.expr);
+                if (s.expr) NoteResultConstruction();
+                if (s.expr && !Impl().results.empty())
+                    NoteReceivingCapacity(Impl().results[0].type, Impl().results[0].request, *s.expr);
+                break;
+            case CoreStmtKind::RetValues:
+                for (auto &value : s.values) Ex(*value);
+                if (!s.values.empty()) NoteResultConstruction();
+                NoteOperandCapacities(Impl().results, s.values);
+                break;
+            case CoreStmtKind::ReturnFrom:
+                for (auto &value : s.values) Ex(*value);
+                NoteTargetTransfer(s.target);
+                NoteOperandCapacities(m.impls[m.targets[s.target].members[0]].results, s.values);
+                break;
+            case CoreStmtKind::RetForward:
+                Ex(*s.expr);
+                NoteResultConstruction();
+                NoteProducerCapacities(Impl().results, *s.expr);
+                break;
+            case CoreStmtKind::ReturnFromForward:
+                Ex(*s.expr);
+                NoteTargetTransfer(s.target);
+                NoteProducerCapacities(m.impls[m.targets[s.target].members[0]].results, *s.expr);
+                break;
+            case CoreStmtKind::BreakValue:
+                Ex(*s.expr);
                 break;
             case CoreStmtKind::Print:
                 fx->outputs = true;
-                for (auto &a : s.print) if (!a.text) Ex(*a.expr);
+                for (auto &a : s.print) {
+                    if (a.kind == CorePrintArg::Expr) Ex(*a.expr);
+                    if (a.kind == CorePrintArg::View) Vw(*a.view);
+                }
                 break;
             case CoreStmtKind::Assert:
             case CoreStmtKind::Exit:
@@ -339,7 +612,12 @@ private:
 
     Roots Ex(const CoreExpr &e) {
         switch (e.kind) {
-            case CoreExprKind::Lit: case CoreExprKind::Bool: return {};
+            case CoreExprKind::Lit: case CoreExprKind::Bool:
+            case CoreExprKind::ResultLocal: return {};
+            case CoreExprKind::Bytes:
+                if (CoreHasConstruction(m.profile) && m.Type(e.type).kind == CoreType::Limited &&
+                    e.bytes.size() > (uint64_t)m.Type(e.type).count) fx->aborts = true;
+                return {};
             case CoreExprKind::Read: {
                 auto rho = Pl(*e.place);
                 AddTargets(fx->reads, rho);
@@ -383,7 +661,7 @@ private:
             case CoreExprKind::Push: {
                 auto rho = Pl(*e.place);
                 Ex(*e.a);
-                if (m.profile == CoreProfile::Shrink) AddTargets(fx->writes, rho);
+                if (CoreHasShrink(m.profile)) AddTargets(fx->writes, rho);
                 AddTargets(fx->grows, rho);
                 if (IsLimitedOwner(*e.place)) fx->aborts = true;
                 return rho;
@@ -404,18 +682,49 @@ private:
             case CoreExprKind::Arr:
             case CoreExprKind::Struct:
                 for (auto &el : e.elems) Ex(*el);
+                if (CoreHasConstruction(m.profile) && e.kind == CoreExprKind::Arr &&
+                    m.Type(e.type).kind == CoreType::Limited &&
+                    e.elems.size() > (uint64_t)m.Type(e.type).count) fx->aborts = true;
                 return {};
             case CoreExprKind::Fill: Ex(*e.a); return {};
+            case CoreExprKind::String:
+                for (auto &part : e.print) {
+                    if (part.kind == CorePrintArg::Expr) Ex(*part.expr);
+                    if (part.kind == CorePrintArg::View) Vw(*part.view);
+                }
+                if (CoreHasConstruction(m.profile) && m.Type(e.type).kind == CoreType::Limited)
+                    fx->aborts = true;
+                return {};
+            case CoreExprKind::Copy: {
+                if (CoreHasConstruction(m.profile) && m.Type(e.type).kind == CoreType::Limited)
+                    fx->aborts = true;
+                auto rho = Pl(*e.place);
+                AddTargets(fx->reads, rho);
+                return {};
+            }
+            case CoreExprKind::Values: {
+                Roots roots;
+                for (auto &value : e.values) roots = Union(roots, Ex(*value));
+                return roots;
+            }
         }
         return {};
     }
 
-    Roots Call(const CoreExpr &e) {
+    Roots Call(const CoreExpr &e, vector<Roots> *resultRoots = nullptr) {
         vector<Roots> argroots;
         for (auto &a : e.args)
-            argroots.push_back(a.kind == CoreArg::Val ? Ex(*a.expr) : Pl(*a.place));
+            argroots.push_back(visit([&](const auto &arg) -> Roots {
+                using Arg = decay_t<decltype(arg)>;
+                if constexpr (is_same_v<Arg, CoreArgReference>) return Pl(*arg.place);
+                else return Ex(*arg.expr);
+            }, a));
         auto &ctx = m.contexts[e.ctx];
         auto &callee = m.impls[ctx.impl];
+        for (size_t i = 0; i < min(callee.params.size(), e.args.size()); i++)
+            if (auto argument = get_if<CoreArgConstruct>(&e.args[i]))
+                NoteReceivingCapacity(callee.vars[callee.params[i].var].type, CoreRequest::Value,
+                                      *argument->expr);
         if (callee.summary.unknown) fx->unknown = true;
         else {
             auto map = [&](const vector<CoreTarget> &from, set<CoreTarget> &to) {
@@ -436,16 +745,28 @@ private:
             map(callee.summary.writes, fx->writes);
             map(callee.summary.grows, fx->grows);
             map(callee.summary.shrinks, fx->shrinks);
+            for (auto target : callee.summary.needs)
+                if (!HandlesTarget(target, (CoreImplId)ci)) fx->needs.insert(target);
+            for (auto target : callee.summary.escapes) {
+                if (HandlesTarget(target, (CoreImplId)ci)) NoteResultConstruction();
+                else fx->escapes.insert(target);
+            }
             fx->aborts |= callee.summary.aborts;
             fx->outputs |= callee.summary.outputs;
         }
         Roots out;
-        if (callee.results.size() == 1 && m.IsRefOrSlice(callee.results[0]) && ctx.resultroots.size() == 1)
-            for (auto &r : ctx.resultroots[0]) {
-                if (r.kind == CoreRootRef::Param && r.index < (int)argroots.size())
-                    out = Union(out, argroots[r.index]);
-                else if (r.kind == CoreRootRef::Global) out = Union(out, { r });
-            }
+        for (size_t i = 0; i < callee.results.size() && i < ctx.resultroots.size(); i++) {
+            Roots roots;
+            if (m.IsRefOrSlice(callee.results[i].type))
+                for (auto &r : ctx.resultroots[i]) {
+                    if (r.kind == CoreRootRef::Param && r.index < (int)argroots.size())
+                        roots = Union(roots, argroots[r.index]);
+                    else if (r.kind == CoreRootRef::Global || r.kind == CoreRootRef::Static)
+                        roots = Union(roots, { r });
+                }
+            out = Union(out, roots);
+            if (resultRoots) resultRoots->push_back(std::move(roots));
+        }
         return out;
     }
 };

@@ -459,7 +459,7 @@ private theorem LS.DenseDefinitions.modifyNoNewDefs {ls : LS} {b : BlockId}
   rw [LS.DenseDefinitions, heq]
   exact h
 
-private theorem LS.insts.modifyPush {ls : LS} {b : BlockId} (hb : b < ls.blocks.size)
+theorem LS.insts.modifyPush {ls : LS} {b : BlockId} (hb : b < ls.blocks.size)
     (i : Inst) :
     List.Perm
       ({ ls with blocks := ls.blocks.modify b fun blk =>
@@ -1068,13 +1068,35 @@ theorem lowerPlace_field_symbolRun_of {le : LEnv} {scopeCount : Nat}
     simp [Op.origin] at ho
   · simp [Op.SymbolRefsValid]
 
+theorem LS.SymbolRun.recordRead {le : LEnv} {scopeCount : Nat} {ls : LS}
+    {action : B ValueId} (place : Goose.Core.Place)
+    (source : LS.SymbolRun le scopeCount ls (fun value => [value]) action) :
+    LS.SymbolRun le scopeCount ls (fun value => [value]) (do
+      let value ← action
+      recordReadValueRootRecipe value place
+      pure value) := by
+  intro wf current result after run
+  obtain ⟨value, mid, firstRun, rest⟩ := bind_eq.mp run
+  obtain ⟨unit, recorded, recordRun, pureRun⟩ := bind_eq.mp rest
+  obtain ⟨rfl, rfl⟩ := pure_eq.mp pureRun
+  have preserved := source wf current value mid firstRun
+  cases place <;> simp only [recordReadValueRootRecipe_run] at recordRun
+  all_goals try split at recordRun
+  all_goals try rw [recordValueRootSource_run] at recordRun
+  all_goals obtain ⟨rfl, rfl⟩ := Prod.mk.inj recordRun
+  all_goals exact ⟨⟨preserved.1.definitions, preserved.1.instructions⟩, preserved.2⟩
+
 theorem lowerExpr_read_var_symbolRun {le : LEnv} {scopeCount : Nat} (x : Goose.Core.VarId)
     {ls : LS} (hx : x < le.slots.size) :
     LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr (.read (.var x))) := by
   change LS.SymbolRun le scopeCount ls (fun v => [v])
-    (do let r ← lowerPlace (.var x); emitDef (.load r))
+    (do let r ← lowerPlace (.var x)
+        let value ← emitDef (.load r)
+        recordReadValueRootRecipe value (.var x)
+        pure value)
   apply LS.SymbolRun.bind (lowerPlace_var_symbolRun x hx)
   intro r ls hls hc hr
+  apply LS.SymbolRun.recordRead (.var x)
   apply LS.SymbolRun.emitDef
   · intro live u hu
     simp [Op.uses] at hu
@@ -1089,9 +1111,13 @@ theorem lowerExpr_read_symbolRun_of {le : LEnv} {scopeCount : Nat}
     (hplace : LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerPlace p)) :
     LS.SymbolRun le scopeCount ls (fun v => [v]) (lowerExpr (.read p)) := by
   change LS.SymbolRun le scopeCount ls (fun v => [v])
-    (do let r ← lowerPlace p; emitDef (.load r))
+    (do let r ← lowerPlace p
+        let value ← emitDef (.load r)
+        recordReadValueRootRecipe value p
+        pure value)
   apply LS.SymbolRun.bind hplace
   intro r ls1 hls1 hc1 hr
+  apply LS.SymbolRun.recordRead p
   apply LS.SymbolRun.emitDef
   · intro live u hu
     simp [Op.uses] at hu
@@ -1349,15 +1375,15 @@ theorem LS.symbolWF_initState (le : LEnv) (scopeCount : Nat) :
   intro i hi
   simp [LS.insts, initState] at hi
 
-theorem lowerImplAt_start_symbols (m : Goose.Core.Module) (impl : Goose.Core.Impl)
-    (implId scopeCount : Nat) :
-    let le := lowerEnv m impl.vars
+theorem lowerImpl_start_symbols (m : Goose.Core.Module) (impl : Goose.Core.Impl)
+    (scopeCount : Nat) :
+    let le := lowerEnv m impl.vars impl.results.toList
     let start := Goose.Lower.newBlock (impl.params.toList.map fun p => .data (tyOfVar impl p.var))
       le initState
     LS.SymbolWF le scopeCount
       { start.2 with cur := some start.1.1 } := by
   dsimp
-  exact (LS.symbolWF_initState (lowerEnv m impl.vars) scopeCount).newBlockCur
+  exact (LS.symbolWF_initState (lowerEnv m impl.vars impl.results.toList) scopeCount).newBlockCur
 
 theorem finishBlocks_defs (blocks : Array BlockB) :
     (finishBlocks blocks).toList.flatMap GIR.Block.defs =
@@ -1431,15 +1457,15 @@ theorem Core.tyExpr_bin_success_origin_bound {env : Core.TEnv} {op : Core.BinOp}
     cases h
 
 theorem lowerEnv_slots_size (m : Core.Module) (vars : Array Core.LocalVar) :
-    (lowerEnv m vars).slots.size = vars.size := by
+    (lowerEnv m vars []).slots.size = vars.size := by
   simp [lowerEnv]
 
 theorem lowerEnv_globals_size (m : Core.Module) (vars : Array Core.LocalVar) :
-    (lowerEnv m vars).globals.size = m.globals.size := by
+    (lowerEnv m vars []).globals.size = m.globals.size := by
   simp [lowerEnv]
 
 theorem lowerEnv_sigs_size (m : Core.Module) (vars : Array Core.LocalVar) :
-    (lowerEnv m vars).sigs.size = m.impls.size := by
+    (lowerEnv m vars []).sigs.size = m.contexts.size := by
   simp [lowerEnv]
 
 theorem lowerPlace_var_symbolRun_of_tyPlace {le : LEnv} {scopeCount : Nat}
@@ -1456,7 +1482,7 @@ theorem lowerPlace_var_symbolRun_of_tyPlace_lowerEnv {m : Core.Module}
     {x : Core.VarId} {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
     (hvars : env.vars = vars)
     (h : (Core.tyPlace env (.var x)).run fuel = .ok (info, fuel')) {ls : LS} :
-    LS.SymbolRun (lowerEnv m vars) scopeCount ls (fun v => [v]) (lowerPlace (.var x)) := by
+    LS.SymbolRun (lowerEnv m vars []) scopeCount ls (fun v => [v]) (lowerPlace (.var x)) := by
   apply lowerPlace_var_symbolRun_of_tyPlace h
   simp [lowerEnv, hvars]
 
@@ -1473,7 +1499,7 @@ theorem lowerPlace_global_symbolRun_of_tyPlace_lowerEnv {m : Core.Module}
     {g : Core.GlobalId} {fuel : Nat} {info : Core.PlaceInfo} {fuel' : Nat}
     (hlimit : env.globalLimit ≤ m.globals.size)
     (h : (Core.tyPlace env (.global g)).run fuel = .ok (info, fuel')) {ls : LS} :
-    LS.SymbolRun (lowerEnv m vars) scopeCount ls (fun v => [v]) (lowerPlace (.global g)) := by
+    LS.SymbolRun (lowerEnv m vars []) scopeCount ls (fun v => [v]) (lowerPlace (.global g)) := by
   apply lowerPlace_global_symbolRun_of_tyPlace h
   simpa [lowerEnv] using hlimit
 
@@ -1628,6 +1654,9 @@ def HasTypedView (env : Core.TEnv) (v : Core.View) : Prop :=
 
 def HasTypedExpr (env : Core.TEnv) (e : Core.Expr) : Prop :=
   ∃ fuel ty fuel', (Core.tyExpr env e).run fuel = .ok (ty, fuel')
+
+def HasTypedBlock (env : Core.TEnv) (b : Core.Block) : Prop :=
+  ∃ fuel ty fuel', (Core.tyBlock env [] b).run fuel = .ok (ty, fuel')
 
 mutual
   inductive V001Place (env : Core.TEnv) : Core.Place → Prop where

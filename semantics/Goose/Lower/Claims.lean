@@ -1,4 +1,4 @@
-import Goose.Lower.Sim
+import Goose.Lower.Scope
 
 namespace Goose.Lower
 
@@ -6,16 +6,6 @@ open Goose.Core
 open Goose.GIR (ValueId BlockId SlotId ScopeId FnId VTy Bnd PrintPart Op Effect Term Inst Pt instAt
   instsAt runAt Frame FnCtx RVal Func Slot)
 open Goose.GIR
-
-theorem checkCapacityAtOrg_some (l : Loc) (count : Nat) (org : OriginId) :
-    checkCapacityAtOrg l count (some org) = checkAppendCapacity l count org := by
-  funext s
-  cases hread : readLoc l s with
-  | stop err state => simp [checkCapacityAtOrg, checkAppendCapacity, hread, bind_apply]
-  | ok value state =>
-    cases value <;>
-      simp [checkCapacityAtOrg, checkAppendCapacity, hread, abortAtOrg, abortAt,
-        M.stop, bind_apply, pure_apply, M.instMonad, M.bind', M.pure']
 
 /-! ### The fragment -/
 
@@ -33,7 +23,8 @@ def exprOk : Expr → Bool
   | .and a b | .or a b => exprOk a && exprOk b
   | .not e => exprOk e
   | .conv _ _ e _ => exprOk e
-  | .call .. | .structLit .. => false
+  | .call .. => false
+  | .structLit _ es => exprsOk es
   | .push p e _ => placeOk p && exprOk e
   | .pop p _ => placeOk p
   | .ifE c t f => exprOk c && blockOk t && blockOk f
@@ -46,7 +37,7 @@ def exprsOk : List Expr → Bool
   | e :: es => exprOk e && exprsOk es
 
 def placeOk : Place → Bool
-  | .field .. => false
+  | .field owner _ => placeOk owner
   | .var _ | .global _ => true
   | .deref e => exprOk e
   | .elem v i _ => viewOk v && exprOk i
@@ -72,10 +63,10 @@ def printOk : List PrintArg → Bool
   | .expr e :: rest => exprOk e && printOk rest
 
 def stmtOk : Stmt → Bool
-  | .letS _ e _ => exprOk e
+  | .letS .. => false
   | .assign p e _ => placeOk p && exprOk e
   | .assignOp _ p e _ => placeOk p && exprOk e
-  | .rebind _ e _ => exprOk e
+  | .rebind .. => false
   | .expr e _ => exprOk e
   | .append p v _ => placeOk p && viewOk v
   | .popN p e _ => placeOk p && exprOk e
@@ -83,7 +74,8 @@ def stmtOk : Stmt → Bool
   | .clear p _ => placeOk p
   | .assignWhole p e _ => placeOk p && exprOk e
   | .ifS c t f _ => exprOk c && blockOk t && (match f with | none => true | some b => blockOk b)
-  | .while .. | .forRange .. | .forEach .. | .ret .. | .brk _ | .cont _ => false
+  | .while c body _ => exprOk c && blockOk body
+  | .forRange .. | .forEach .. | .ret .. | .brk _ | .cont _ => false
   | .print args _ => printOk args
   | .assertS e _ => exprOk e
   | .abort .. => true
@@ -95,76 +87,6 @@ set_option hygiene false in
 macro "okpf" : tactic => `(tactic| first | assumption | (simp only [exprOk, exprsOk, placeOk, viewOk, boundOk, blockOk, stmtsOk, printOk, stmtOk, Bool.and_eq_true, Bool.true_and, Bool.and_true] at hok; first | exact hok | exact hok.1 | exact hok.2 | exact hok.1.1 | exact hok.1.2 | exact hok.2.1 | exact hok.2.2 | exact hok.1.1.1 | exact hok.2.2.1 | exact hok.2.2.2 | exact hok.2.1.1 | exact hok.2.1.2 | exact hok.1.2.1 | exact hok.1.2.2))
 
 /-! ### Combining the results of fragments -/
-
-theorem Post.init {cfg : Cfg} {env : Env} {cx : FnCtx} {ls : LS} {fr : Frame} {pt : Pt}
-    (hrel : Rel cfg env cx fr ls) (hpp : ls.pp = some pt) : Post cfg env cx ls fr ls fr pt [] :=
-  ⟨hpp, by simp, by simp, Nat.le_refl _, Same.refl _ _, hrel⟩
-
-/-- A second fragment after a first. -/
-theorem Post.comp {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls1 ls2 : LS} {fr fr1 fr2 : Frame}
-    {pt1 pt2 : Pt} {c1 c2 : List (ValueId × RVal)}
-    (h1 : Post cfg env cx ls fr ls1 fr1 pt1 c1) (h2 : Post cfg env cx ls1 fr1 ls2 fr2 pt2 c2) :
-    Post cfg env cx ls fr ls2 fr2 pt2 (c1 ++ c2) := by
-  refine ⟨h2.pp, fun p hp => ?_, fun p hp => ?_, Nat.le_trans h1.mono h2.mono,
-    h1.same.trans h2.same h1.mono, h2.rel⟩
-  · rcases List.mem_append.mp hp with hp | hp
-    · rw [h2.same p.1 (h1.lt p hp)]
-      exact h1.has p hp
-    · exact h2.has p hp
-  · rcases List.mem_append.mp hp with hp | hp
-    · exact Nat.lt_of_lt_of_le (h1.lt p hp) h2.mono
-    · exact h2.lt p hp
-
-theorem Post.sub {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls' : LS} {fr fr' : Frame} {pt : Pt}
-    {cells cells' : List (ValueId × RVal)} (h : Post cfg env cx ls fr ls' fr' pt cells)
-    (hsub : ∀ p ∈ cells', p ∈ cells) : Post cfg env cx ls fr ls' fr' pt cells' :=
-  ⟨h.pp, fun p hp => h.has p (hsub p hp), fun p hp => h.lt p (hsub p hp), h.mono, h.same, h.rel⟩
-
-theorem Post.has_mem {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls' : LS} {fr fr' : Frame} {pt : Pt}
-    {cells : List (ValueId × RVal)} (h : Post cfg env cx ls fr ls' fr' pt cells)
-    {i : ValueId} {x : RVal} (hm : (i, x) ∈ cells) : fr'.vals[i]? = some x := h.has (i, x) hm
-
-/-- A defining instruction whose operation computes what `c` does, after a fragment. -/
-theorem leaf_def {cfg : Cfg} {env : Env} {cx : FnCtx} {ls lsk ls1 : LS} {fr frk : Frame}
-    {ptk : Pt} {cellsk : List (ValueId × RVal)}
-    (hP : Post cfg env cx ls fr lsk frk ptk cellsk) {op : Op} {le : LEnv} {r : ValueId}
-    (h : emitDef op le lsk = (r, ls1)) (hext : ExtT ls1 cx.fn.blocks)
-    (hnc : ∀ f a o, op ≠ .call f a o) {α : Type} {c : M α} (inj : α → RVal)
-    (hx : execPure cx frk op = c >>= fun a => pure (inj a)) :
-    SimG cx ptk frk c (fun a pt' fr' => Post cfg env cx ls fr ls1 fr' pt' [(r, inj a)]) := by
-  have hi : instAt cx.fn ptk = some (.def r op) := (Post.def_leaf hP h hext (.val .unit)).2
-  refine (SimG.def_step (r := r) inj hi hnc hx).mono fun a pt' fr' ⟨hpt, hfr⟩ => ?_
-  subst hpt; subst hfr
-  exact (Post.def_leaf hP h hext (inj a)).1
-
-/-- A defining instruction after a fragment, keeping the cells of the fragment. -/
-theorem leaf_def_keep {cfg : Cfg} {env : Env} {cx : FnCtx} {ls lsk ls1 : LS} {fr frk : Frame}
-    {ptk : Pt} {cellsk : List (ValueId × RVal)}
-    (hP : Post cfg env cx ls fr lsk frk ptk cellsk) {op : Op} {le : LEnv} {r : ValueId}
-    (h : emitDef op le lsk = (r, ls1)) (hext : ExtT ls1 cx.fn.blocks)
-    (hnc : ∀ f a o, op ≠ .call f a o) {α : Type} {c : M α} (inj : α → RVal)
-    (hx : execPure cx frk op = c >>= fun a => pure (inj a)) :
-    SimG cx ptk frk c (fun a pt' fr' => Post cfg env cx ls fr ls1 fr' pt' ((r, inj a) :: cellsk)) := by
-  have hi : instAt cx.fn ptk = some (.def r op) := (Post.def_leaf_keep hP h hext (.val .unit)).2
-  refine (SimG.def_step (r := r) inj hi hnc hx).mono fun a pt' fr' ⟨hpt, hfr⟩ => ?_
-  subst hpt; subst hfr
-  exact (Post.def_leaf_keep hP h hext (inj a)).1
-
-theorem slots_get {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls : LS}
-    (hrel : Rel cfg env cx fr ls) (x : Nat) :
-    cx.fn.slots[x]? = env.vars[x]?.map fun lv => (⟨lv.ty, lv.kind, lv.scope, x⟩ : Slot) := by
-  rw [hrel.slots]
-  simp [Array.getElem?_mapIdx]
-
-theorem slotRoot_eq {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls : LS}
-    (hrel : Rel cfg env cx fr ls) (x : Nat) : slotRoot cx.fn fr x = rootOf env x := by
-  unfold slotRoot rootOf
-  rw [slots_get hrel x]
-  cases env.vars[x]? with
-  | none => rfl
-  | some lv =>
-    simp only [Option.map_some, hrel.scopes, hrel.act]
-    cases List.lookup lv.scope env.scopes <;> rfl
 
 /-! ### Claims -/
 
@@ -190,11 +112,6 @@ def ViewClaim (n : Nat) (v : View) : Prop :=
       Post cfg env cx ls fr ls' fr' pt' [(r, .view vw)])
 
 /-- What a lowered bound stands for. -/
-def BndSpec (len : Nat) (dflt : Int) : Bnd → Int → List (ValueId × RVal) → Prop
-  | .omitted, k, cells => k = dflt ∧ cells = []
-  | .val v, k, cells => ∃ t, cells = [(v, .val (.int t k))]
-  | .fromEnd v, k, cells => ∃ t kk, k = (len : Int) - kk ∧ cells = [(v, .val (.int t kk))]
-
 def BoundClaim (n : Nat) (bd : Bound) : Prop :=
   boundOk bd = true → ∀ (le : LEnv) (ls : LS) (bnd : Bnd) (ls' : LS) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (fr : Frame) (len : Nat) (dflt : Int), lowerBound bd le ls = (bnd, ls') → ls.pp = some pt →
@@ -320,6 +237,19 @@ theorem placeClaim_deref (n : Nat) (ihe : ∀ e, ExprClaim n e) (e : Expr) : Pla
   subst hva
   exact SimG.ret P1
 
+theorem placeClaim_field (n : Nat) (ihp : ∀ p, PlaceClaim n p)
+    (owner : Place) (index : Nat) : PlaceClaim (n + 1) (.field owner index) := by
+  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+  simp only [lowerPlace, bind_eq] at hlow
+  obtain ⟨address, middle, hplace, hfield⟩ := hlow
+  have hextMiddle := hext.of_adv (adv_emitDef hfield)
+  simp only [evalPlace]
+  refine SimG.bind (ihp owner (by okpf) le ls address middle pt cfg env cx fr
+    hplace hpp hextMiddle hrel) fun location pt' fr' P => ?_
+  have hcell : fr'.vals[address]? = some (.val (.ref location)) := P.has (address, _) (by simp)
+  refine leaf_def P hfield hext (by simp) (fun l => RVal.val (.ref l)) ?_
+  simp only [execPure, getVal_of hcell, Core.expectRef, pure_bind]
+
 theorem placeClaim_elem (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihv : ∀ v, ViewClaim n v)
     (v : View) (i : Expr) (org : OriginId) : PlaceClaim (n + 1) (.elem v i org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
@@ -366,20 +296,6 @@ theorem viewClaim_val (n : Nat) (ihe : ∀ e, ExprClaim n e) (e : Expr) : ViewCl
   refine leaf_def P1 h2 hext (by simp) RVal.view ?_
   simp only [execPure, getVal_of hc, Goose.Core.expectSlice, bind_assoc, pure_bind]
 
-theorem evalBnd_of_spec {fr : Frame} {len : Nat} {dflt : Int} {bnd : Bnd} {k : Int}
-    {cells : List (ValueId × RVal)} (hs : BndSpec len dflt bnd k cells)
-    (hc : ∀ p ∈ cells, fr.vals[p.1]? = some p.2) : evalBnd fr len dflt bnd = pure k := by
-  cases bnd with
-  | omitted => obtain ⟨rfl, -⟩ := hs; rfl
-  | val v =>
-    obtain ⟨t, rfl⟩ := hs
-    have := hc (v, .val (.int t k)) (by simp)
-    simp only [evalBnd, getVal_of this, Goose.Core.expectInt, pure_bind]
-  | fromEnd v =>
-    obtain ⟨t, kk, rfl, rfl⟩ := hs
-    have := hc (v, .val (.int t kk)) (by simp)
-    simp only [evalBnd, getVal_of this, Goose.Core.expectInt, pure_bind]
-
 theorem boundClaim_omitted (n : Nat) : BoundClaim n .omitted := by
   intro hok le ls bnd ls' pt cfg env cx fr len dflt hlow hpp hext hrel
   simp only [lowerBound, pure_run] at hlow
@@ -421,24 +337,68 @@ theorem exprClaim_read (n : Nat) (ihp : ∀ p, PlaceClaim n p) (p : Place) : Exp
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerExpr, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, h2⟩ := hlow
-  have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef h2)
+  rcases h2 with ⟨value, ls2, hload, unitResult, ls3, hrecord, hreturn⟩
+  cases unitResult
+  rw [pure_run] at hreturn
+  rcases Prod.mk.inj hreturn with ⟨rfl, rfl⟩
+  have hadvRecord : ls2.Adv ls3 :=
+    advB_recordReadValueRootRecipe value p le ls2 () ls3 hrecord
+  have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv ((adv_emitDef hload).trans hadvRecord)
+  have hext2 : ExtT ls2 cx.fn.blocks := hext.of_adv hadvRecord
+  have hrecordState : (recordReadValueRootRecipe value p le ls2).2 = ls3 :=
+    congrArg Prod.snd hrecord
   simp only [evalExpr]
   refine SimG.bind (ihp p (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
   have hc : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)
-  refine leaf_def P1 h2 hext (by simp) RVal.val ?_
-  simp only [execPure, getVal_of hc, Goose.Core.expectRef, bind_assoc, pure_bind]
+  refine SimG.mono (leaf_def P1 hload hext2 (by simp) RVal.val ?_) fun a pt' fr' hpost => ?_
+  · simp only [execPure, getVal_of hc, Goose.Core.expectRef, bind_assoc, pure_bind]
+  · cases hpost with
+    | mk hpp' hhas hlt hmono hsame hrel' =>
+      have hblocks : ls3.blocks = ls2.blocks := by
+        rw [← hrecordState]
+        cases p with
+        | var variableId =>
+          by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+            simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+        | _ => simp [recordReadValueRootRecipe_run]
+      have hvals : ls3.vals = ls2.vals := by
+        rw [← hrecordState]
+        cases p with
+        | var variableId =>
+          by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+            simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+        | _ => simp [recordReadValueRootRecipe_run]
+      have hcur : ls3.cur = ls2.cur := by
+        rw [← hrecordState]
+        cases p with
+        | var variableId =>
+          by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+            simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+        | _ => simp [recordReadValueRootRecipe_run]
+      have hstack : ls3.stack = ls2.stack := by
+        rw [← hrecordState]
+        cases p with
+        | var variableId =>
+          by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+            simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+        | _ => simp [recordReadValueRootRecipe_run]
+      refine ⟨by simpa [LS.pp, hblocks, hcur] using hpp', hhas, ?_, ?_, hsame,
+        hrel'.stack_eq hstack⟩
+      simpa [hvals] using hlt
+      simpa [hvals] using hmono
 
 theorem exprClaim_ref (n : Nat) (ihp : ∀ p, PlaceClaim n p) (m : Mutability) (p : Place) :
     ExprClaim (n + 1) (.ref m p) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
   simp only [lowerExpr, bind_eq] at hlow
   obtain ⟨rp, ls1, h1, h2⟩ := hlow
-  rcases freezeTo_cases h2 with ⟨hr, hls⟩ | ⟨hf⟩
+  rcases borrowTo_ref_cases h2 with ⟨hr, hls⟩ | hf | hf
   · subst hr; subst hls
     simp only [evalExpr]
     refine SimG.bind (ihp p (by okpf) le ls r ls' pt cfg env cx fr h1 hpp hext hrel) fun l pt1 fr1 P1 => ?_
     exact SimG.ret P1
-  · have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef hf)
+  all_goals
+    have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitDef hf)
     simp only [evalExpr]
     refine SimG.bind (ihp p (by okpf) le ls rp ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun l pt1 fr1 P1 => ?_
     have hc : fr1.vals[rp]? = some (.val (.ref l)) := P1.has (rp, _) (by simp)
@@ -566,22 +526,6 @@ theorem exprClaim_pop (n : Nat) (ihp : ∀ p, PlaceClaim n p) (owner : Place)
 /-! ### Lists of expressions -/
 
 /-- The cells that hold the values of a list of lowered expressions. -/
-def cellsOf : List ValueId → List Val → List (ValueId × RVal)
-  | r :: rs, v :: vs => (r, .val v) :: cellsOf rs vs
-  | _, _ => []
-
-theorem mapList_getVal_cells {fr : Frame} : ∀ {rs : List ValueId} {vs : List Val},
-    rs.length = vs.length → (∀ p ∈ cellsOf rs vs, fr.vals[p.1]? = some p.2) →
-    mapList (getVal fr) rs = pure vs
-  | [], [], _, _ => rfl
-  | r :: rs, v :: vs, hl, hc => by
-    have h1 : fr.vals[r]? = some (.val v) := hc (r, .val v) (by simp [cellsOf])
-    have h2 := mapList_getVal_cells (fr := fr) (rs := rs) (vs := vs) (by simpa using hl)
-      (fun p hp => hc p (by simp [cellsOf, hp]))
-    simp only [mapList, getVal_of h1, pure_bind, h2]
-  | [], _ :: _, hl, _ => absurd hl (by simp)
-  | _ :: _, [], hl, _ => absurd hl (by simp)
-
 def ExprsClaim (n : Nat) (es : List Expr) : Prop :=
   exprsOk es = true → ∀ (le : LEnv) (ls : LS) (rs : List ValueId) (ls' : LS) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (fr : Frame), lowerExprs es le ls = (rs, ls') → ls.pp = some pt → ExtT ls' cx.fn.blocks →
@@ -620,6 +564,24 @@ theorem exprClaim_arrLit (n : Nat) (ihes : ∀ es, ExprsClaim n es) (t : Ty) (es
   have hc := mapList_getVal_cells (fr := fr1) hlen (fun p hp => P1.has p hp)
   refine leaf_def P1 h2 hext (by simp) RVal.val ?_
   simp only [execPure, hc, pure_bind, bind_assoc]
+
+theorem exprClaim_structLit (n : Nat) (ihes : ∀ es, ExprsClaim n es) (ty : Ty) (es : List Expr) :
+    ExprClaim (n + 1) (.structLit ty es) := by
+  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+  simp only [lowerExpr, bind_eq] at hlow
+  obtain ⟨ids, middle, hexprs, hrecord⟩ := hlow
+  have hextMiddle := hext.of_adv (adv_emitDef hrecord)
+  cases ty with
+  | structT id args =>
+    simp only [evalExpr]
+    refine SimG.bind (ihes es (by okpf) le ls ids middle pt cfg env cx fr
+      hexprs hpp hextMiddle hrel) fun values pt' fr' ⟨hlen, P⟩ => ?_
+    have hread := mapList_getVal_cells (fr := fr') hlen P.has
+    refine leaf_def P hrecord hext (by simp) RVal.val ?_
+    simp only [execPure, hread, pure_bind, bind_assoc]
+  | _ =>
+    simp only [evalExpr]
+    exact SimG.of_fault
 
 theorem exprClaim_fill (n : Nat) (ihe : ∀ e, ExprClaim n e) (t : Ty) (a : Expr) :
     ExprClaim (n + 1) (.fill t a) := by
@@ -805,51 +767,12 @@ theorem exprClaim_or (n : Nat) (ihe : ∀ e, ExprClaim n e) (a b : Expr) : ExprC
 
 /-! ### Statements -/
 
-/-- An effect after a fragment. -/
-theorem Post.eff_leaf {cfg : Cfg} {env : Env} {cx : FnCtx} {ls lsk ls1 : LS} {fr frk : Frame}
-    {ptk : Pt} {cellsk : List (ValueId × RVal)}
-    (hP : Post cfg env cx ls fr lsk frk ptk cellsk) {e : Effect} {le : LEnv}
-    (h : emitEffect e le lsk = ((), ls1)) (hext : ExtT ls1 cx.fn.blocks) :
-    Post cfg env cx ls fr ls1 frk (ptk.1, ptk.2 + 1) [] ∧ instAt cx.fn ptk = some (.eff e) := by
-  obtain ⟨hv, hst, hpp, hi⟩ := emitEffect_facts h hP.pp hext
-  have hm := hP.mono
-  exact ⟨⟨hpp, by simp, by simp, by nat_omega, hP.same, hP.rel.stack_eq hst⟩, hi⟩
-
-/-- An effect that computes what `c0` does, leaving the frame alone, after a fragment, and then
-a Core result. -/
-theorem leaf_eff {cfg : Cfg} {env : Env} {cx : FnCtx} {ls lsk ls1 : LS} {fr frk : Frame}
-    {ptk : Pt} {cellsk : List (ValueId × RVal)}
-    (hP : Post cfg env cx ls fr lsk frk ptk cellsk) {e : Effect} {le : LEnv}
-    (h : emitEffect e le lsk = ((), ls1)) (hext : ExtT ls1 cx.fn.blocks)
-    {α β : Type} {c : M β} {c0 : M α} (a0 : β) (hc : c = c0 >>= fun _ => pure a0)
-    (hx : execEff cx.fn frk e = c0 >>= fun _ => pure frk) :
-    SimG cx ptk frk c (fun a pt' fr' => a = a0 ∧ Post cfg env cx ls fr ls1 fr' pt' []) := by
-  subst hc
-  obtain ⟨hP', hi⟩ := Post.eff_leaf hP h hext
-  refine SimG.bind (SimG.eff_step (fun _ => frk) hi hx) fun _ pt' fr' ⟨hpt, hfr⟩ => ?_
-  subst hpt; subst hfr
-  exact SimG.ret ⟨rfl, hP'⟩
-
 def StmtClaim (n : Nat) (lc : Option LoopCtx) (s : Stmt) : Prop :=
   stmtOk s = true → ∀ (le : LEnv) (ls : LS) (r : Unit) (ls' : LS) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
     (fr : Frame), lowerStmt lc s le ls = (r, ls') → ls.pp = some pt → ExtT ls' cx.fn.blocks →
     Rel cfg env cx fr ls →
     SimG cx pt fr (execStmt n cfg env s) (fun flow pt' fr' =>
       flow = Flow.normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' [])
-
-theorem stmtClaim_let (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e : Expr) (org : OriginId) :
-    StmtClaim (n + 1) lc (.letS x e org) := by
-  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
-  simp only [lowerStmt, bind_eq] at hlow
-  obtain ⟨v, ls1, h1, h2⟩ := hlow
-  have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv (adv_emitEffect h2)
-  simp only [execStmt]
-  refine SimG.bind (ihe e (by okpf) le ls v ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun va pt1 fr1 P1 => ?_
-  have hc : fr1.vals[v]? = some (.val va) := P1.has (v, _) (by simp)
-  have hx : execEff cx.fn fr1 (.slotInit x v (some org)) =
-      (rootOf env x >>= fun rt => bindRoot rt va) >>= fun _ => pure fr1 := by
-    simp only [execEff, slotRoot_eq P1.rel, getVal_of hc, bind_assoc, pure_bind]
-  exact leaf_eff P1 h2 hext (Flow.normal .unit) (by simp only [bind_assoc]) hx
 
 theorem stmtClaim_assign (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, PlaceClaim n p) (p : Place)
     (e : Expr) (org : OriginId) : StmtClaim (n + 1) lc (.assign p e org) := by
@@ -867,27 +790,6 @@ theorem stmtClaim_assign (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim
   have hx : execEff cx.fn fr2 (.store rp v (some org)) = writeLoc l va >>= fun _ => pure fr2 := by
     simp only [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef, bind_assoc, pure_bind]
   exact leaf_eff P12 h3 hext (Flow.normal .unit) rfl hx
-
-theorem stmtClaim_rebind (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (x : VarId) (e : Expr) (org : OriginId) :
-    StmtClaim (n + 1) lc (.rebind x e org) := by
-  intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
-  simp only [lowerStmt, bind_eq] at hlow
-  obtain ⟨v, ls1, h1, rs, ls2, h2, h3⟩ := hlow
-  have hext2 : ExtT ls2 cx.fn.blocks := hext.of_adv (adv_emitEffect h3)
-  have hext1 : ExtT ls1 cx.fn.blocks := hext2.of_adv (adv_emitDef h2)
-  simp only [execStmt]
-  refine SimG.bind (ihe e (by okpf) le ls v ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun va pt1 fr1 P1 => ?_
-  rw [show (rootOf env x >>= fun rt => writeLoc ⟨rt, []⟩ va >>= fun _ => pure (Flow.normal Val.unit)) =
-    ((rootOf env x >>= fun rt => pure (Loc.mk rt [])) >>= fun l => writeLoc l va >>= fun _ =>
-      pure (Flow.normal Val.unit)) by simp [bind_assoc]]
-  refine SimG.bind (leaf_def_keep P1 h2 hext2 (by simp) (fun l => RVal.val (.ref l)) ?_)
-    fun l pt2 fr2 P2 => ?_
-  · simp only [execPure, slotRoot_eq P1.rel, bind_assoc, pure_bind]
-  have hl : fr2.vals[rs]? = some (.val (.ref l)) := P2.has (rs, _) (by simp)
-  have hv : fr2.vals[v]? = some (.val va) := P2.has (v, _) (by simp)
-  have hx : execEff cx.fn fr2 (.store rs v (some org)) = writeLoc l va >>= fun _ => pure fr2 := by
-    simp only [execEff, getVal_of hl, getVal_of hv, Goose.Core.expectRef, bind_assoc, pure_bind]
-  exact leaf_eff P2 h3 hext (Flow.normal .unit) rfl hx
 
 theorem stmtClaim_assignOp (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (ihp : ∀ p, PlaceClaim n p)
     (op : BinOp) (p : Place) (e : Expr) (org : OriginId) : StmtClaim (n + 1) lc (.assignOp op p e org) := by
@@ -1388,107 +1290,6 @@ theorem stmtsClaim_succ (n : Nat) (lc : Option LoopCtx) (ihs : ∀ s, StmtClaim 
 
 /-! ### Blocks -/
 
-theorem releaseSlots_eq {fn : Func} {vars : Array LocalVar}
-    (hs : fn.slots = vars.mapIdx fun i lv => (⟨lv.ty, lv.kind, lv.scope, i⟩ : Slot))
-    (act : ActId) (sc : Nat) (si : ScopeInst) :
-    ∀ (n : Nat) (st : Store), releaseSlots fn act sc si n st = releaseVars vars act sc si n st
-  | 0, st => rfl
-  | n + 1, st => by
-    simp only [releaseSlots, releaseVars, hs, Array.getElem?_mapIdx]
-    cases vars[n]? with
-    | none => exact releaseSlots_eq hs act sc si n st
-    | some lv => simpa using releaseSlots_eq hs act sc si n _
-
-theorem releaseScope_eq {cfg : Cfg} {env : Env} {cx : FnCtx} {fr : Frame} {ls : LS}
-    (hrel : Rel cfg env cx fr ls) (sc : Nat) (si : ScopeInst) :
-    GIR.releaseScope cx.fn fr.act sc si = Core.releaseScope env sc si := by
-  funext s
-  have hsz : cx.fn.slots.size = env.vars.size := by rw [hrel.slots]; simp
-  simp only [GIR.releaseScope, Core.releaseScope, hrel.act, hsz]
-  rw [releaseSlots_eq hrel.slots]
-
-theorem block_enter {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls1 : LS} {fr : Frame} {pt : Pt}
-    {le : LEnv} {sc : ScopeId} (hpp : ls.pp = some pt) (h : emitEffect (.enter sc) le ls = ((), ls1))
-    (hext : ExtT ls1 cx.fn.blocks) (hrel : Rel cfg env cx fr ls) :
-    SimG cx pt fr freshScope (fun si pt1 fr1 =>
-      ls1.pp = some pt1 ∧ ls1.vals.size = ls.vals.size ∧ fr1.vals = fr.vals ∧
-      Rel cfg { env with scopes := (sc, si) :: env.scopes } cx fr1 { ls1 with stack := sc :: ls1.stack }) := by
-  obtain ⟨hv, hst, hpp1, hi⟩ := emitEffect_facts h hpp hext
-  have hx : execEff cx.fn fr (.enter sc) =
-      freshScope >>= fun si => pure ({ fr with scopes := (sc, si) :: fr.scopes } : Frame) := rfl
-  refine (SimG.eff_step (fun si => { fr with scopes := (sc, si) :: fr.scopes }) hi hx).mono
-    fun si pt1 fr1 ⟨hpt, hfr⟩ => ?_
-  subst hpt; subst hfr
-  refine ⟨hpp1, hv, rfl, ?_⟩
-  exact ⟨hrel.prof, hrel.slots, hrel.act, by simp [hrel.scopes], hrel.depth, by simp [hst, hrel.stack]⟩
-
-theorem block_leave {cfg : Cfg} {env : Env} {cx : FnCtx} {lsk ls_l : LS} {frk : Frame} {ptk : Pt}
-    {le : LEnv} {sc : ScopeId} {si : ScopeInst} (hpp : lsk.pp = some ptk)
-    (h : emitEffect (.leave sc) le lsk = ((), ls_l)) (hext : ExtT ls_l cx.fn.blocks)
-    (hrel : Rel cfg { env with scopes := (sc, si) :: env.scopes } cx frk lsk) :
-    SimG cx ptk frk (Core.releaseScope env sc si) (fun _ pt' fr' =>
-      ls_l.pp = some pt' ∧ ls_l.vals.size = lsk.vals.size ∧ fr'.vals = frk.vals ∧
-      Rel cfg env cx fr' { ls_l with stack := ls_l.stack.drop 1 }) := by
-  obtain ⟨hv, hst, hpp1, hi⟩ := emitEffect_facts h hpp hext
-  have hsc : frk.scopes = (sc, si) :: env.scopes := hrel.scopes
-  have heq := releaseScope_eq hrel sc si
-  have hx : execEff cx.fn frk (.leave sc) =
-      Core.releaseScope env sc si >>= fun _ => pure ({ frk with scopes := env.scopes } : Frame) := by
-    simp only [execEff, hsc, ↓reduceIte]
-    rw [heq]
-    rfl
-  refine (SimG.eff_step (fun _ => { frk with scopes := env.scopes }) hi hx).mono
-    fun u pt1 fr1 ⟨hpt, hfr⟩ => ?_
-  subst hpt; subst hfr
-  refine ⟨hpp1, hv, rfl, ?_⟩
-  refine ⟨hrel.prof, hrel.slots, hrel.act, rfl, hrel.depth, ?_⟩
-  have := hrel.stack
-  simp only [List.map_cons] at this
-  simp [hst, this]
-
-/-- A block's own scope around its statements, and what it does with the flow that ends them. -/
-def coreBlock (n : Nat) (cfg : Cfg) (env : Env) (sc : Nat) (stmts : List Stmt)
-    (vf : Env → Flow → M Flow) : M Flow := do
-  let si ← freshScope
-  let env' : Env := { env with scopes := (sc, si) :: env.scopes }
-  let flow ← execStmts n cfg env' stmts
-  let flow' ← vf env' flow
-  Goose.Core.releaseScope env sc si
-  pure flow'
-
-/-- What a block does with the flow that ends its statements. -/
-def valueFlow (n : Nat) (cfg : Cfg) : Option Expr → Env → Flow → M Flow
-  | some e, env', .normal _ => do pure (Flow.normal (← evalExpr n cfg env' e))
-  | _, _, f => pure f
-
-theorem execBlock_nil (n : Nat) (cfg : Cfg) (env : Env) (sc : Nat) (stmts : List Stmt)
-    (value : Option Expr) :
-    execBlock (n + 1) cfg env [] (.mk sc stmts value) = coreBlock n cfg env sc stmts (valueFlow n cfg value) := by
-  rw [execBlock]
-  simp only [coreBlock, bindAll, pure_bind]
-  congr 1
-  funext si
-  congr 1
-  funext flow
-  congr 1
-  funext flow'
-  cases flow <;> cases value <;> simp [valueFlow]
-
-/-- A post-condition of a fragment run in an inner scope, as one of the whole block. -/
-theorem Post.rescope {cfg : Cfg} {env env' : Env} {cx : FnCtx} {ls lsp lsk ls_f : LS}
-    {fr frp frk fr_f : Frame} {ptk pt : Pt} {cells : List (ValueId × RVal)}
-    (hP : Post cfg env' cx lsp frp lsk frk ptk cells) (hv0 : lsp.vals.size = ls.vals.size)
-    (hfr0 : frp.vals = fr.vals) (hpp : ls_f.pp = some pt) (hv : ls_f.vals.size = lsk.vals.size)
-    (hfr : fr_f.vals = frk.vals) (hrel : Rel cfg env cx fr_f ls_f) :
-    Post cfg env cx ls fr ls_f fr_f pt cells := by
-  refine ⟨hpp, fun p hp => ?_, fun p hp => ?_, ?_, fun i hi => ?_, hrel⟩
-  · rw [hfr]; exact hP.has p hp
-  · rw [hv]; exact hP.lt p hp
-  · have := hP.mono; rw [hv]; omega
-  · have h1 := hP.same i (by omega)
-    show fr_f.vals[i]? = fr.vals[i]?
-    rw [hfr, h1, hfr0]
-
 theorem block_core {n : Nat} {lc : Option LoopCtx} (ihs : ∀ ss, StmtsClaim n lc ss) {sc : ScopeId} {stmts : List Stmt}
     (hokS : stmtsOk stmts = true) {U : Val → Prop}
     {X : B ValueId} {vf : Env → Flow → M Flow} {cells : ValueId → Val → List (ValueId × RVal)}
@@ -1546,9 +1347,6 @@ theorem block_unfold {lc : Option LoopCtx} {sc : ScopeId} {stmts : List Stmt} {v
   rw [pure_run] at hpure
   obtain ⟨hr, rfl⟩ := Prod.mk.inj hpure
   exact ⟨ls1, ls_s, ls_x, ls_l, u3, rx, by simpa using h1, h3, h4, by simpa using h5, hls', hr.symm⟩
-
-def blockCells (blk : Core.Block) (want : Bool) (r : ValueId) (v : Val) : List (ValueId × RVal) :=
-  if blk.value.isSome || want then [(r, .val v)] else []
 
 def BlockClaim (n : Nat) (lc : Option LoopCtx) (want : Bool) (blk : Core.Block) : Prop :=
   blockOk blk = true → ∀ (le : LEnv) (ls : LS) (r : ValueId) (ls' : LS) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
@@ -1637,7 +1435,8 @@ theorem exprClaim_ifE (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihbv : ∀ blk, Bl
   simp only [lowerExpr, bind_eq] at hlow
   obtain ⟨cv, ls1, h1, hw⟩ := hlow
   have hadv_w : ls1.Adv ls' :=
-    advB_ifE_core cv (advB_lowerBlock none [] true t) (advB_lowerBlock none [] true f) _ _ _ _ hw
+    advB_ifE_core cv (sourceBlockScope t)
+      (advB_lowerBlock none [] true t) (advB_lowerBlock none [] true f) _ _ _ _ hw
   have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv hadv_w
   simp only [evalExpr]
   refine SimG.bind (ihe c (by okpf) le ls cv ls1 pt cfg env cx fr h1 hpp hext1 hrel) fun va pt1 fr1 P1 => ?_
@@ -1648,12 +1447,36 @@ theorem exprClaim_ifE (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihbv : ∀ blk, Bl
   rw [whenLive_some _ _ _ hc1] at hw
   simp only [bind_eq] at hw
   obtain ⟨⟨tb, eb⟩, lsf, hf, u2, ls2, hs1, vt, ls3, ha1, endT, ls4, hc4, u5, ls5, hs2, vf, ls6, ha2,
-    endF, ls7, hc7, hj⟩ := hw
+    endF, ls7, hc7, joined, ls8, hj, u8, ls9, hrecipe, hp⟩ := hw
   obtain ⟨e4c, e4⟩ := curBlock_eq hc4
   subst e4
   obtain ⟨e7c, e7⟩ := curBlock_eq hc7
   subst e7
-  have hext6 : ExtT ls7 cx.fn.blocks := hext.of_ext (joinValue_ext hj)
+  rw [pure_run] at hp
+  have hfinal : ls9 = ls' := (Prod.mk.inj hp).2
+  have recipeExt : ls8.Ext ls9 :=
+    (advB_recordValueRootRecipe joined (sourceBlockScope t) _ _ _ _ hrecipe).ext
+  have recipeState := hrecipe
+  rw [recordValueRootRecipe_run] at recipeState
+  have recipeUpdate := (Prod.mk.inj recipeState).2
+  have recipeVals : ls9.vals = ls8.vals := by
+    simpa using (congrArg LS.vals recipeUpdate).symm
+  have recipeStack : ls9.stack = ls8.stack := by
+    simpa using (congrArg LS.stack recipeUpdate).symm
+  have recipePp : ls8.pp = ls9.pp := by
+    simpa [LS.pp] using congrArg LS.pp recipeUpdate
+  have recipeFinal : ls8.Ext ls' := by
+    rw [← hfinal]
+    exact recipeExt
+  have finalVals : ls'.vals = ls8.vals := by
+    rw [← hfinal]
+    exact recipeVals
+  have finalStack : ls'.stack = ls8.stack := by
+    rw [← hfinal]
+    exact recipeStack
+  have joinOutputExt : ExtT ls8 cx.fn.blocks := hext.of_ext recipeFinal
+  have hext6 : ExtT ls7 cx.fn.blocks := by
+    exact joinOutputExt.of_ext (joinValue_ext hj)
   have hadv1 := advB_lowerBlock none [] true t _ _ _ _ ha1
   have hadv2 := advB_lowerBlock none [] true f _ _ _ _ ha2
   obtain ⟨htb, heb, hinst, ⟨Ttb, hTtb, hTtbp⟩, ⟨Teb, hTeb, hTebp⟩, hpp2, hpp5, hst2, hv2, hst3, hst6,
@@ -1698,21 +1521,26 @@ theorem exprClaim_ifE (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihbv : ∀ blk, Bl
     obtain ⟨blk7, hc7', hb7, hp7⟩ := LS.pp_some P7.pp
     have hendF' : endF = some pt7.1 := by rw [e7c]; exact hc7'
     have hlive : endT.isSome ∨ endF.isSome := Or.inr (by rw [hendF']; rfl)
-    obtain ⟨ty, hr, hvj, hstj, hbj, hcj, hTj, hFj⟩ := joinValue_facts hj hext hlive hnd hltT hltF
+    obtain ⟨ty, hr, hvj, hstj, hbj, hcj, hTj, hFj⟩ := joinValue_facts hj joinOutputExt hlive hnd hltT hltF
+    have hresult : r = ls7.vals.size := (Prod.mk.inj hp).1.symm.trans hr
+    have finalPp : ls'.pp = some (ls7.blocks.size, 0) := by
+      rw [← hfinal, ← recipePp]
+      exact LS.pp_eq hcj hbj
     have hinstF := hFj pt7.1 blk7 hendF' hb7
-    obtain ⟨Tjb, hTjb, hTjbp⟩ := hext.params hbj
+    obtain ⟨Tjb, hTjb, hTjbp⟩ := joinOutputExt.params hbj
     have hcell : fr7.vals[vf]? = some (.val v) := P7.has (vf, _) (by simp)
     have hpt7 : pt7 = (pt7.1, blk7.insts.size) := Prod.ext rfl hp7
     have hi7 : instAt cx.fn pt7 = some (.term (.br ls7.blocks.size [vf])) := by
       rw [hpt7]; exact hinstF
     have g2 := goes_br1 hi7 hTjb hTjbp hcell
     refine ⟨(ls7.blocks.size, 0), fr7.set ls7.vals.size (.val v), g2, ?_⟩
-    rw [hr]
+    rw [hresult]
     have hsame : Same ls.vals.size fr fr7 := by
       refine P1.same.trans (P7.same.mono ?_) P1.mono
       rw [e5]; show ls1.vals.size ≤ ls4.vals.size; exact hmono_all
     exact Post.join hsame (P7.rel.stack_eq (hrel.stack.trans P7.rel.stack.symm)) (by nat_omega)
-      (by nat_omega) (by nat_omega) (hstj.trans hst_out) (LS.pp_eq hcj hbj)
+      (by rw [finalVals]; nat_omega) (by rw [finalVals]; nat_omega)
+      (finalStack.trans (hstj.trans hst_out)) finalPp
   · -- the then arm
     simp only [↓reduceIte]
     refine SimG.goes (goes_condbr_then0 hinst' hcv hTtb hTtbp rfl) ?_
@@ -1721,30 +1549,30 @@ theorem exprClaim_ifE (n : Nat) (ihe : ∀ e, ExprClaim n e) (ihbv : ∀ blk, Bl
     obtain ⟨blk3, hc3, hb3, hp3⟩ := LS.pp_some P3.pp
     have hendT' : endT = some pt3.1 := by rw [e4c]; exact hc3
     have hlive : endT.isSome ∨ endF.isSome := Or.inl (by rw [hendT']; rfl)
-    obtain ⟨ty, hr, hvj, hstj, hbj, hcj, hTj, hFj⟩ := joinValue_facts hj hext hlive hnd hltT hltF
+    obtain ⟨ty, hr, hvj, hstj, hbj, hcj, hTj, hFj⟩ := joinValue_facts hj joinOutputExt hlive hnd hltT hltF
+    have hresult : r = ls7.vals.size := (Prod.mk.inj hp).1.symm.trans hr
+    have finalPp : ls'.pp = some (ls7.blocks.size, 0) := by
+      rw [← hfinal, ← recipePp]
+      exact LS.pp_eq hcj hbj
     have hne : pt3.1 ≠ eb := (hendT pt3.1 hc3).2.1
     have hb7 : ls7.blocks[pt3.1]? = some blk3 := hkeep pt3.1 blk3 hb3 hne
     have hinstT := hTj pt3.1 blk3 hendT' hb7
-    obtain ⟨Tjb, hTjb, hTjbp⟩ := hext.params hbj
+    obtain ⟨Tjb, hTjb, hTjbp⟩ := joinOutputExt.params hbj
     have hcell : fr3.vals[vt]? = some (.val v) := P3.has (vt, _) (by simp)
     have hpt3 : pt3 = (pt3.1, blk3.insts.size) := Prod.ext rfl hp3
     have hi3 : instAt cx.fn pt3 = some (.term (.br ls7.blocks.size [vt])) := by
       rw [hpt3]; exact hinstT
     have g2 := goes_br1 hi3 hTjb hTjbp hcell
     refine ⟨(ls7.blocks.size, 0), fr3.set ls7.vals.size (.val v), g2, ?_⟩
-    rw [hr]
+    rw [hresult]
     have hsame : Same ls.vals.size fr fr3 := by
       refine P1.same.trans (P3.same.mono ?_) P1.mono
       nat_omega
     exact Post.join hsame (P3.rel.stack_eq (hrel.stack.trans P3.rel.stack.symm)) (by nat_omega)
-      (by nat_omega) (by nat_omega) (hstj.trans hst_out) (LS.pp_eq hcj hbj)
+      (by rw [finalVals]; nat_omega) (by rw [finalVals]; nat_omega)
+      (finalStack.trans (hstj.trans hst_out)) finalPp
 
 /-- A fragment that leaves no result cell. -/
-theorem Post.nil {cfg : Cfg} {env : Env} {cx : FnCtx} {ls ls' : LS} {fr fr' : Frame} {pt' : Pt}
-    (hpp : ls'.pp = some pt') (hmono : ls.vals.size ≤ ls'.vals.size) (hsame : Same ls.vals.size fr fr')
-    (hrel : Rel cfg env cx fr' ls') : Post cfg env cx ls fr ls' fr' pt' [] :=
-  ⟨hpp, by simp, by simp, hmono, hsame, hrel⟩
-
 theorem stmtClaim_assert (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprClaim n e) (e : Expr) (org : OriginId) :
     StmtClaim (n + 1) lc (.assertS e org) := by
   intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
@@ -1994,6 +1822,185 @@ theorem stmtClaim_ifS_some (n : Nat) (lc : Option LoopCtx) (ihe : ∀ e, ExprCla
     · exact P1.same.trans (P3.same.mono (by nat_omega)) P1.mono
     · exact P3.rel.stack_eq (hstj.trans (hst6.trans hst3.symm))
 
+def WhileClaim (n : Nat) : Prop := ∀ (c : Expr) (body : Core.Block)
+    (hokC : exprOk c = true) (hokB : blockOk body = true)
+    (le : LEnv) (ls ls' : LS) (hb : BlockId) (cfg : Cfg) (env : Env) (cx : FnCtx)
+    (hlow : lowerWhile hb (lowerExpr c)
+      (fun d xb => lowerBlock (some ⟨d, xb, .jump hb⟩) [] false body) le ls = ((), ls'))
+    (hpp : ls.pp = some (hb, 0)) (hext : ExtT ls' cx.fn.blocks)
+    (hheader : ∃ blk, cx.fn.blocks[hb]? = some blk ∧ blk.params = []),
+    ∀ fr, Rel cfg env cx fr ls →
+      SimG cx (hb, 0) fr (execWhile n cfg env c body) (fun flow pt' fr' =>
+        flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' [])
+
+theorem whileClaim_zero : WhileClaim 0 := by
+  intro c body hokC hokB le ls ls' hb cfg env cx hlow hpp hext hheader fr hrel
+  simp only [execWhile]
+  exact SimG.of_timeout
+
+theorem whileClaim_succ (n : Nat) (ihe : ∀ e, ExprClaim n e)
+    (ihb : ∀ lc want blk, BlockClaim n lc want blk) (ih : WhileClaim n) :
+    WhileClaim (n + 1) := by
+  intro c body hokC hokB le ls ls' hb cfg env cx hlow hpp hext hheader fr hrel
+  have hlow0 := hlow
+  have hheader0 := hheader
+  unfold lowerWhile at hlow
+  obtain ⟨cv, ls1, h1, hw⟩ := bind_eq.mp hlow
+  have aw : ls1.Adv ls' := advB_whenLive () (fun _ =>
+    advB_loopBody cv (fun _ _ => advB_lowerBlock _ [] false body) (advB_emitTerm _))
+    _ _ _ _ hw
+  have hext1 : ExtT ls1 cx.fn.blocks := hext.of_adv aw
+  simp only [execWhile]
+  refine SimG.bind (ihe c hokC le ls cv ls1 (hb, 0) cfg env cx fr
+    h1 hpp hext1 hrel) fun va pt1 fr1 P1 => ?_
+  refine SimG.expectBool fun β hva => ?_
+  subst hva
+  have hcv : fr1.vals[cv]? = some (.val (.bool β)) := P1.has (cv, _) (by simp)
+  obtain ⟨blk1, hc1, hb1, hp1⟩ := LS.pp_some P1.pp
+  rw [whenLive_some _ _ _ hc1] at hw
+  unfold loopBody at hw
+  simp only [bind_eq] at hw
+  obtain ⟨st, lsG, hg, ⟨tb, jb⟩, lsf, hf, u2, ls2, hs1, vt, ls3, ha1,
+    u4, ls4, ht, hs2⟩ := hw
+  rw [get_apply] at hg
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj hg
+  have e2 : ls2 = { lsf with cur := some tb } := by
+    rw [setCur_run] at hs1; exact (Prod.mk.inj hs1).2.symm
+  have e5 : ls' = { ls4 with cur := some jb } := by
+    rw [setCur_run] at hs2; exact (Prod.mk.inj hs2).2.symm
+  have hext4 : ExtT ls4 cx.fn.blocks := by rw [e5] at hext; exact hext
+  have hadv1 := advB_lowerBlock (some ⟨ls1.stack.length, jb, .jump hb⟩) [] false body _ _ _ _ ha1
+  have hext3 : ExtT ls3 cx.fn.blocks := hext4.of_adv (adv_emitTerm ht)
+  have hext2 : ExtT ls2 cx.fn.blocks := hext3.of_adv hadv1
+  have hextf : ExtT lsf cx.fn.blocks := by rw [e2] at hext2; exact hext2
+  obtain ⟨htb, hjb, hszf, hvf, hstf, hcf, hinst, hbtb, hbjb⟩ := fork_facts hf P1.pp hextf
+  obtain ⟨Ttb, hTtb, hTtbp⟩ := hextf.params hbtb
+  obtain ⟨Tjb, hTjb, hTjbp⟩ := hextf.params hbjb
+  have hpp2 : ls2.pp = some (tb, 0) := by rw [e2]; exact LS.pp_cur hbtb
+  have hst1 : ls1.stack = ls.stack := P1.rel.stack.trans hrel.stack.symm
+  have hst2 : ls2.stack = ls.stack := by rw [e2]; show lsf.stack = _; rw [hstf, hst1]
+  have hv2 : ls2.vals.size = ls1.vals.size := by rw [e2]; show lsf.vals.size = _; rw [hvf]
+  have hrel2 : Rel cfg env cx fr1 ls2 := P1.rel.stack_eq (by rw [hst2, hst1])
+  have hm1 := P1.mono
+  have hinst' : instAt cx.fn pt1 = some (.term (.condbr cv tb [] jb [])) := hinst
+  have a4 := adv_emitTerm ht
+  have hjb3 : ls3.blocks[jb]? = some ⟨[], #[]⟩ := by
+    refine hadv1.keep jb ⟨[], #[]⟩ ?_ ?_
+    · rw [e2]; show some tb ≠ some jb; intro hh; have := Option.some.inj hh; nat_omega
+    · rw [e2]; exact hbjb
+  have hjb4 : ls4.blocks[jb]? = some ⟨[], #[]⟩ := by
+    cases hce : ls3.cur with
+    | none =>
+      rw [emitTerm_none _ _ hce] at ht
+      obtain ⟨-, rfl⟩ := Prod.mk.inj ht
+      exact hjb3
+    | some b3 =>
+      rw [emitTerm_run _ _ hce] at ht
+      obtain ⟨-, rfl⟩ := Prod.mk.inj ht
+      have hb3 : b3 ≠ jb := by
+        rcases hadv1.cur with h | h | ⟨c, hc, hc1, _⟩
+        · rw [hce] at h; cases h
+        · rw [hce, e2] at h
+          have := Option.some.inj h
+          nat_omega
+        · rw [hce] at hc
+          have := Option.some.inj hc
+          have hl2 : ls2.blocks.size = ls1.blocks.size + 2 := by rw [e2]; exact hszf
+          nat_omega
+      show (ls3.blocks.modify b3 _)[jb]? = _
+      rw [getElem?_modify_ne hb3]
+      exact hjb3
+  have hpp' : ls'.pp = some (jb, 0) := by rw [e5]; exact LS.pp_cur hjb4
+  have hstl : ls'.stack = ls.stack := by
+    rw [e5]; show ls4.stack = _
+    rw [a4.stack, hadv1.stack, hst2]
+  have hmono : ls.vals.size ≤ ls'.vals.size := by
+    rw [e5]; show _ ≤ ls4.vals.size
+    have := a4.vals; have := hadv1.vals; nat_omega
+  cases β
+  · simp only [Bool.false_eq_true, ↓reduceIte]
+    refine SimG.goes (goes_condbr_else0 hinst' hcv hTjb hTjbp rfl) ?_
+    exact SimG.ret ⟨rfl, Post.nil hpp' hmono P1.same
+      (P1.rel.stack_eq (by rw [hstl, hst1]))⟩
+  · simp only [↓reduceIte]
+    refine SimG.goes (goes_condbr_then0 hinst' hcv hTtb hTtbp rfl) ?_
+    refine SimG.bind (ihb (some ⟨ls1.stack.length, jb, .jump hb⟩) false body
+      hokB le ls2 vt ls3 (tb, 0) cfg env cx fr1 ha1 hpp2 hext3 hrel2)
+      fun flow pt3 fr3 ⟨v, hf, _, P3⟩ => ?_
+    subst hf
+    obtain ⟨-, -, -, hi3'⟩ := emitTerm_facts ht P3.pp hext4
+    obtain ⟨Thb, hThb, hThbp⟩ := hheader
+    have hi3 : instAt cx.fn pt3 = some (.term (.br hb [])) := hi3'
+    have hst3 : ls3.stack = ls.stack := P3.rel.stack.trans hrel.stack.symm
+    have hrelH : Rel cfg env cx fr3 ls := P3.rel.stack_eq hst3.symm
+    refine SimG.goes (goes_br0 (fr := fr3) hi3 hThb hThbp) ((ih c body hokC hokB le ls ls' hb cfg env cx hlow0 hpp hext hheader0 fr3 hrelH).mono ?_)
+    rintro flow pt' fr' ⟨hflow, P⟩
+    refine ⟨hflow, ⟨P.pp, P.has, P.lt, P.mono, ?_, P.rel⟩⟩
+    have hsame : Same ls.vals.size fr fr3 :=
+      P1.same.trans (P3.same.mono (by rw [hv2]; exact hm1)) (Nat.le_refl _)
+    exact hsame.trans P.same (Nat.le_refl _)
+
+
+theorem stmtClaim_while (n : Nat) (ih : WhileClaim n) (lc : Option LoopCtx) (c : Expr) (body : Core.Block)
+    (org : OriginId) (hokC : exprOk c = true) (hokB : blockOk body = true)
+    (le : LEnv) (ls ls' : LS) (r : Unit) (pt : Pt) (cfg : Cfg) (env : Env) (cx : FnCtx)
+    (fr : Frame) (hlow : lowerStmt lc (.while c body org) le ls = (r, ls'))
+    (hpp : ls.pp = some pt) (hext : ExtT ls' cx.fn.blocks) (hrel : Rel cfg env cx fr ls) :
+    SimG cx pt fr (execStmt (n + 1) cfg env (.while c body org)) (fun flow pt' fr' =>
+      flow = .normal .unit ∧ Post cfg env cx ls fr ls' fr' pt' []) := by
+  simp only [lowerStmt, bind_eq] at hlow
+  obtain ⟨⟨hb, ps⟩, ls1, hn, u1, ls2, ht, u2, lsH, hs, hw⟩ := hlow
+  have hr : r = () := Subsingleton.elim _ _
+  subst hr
+  have aW := advB_lowerWhile hb (advB_lowerExpr c)
+    (fun _ _ => advB_lowerBlock _ [] false body) _ _ _ _ hw
+  have hextH : ExtT lsH cx.fn.blocks := hext.of_adv aW
+  have eH : lsH = { ls2 with cur := some hb } := by
+    rw [setCur_run] at hs; exact (Prod.mk.inj hs).2.symm
+  have hext2 : ExtT ls2 cx.fn.blocks := by rw [eH] at hextH; exact hextH
+  have hn0 := hn
+  rw [newBlock0_run] at hn0
+  obtain ⟨hids, e1⟩ := Prod.mk.inj hn0
+  obtain ⟨hhb, -⟩ := Prod.mk.inj hids
+  have hval1 : ls1.vals = ls.vals := by rw [← e1]
+  have hst1 : ls1.stack = ls.stack := by rw [← e1]
+  have hc1 : ls1.cur = ls.cur := by rw [← e1]
+  obtain ⟨blk, hc, hb0, hp0⟩ := LS.pp_some hpp
+  have hlt : pt.1 < ls.blocks.size := (Array.getElem?_eq_some_iff.mp hb0).1
+  have hb1 : ls1.blocks[pt.1]? = some blk := by
+    rw [← e1]
+    exact (getElem?_push_lt hlt).trans hb0
+  have hpp1 : ls1.pp = some pt := by
+    have h := LS.pp_eq (hc1.trans hc) hb1
+    rw [← hp0] at h
+    exact h
+  obtain ⟨hv2, hst2, -, hinst⟩ := emitTerm_facts ht hpp1 hext2
+  have hnew : ls1.blocks[hb]? = some ⟨[], #[]⟩ := by
+    rw [← hhb, ← e1]
+    simp
+  have hne : ls1.cur ≠ some hb := by
+    rw [hc1, hc]
+    intro h
+    have he := Option.some.inj h
+    rw [← hhb] at he
+    exact Nat.ne_of_lt hlt he
+  have hb2 : ls2.blocks[hb]? = some ⟨[], #[]⟩ := (adv_emitTerm ht).keep hb _ hne hnew
+  have hppH : lsH.pp = some (hb, 0) := by rw [eH]; exact LS.pp_cur hb2
+  obtain ⟨Thb, hThb, hThbp⟩ := hext2.params hb2
+  have hrelH : Rel cfg env cx fr lsH := hrel.stack_eq (by
+    rw [eH]; show ls2.stack = _; rw [hst2, hst1])
+  have hsizeH : lsH.vals.size = ls.vals.size := by
+    rw [eH]; show ls2.vals.size = _; rw [hv2, hval1]
+  have hi : instAt cx.fn pt = some (.term (.br hb [])) := hinst
+  simp only [execStmt]
+  refine SimG.goes (goes_br0 hi hThb hThbp)
+    ((ih c body hokC hokB le lsH ls' hb cfg env cx hw hppH hext
+      ⟨Thb, hThb, hThbp⟩ fr hrelH).mono ?_)
+  rintro flow pt' fr' ⟨hflow, P⟩
+  refine ⟨hflow, ⟨P.pp, P.has, P.lt, ?_, ?_, P.rel⟩⟩
+  · rw [← hsizeH]; exact P.mono
+  · rw [← hsizeH]; exact P.same
+
 /-! ### All claims, by induction on Core's fuel -/
 
 structure Claims (n : Nat) : Prop where
@@ -2007,6 +2014,7 @@ structure Claims (n : Nat) : Prop where
   stmts : ∀ lc ss, StmtsClaim n lc ss
   block : ∀ lc want blk, BlockClaim n lc want blk
   blockValue : ∀ blk, BlockValueClaim n blk
+  whileLoop : WhileClaim n
 
 theorem claims_zero : Claims 0 where
   expr := fun e => by
@@ -2033,6 +2041,7 @@ theorem claims_zero : Claims 0 where
     intro hok le ls r ls' pt cfg env cx fr hlow hpp hext hrel
     simp only [execBlock]; exact SimG.of_timeout
   blockValue := blockValueClaim_zero
+  whileLoop := whileClaim_zero
 
 theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
   have hexpr : ∀ e, ExprClaim (n + 1) e := by
@@ -2059,17 +2068,17 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | blockE b => exact exprClaim_blockE n ih.blockValue b
     | arrLit t es => exact exprClaim_arrLit n ih.exprs t es
     | fill t a => exact exprClaim_fill n ih.expr t a
-    | structLit t es => intro hok; simp [exprOk] at hok
+    | structLit t es => exact exprClaim_structLit n ih.exprs t es
   have hprint : ∀ args, PrintArgsClaim (n + 1) args :=
     printArgsClaim (n + 1) (fun m h => by cases h; exact ih.expr)
-  refine ⟨hexpr, ?_, ?_, ?_, exprsClaim (n + 1) hexpr, hprint, ?_, ?_, ?_, ?_⟩
+  refine ⟨hexpr, ?_, ?_, ?_, exprsClaim (n + 1) hexpr, hprint, ?_, ?_, ?_, ?_, whileClaim_succ n ih.expr ih.block ih.whileLoop⟩
   · intro p
     cases p with
     | var x => exact placeClaim_var _ x
     | global g => exact placeClaim_global _ g
     | deref e => exact placeClaim_deref n ih.expr e
     | elem v i org => exact placeClaim_elem n ih.expr ih.view v i org
-    | field p i => intro hok; simp [placeOk] at hok
+    | field p i => exact placeClaim_field n ih.place p i
   · intro v
     cases v with
     | of p => exact viewClaim_of n ih.place p
@@ -2081,10 +2090,10 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
     | fromEnd e => exact boundClaim_fromEnd n ih.expr e
   · intro lc s
     cases s with
-    | letS x e org => exact stmtClaim_let n lc ih.expr x e org
+    | letS x e org => intro hok; cases hok
     | assign p e org => exact stmtClaim_assign n lc ih.expr ih.place p e org
     | assignOp op p e org => exact stmtClaim_assignOp n lc ih.expr ih.place op p e org
-    | rebind x e org => exact stmtClaim_rebind n lc ih.expr x e org
+    | rebind x e org => intro hok; cases hok
     | expr e org => exact stmtClaim_expr n lc ih.expr e org
     | append owner src org => exact stmtClaim_append n lc ih.place ih.view owner src org
     | popN owner count org => exact stmtClaim_popN n lc ih.place ih.expr owner count org
@@ -2095,7 +2104,12 @@ theorem claims_succ (n : Nat) (ih : Claims n) : Claims (n + 1) := by
       cases f with
       | none => exact stmtClaim_ifS_none n lc ih.expr (ih.block lc) c t org
       | some fb => exact stmtClaim_ifS_some n lc ih.expr (ih.block lc) c t fb org
-    | «while» c body org => intro hok; simp [stmtOk] at hok
+    | «while» c body org =>
+      intro hok
+      have h : exprOk c = true ∧ blockOk body = true := by simpa [stmtOk] using hok
+      intro le ls r ls' pt cfg env cx fr hlow hpp hext hrel
+      exact stmtClaim_while n ih.whileLoop lc c body org h.1 h.2
+        le ls ls' r pt cfg env cx fr hlow hpp hext hrel
     | forRange x lo hi body org => intro hok; simp [stmtOk] at hok
     | forEach x idx v byRef body org => intro hok; simp [stmtOk] at hok
     | ret e org => intro hok; simp [stmtOk] at hok

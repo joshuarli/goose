@@ -33,7 +33,7 @@ def specializedResult : Core.Module :=
     contexts := #[⟨0, "f", [(0, [.global 0]), (1, [.global 0])], [[.global 0]], []⟩,
       ⟨1, "main", [], [], []⟩]
     entry := 1
-    origins := #[⟨0, 1, "test"⟩] }
+    origins := #[⟨0, 1, "expr"⟩] }
 
 def orphanUnderstatedSummary : Core.Module :=
   let emptyImpl (name : String) : Core.Impl :=
@@ -45,9 +45,9 @@ def orphanUnderstatedSummary : Core.Module :=
     types := #[.int .i64]
     globals := #[]
     impls := #[main, orphan]
-    contexts := #[⟨0, "main", [], [], []⟩]
+    contexts := #[⟨0, "main", [], [], []⟩, ⟨1, "orphan", [], [], []⟩]
     entry := 0
-    origins := #[⟨0, 1, "test"⟩] }
+    origins := #[⟨0, 1, "abort"⟩] }
 
 #guard match Core.validate specializedResult with
   | .ok _ => true
@@ -61,7 +61,7 @@ def orphanUnderstatedSummary : Core.Module :=
   some #[[.global 0, .param 0, .param 1]]
 
 #guard match Core.validate orphanUnderstatedSummary with
-  | .error ⟨.root, _⟩ => true
+  | .error ⟨.summary, _⟩ => true
   | _ => false
 
 #guard match GIR.validate (lower orphanUnderstatedSummary) with
@@ -95,6 +95,15 @@ def loopVoid : Core.Module :=
   { m with
     impls := m.impls.modify 1 (fun impl => { impl with results := #[] })
     contexts := m.contexts.modify 1 (fun ctx => { ctx with resultRoots := [] }) }
+
+def loopingEntry : Core.Module :=
+  { loopVoid with entry := 1 }
+
+#guard match Core.validate loopingEntry with
+  | .ok _ => true
+  | _ => false
+#guard Goose.Proofs.Lower.moduleOk loopingEntry
+#guard !Goose.Proofs.Lower.moduleOk specializedResult
 
 def tailResult : Core.Module :=
   let m := loopResult (.mk 1 [] none)

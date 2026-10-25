@@ -2710,6 +2710,42 @@ theorem DemandExpectedSourceAt.placeWholeRootsRequest
   rw [← hwholeList]
   exact List.mem_map.mpr ⟨forbiddenOwner, forbidden, rfl⟩
 
+theorem DemandExpectedSourceAt.readWholeRootsRequest
+    {m owner path place expected access forbiddenOwner}
+    (sourceAt : DemandExpectedSourceAt m owner path (.expression (.read place)) .expression expected)
+    (accessMatches : demandAccess? m owner = some access)
+    (forbidden : forbiddenOwner ∈ expected.forbidden) :
+    ∃ roots, access.exprRoots (.read place) = .ok roots ∧
+      ∃ request, request ∈ expected.wholeChecks ∧
+        request.forbidden = forbiddenOwner ∧ request.checkedRoots = roots := by
+  rcases sourceAt with ⟨points, hwalk, hmem, hpath, hnode, hphase⟩
+  obtain ⟨setup, result, hsetup, hresult, hmap⟩ := expectedPoints_result hwalk
+  have hmemMap : expected ∈ result.entries.map fun entry => entry.expected := by
+    rw [hmap]
+    exact hmem
+  rcases List.mem_map.mp hmemMap with ⟨entry, hentry, heq⟩
+  subst expected
+  have hsetupAccess : demandAccess? m owner = some setup.access := by
+    simp [demandAccess?, hsetup]
+  have haccessEq : setup.access = access := Option.some.inj (hsetupAccess.symm.trans accessMatches)
+  have hitemNode : entry.item.node = .expression (.read place) := entry.expectedNode.symm.trans hnode
+  have hwhole := entry.wholeRequests
+  have hrootsExists : ∃ roots, setup.access.exprRoots (.read place) = .ok roots := by
+    cases hroots : setup.access.exprRoots (.read place) with
+    | error error =>
+      simp [DemandNode.expectedWholeChecks, hitemNode, hphase, hroots,
+        Functor.map, Except.map] at hwhole
+    | ok roots => exact ⟨roots, rfl⟩
+  rcases hrootsExists with ⟨roots, hrootsSetup⟩
+  have hroots : access.exprRoots (.read place) = .ok roots := by
+    simpa [haccessEq] using hrootsSetup
+  have hwholeList := Except.ok.inj (ε := Rejection) (by
+    simpa [DemandNode.expectedWholeChecks, hitemNode, hphase,
+      entry.expectedForbidden.symm, hrootsSetup, Functor.map, Except.map] using hwhole)
+  refine ⟨roots, hroots, ⟨⟨forbiddenOwner, roots⟩, ?_, rfl, rfl⟩⟩
+  rw [← hwholeList]
+  exact List.mem_map.mpr ⟨forbiddenOwner, forbidden, rfl⟩
+
 /-- A checked call occurrence records every effect owner queried for its
 inherited forbidden roots. -/
 theorem DemandExpectedSourceAt.callWholeRootsRequests

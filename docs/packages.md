@@ -43,6 +43,15 @@ objects and each program's C. `goose build --dry-run` shows the commands
 with their paths, for a Makefile or CMake project that wants to drive the
 C compiler itself.
 
+Work that takes a while (fetching a package, building a package's C,
+compiling the runtime) prints one line as it starts. On a terminal a live
+line below it shows what is running, for how long, and the last line the
+tool printed, and is erased when the work is done. When the output goes
+anywhere else (a file, a pipe, a CI log, an agent running the command)
+there is no live line, only those one-line notes. `GOOSE_PROGRESS=plain`
+or `GOOSE_PROGRESS=live` overrides the choice; `-v` and `--dry-run` print
+plainly.
+
 ## 2. Using a package
 
 A *package* is a library in a directory of its own: a module named after it,
@@ -180,11 +189,35 @@ and a program links it statically.
 
 The functions the package's `extern fn`s name must be defined by that C (or
 by the C library); the runtime's own `gs_os_*` and friends belong to the
-standard library. A package's C is self-contained: two packages that must
-share C share a repository, as `gfx`, `audio` and `ui` do. A package whose
-functions keep one state for the process, or that may only be called from
-the main thread, says so in its sidecar, `main_thread_only = true;`, and a
-`thread_fn` calling it is then a compile error.
+standard library. Every `.goose` file under the package root counts as the
+package's, except in a directory below the root holding a sidecar of its
+own (an example program with its own C, say) and in the directories the
+sidecar lists as not the package's:
+
+```goose
+// mylib.build
+exclude = ["tools", "third_party/demo"];
+```
+
+Most values an `extern fn` passes have layouts C can declare for itself, a
+slice as `{ data, len }`, say (spec §7.10). A builder, `u8[>..]&`, is the
+exception: C appends to it through the runtime, which `goose.h` gives C
+compiled on its own. The compiler puts that header on the include path of
+every native part, the program's own included, CMake targets too, and
+builds them all again when it changes:
+
+```c
+#include "goose.h"
+void mylib_name(gs_rref out, int64_t id) {   /* extern fn mylib_name(out: u8[>..]&, id: i64); */
+    gs_bld_append(out, "item", 4);
+}
+```
+
+A package's C is self-contained: two packages that must share C share a
+repository, as `gfx`, `audio` and `ui` do. A package whose functions keep
+one state for the process, or that may only be called from the main thread,
+says so in its sidecar, `main_thread_only = true;`, and a `thread_fn`
+calling it is then a compile error.
 
 ### Files a package needs at run time
 

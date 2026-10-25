@@ -159,6 +159,7 @@ struct TypeCheck {
     using TypePairCache = flat_map<pair<TypeExpr *, TypeExpr *>, bool>;
     TypePairCache cancontain, reachesthrough;
     bool library = false;   // Built for a C host (--header): fn main() is optional.
+    bool nomain = false;    // Checking only: a file without fn main() is checked on its own.
 
     // (Val, the checked value of an expression, lives in ast.h: node Check
     // overrides return it.)
@@ -245,6 +246,7 @@ struct TypeCheck {
         int scopebase = 0;           // First scope index belonging to this frame.
         int varbase = 0;             // First var index belonging to this frame.
         Line callline;               // Call site, for instantiation chain diagnostics.
+        string_view expansiontrace;  // Structural entry containing the call site.
         bool isfunval = false;
         bool isdefault = false;    // Lexically isolated, but caller values remain live.
         // A parameter default's: the function, which parameter, and
@@ -270,7 +272,7 @@ struct TypeCheck {
         BodyExits *exits = nullptr;
     };
 
-    enum ScopeKind { SK_PLAIN, SK_FN, SK_LOOP, SK_BLOCK };
+    enum ScopeKind { SK_PLAIN, SK_FN, SK_LOOP, SK_BLOCK, SK_EXPANSION };
     // Snapshot of assigned/narrowed for the variables the code between a
     // save and its restore can name (NamedFrames): those of the current
     // frame, of the frames it is lexically nested in, and of the frames the
@@ -345,6 +347,11 @@ struct TypeCheck {
         ~BlockScope() { tc.blockpos.pop_back(); }
     };
     void CheckStmts(Block *b);
+    size_t expansionsize = 0;
+    Node *ExpansionConstant(Node *n, set<VarDecl *> &visiting);
+    void ExpandConstFor(ConstFor *cf, const function<void(ExpansionClone &)> &emit);
+    Block *ExpandStatements(ConstFor *cf);
+    void ExpandInitializers(vector<FieldInit> &inits);
     bool MentionsName(Node *n, string_view name, set<SFunction *> &seen);
     bool EscapingContinue(Node *n);
     enum class ShrinkDemand { Source, Core };
@@ -537,7 +544,14 @@ struct TypeCheck {
 
     static constexpr int MAXCHAIN = 20;
 
-    [[noreturn]] void Error(Line l, const string &msg) { ErrorIn(l, msg, InstantiationChain()); }
+    string_view ActiveExpansionTrace() {
+        for (auto i = cur.nodepath.rbegin(); i != cur.nodepath.rend(); ++i)
+            if (!i->node->expansiontrace.empty()) return i->node->expansiontrace;
+        return {};
+    }
+    [[noreturn]] void Error(Line l, const string &msg) {
+        ErrorIn(l, msg, cat(ActiveExpansionTrace(), InstantiationChain()));
+    }
 
     // An error at code checked earlier, with the instantiation chain taken
     // there: how a check made once the whole program has been reports one.
@@ -562,9 +576,14 @@ struct TypeCheck {
         string s;
         // A long chain shows its innermost and outermost instantiations.
         auto chain = 0, nth = 0;
+        string_view lasttrace;
         for (auto &f : frames) chain += f.sf && !f.isfunval;
         for (auto i = (int)frames.size() - 1; i > 0; i--) {
             auto &f = frames[i];
+            if (!f.expansiontrace.empty() && f.expansiontrace != lasttrace) {
+                s += f.expansiontrace;
+                lasttrace = f.expansiontrace;
+            }
             if (f.defaultfn) {
                 Append(s, "\n  in the default of parameter ",
                        f.defaultfn->params[f.defaultparam].name, " of ", f.defaultfn->qname,
@@ -645,7 +664,10 @@ struct TypeCheck {
         }
     }
 
-    [[noreturn]] void Error(const Node *n, const string &msg) { Error(n->line, msg); }
+    [[noreturn]] void Error(const Node *n, const string &msg) {
+        ErrorIn(n->line, msg, cat(n->expansiontrace.empty() ? ActiveExpansionTrace() : n->expansiontrace,
+                                 InstantiationChain()));
+    }
 
     // A warning's text, about node `at` as the source has it; or, where
     // `cast` is set, a check's verdict on that explicit cast as the source
@@ -862,7 +884,7 @@ struct TypeCheck {
         if (a == b) return true;
         if (a->kind != b->kind || a->cq != b->cq) return false;
         switch (a->kind) {
-            case TY_INT:  return a->intstorage == b->intstorage;
+            case TY_INT:  return a->intstorage == b->intstorage && SameIndex(a, b);
             case TY_FLT:  return a->fltstorage == b->fltstorage;
             case TY_BOOL: case TY_VOID: case TY_FN: return true;
             case TY_STRUCT: {
@@ -968,6 +990,7 @@ struct TypeCheck {
     TypeExpr *SubstRaw(TypeExpr *t) {
         switch (t->kind) {
             case TY_GENERIC: {
+                if (!t->named->expansionerror.empty()) Error(t->line, string(t->named->expansionerror));
                 auto b = LookupBindingOuter(t->named->name);
                 if (!b) return t;  // Unknown name; ValidateType reports it.
                 if (!t->named->args.empty())
@@ -1042,6 +1065,16 @@ struct TypeCheck {
                 if (!found)
                     Error(t->line, cat("enum ", adt->enu->en->name, " has no variant named ", name));
                 return ast.VariantOf(adt, name, found, t->line);
+            }
+            case TY_FN: {
+                auto args = SubstArgs(t->fn->args), rets = SubstArgs(t->fn->rets);
+                if (!args && !rets) return t;
+                auto n = ast.NewType(TY_FN, t->line);
+                n->fn = ast.NewDetail<TypeFn>();
+                *n->fn = *t->fn;
+                if (args) n->fn->args = std::move(*args);
+                if (rets) n->fn->rets = std::move(*rets);
+                return n;
             }
             default: return t;
         }
@@ -1136,6 +1169,9 @@ struct TypeCheck {
     Node *DefaultValue(TypeExpr *t, Line line);
     SizeClass ClassOf(TypeExpr *t);
     bool IsFlat(TypeExpr *t);
+    bool HoldsIndexT(TypeExpr *t);
+    SFunction *TextFn();
+    void CheckfreeCallee(Node *at, SFunction *callee);
     bool HoldsPlainRef(TypeExpr *t);
     bool HasDefault(TypeExpr *t, string &why);
 
@@ -1540,6 +1576,10 @@ struct TypeCheck {
     // base is that global's, everywhere.
 
     void ResolvePools();
+    void ResolveIndexTypes();
+    void ValidateIndexType(TypeExpr *t);
+    // The globals some index or bound type names: never shrunk (§3.11).
+    set<VarDef *> indexarrays;
 
     // The globals some relative reference type measures offsets from. Empty
     // for a program without the feature, which is what keeps `RootArg::pool`
@@ -1672,6 +1712,24 @@ struct TypeCheck {
         auto held = a.classread || (classread && src == a.root);
         if (x->contents.Add({ a.root, a.exact, a.from, a.slotread, held }))
             NoteFact(x, ActivationFloor(a.root));
+    }
+    // A reference or slice variable's binding grown by the places `rv` may
+    // point (Roots::Add), which a loop around the rebind feeds back as a
+    // store into a holder is (AddContents): a place at a class of an
+    // activation's to that activation's own loops and rounds, its callers
+    // learning where it points at the call (ApplyCalleeStores). Returns
+    // whether the binding changed.
+    bool AddBinding(VarDef *vd, const Roots &rv) {
+        auto changed = rv.unknown && !vd->ref.unknown;
+        vd->ref.unknown = vd->ref.unknown || rv.unknown;
+        auto floor = changed ? 0 : (int)scopes.size();
+        for (auto &a : rv.alts) {
+            if (!vd->ref.Add(a)) continue;
+            changed = true;
+            floor = min(floor, ActivationFloor(a.root));
+        }
+        if (changed) NoteFact(vd, floor);
+        return changed;
     }
     // A container a store record may name as the source of what it stores
     // (StoreEvent::src), one whose stores say what it holds. A temporary was
@@ -1917,9 +1975,15 @@ struct TypeCheck {
     }
     bool InGenericCode();
     bool Converts(const Val &v, TypeExpr *t);
+    // Whether two integer types are alike in being an index or bound type:
+    // both plain, or both of one array and kind (§3.11).
+    static bool SameIndex(const TypeExpr *a, const TypeExpr *b) {
+        if (!a->ix || !b->ix) return !a->ix && !b->ix;
+        return a->ix->arr == b->ix->arr && a->ix->upto == b->ix->upto;
+    }
     static bool SameNum(TypeExpr *a, TypeExpr *b) {
         if (!a || !b || a->kind != b->kind) return false;
-        if (a->kind == TY_INT) return a->intstorage == b->intstorage;
+        if (a->kind == TY_INT) return a->intstorage == b->intstorage && SameIndex(a, b);
         return a->kind == TY_FLT && a->fltstorage == b->fltstorage;
     }
     bool SameNumVal(const Val &a, const Val &b);
@@ -2207,6 +2271,7 @@ struct TypeCheck {
     void NoCopyWrite(Node *at, const LVal &lv);
     bool WholeWritable(const LVal &lv);
     void CheckIncDec(IncDec *x);
+    [[noreturn]] void NoIndexUpdate(Node *at, const char *op, TypeExpr *st);
 
     // ------------------------------------------------------------------
     // Builtins and array members.
@@ -2310,6 +2375,7 @@ struct TypeCheck {
     };
     vector<GlobalShrink> globalshrinks;
     void NoteGlobalShrink(Node *at, const string &prefix, VarDef *vd, TypeExpr *bound);
+    [[noreturn]] void ThreadIndexError(Node *at, TypeExpr *t);
     void CheckGlobalShrinks();
     // Whether what a store record leads to may point into the array `arr`
     // of type `arrtype`: its stores followed through the containers they
@@ -2442,6 +2508,9 @@ struct TypeCheck {
         bool exact = false;   // root is the array itself, not a bound on its lifetime.
         string what;
         bool shrink = false;
+        // The type of the resizable array grown or shrunk (SoleResizableIn),
+        // null where the checker cannot tell.
+        TypeExpr *arr = nullptr;
     };
 
     // The state of the body being checked, which a body checked inside it
@@ -2512,9 +2581,15 @@ struct TypeCheck {
             std::swap(tc.cur, saved);
         }
     };
-    void NoteGrow(Node *at, const Roots &roots, const string &what);
-    void NoteShrinkEvent(Node *at, VarDef *root, TypeExpr *bound, const string &what);
-    void CheckGrowsSince(size_t base, const Roots &built, const string &what);
+    // Each takes the type of the storage grown, shrunk or built in.
+    void NoteGrow(Node *at, const Roots &roots, const string &what, TypeExpr *t);
+    void NoteShrinkEvent(Node *at, VarDef *root, TypeExpr *bound, const string &what,
+                         TypeExpr *t);
+    void CheckGrowsSince(size_t base, const Roots &built, const string &what, TypeExpr *t);
+    // The type of the one resizable array a value of type t holds (§1.3,
+    // §3.4), where every value of t holds one of the same type: null where
+    // there is none, or a variable ADT's variants hold different ones.
+    TypeExpr *SoleResizableIn(TypeExpr *t);
     void ApplyCalleeGrows(Node *at, FnSpec *spec, vector<Val> &argvals, string_view name);
     void ApplyCalleeWritableContents(FnSpec *spec, vector<Val> &argvals);
     // Whether an element pushed into, or allocated in, an array of `elem`
@@ -2572,8 +2647,9 @@ struct TypeCheck {
     // ------------------------------------------------------------------
     // The driver: globals in order, then main, then thread entry points.
 
-    TypeCheck(Ast &_ast, bool _library = false, vector<LintWarning> *_lintwarnings = nullptr)
-        : ast(_ast), library(_library), lintwarnings(_lintwarnings) {
+    TypeCheck(Ast &_ast, bool _library = false, vector<LintWarning> *_lintwarnings = nullptr,
+              bool _nomain = false)
+        : ast(_ast), library(_library), nomain(_nomain), lintwarnings(_lintwarnings) {
         // A checked program records values for about two thirds as many
         // nodes as it parsed to, clones included, so this is the size the
         // table grows to anyway.
@@ -2604,6 +2680,7 @@ struct TypeCheck {
             }
         }
         ResolvePools();
+        ResolveIndexTypes();
         // Validate all non-generic type declarations up front: clearer errors
         // than at first use, and unused decls get checked too.
         for (auto st : ast.structs)
@@ -2627,10 +2704,12 @@ struct TypeCheck {
         }
         // Concrete ones only; a pointee still spelled with a type parameter
         // gets here again once a specialization substitutes it.
-        for (auto t : ast.alltypes)
+        for (auto t : ast.alltypes) {
             if (t->kind == TY_REF && t->ref->pool && !HasGenerics(t->ref->sub)) ValidatePool(t);
+            if (IsIndexT(t)) ValidateIndexType(t);
+        }
         auto mainsf = ast.MainFunction();
-        if (!mainsf && !library)
+        if (!mainsf && !library && !(nomain && !ast.DeclaresMain()))
             throw CompileError { "program needs exactly one global fn main()" };
         if (mainsf) {
             if (!mainsf->params.empty() || mainsf->has_rets || !mainsf->generics.empty() ||
@@ -2643,8 +2722,10 @@ struct TypeCheck {
         }
         // Thread entry points compile as separate programs; check any
         // that no spawn reached.
-        for (auto sf : ast.functions)
+        for (size_t i = 0; i < ast.functions.size(); i++) {
+            auto sf = ast.functions[i];
             if (sf->isthread) EnsureThreadSpec(sf, sf->line);
+        }
         // Thread programs may not touch globals: that would be shared mutable
         // memory between programs.
         for (auto sf : ast.functions)
@@ -2658,7 +2739,7 @@ struct TypeCheck {
         // reusable where it could be).
         // Errors these produce are real; a lack of errors is weaker than for
         // reached code, since no call-site facts were available.
-        for (auto sf : ast.functions) CheckUnreached(sf);
+        for (size_t i = 0; i < ast.functions.size(); i++) CheckUnreached(ast.functions[i]);
         auto exportcount = 0;
         for (auto sf : ast.functions) {
             if (!sf->isexport) continue;
@@ -2819,9 +2900,30 @@ struct TypeCheck {
         CheckSpecBody(spec, &args, sf->line);
     }
 
+    // A `let` global whose references all lead into static data, as a
+    // string literal's do: a worker's copy of it views the same read-only
+    // bytes, which no program can tell from a copy of its own (§11.2).
+    bool StaticViewsOnly(VarDef *g) {
+        if (g->isvar) return false;
+        function<bool(TypeExpr *)> relative = [&](TypeExpr *t) {
+            switch (t->kind) {
+                case TY_REF: return t->ref->lenstorage >= 0 || relative(t->ref->sub);
+                case TY_SLICE: return relative(t->sub);
+                case TY_ARRAY: return relative(t->arr->sub);
+                default: return AnyField(t, relative);
+            }
+        };
+        if (relative(g->type)) return false;
+        auto statics = [](const Roots &r) {
+            return !r.unknown && r.All([](const RootAlt &a) { return !a.root && a.exact; });
+        };
+        auto k = g->type->kind;
+        return k == TY_REF || k == TY_SLICE ? statics(g->ref) : statics(g->contents);
+    }
+
     // Walks a thread program's call graph: a worker's program has its own
     // copy of every global it uses, taken at spawn, which a value
-    // holding references cannot be.
+    // holding references into other storage cannot be.
     void CheckThreadGlobals(FnSpec *entry) {
         set<FnSpec *> seen;
         function<void(FnSpec *)> rec = [&](FnSpec *sp) {
@@ -2830,9 +2932,11 @@ struct TypeCheck {
                 if (!n) return;
                 if (auto id = Is<Ident>(n)) {
                     auto g = id->vdef;
-                    if (g && g->isglobal && g->type && !IsFlat(g->type))
-                        Error(n, cat("thread programs may access only flat globals (§11.2): ",
-                                     id->name, " holds references (reached from thread_fn ",
+                    if (g && g->isglobal && g->type && !IsFlat(g->type) && !StaticViewsOnly(g))
+                        Error(n, cat("thread programs may access only flat globals, and `let` "
+                                     "globals whose references lead only to static data "
+                                     "(§11.2): ", id->name, " holds references",
+                                     g->isvar ? " and is a var" : "", " (reached from thread_fn ",
                                      entry->sf->name, ")"));
                 }
                 if (auto c = Is<Call>(n)) {
@@ -2876,8 +2980,8 @@ struct TypeCheck {
 
 // Runs the whole pass; errors throw CompileError.
 inline void TypeCheckProgram(Ast &ast, bool library = false,
-                             vector<LintWarning> *lintwarnings = nullptr) {
-    TypeCheck tc(ast, library, lintwarnings);
+                             vector<LintWarning> *lintwarnings = nullptr, bool nomain = false) {
+    TypeCheck tc(ast, library, lintwarnings, nomain);
 }
 
 }  // namespace goose

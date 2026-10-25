@@ -309,7 +309,8 @@ Parser/resolver errors live in `test/errors/`; semantic errors live in
 `test/errors_tc/` and must get past parsing and resolution (`parsed ok`)
 before they fail. Each source declares one or
 more `// error: <diagnostic substring>` lines. The compiler must exit with 1,
-and all markers must occur in diagnostic headers, excluding echoed source.
+and all markers must occur in diagnostic headers or `in const for` expansion
+context lines, excluding echoed source.
 Use the specific rejection reason and relevant types/roots; omit source paths,
 line numbers and specification section numbers. These inline assertions replace
 the old compiler-error `.stderr` files.
@@ -400,6 +401,7 @@ The runner checks more than exit status and runtime output:
 | `member_parameters.goose` at O1 | Read the generated C: `walk`, which takes two slices and a `T[>..]&`, has each as two scalar C parameters (data pointer and count, header pointer and stack; spec C.3, `ParamFields`). Its runs pass slices, builders and pool references through calls, a recursion, a case-function dispatch, nested functions' free variables, a `simd` function, a `format` overload and an exported wrapper. |
 | `member_stores.goose` at O1 | Read the generated C: `store_links` stores to fields reached through references that cannot be rebound, with no index on the way, as C member stores rather than through a pointer taken first (`StableDest`); its runs check the stores, and that a right side rebinding the reference on the way still stores where the destination named before it ran (`evaluation_order.goose` has a right side writing the destination itself). |
 | `optimize.goose` at O0/O1/O2 | Inspect named tail-recursion bodies in `--specs`: supported integer accumulator/plain recursion becomes loops; modulo, floating-point reassociation, nonlocal-return frames and returns inside nested loops retain self calls. Mixed operators retain the ineligible call. Leading locals prevent base-case inlining from consuming these cases first. The `gb_` functions count the copies of their first statement: guarded base-case inlining copies the body once per self-call site where the test compares unassigned parameters, UFCS-spelled self-calls included, and not where it reads a global or a node, does arithmetic, or reads an assigned parameter. |
+| `docs/reference.md` | Every ```` ```goose ```` block of the language reference compiles (as written, or wrapped in a `main`), a block marked `// error` fails, none warns, and where the JIT runs, each complete program prints the block shown after it. `scripts/check_doc_examples.py` does the work in a process of its own, as the samples' runner does, writing the blocks under `build/gen/<profile>/doc_examples/`; its docstring has the markers a document uses for a block that is only a fragment or is compiled without being run. Run it by hand on any document: `python scripts/check_doc_examples.py docs/reference.md --run -v`. |
 
 The sharing, report-dependency and units checks are scale qualifications, not
 part of the regular fixture suite. Run them from the repository root after

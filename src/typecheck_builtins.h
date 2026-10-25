@@ -58,6 +58,21 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             if (wid && !(wvd && !wvd->isglobal) && !ScopeNameKind(wid->name))
                 for (auto sf : DepLookupFunctions(ast, wid->name, wid->ns))
                     if (sf->isthread) wsf = sf;
+            // A function parameter bound to a thread_fn's name names it too
+            // (§7.6).
+            const FnValBind *fvb = nullptr;
+            if (wid && wid->ns.empty() && !(wvd && !wvd->isglobal) &&
+                !LookupTypeParam(wid->name, fvb) && fvb && fvb->named) {
+                if (fvb->set) {
+                    for (auto sf : *fvb->set) if (sf->isthread) wsf = sf;
+                } else if (fvb->named->isthread) {
+                    wsf = fvb->named;
+                }
+            }
+            if (!wsf && fvb)
+                Error(c, cat("thread_spawn's first argument names a thread_fn: ", wid->name,
+                             " is bound to ", fvb->named ? cat(fvb->named->name, ", which is not one")
+                                                         : string("a block")));
             if (!wsf) Error(c, "thread_spawn's first argument names a thread_fn");
             wid->fnref = wsf;
             wid->exprtype = fntype;
@@ -67,8 +82,10 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                              (int64_t)spec->argtypes.size(), " worker argument(s)"));
             {
                 DestScope ds(*this, Dest {});
-                for (size_t i = 0; i < spec->argtypes.size(); i++)
+                for (size_t i = 0; i < spec->argtypes.size(); i++) {
+                    if (HoldsIndexT(spec->argtypes[i])) ThreadIndexError(c, spec->argtypes[i]);
                     CheckArg(args[1 + i], spec->argtypes[i]);
+                }
             }
             c->spec = spec;
             Val v;
@@ -80,6 +97,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             NoUntypedEmptyArray(av, args[0], d.name);
             if (av.type->kind == TY_VOID || av.type->kind == TY_FN || !IsFlat(av.type))
                 Error(c, cat("queue elements must be flat (§11.2), not ", TypeStr(av.type)));
+            if (HoldsIndexT(av.type)) ThreadIndexError(c, av.type);
             return VoidVal();
         }
         case B_QGET: case B_QPOLL: {
@@ -89,6 +107,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             ValidateType(t, c->line, VT_LOCAL);
             if (!IsFlat(t))
                 Error(c, cat("queue elements must be flat (§11.2), not ", TypeStr(t)));
+            if (HoldsIndexT(t)) ThreadIndexError(c, t);
             c->rettypes.push_back(t);
             Val first;
             first.type = t;
@@ -230,6 +249,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
     // Member receiver validation, from the table.
     Val rv;
     TypeExpr *elem = nullptr;
+    TypeExpr *recvarr = nullptr;   // The receiver's array type.
     auto ak = A_FIXED;
     if (d.flags & BF_MEMBER) {
         if (precv) {
@@ -256,6 +276,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         if (rt->kind == TY_ARRAY) {
             ak = rt->arr->akind;
             elem = rt->arr->sub;
+            recvarr = rt;
         } else if (rt->kind == TY_SLICE) {
             elem = rt->sub;
         }
@@ -312,7 +333,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         auto how = d.kind == B_PUSH ? "push into " : d.kind == B_APPEND ? "append to "
                  : d.kind == B_FORMAT ? "format into " : d.kind == B_RESIZE ? "resize "
                  : "allocate in ";
-        NoteGrow(c, rv, cat(how, ExprStr(args[0])));
+        NoteGrow(c, rv, cat(how, ExprStr(args[0])), recvarr);
     }
     // The serialization pair. to_bytes
     // builds the image -- a varint byte count then the element region --
@@ -352,7 +373,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             if (!ov.writable)
                 Error(c, "cannot append through a non-writable value (let, or "
                          "non-writable provenance, §9.5)");
-            NoteGrow(c, ov, cat("append to ", ExprStr(args[1])));
+            NoteGrow(c, ov, cat("append to ", ExprStr(args[1])), ot);
             return VoidVal();
         }
         auto t = GrowU8Array(c->line);
@@ -461,7 +482,8 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             if (!c->defaultinit) c->defaultinit = DefaultCall(elem, c->line);
             auto logbase = cur.growlog.size();
             ElemArg(c->defaultinit, elem, rv);
-            CheckGrowsSince(logbase, rv, "the default elements allocated in a slice pool");
+            CheckGrowsSince(logbase, rv, "the default elements allocated in a slice pool",
+                            recvarr);
         }
         // Growing a slice may move it, and a moved element's self-relative
         // offsets would still measure from where it was.
@@ -487,7 +509,8 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                     CheckGrowsSince(logbase, rv,
                                     cat("the element ",
                                         d.kind == B_PUSH ? "pushed into " : "allocated in ",
-                                        ExprStr(args[0])));
+                                        ExprStr(args[0])),
+                                    recvarr);
                 break;
             }
             case 'a': {  // An array/slice of the receiver's element type.
@@ -518,7 +541,8 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                 auto inplace = al ? ClassOf(elem) != SC_FIXED || HasRelRefT(elem, true)
                                   : Is<Call>(an) && ak != A_LIMITED && ClassOf(t2) != SC_FIXED;
                 if (inplace)
-                    CheckGrowsSince(logbase, rv, cat("the run appended to ", ExprStr(args[0])));
+                    CheckGrowsSince(logbase, rv, cat("the run appended to ", ExprStr(args[0])),
+                                    recvarr);
                 break;
             }
             default: assert(false);
@@ -836,6 +860,7 @@ inline FnSpec *TypeCheck::UserFormatIn(Call *c, TypeExpr *t, string_view ns,
         ApplyCalleeRebinds(sp);
         ApplyCalleeGrows(c, sp, argvals, "format");
         ApplyCalleeWritableContents(sp, argvals);
+        CheckfreeCallee(c, sp->sf);
         c->fmtspecs.push_back({ t, sp });
         return sp;
     }
@@ -1035,6 +1060,12 @@ inline void TypeCheck::CheckHeldShrinks(Node *at, const string &op, VarDef *root
                                         const string &what, bool growonly, TypeExpr *bound) {
     HeldOperands([&](const Held &h) {
         auto &[node, v, location, render, elems, loop, reread, inplace] = h;
+        // A variable of the loop's body is made after its sequence and gone
+        // before it, so neither the sequence nor what it holds can lie in
+        // or refer into that variable's storage (§9.2).
+        if (loop && loop->vdef && root && !root->isglobal && !IsClassRoot(root) &&
+            Depth(root) >= Depth(loop->vdef))
+            return;
         auto path = !inplace && v.type->kind == TY_REF &&
                     ClassOf(v.type->ref->sub) == SC_RESIZABLE;
         auto mayfree = inplace
@@ -1122,6 +1153,15 @@ inline void TypeCheck::GrowOnlyShrinkAt(Node *c, const string &op, VarDef *vd,
     if (vd->reusable)
         Error(c, cat("cannot ", op, " reusable pool ", what,
                      ": its slots stay live for the freelist (§5.4)"));
+    // An index type relies on its array's length never going down, which
+    // any index held anywhere may still name (§3.11). Where the root only
+    // bounds the storage, any such array of the type may be the one.
+    for (auto ia : indexarrays) {
+        if (ia == vd || (bound && !vd->isglobal && ia->type && TypeEq(LoadType(ia->type), bound)))
+            Error(c, cat("cannot ", op, " ", what, ia == vd ? "" : cat(", which may be ", ia->name),
+                         ": an index type names ", ia->name, ", so its length never goes "
+                         "down (§3.11)"));
+    }
     // The elements freed: of the array itself, or for a bound, of an array
     // of its type. A parameter class's storage is not known here.
     auto arrtype = bound ? bound : vd->type ? LoadType(vd->type) : nullptr;
@@ -1454,8 +1494,10 @@ inline void TypeCheck::ApplyCalleeStores(FnSpec *spec, vector<Val> &argvals, Nod
     // them (VarDef::contents) instead of the callee's classes, which mean
     // nothing once its activation has ended, and a loop around the call feeds
     // that back; the check then stands for this call alone (FnSpec::storesout).
-    // A global is left to the judgement of the globals, which follows its
-    // stores through the calls that passed each class (CheckGlobalShrinks).
+    // A reference or slice variable such a body rebinds is bound to them the
+    // same way, as the call's result would be (RetAltVal). A global is left
+    // to the judgement of the globals, which follows its stores through the
+    // calls that passed each class (CheckGlobalShrinks).
     // Cached callee locals retain the depth of their original check. A later
     // deeper call does not make them lexical variables of that caller.
     auto lexical_container = [&](VarDef *x) {
@@ -1465,9 +1507,29 @@ inline void TypeCheck::ApplyCalleeStores(FnSpec *spec, vector<Val> &argvals, Nod
         });
         return named;
     };
+    if (!spec->inprogress) {
+        Roots unused;
+        auto ofcallee = [&](const RootAlt &a) { return classat(a.root, unused) >= 0; };
+        EachNamedVar((int)frames.size() - 1, CurRealFrame().spec, [&](int i) {
+            auto x = vars[i];
+            if (!x->type || !IsRefOrSlice(x->type) || x->isglobal || !x->ref.Any(ofcallee))
+                return;
+            spec->storesout = true;
+            Roots bound;
+            for (auto &a : x->ref.alts)
+                if (ofcallee(a)) bound.Add(RetAltVal(spec, a, argvals, x->type, at));
+            erase_if(x->ref.alts, ofcallee);
+            AddBinding(x, bound);
+        });
+    }
     auto end = min(rec->eventend, storeevents.size());
     for (auto i = rec->eventstart; i < end; i++) {
         auto e = storeevents[i];
+        // A call back into a body still being checked leaves the events of
+        // that body's own variables as they are: a cycle's rounds keep the
+        // variables, so they are those of the activation being checked, which
+        // this call's arguments do not describe.
+        if (spec->inprogress && e.container && e.container->ownerspec == spec) continue;
         auto r = mapped(e.root, e.exact);
         auto src = source(e.src);
         e.classread = e.classread && IsClassRoot(src);
@@ -1681,6 +1743,13 @@ inline void TypeCheck::NoteGlobalBinding(VarDef *gd, const Roots &roots, bool by
         e.at = at;
         madestores.push_back(e);
     }
+}
+
+// Each thread program has a copy of the globals of its own, which grow apart
+// once it runs, so an index of one copy says nothing about another (§3.11).
+inline void TypeCheck::ThreadIndexError(Node *at, TypeExpr *t) {
+    Error(at, cat(TypeStr(t), " cannot pass between threads: it holds an index type, and each "
+                  "thread program's copy of the array it names grows on its own (§3.11)"));
 }
 
 // A shrink of global array vd, or of what vd only bounds, for
@@ -2343,7 +2412,7 @@ inline void TypeCheck::ShrinkThrough(Node *at, const string &verb, const string 
                                                     " may point at");
             ShrinkGrowShrink(at, cat(verb, " ", recv), t.root, what, bound, balance);
         }
-        NoteShrinkEvent(at, t.root, bound, cat(verb, " ", recv));
+        NoteShrinkEvent(at, t.root, bound, cat(verb, " ", recv), arr);
     }
 }
 
@@ -2912,6 +2981,7 @@ inline void TypeCheck::ApplyCalleeShrinks(Node *at, FnSpec *spec, vector<Val> &a
     struct Hit {
         VarDef *root;
         TypeExpr *bound;
+        TypeExpr *arr;   // Null where the record does not say.
         bool growonly;
         ShrinkBalance balance;
         const char *how;
@@ -2938,7 +3008,7 @@ inline void TypeCheck::ApplyCalleeShrinks(Node *at, FnSpec *spec, vector<Val> &a
             if (CoreRetainedShrinkConflict(argument, h.root, h.bound, h.growonly))
                 NoteCoreShrinkUnsupported(CoreShrinkBoundary::Demand, at->line);
         }
-        NoteShrinkEvent(at, h.root, h.bound, op);
+        NoteShrinkEvent(at, h.root, h.bound, op, h.arr);
     };
     // A shrink of the `arr` at root, and, where root is inexact or only
     // bounds it, of every other array it may be (ShrinkTargets). An
@@ -2948,7 +3018,7 @@ inline void TypeCheck::ApplyCalleeShrinks(Node *at, FnSpec *spec, vector<Val> &a
                       ShrinkBalance balance) {
         auto growonly = arr ? GrowOnlyTail(arr) : IsGrowOnlyRootVar(roots.Root());
         for (auto &t : ShrinkTargets(roots, arr))
-            hits.push_back({ t.root, t.bound ? arr : nullptr, growonly,
+            hits.push_back({ t.root, t.bound ? arr : nullptr, arr, growonly,
                              growonly ? SB_UNBALANCED : balance,
                              roots.Exact() && t.root == roots.Root() ? how : "may shrink" });
     };
@@ -3080,13 +3150,33 @@ inline TypeCheck::Alias TypeCheck::MayAliasRoots(VarDef *a, bool aexact, VarDef 
     return AL_NO;
 }
 
-inline void TypeCheck::NoteGrow(Node *at, const Roots &roots, const string &what) {
+inline TypeExpr *TypeCheck::SoleResizableIn(TypeExpr *t) {
+    if (!t || ClassOf(t) != SC_RESIZABLE) return nullptr;
+    if (t->kind == TY_ARRAY) return t;
+    TypeExpr *arr = nullptr;
+    auto mixed = AnyField(t, [&](TypeExpr *ft) {
+        if (ClassOf(ft) != SC_RESIZABLE) return false;
+        auto a = SoleResizableIn(ft);
+        if (!a || (arr && !TypeEq(a, arr))) return true;
+        arr = a;
+        return false;
+    });
+    return mixed ? nullptr : arr;
+}
+
+inline void TypeCheck::NoteGrow(Node *at, const Roots &roots, const string &what, TypeExpr *t) {
+    auto arr = SoleResizableIn(t);
+    auto note = [&](vector<TypeExpr *> &types) {
+        for (auto u : types)
+            if (!u == !arr && (!u || TypeEq(u, arr))) return;
+        types.push_back(arr);
+    };
     for (auto &a : roots.alts) {
         auto root = a.root;
         if (!root || IsTemp(root)) continue;
-        cur.growlog.push_back({ at, root, a.exact, what });
-        NoteRootEvent(root, [](FnSpec *s, int i) { s->record.growparams.insert(i); },
-                      [](FnSpec *s, VarDef *r) { s->record.growexternals.insert(r); });
+        cur.growlog.push_back({ at, root, a.exact, what, false, arr });
+        NoteRootEvent(root, [&](FnSpec *s, int i) { note(s->record.growparams[i]); },
+                      [&](FnSpec *s, VarDef *r) { note(s->record.growexternals[r]); });
     }
 }
 
@@ -3094,18 +3184,24 @@ inline void TypeCheck::NoteGrow(Node *at, const Roots &roots, const string &what
 // logged with the growths: a value under construction in the array meanwhile
 // would be freed under it (CheckGrowsSince).
 inline void TypeCheck::NoteShrinkEvent(Node *at, VarDef *root, TypeExpr *bound,
-                                       const string &what) {
+                                       const string &what, TypeExpr *t) {
     if (!root || IsTemp(root)) return;
-    cur.growlog.push_back({ at, root, !bound, what, true });
+    cur.growlog.push_back({ at, root, !bound, what, true, SoleResizableIn(t) });
 }
 
 // The value built at the top or in a slot of the array `built` may be, by
 // the expression checked since cur.growlog was `base` long: none of the growths
 // logged meanwhile may have been of that array, or it would have landed
-// inside the value, and none of the shrinks.
-inline void TypeCheck::CheckGrowsSince(size_t base, const Roots &built, const string &what) {
+// inside the value, and none of the shrinks. A resizable array of another
+// type is another array, whatever the roots, and lies outside the value, as
+// resizables are never elements and a stack holds one (§1.3, §3.4); any
+// other growable array may lie inside it.
+inline void TypeCheck::CheckGrowsSince(size_t base, const Roots &built, const string &what,
+                                       TypeExpr *t) {
+    auto arr = SoleResizableIn(t);
     for (auto i = base; i < cur.growlog.size(); i++) {
         auto e = cur.growlog[i];
+        if (arr && e.arr && !TopConstEq(arr, e.arr)) continue;
         for (auto &b : built.alts) {
             auto may = MayAliasRoots(e.root, e.exact, b.root, b.exact);
             if (may == AL_NO) continue;
@@ -3127,17 +3223,18 @@ inline void TypeCheck::CheckGrowsSince(size_t base, const Roots &built, const st
 inline void TypeCheck::ApplyCalleeGrows(Node *at, FnSpec *spec, vector<Val> &argvals,
                                         string_view name) {
     // A record notes a growth of a parameter's class (ClassArgRoot).
-    auto grows = [&](size_t i, const char *how) {
+    auto grows = [&](size_t i, const char *how, TypeExpr *arr) {
         if (i >= argvals.size()) return;
         auto roots = ClassArgRoots(spec->argtypes[i], argvals[i]);
         auto root = roots.Root();
         if (!root || IsTemp(root)) return;
-        NoteGrow(at, roots, cat("call ", name, ", which ", how, " ", root->name));
+        NoteGrow(at, roots, cat("call ", name, ", which ", how, " ", root->name), arr);
     };
     if (spec->sf->isextern) {
         for (size_t i = 0; i < spec->argtypes.size(); i++) {
             auto pt = spec->argtypes[i];
-            if (IsPlainRef(pt) && ClassOf(pt->ref->sub) == SC_RESIZABLE) grows(i, "may grow");
+            if (IsPlainRef(pt) && ClassOf(pt->ref->sub) == SC_RESIZABLE)
+                grows(i, "may grow", pt->ref->sub);
         }
         return;
     }
@@ -3145,9 +3242,11 @@ inline void TypeCheck::ApplyCalleeGrows(Node *at, FnSpec *spec, vector<Val> &arg
     // edge grows nothing yet.
     auto rec = RecordOf(spec);
     if (!rec) return;
-    for (auto pi : rec->growparams) grows((size_t)pi, "grows");
-    for (auto vd : rec->growexternals)
-        NoteGrow(at, RootsOf(vd), cat("call ", name, ", which grows ", vd->name));
+    for (auto &[pi, arrs] : rec->growparams)
+        for (auto arr : arrs) grows((size_t)pi, "grows", arr);
+    for (auto &[vd, arrs] : rec->growexternals)
+        for (auto arr : arrs)
+            NoteGrow(at, RootsOf(vd), cat("call ", name, ", which grows ", vd->name), arr);
 }
 
 // A callee's writable references and stores reach the same roots at its

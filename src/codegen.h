@@ -60,13 +60,19 @@ namespace goose {
 // the element count (or the whole frame object) to it. A `pool` lvalue is a
 // gs_pref, which a construct's value choosing among pools reaches as each
 // branch's pool reference (GenPrefVal).
-enum DstKind { DK_DISCARD, DK_LVALUE, DK_STACK };
+// DK_BRANCH is where an inlined bool call in a condition delivers its value
+// (CodeGen::GenBranch): a branch to label s where the value is `when`,
+// leaving the scopes down to `exitscope` on the way, and on through the
+// call where it is not.
+enum DstKind { DK_DISCARD, DK_LVALUE, DK_STACK, DK_BRANCH };
 struct Dst {
     DstKind k = DK_DISCARD;
     string s;
     TypeExpr *t = nullptr;
     string lenlv;
     bool pool = false;
+    bool when = false;
+    int exitscope = -1;
 };
 
 // What a relative store knows of the reference it encodes beyond its type:
@@ -297,6 +303,7 @@ struct CodeGen {
     // uniquified mangle.
 
     string Mangle(TypeExpr *t);
+    map<VarDef *, int> ixmangles;   // Index types' arrays, numbered for Mangle.
 
     unordered_map<string, string> ctypes;   // mangle -> emitted C type name.
     bool corebuiltins = false;
@@ -484,6 +491,7 @@ struct CodeGen {
     int stknext = 0, stkmax = 0;
     string spexpr;                       // "gs_sp" inside functions, "0" at global init.
     set<string> fnused;                  // Local C identifiers.
+    unordered_map<string, int> fnnextsuffix;
     unordered_map<const VarDef *, string> vnames;
     unordered_map<const VarDef *, string> vstk;    // Stack expr per nonfixed local.
     unordered_map<const VarDef *, pair<string, string>> vpool;  // fl base name, fl stack expr.
@@ -866,6 +874,7 @@ struct CodeGen {
         ~FillScope() { for (auto n : added) cg.fillvalues.erase(n); }
     };
     string GenPure(Node *n);
+    string IndexTypeCheck(const string &x, TypeExpr *t, Line ln);
     static string IntStr(int64_t v);
     static string FltStr(double v, bool f32);
     Loc IndexLoc(Loc lv, Node *idxnode, Line ln, bool nobc);
@@ -899,6 +908,11 @@ struct CodeGen {
     string GenRefVal(Node *child, Line ln);
     string GenXD(Node *n, TypeExpr *want);
     string GenTruth(Node *n);
+    bool SpeculativeForm(Binary *b);
+    Binary *ChainOp(Node *n);
+    InlineBlock *BranchCall(Node *n);
+    bool BranchChain(Node *n);
+    void GenBranch(Node *n, bool when, string lbl, int exitscope = -1);
     bool Speculatable(Node *n, bool idxok, bool truth, int &budget);
     bool SpeculatablePlace(Node *n, bool idxok, int &budget);
 
@@ -1060,17 +1074,21 @@ struct CodeGen {
                      vector<const VarDef *> binders = {});
     static bool StraightCode(Node *n);
     bool InStraightLoop();
+    static bool CallsRecursive(Node *n);
 
-    // Divisors fixed for a loop being emitted, by DivisorKey: the C locals
+    // Divisors fixed for a loop being emitted, by DivisionKey: the C locals
     // holding the divisor's value as a u64, its gs_divu_gen magic and its
-    // shift (HoistDivisors).
-    struct DivMagic { string val, magic, more; };
+    // shift, or as a u32 and gs_divu32_gen's where `narrow` (HoistDivisors).
+    // `zeronone`: only a zero divisor leaves it without a magic.
+    struct DivMagic { string val, magic, more; bool narrow, zeronone; };
     unordered_map<string, DivMagic> divmagic;
     // The variables of the specialization being emitted that a reference is
     // made to somewhere in it (RefdLocals), for refdspec.
     set<const VarDef *> refdlocals;
     FnSpec *refdspec = nullptr;
     bool LoopDivisible(Binary *b);
+    static bool NarrowDivision(Binary *b);
+    string DivisionKey(Binary *b, const VarDef **root = nullptr, bool *path = nullptr);
     string DivisorKey(Node *n, const VarDef **root = nullptr, bool *path = nullptr);
     string DivisorValue(Node *n, string &ok);
     const set<const VarDef *> &RefdLocals();

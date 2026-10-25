@@ -176,9 +176,9 @@ string:
 * `@ref` is required for a git source. A tag or a commit hash is a pin; a
   branch name is accepted and behaves like a pin until `goose fetch
   --update`, which is spelled out in the docs as the reason to prefer tags.
-* A path (`./`, `../`, `/`, or a drive letter) is a directory used in place,
-  relative to the importing file. No git involved, for developing a library
-  beside the program that uses it.
+* A path (`.`, `..`, `./`, `../`, `/`, or a drive letter) is a directory
+  used in place, relative to the importing file. No git involved, for
+  developing a library beside the program that uses it.
 
 The grammar line becomes
 
@@ -308,6 +308,7 @@ comments, `key = value;`, strings, `true`/`false`, integers and
 | `cmake_target` | both | the package root holds a CMake project, and this is the static library target to build and link (§5.2) |
 | `cmake_options` | both | `NAME=VALUE` cache entries for its configure |
 | `main_thread_only` | both | its functions may not be reached from a `thread_fn` (§5.4) |
+| `exclude` | both | directories, relative to the package root, whose `.goose` files are not the package's own: the JIT library's symbol table (§5.3) looks for extern fns in neither these nor a directory below the root that holds a sidecar of its own |
 | `output` | program | the executable's name, relative to the root's directory |
 
 Every `c_*` key takes a `_windows`, `_linux` or `_macos` suffix for a
@@ -322,8 +323,11 @@ per toolchain (§6.1) under `build/pkg/…/<toolchain>/`, release configuration,
 static C runtime on Windows, in two forms: what an AOT program links, and a
 shared library the JIT loads. Both are built in one go, by the first `run` or
 `build` that reaches the package; `check` never builds. Inputs are stamped:
-a path package rebuilds when any of its sources is newer than its build, a
-git checkout never (it never changes).
+a path package rebuilds when any of its C sources (by path, modification
+time and size), its sidecar or the set of its extern fns changes, and every
+package, a git checkout included, when `goose.h` does: the header the
+compiler gives native C for the values it cannot declare itself, a
+builder's `gs_rref` (spec §7.10).
 
 ### 5.1 Plain C sources
 
@@ -342,9 +346,18 @@ CMakeLists directly:
 
 ```cmake
 cmake_minimum_required(VERSION 3.20)
-project(goose_pkg_physics C CXX)
+project(goose_pkg_physics C)
+# C++, and on macOS Objective-C and Objective-C++, where there is a compiler.
+include(CheckLanguage)
+check_language(CXX)
+if(CMAKE_CXX_COMPILER)
+    enable_language(CXX)
+endif()
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 add_subdirectory("<package root>" pkg EXCLUDE_FROM_ALL)
+if(NOT TARGET <cmake_target>)
+    message(FATAL_ERROR "... names the CMake target <cmake_target>, which ... does not define")
+endif()
 # The JIT library: the symbol table pulls what it names out of the target.
 add_library(goose_jit_physics SHARED goose_symbols.c)
 target_link_libraries(goose_jit_physics PRIVATE <cmake_target>)
@@ -355,7 +368,10 @@ target_link_libraries(goose_linkprobe PRIVATE <cmake_target>)
 
 configured with `-DCMAKE_BUILD_TYPE=Release`, the discovered C and C++
 compilers, the `cmake_options`, and a generator chosen as Ninja if on PATH,
-else the platform default; built with `--config Release`.
+else the platform default; built with `--config Release`. The configure
+command that last succeeded is kept beside the build; any other one (an
+edited `cmake_options`, or a configure that failed) configures again from a
+fresh cache.
 
 The response file for AOT programs is the link closure of `<cmake_target>`:
 its archive, every static library it depends on, and the system libraries
@@ -400,11 +416,12 @@ GOOSE_EXPORT const goose_symbol *goose_symbols(void) {
 ```
 
 The names are every `extern fn`'s C symbol in every `.goose` file under the
-package root, which the compiler parses for this (dummy prototypes: taking a
-function's address needs no signature). One exported symbol per library, so
-Windows needs no export lists. Linking the table pulls exactly the objects
-that define those functions, and their dependencies, into the shared
-library.
+package root (but for the sidecar's `exclude` directories and those below the
+root holding a sidecar of their own, §4.7), which the compiler parses for
+this (dummy prototypes: taking a function's address needs no signature). One
+exported symbol per library, so Windows needs no export lists. Linking the
+table pulls exactly the objects that define those functions, and their
+dependencies, into the shared library.
 
 A JIT run then, for each package whose extern functions the program's code
 reaches (codegen already collects `usedexterns`; each extern's declaring file
@@ -461,6 +478,12 @@ The order: `--cc`, then `GOOSE_CC`, then `cc = "…";` in `GOOSE_HOME/config`
 * **Linux**: `cc`, then `gcc`, then `clang`, on PATH.
 * **macOS**: `cc` (Apple clang).
 
+One command finds its toolchain once and builds everything with it: the
+native parts, the runtime object and the link. "On PATH" is the PATH the
+compiler was started with: building a CMake package on Windows imports the
+vcvars64 environment, which puts `cl` on PATH, and discovery finds the same
+toolchain whether that happened earlier in the process or not.
+
 `--cc` takes a name (`msvc`, `clang-cl`, `clang`, `gcc`) or a path. Each
 toolchain has a *style*, `msvc` or `cc`, which decides the spelling of every
 flag and which response file a package's build writes, exactly as
@@ -473,7 +496,12 @@ all of it.
 Processes are started by a small cross-platform runner (`src/process.h`:
 `CreateProcessW`, `posix_spawn`), output captured to a log file in the build
 directory and shown on failure with the command that failed; `-v` shows
-every command, `--dry-run` only prints them.
+every command, `--dry-run` only prints them. While they run, `src/progress.h`
+keeps a person informed without flooding a log: each step that does real
+work (a fetch, a package's native part, the runtime object) prints one line,
+and only where stderr is a terminal does a live line, redrawn in place,
+show the running command, its time and the last line it printed.
+`GOOSE_PROGRESS=plain|live` overrides the terminal check.
 
 Without any C compiler:
 
@@ -546,7 +574,8 @@ writes `link-cc.rsp` and `link-msvc.rsp` under `pkg/…/<config>/` through the
 same wrapper and file-API probe as §5.2 (`cmake/package.cmake`, shared by
 the two). The compiler is built knowing that directory, as it knows
 `GOOSE_GFX_LINK_PATH` today, and looks there, then beside its own binary,
-then in `GOOSE_HOME`, for a builtin package's response file. A builtin
+for a builtin package's response file, as it does for the package's sources.
+A builtin
 package for a plain-C sidecar is the same minus `add_subdirectory`: CMake
 compiles `c_sources` itself.
 
@@ -557,6 +586,14 @@ The release binaries and CI configure with `all`; a developer's first
 `cmake -B build` builds the compiler alone in a fraction of the time, and
 the graphics samples still run, after one fetch and build into `~/.goose`,
 shared by every worktree.
+
+A release (`.github/workflows/release.yml`, laid out by
+`scripts/package_release.py`) has no build tree to look in: each builtin
+package is under `pkg/<name>/` beside the compiler, its sources without
+their vendored dependencies, and the static libraries of its link closure in
+`lib/`, which its response files there name relative to themselves. A link
+takes a copy of those under `GOOSE_HOME/build/builtin/` with the paths made
+absolute, one per place the compiler is unpacked.
 
 ### 7.2 What stays in the compiler
 
@@ -691,7 +728,10 @@ until the new one covers it.
   turn out to be used in anger, `goose vendor`.
 * **Fetching without git** (GitHub tarballs over HTTPS), and prebuilt
   package binaries, when the three platforms times the configurations are
-  worth it.
+  worth it. `goose.h` repeats layouts codegen emits (`gs_stack`, `gs_rhdr`,
+  `gs_rref`), and a part built from source is rebuilt when it changes; a
+  prebuilt one would need those layouts to carry a version it is checked
+  against.
 * **Package data at run time**: a library's files reachable through a
   `package_dir("gfx")` in JIT and copied beside the executable by `build`.
   `embed_file` covers fonts and tables until then.

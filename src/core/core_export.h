@@ -1,14 +1,3 @@
-// Goose compiler — Typed Goose Core, export from the checked program.
-//
-// Reads the checked, unoptimized specializations reachable from `main` and
-// builds the in-memory module (core_ir.h) without changing anything: it
-// creates no types and no specializations and prints no warnings. What the
-// checker left implicit is made explicit here. Reference transparency becomes
-// a read through a dereference, array-to-slice coercions become slicing,
-// implicit integer widening becomes a conversion, and a nested function
-// becomes an ordinary implementation that takes each free variable as a
-// trailing by-reference parameter. A program that uses anything outside the
-// pilot profile throws CoreUnsupported with the feature's name.
 #pragma once
 
 namespace goose {
@@ -94,7 +83,9 @@ private:
     unordered_map<const StructInst *, int> structid;
 
     vector<FnSpec *> ctxspecs;
-    unordered_map<const FnSpec *, int> ctxof;
+    vector<vector<CoreRequest>> ctxrequests;
+    unordered_map<const FnSpec *, map<vector<CoreRequest>, int>> ctxvariants;
+    map<vector<CoreImplId>, CoreTargetId> targetsetid;
 
     // The free variables of each reachable specialization, in the order the
     // legacy backend passes them.
@@ -110,6 +101,7 @@ private:
         unordered_map<const VarDef *, int> varid;
         int nextscope = 0;
         vector<VarDef *> *free = nullptr;
+        vector<CoreRequest> requests;
     } cur;
 
     // Control flow inside an expression block: how many such blocks are open,
@@ -233,26 +225,98 @@ private:
         }
     }
 
-    // Array and slice elements are fixed-size scalars, flat structs, or fixed
-    // arrays composed of those values.
-    CoreTypeId ElementTy(TypeExpr *t) {
-        auto id = Ty(t);
-        switch (mod.Type(id).kind) {
-            case CoreType::Int: case CoreType::Bool: case CoreType::Arr: case CoreType::Struct: return id;
-            case CoreType::Ref: case CoreType::Slice: Fail("stored-reference");
-            default: Fail("variable-element");
+    bool FlatCoreType(CoreTypeId type) const {
+        auto &t = mod.Type(type);
+        switch (t.kind) {
+            case CoreType::Int: case CoreType::Bool: case CoreType::Struct:
+                return true;
+            case CoreType::Arr:
+                return t.count > 0 && FlatCoreType(t.elem);
+            default:
+                return false;
         }
     }
 
-    CoreTypeId OwnerElementTy(TypeExpr *t) {
-        unordered_set<const StructInst *> open;
-        if (!t || t->cq || !FlatFixedField(t, open)) Fail("nonflat-element", t ? t->line : here);
+    bool VariableElementType(CoreTypeId type) const {
+        auto &t = mod.Type(type);
+        switch (t.kind) {
+            case CoreType::Arr:
+                return VariableElementType(t.elem);
+            case CoreType::VarArr:
+                return FlatCoreType(t.elem) || VariableElementType(t.elem);
+            default:
+                return false;
+        }
+    }
+
+    bool NonfixedValueType(CoreTypeId type) const {
+        auto &t = mod.Type(type);
+        return t.kind == CoreType::VarArr || t.kind == CoreType::Grow ||
+               t.kind == CoreType::GrowShrink ||
+               (t.kind == CoreType::Arr && VariableElementType(type));
+    }
+
+    CoreTypeId CallResultType(FnSpec *spec) {
+        if (spec->rets.empty()) return mod.UnitType();
+        if (spec->rets.size() == 1) return ResultTy(spec, 0);
+        CoreType type;
+        type.kind = CoreType::Tuple;
+        for (size_t i = 0; i < spec->rets.size(); i++) type.parts.push_back(ResultTy(spec, i));
+        return mod.Intern(type);
+    }
+
+    bool HasNonfixedResult(FnSpec *spec) {
+        for (size_t i = 0; i < spec->rets.size(); i++)
+            if (NonfixedValueType(ResultTy(spec, i))) return true;
+        return false;
+    }
+
+    CoreExprP ReturnValue(Node *value, FnSpec *target, size_t index, bool allowLocal) {
+        auto type = ResultTy(target, index);
+        if (allowLocal && NonfixedValueType(type)) {
+            if (auto id = Is<Ident>(value); id && id->vdef) {
+                auto found = cur.varid.find(id->vdef);
+                if (found != cur.varid.end() && NonfixedValueType(cur.impl->vars[found->second].type) &&
+                    found->second >= (int)cur.impl->params.size()) {
+                    auto e = NewExpr(CoreExprKind::ResultLocal, type);
+                    e->var = found->second;
+                    e->org = Org(value->line, CoreOriginKind::Return);
+                    return e;
+                }
+            }
+        }
+        if (auto call = Is<Call>(value); call && call->spec && call->spec->rets.size() == 1) {
+            auto requests = DefaultRequests(call->spec);
+            if (target == cur.spec && index < cur.requests.size()) requests[0] = cur.requests[index];
+            else {
+                auto targetrequests = TargetContext(target).second;
+                if (index < targetrequests.size()) requests[0] = targetrequests[index];
+            }
+            return ReborrowTo(CallValue(call, false, std::move(requests)), type);
+        }
+        return ReborrowTo(Value(value), type);
+    }
+
+    CoreTypeId ElementTy(TypeExpr *t) {
         auto id = Ty(t);
         switch (mod.Type(id).kind) {
-            case CoreType::Int: case CoreType::Bool: case CoreType::Arr: case CoreType::Struct:
-                return id;
-            default: Fail("nonflat-element");
+            case CoreType::Int: case CoreType::Bool: case CoreType::Struct: return id;
+            case CoreType::Ref: case CoreType::Slice: Fail("stored-reference");
+            default: break;
         }
+        if (FlatCoreType(id)) return id;
+        if (CoreHasConstruction(mod.profile) && VariableElementType(id)) return id;
+        Fail("variable-element");
+    }
+
+    CoreTypeId OwnerElementTy(TypeExpr *t, bool allowVariable = false) {
+        unordered_set<const StructInst *> open;
+        if (!t || t->cq) Fail("nonflat-element", t ? t->line : here);
+        auto id = Ty(t);
+        if (FlatCoreType(id)) return id;
+        if (allowVariable && CoreHasConstruction(mod.profile) && VariableElementType(id)) return id;
+        if (!FlatFixedField(t, open)) Fail("nonflat-element", t->line);
+        return id;
     }
 
     bool FlatFixedField(TypeExpr *t, unordered_set<const StructInst *> &open) {
@@ -371,10 +435,13 @@ private:
         // component-before-parent.
         auto id = (int)mod.structs.size();
         structid.emplace(inst, id);
-        mod.profile = CoreProfile::Shrink;
+        mod.profile = CoreWithShrink(mod.profile);
         mod.structs.push_back(CoreStruct { layout.size, {} });
         CoreStruct descriptor;
         descriptor.size = layout.size;
+        auto displaytype = *t;
+        displaytype.cq = false;
+        displaytype.Dump(descriptor.displayName);
         for (size_t i = 0; i < inst->st->fields.size(); i++) {
             auto &field = inst->st->fields[i];
             if (field.ispad) continue;
@@ -439,10 +506,14 @@ private:
                         ct.count = a->size;
                         break;
                     case A_GROW:
-                        if (position == TypePosition::Parameter) Fail("nonfixed-construction", t->line);
+                        if (position == TypePosition::Parameter) mod.profile = CoreProfile::Construction;
                         ct.kind = CoreType::Grow;
                         break;
-                    case A_VAR: Fail("variable-array");
+                    case A_VAR:
+                        if (a->lenstorage >= 0) Fail("array-prefix", t->line);
+                        mod.profile = CoreProfile::Construction;
+                        ct.kind = CoreType::VarArr;
+                        break;
                     case A_LIMITED:
                         if (position == TypePosition::Parameter) Fail("limited-value", t->line);
                         if (!a->sizeexpr) Fail("runtime-capacity", t->line);
@@ -450,16 +521,17 @@ private:
                         if (a->size > INT32_MAX) Fail("capacity-limit", t->line);
                         ct.kind = CoreType::Limited;
                         ct.count = a->size;
-                        mod.profile = CoreProfile::Shrink;
+                        mod.profile = CoreWithShrink(mod.profile);
                         break;
                     case A_GROWSHRINK:
-                        if (position == TypePosition::Parameter) Fail("nonfixed-construction", t->line);
+                        if (position == TypePosition::Parameter) mod.profile = CoreProfile::Construction;
                         ct.kind = CoreType::GrowShrink;
-                        mod.profile = CoreProfile::Shrink;
+                        mod.profile = CoreWithShrink(mod.profile);
                         break;
                 }
                 ct.elem = (a->akind == A_GROW || a->akind == A_GROWSHRINK || a->akind == A_LIMITED)
-                              ? OwnerElementTy(a->sub) : ElementTy(a->sub);
+                              ? OwnerElementTy(a->sub, a->akind == A_GROW)
+                              : ElementTy(a->sub);
                 break;
             }
             case TY_SLICE:
@@ -507,9 +579,15 @@ private:
 
     // A result's type likewise: read-only where some return of it is.
     CoreTypeId ResultTy(FnSpec *sp, size_t i) {
-        if (sp->rets[i] && sp->rets[i]->kind == TY_ARRAY && sp->rets[i]->arr->akind != A_FIXED)
-            Fail(sp->rets[i]->arr->akind == A_LIMITED ? "limited-value" : "nonfixed-construction",
-                 sp->rets[i]->line);
+        auto *result = sp->rets[i];
+        if (result && result->kind == TY_ARRAY) {
+            if (result->arr->akind == A_LIMITED) Fail("limited-value", result->line);
+            if (result->arr->akind == A_VAR || result->arr->akind == A_GROW ||
+                result->arr->akind == A_GROWSHRINK ||
+                (result->arr->akind == A_FIXED && result->arr->sub &&
+                 result->arr->sub->kind == TY_ARRAY && result->arr->sub->arr->akind == A_VAR))
+                mod.profile = CoreProfile::Construction;
+        }
         auto t = Ty(sp->rets[i]);
         if (i < sp->record.retroots.size() && sp->record.retroots[i].set && !sp->record.retroots[i].writable)
             t = Constify(t);
@@ -518,6 +596,7 @@ private:
 
     bool OwnerLiteralRun(Node *n) const {
         if (!n) return false;
+        if (Is<StrLit>(n)) return true;
         if (Is<ArrayLit>(n)) {
             auto a = (ArrayLit *)n;
             return !a->fillval && !a->capexpr;
@@ -527,6 +606,15 @@ private:
             return x->elseb && OwnerLiteralRun(x->elseb);
         }
         if (auto b = Is<Block>(n)) return b->tail && OwnerLiteralRun(b->tail);
+        return false;
+    }
+
+    bool OwnerContainsString(Node *n) const {
+        if (!n) return false;
+        if (Is<StrLit>(n)) return true;
+        if (auto x = Is<IfExpr>(n))
+            return OwnerContainsString(x->thenb) || OwnerContainsString(x->elseb);
+        if (auto b = Is<Block>(n)) return OwnerContainsString(b->tail);
         return false;
     }
 
@@ -569,10 +657,10 @@ private:
         if (!grows && !shrinks && !writes) return CoreMut::Const;
         switch (t->arr->akind) {
             case A_GROW:
-                if (shrinks) mod.profile = CoreProfile::Shrink;
+                if (shrinks) mod.profile = CoreWithShrink(mod.profile);
                 return CoreMut::Mut;
             case A_GROWSHRINK:
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 return CoreMut::Mut;
             case A_LIMITED:
                 Fail("limited-capture-mutation", v->line);
@@ -656,10 +744,60 @@ private:
     }
 
     int ContextOf(FnSpec *spec) {
-        if (auto it = ctxof.find(spec); it != ctxof.end()) return it->second;
+        return ContextOf(spec, DefaultRequests(spec));
+    }
+
+    vector<CoreRequest> DefaultRequests(FnSpec *spec) {
+        vector<CoreRequest> requests;
+        for (size_t i = 0; i < spec->rets.size(); i++) {
+            auto type = ResultTy(spec, i);
+            requests.push_back(NonfixedValueType(type) ? CoreRequest::Value : CoreRequest::Register);
+        }
+        return requests;
+    }
+
+    int ContextOf(FnSpec *spec, const vector<CoreRequest> &requests) {
+        if (requests.size() != spec->rets.size()) Fail("result-request");
+        for (size_t i = 0; i < requests.size(); i++) {
+            auto type = ResultTy(spec, i);
+            auto nonfixed = NonfixedValueType(type);
+            if ((!nonfixed && requests[i] != CoreRequest::Register) ||
+                (nonfixed && requests[i] == CoreRequest::Register))
+                Fail("result-request");
+            if (requests[i] == CoreRequest::ElementRun && !nonfixed) Fail("result-request");
+        }
+        auto &variants = ctxvariants[spec];
+        if (auto it = variants.find(requests); it != variants.end()) return it->second;
         auto id = (int)ctxspecs.size();
         ctxspecs.push_back(spec);
-        ctxof[spec] = id;
+        ctxrequests.push_back(requests);
+        variants[requests] = id;
+        return id;
+    }
+
+    string ContextStableKey(FnSpec *spec, const vector<CoreRequest> &requests) {
+        auto key = keys.Context(spec).total.Short();
+        if (requests == DefaultRequests(spec)) return key;
+        key += "/requests-";
+        for (auto request : requests)
+            key += request == CoreRequest::Register ? 'r' : request == CoreRequest::Value ? 'v' : 'e';
+        return key;
+    }
+
+    pair<CoreImplId, vector<CoreRequest>> TargetContext(FnSpec *spec) {
+        auto variants = ctxvariants.find(spec);
+        if (variants == ctxvariants.end() || variants->second.size() != 1) Fail("return-from-request");
+        return { variants->second.begin()->second, variants->second.begin()->first };
+    }
+
+    CoreTargetId TargetSetOf(FnSpec *spec) {
+        auto [member, requests] = TargetContext(spec);
+        vector<CoreImplId> members { member };
+        if (auto found = targetsetid.find(members); found != targetsetid.end()) return found->second;
+        auto id = (CoreTargetId)mod.targets.size();
+        targetsetid.emplace(members, id);
+        mod.targets.push_back({ std::move(members) });
+        mod.profile = CoreProfile::Construction;
         return id;
     }
 
@@ -690,8 +828,14 @@ private:
                 if (reportonly && !stdlib) Remember(u);
                 // What it called is not part of the program.
                 while (ctxspecs.size() > nctx) {
-                    ctxof.erase(ctxspecs.back());
+                    auto spec = ctxspecs.back();
+                    auto requests = ctxrequests.back();
+                    if (auto variants = ctxvariants.find(spec); variants != ctxvariants.end()) {
+                        variants->second.erase(requests);
+                        if (variants->second.empty()) ctxvariants.erase(variants);
+                    }
                     ctxspecs.pop_back();
+                    ctxrequests.pop_back();
                 }
                 // A skipped initializer must not leave struct descriptors
                 // without a corresponding global or field that uses them.
@@ -725,6 +869,7 @@ private:
         cg.org = Org(g->line, CoreOriginKind::Global);
         cg.module = keys.ModuleOf(g->line.fileidx);
         coerceorg = cg.org;
+        if (OwnerContainsString(g->inits[0])) Fail("nonfixed-construction", g->inits[0]->line);
         if (v->type->kind == TY_ARRAY && v->type->arr->akind != A_FIXED)
             RequireOwnerLiteralRun(g->inits[0], v->type);
         cg.init = Value(g->inits[0]);
@@ -774,11 +919,14 @@ private:
         cur.spec = sp;
         cur.impl = &impl;
         cur.free = &freevars[sp];
+        cur.requests = ctxrequests[k];
         impl.name = string(sp->sf->name);
         if (!CoreIsUtf8(impl.name)) Fail("non-utf8-text");
-        if (sp->rets.size() > 1) ReportOrFail("multiple-results", sp->sf->line);
         if (sp->sf->isthread) ReportOrFail("thread", sp->sf->line);
-        for (size_t r = 0; r < sp->rets.size(); r++) impl.results.push_back(ResultTy(sp, r));
+        for (size_t r = 0; r < sp->rets.size(); r++) {
+            auto type = ResultTy(sp, r);
+            impl.results.push_back({ type, cur.requests[r], {} });
+        }
         auto porg = Org(sp->sf->line, CoreOriginKind::Param);
         for (size_t i = 0; i < sp->params.size(); i++) {
             auto vd = sp->params[i];
@@ -801,11 +949,12 @@ private:
             impl.params.push_back({ id, true });
         }
         impl.body = Body(sp->body);
+        FillNamedResults(sp);
 
         auto &ctx = mod.contexts.back();
         ctx.impl = k;
         ctx.declkey = DeclKey(sp);
-        ctx.stablekey = keys.Context(sp).total.Short();
+        ctx.stablekey = ContextStableKey(sp, cur.requests);
         ctx.module = keys.ModuleOf(sp->sf->line.fileidx);
         if (!reportonly) {
             FillRoots(sp, ctx);
@@ -815,6 +964,29 @@ private:
             } catch (CoreUnsupported &u) {
                 Remember(u);
             }
+        }
+    }
+
+    void FillNamedResults(FnSpec *sp) {
+        set<CoreVarId> named;
+        for (size_t i = 0; i < cur.impl->results.size(); i++) {
+            auto &result = cur.impl->results[i];
+            if (result.request != CoreRequest::Value || !NonfixedValueType(result.type)) continue;
+            auto local = NamedResultOf(sp->body, sp->sf, sp->rets.size(), i);
+            if (!local) continue;
+            auto found = cur.varid.find(local);
+            if (found == cur.varid.end() || found->second < (int)cur.impl->params.size() ||
+                named.count(found->second)) continue;
+            auto source = cur.impl->vars[found->second].type;
+            auto &sourceType = mod.Type(source);
+            auto &resultType = mod.Type(result.type);
+            auto resizableToVar = (sourceType.kind == CoreType::Grow ||
+                                   sourceType.kind == CoreType::GrowShrink) &&
+                                  resultType.kind == CoreType::VarArr &&
+                                  sourceType.elem == resultType.elem;
+            if (source != result.type && !resizableToVar) continue;
+            result.namedLocal = found->second;
+            named.insert(found->second);
         }
     }
 
@@ -829,10 +1001,16 @@ private:
             try {
                 if (t->exprtype && t->exprtype->kind != TY_VOID && !cur.impl->results.empty()) {
                     CoreStmt st;
-                    st.kind = CoreStmtKind::Ret;
                     st.org = Org(t->line, CoreOriginKind::Return);
                     coerceorg = st.org;
-                    st.expr = ReborrowTo(Value(t), ResultOfCurrent());
+                    auto call = Is<Call>(t);
+                    if (call && call->spec && call->spec->rets.size() > 1) {
+                        st.kind = CoreStmtKind::RetForward;
+                        st.expr = CallValue(call, true, cur.requests);
+                    } else {
+                        st.kind = CoreStmtKind::Ret;
+                        st.expr = ReturnValue(t, cur.spec, 0, true);
+                    }
                     cb.stmts.push_back(std::move(st));
                 } else {
                     Stmt(t, cb);
@@ -952,11 +1130,25 @@ private:
             case NK_ForLoop: return ForStmt((ForLoop *)n, out);
             case NK_Return: {
                 auto r = (Return *)n;
-                if (!r->from.empty()) Fail("return-from");
                 if (exprdepth) Fail("control-in-expression");
-                if (r->vals.size() > 1) Fail("multiple-results");
+                auto target = r->targetspec ? r->targetspec : cur.spec;
+                if (!target) Fail("return-outside-function");
+                auto nonlocal = !r->from.empty() || target != cur.spec;
+                auto forward = r->vals.size() == 1 && Is<Call>(r->vals[0]) &&
+                               ((Call *)r->vals[0])->spec && ((Call *)r->vals[0])->spec->rets.size() > 1;
                 auto s = MakeStmt(CoreStmtKind::Ret, n->line, CoreOriginKind::Return);
-                if (r->vals.size() == 1) s.expr = ReborrowTo(Value(r->vals[0]), ResultOfCurrent());
+                if (nonlocal) s.target = TargetSetOf(target);
+                if (forward) {
+                    s.kind = nonlocal ? CoreStmtKind::ReturnFromForward : CoreStmtKind::RetForward;
+                    s.expr = CallValue((Call *)r->vals[0], true,
+                                       nonlocal ? TargetContext(target).second : cur.requests);
+                } else if (r->vals.size() > 1 || nonlocal) {
+                    s.kind = nonlocal ? CoreStmtKind::ReturnFrom : CoreStmtKind::RetValues;
+                    for (size_t i = 0; i < r->vals.size(); i++)
+                        s.values.push_back(ReturnValue(r->vals[i], target, i, true));
+                } else if (r->vals.size() == 1) {
+                    s.expr = ReturnValue(r->vals[0], target, 0, true);
+                }
                 out.stmts.push_back(std::move(s));
                 return;
             }
@@ -1011,18 +1203,38 @@ private:
     }
 
     void LetStmt(VarDecl *d, CoreBlock &out) {
-        if (d->names.size() != 1 || d->defs.size() != 1) Fail("multiple-results");
-        if (d->inits.size() != 1) Fail("uninitialized-declaration");
         if (d->reusable) Fail("reusable");
-        auto vd = d->defs[0];
-        auto s = MakeStmt(CoreStmtKind::Let, d->line, CoreOriginKind::Let);
-        // The variable is numbered before its initializer, as it is written.
-        s.var = NewVar(vd, vd->name, VarTy(vd), vd->isvar ? CoreVarKind::Var : CoreVarKind::Let,
-                       out.scope, Org(d->line, CoreOriginKind::Let));
-        if (vd->type->kind == TY_ARRAY && vd->type->arr->akind != A_FIXED)
-            RequireOwnerLiteralRun(d->inits[0], vd->type);
-        s.expr = ReborrowTo(Value(d->inits[0]), cur.impl->vars[s.var].type);
-        out.stmts.push_back(std::move(s));
+        if (d->inits.size() == 1 && d->names.size() > 1) {
+            if (!Is<Call>(d->inits[0]) || d->defs.size() != d->names.size()) Fail("multiple-results");
+            auto call = (Call *)d->inits[0];
+            if (!call->spec || call->spec->rets.size() != d->defs.size()) Fail("multiple-results");
+            auto s = MakeStmt(CoreStmtKind::Receive, d->line, CoreOriginKind::Let);
+            for (size_t i = 0; i < d->defs.size(); i++) {
+                auto vd = d->defs[i];
+                s.vars.push_back(NewVar(vd, vd->name, VarTy(vd), vd->isvar ? CoreVarKind::Var : CoreVarKind::Let,
+                                        out.scope, Org(d->line, CoreOriginKind::Let)));
+            }
+            s.expr = CallValue(call, true);
+            s.org = Org(d->line, CoreOriginKind::Let);
+            out.stmts.push_back(std::move(s));
+            return;
+        }
+        if (d->inits.size() != d->names.size() || d->defs.size() != d->names.size())
+            Fail(d->inits.empty() ? "uninitialized-declaration" : "multiple-results");
+        for (size_t i = 0; i < d->defs.size(); i++) {
+            auto vd = d->defs[i];
+            auto s = MakeStmt(CoreStmtKind::Let, d->line, CoreOriginKind::Let);
+            s.var = NewVar(vd, vd->name, VarTy(vd), vd->isvar ? CoreVarKind::Var : CoreVarKind::Let,
+                           out.scope, Org(d->line, CoreOriginKind::Let));
+            auto value = Value(d->inits[i]);
+            if (vd->type->kind == TY_ARRAY && vd->type->arr->akind == A_LIMITED)
+                RequireOwnerLiteralRun(d->inits[i], vd->type);
+            else if (IsArrayTE(vd->type) && vd->type->arr->akind != A_FIXED &&
+                     !CoreHasConstruction(mod.profile))
+                RequireOwnerLiteralRun(d->inits[i], vd->type);
+            s.expr = ReborrowTo(std::move(value), cur.impl->vars[s.var].type);
+            out.stmts.push_back(std::move(s));
+        }
     }
 
     // The Core type of a variable. A reference bound over a read-only source
@@ -1100,8 +1312,9 @@ private:
             if (IsArrayTE(assigned) &&
                 (assigned->arr->akind == A_GROW || assigned->arr->akind == A_GROWSHRINK)) {
                 auto s = MakeStmt(CoreStmtKind::AssignWhole, a->line, CoreOriginKind::Assign);
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 s.place = ToPlace(a->lval, true);
+                if (OwnerContainsString(a->rhs)) Fail("nonfixed-construction", a->rhs->line);
                 RequireOwnerLiteralRun(a->rhs, assigned);
                 s.expr = Value(a->rhs);
                 out.stmts.push_back(std::move(s));
@@ -1186,13 +1399,21 @@ private:
                     CorePrintArg pa;
                     if (auto sl = Is<StrLit>(a)) {
                         if (!CoreIsUtf8(sl->val)) Fail("non-utf8-text", a->line);
-                        pa.text = true;
+                        pa.kind = CorePrintArg::Text;
                         pa.str = sl->val;
                     } else {
                         here = a->line;
-                        pa.expr = Value(a);
-                        auto k = mod.Type(pa.expr->type).kind;
-                        if (k != CoreType::Int && k != CoreType::Bool) Fail("print-argument", a->line);
+                        auto *type = a->exprtype ? Pointee(a->exprtype) : nullptr;
+                        if (CoreHasConstruction(mod.profile) && type &&
+                            (type->kind == TY_ARRAY || type->kind == TY_SLICE)) {
+                            pa.kind = CorePrintArg::View;
+                            pa.view = ToView(a);
+                        } else {
+                            pa.kind = CorePrintArg::Expr;
+                            pa.expr = Value(a);
+                            auto k = mod.Type(pa.expr->type).kind;
+                            if (k != CoreType::Int && k != CoreType::Bool) Fail("print-argument", a->line);
+                        }
                     }
                     s.print.push_back(std::move(pa));
                 }
@@ -1222,17 +1443,38 @@ private:
                 return;
             }
             case B_APPEND: {
-                auto s = MakeStmt(CoreStmtKind::Append, c->line, CoreOriginKind::Expr);
                 auto an = c->ArgNodes();
-                s.place = OwnerPlace(an[0]);
-                s.view = ToView(an[1]);
-                out.stmts.push_back(std::move(s));
+                auto source = Pointee(an[1]->exprtype);
+                if (IsArrayTE(source) && source->arr->akind == A_FIXED && !NonfixedValueType(Ty(source))) {
+                    auto s = MakeStmt(CoreStmtKind::AppendValue, c->line, CoreOriginKind::Expr);
+                    s.place = OwnerPlace(an[0]);
+                    s.expr = Value(an[1]);
+                    out.stmts.push_back(std::move(s));
+                } else if (IsArrayTE(source) && NonfixedValueType(Ty(source)) &&
+                           (Is<ArrayLit>(an[1]) || Is<Call>(an[1]))) {
+                    auto s = MakeStmt(CoreStmtKind::AppendConstruct, c->line, CoreOriginKind::Expr);
+                    s.place = OwnerPlace(an[0]);
+                    if (auto producer = Is<Call>(an[1]); producer && producer->spec &&
+                        producer->spec->rets.size() == 1) {
+                        auto requests = DefaultRequests(producer->spec);
+                        requests[0] = CoreRequest::ElementRun;
+                        s.expr = CallValue(producer, false, std::move(requests));
+                    } else {
+                        s.expr = Value(an[1]);
+                    }
+                    out.stmts.push_back(std::move(s));
+                } else {
+                    auto s = MakeStmt(CoreStmtKind::Append, c->line, CoreOriginKind::Expr);
+                    s.place = OwnerPlace(an[0]);
+                    s.view = ToView(an[1]);
+                    out.stmts.push_back(std::move(s));
+                }
                 return;
             }
             case B_POP_N: {
                 auto an = c->ArgNodes();
                 auto s = MakeStmt(CoreStmtKind::PopN, c->line, CoreOriginKind::Expr);
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 s.place = OwnerPlace(an[0]);
                 s.expr = Value(an[1]);
                 out.stmts.push_back(std::move(s));
@@ -1241,7 +1483,7 @@ private:
             case B_RESIZE: {
                 auto an = c->ArgNodes();
                 auto s = MakeStmt(CoreStmtKind::Resize, c->line, CoreOriginKind::Expr);
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 s.place = OwnerPlace(an[0]);
                 s.expr = Value(an[1]);
                 if (an.size() == 3) s.expr2 = Value(an[2]);
@@ -1251,7 +1493,7 @@ private:
             case B_CLEAR: {
                 auto an = c->ArgNodes();
                 auto s = MakeStmt(CoreStmtKind::Clear, c->line, CoreOriginKind::Expr);
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 s.place = OwnerPlace(an[0]);
                 out.stmts.push_back(std::move(s));
                 return;
@@ -1482,8 +1724,6 @@ private:
 
     // A mutable reference or slice where the slot has a read-only one of the
     // same elements: reborrowed read-only.
-    CoreTypeId ResultOfCurrent() { return cur.impl && !cur.impl->results.empty() ? cur.impl->results[0] : -1; }
-
     CoreExprP ReborrowTo(CoreExprP e, CoreTypeId want) {
         if (want < 0 || !e || e->type == want) return e;
         auto &w = mod.Type(want);
@@ -1542,7 +1782,19 @@ private:
                 e->flag = ((BoolLit *)n)->val;
                 return e;
             }
-            case NK_StrLit: Fail("string-value");
+            case NK_StrLit: {
+                auto literal = (StrLit *)n;
+                auto type = Ty(n->exprtype);
+                auto &array = mod.Type(type);
+                if (array.kind != CoreType::Grow || mod.Type(array.elem).kind != CoreType::Int ||
+                    mod.Type(array.elem).ity != CoreIntTy::U8)
+                    Fail("string-value", n->line);
+                auto e = NewExpr(CoreExprKind::Bytes, type);
+                for (auto byte : literal->val) e->bytes.push_back((uint8_t)byte);
+                e->org = Org(n->line, CoreOriginKind::Expr);
+                mod.profile = CoreProfile::Construction;
+                return e;
+            }
             case NK_FltLit: Fail("float");
             case NK_Ident: return IdentValue((Ident *)n);
             case NK_ArrayLit: return ArrayValue((ArrayLit *)n);
@@ -1581,6 +1833,7 @@ private:
                     e->otherwise->scope = cur.nextscope++;
                     e->otherwise->value = Value(x->elseb);
                 }
+                e->org = Org(n->line, CoreOriginKind::Expr);
                 return e;
             }
             case NK_Block: {
@@ -1588,6 +1841,7 @@ private:
                 auto e = NewExpr(CoreExprKind::Block, Ty(b->exprtype ? b->exprtype : ast.voidtype));
                 ExprBlockScope inexpr(*this);
                 e->then = BlockOf(b, b->exprtype && b->exprtype->kind != TY_VOID);
+                e->org = Org(n->line, CoreOriginKind::Expr);
                 return e;
             }
             case NK_StructLit: return StructValue((StructLit *)n);
@@ -1652,6 +1906,64 @@ private:
         return ReadOf(std::move(place), Ty(inner));
     }
 
+    CoreExprP UnreachableElementValue(CoreTypeId type) {
+        auto t = mod.Type(type);
+        switch (t.kind) {
+            case CoreType::Int: return IntLiteral(type, false, 0);
+            case CoreType::Bool: return NewExpr(CoreExprKind::Bool, type);
+            case CoreType::Arr: {
+                auto e = NewExpr(CoreExprKind::Fill, type);
+                e->a = UnreachableElementValue(t.elem);
+                e->org = Org(here, CoreOriginKind::Expr);
+                return e;
+            }
+            case CoreType::VarArr: {
+                auto e = NewExpr(CoreExprKind::Arr, type);
+                e->org = Org(here, CoreOriginKind::Expr);
+                return e;
+            }
+            case CoreType::Struct: {
+                auto e = NewExpr(CoreExprKind::Struct, type);
+                for (auto &field : mod.structs[t.structid].fields)
+                    e->elems.push_back(UnreachableElementValue(field.type));
+                return e;
+            }
+            default: Fail("unreachable-element-type");
+        }
+    }
+
+    bool NeverReturns(Node *n) const {
+        if (!n) return false;
+        if (auto call = Is<Call>(n)) {
+            if (call->builtin == B_ABORT || call->builtin == B_EXIT) return true;
+            return call->spec && !call->spec->inprogress && !call->spec->record.mayreturn;
+        }
+        if (auto block = Is<Block>(n)) {
+            for (auto stmt : block->stmts)
+                if (NeverReturns(stmt)) return true;
+            return NeverReturns(block->tail);
+        }
+        if (auto branch = Is<IfExpr>(n))
+            return NeverReturns(branch->cond) ||
+                   (NeverReturns(branch->thenb) && NeverReturns(branch->elseb));
+        return Is<Return>(n) != nullptr;
+    }
+
+    CoreExprP ElementValue(Node *n, CoreTypeId type) {
+        if (!n->exprtype || n->exprtype->kind != TY_VOID) return Value(n);
+        if (!NeverReturns(n)) Fail("bottom-element", n->line);
+        here = n->line;
+        auto e = NewExpr(CoreExprKind::Block, type);
+        e->org = Org(n->line, CoreOriginKind::Expr);
+        ExprBlockScope inexpr(*this);
+        e->then = make_unique<CoreBlock>();
+        e->then->scope = cur.nextscope++;
+        Stmt(n, *e->then);
+        here = n->line;
+        e->then->value = UnreachableElementValue(type);
+        return e;
+    }
+
     CoreExprP ArrayValue(ArrayLit *a) {
         if (a->capexpr) Fail("runtime-capacity");
         auto t = a->exprtype;
@@ -1665,11 +1977,14 @@ private:
                 Fail("owner-fill-literal", a->line);
             if (ct.kind != CoreType::Arr) Fail("fill-grow");
             auto e = NewExpr(CoreExprKind::Fill, ty);
-            e->a = Value(a->fillval);
+            e->a = ElementValue(a->fillval, ct.elem);
+            e->org = Org(a->line, CoreOriginKind::Expr);
             return e;
         }
         auto e = NewExpr(CoreExprKind::Arr, ty);
-        for (auto el : a->elems) e->elems.push_back(Value(el));
+        auto element = ct.elem;
+        for (auto el : a->elems) e->elems.push_back(ElementValue(el, element));
+        e->org = Org(a->line, CoreOriginKind::Expr);
         return e;
     }
 
@@ -1804,7 +2119,7 @@ private:
             if (inst->st->fields[i].ispad) continue;
             auto init = literal->InitFor((int)i);
             if (!init) Fail("struct");
-            e->elems.push_back(Value(init));
+            e->elems.push_back(ElementValue(init, Ty(inst->ftypes[i])));
         }
         return e;
     }
@@ -1832,8 +2147,11 @@ private:
         Fail("temporary-place");
     }
 
-    CoreExprP CallValue(Call *c) {
-        if (c->builtin >= 0 && !c->spec) return BuiltinValue(c);
+    CoreExprP CallValue(Call *c, bool multiResult = false, vector<CoreRequest> requests = {}) {
+        if (c->builtin >= 0 && !c->spec) {
+            if (multiResult) Fail("multiple-results", c->line);
+            return BuiltinValue(c);
+        }
         if (!c->spec) {
             if (!c->dispatch.empty()) Fail("adt");
             Fail("function-value");
@@ -1842,9 +2160,11 @@ private:
         if (!c->dispatch.empty()) Fail("adt");
         if (!c->fmtspecs.empty()) Fail("user-format");
         auto callee = c->spec;
-        auto &rets = callee->rets;
-        if (rets.size() > 1) Fail("multiple-results");
-        auto e = NewExpr(CoreExprKind::Call, rets.empty() ? mod.UnitType() : ResultTy(callee, 0));
+        if (!multiResult && callee->rets.size() > 1 && HasNonfixedResult(callee))
+            Fail("multiple-results", c->line);
+        auto type = multiResult ? CallResultType(callee)
+                                : callee->rets.empty() ? mod.UnitType() : ResultTy(callee, 0);
+        auto e = NewExpr(CoreExprKind::Call, type);
         auto savedorg = coerceorg;
         coerceorg = Org(c->line, CoreOriginKind::Call);
         auto an = c->ArgNodes();
@@ -1854,12 +2174,11 @@ private:
             auto pt = callee->argtypes[i];
             CoreArg arg;
             if (pt->kind == TY_REF) {
-                arg.kind = CoreArg::Ref;
-                arg.mut = mod.Type(ParamTy(callee, i)).mut;
-                arg.place = ArgPlace(an[i]);
+                arg = CoreArgReference { mod.Type(ParamTy(callee, i)).mut, ArgPlace(an[i]) };
             } else {
-                arg.kind = CoreArg::Val;
-                arg.expr = Value(an[i]);
+                auto value = Value(an[i]);
+                if (NonfixedValueType(ParamTy(callee, i))) arg = CoreArgConstruct { std::move(value) };
+                else arg = CoreArgValue { std::move(value) };
             }
             e->args.push_back(std::move(arg));
         }
@@ -1867,15 +2186,14 @@ private:
         // activation's variables of the same name.
         for (auto fv : freevars[callee]) {
             CoreArg arg;
-            arg.kind = CoreArg::Ref;
-            arg.mut = CaptureMut(callee, fv);
-            arg.place = VarPlace(fv);
+            arg = CoreArgReference { CaptureMut(callee, fv), VarPlace(fv) };
             e->args.push_back(std::move(arg));
         }
         coerceorg = savedorg;
         // The callee's number is taken once its arguments, which may call too,
         // have been met: calls are numbered in the order they run.
-        e->ctx = ContextOf(callee);
+        if (requests.empty()) requests = DefaultRequests(callee);
+        e->ctx = ContextOf(callee, requests);
         e->org = Org(c->line, CoreOriginKind::Call);
         return e;
     }
@@ -1886,7 +2204,7 @@ private:
                 auto an = c->ArgNodes();
                 auto owner = Pointee(an[0]->exprtype);
                 auto e = NewExpr(CoreExprKind::Pop, OwnerElementTy(owner->arr->sub));
-                mod.profile = CoreProfile::Shrink;
+                mod.profile = CoreWithShrink(mod.profile);
                 e->place = OwnerPlace(an[0]);
                 e->org = Org(c->line, CoreOriginKind::Expr);
                 return e;
@@ -1906,9 +2224,13 @@ private:
             case B_COPY: {
                 auto an = c->ArgNodes();
                 auto t = an.empty() ? nullptr : Pointee(an[0]->exprtype);
-                if (IsArrayTE(t) && t->arr->akind != A_FIXED)
-                    Fail(t->arr->akind == A_LIMITED ? "limited-value" : "nonfixed-construction", c->line);
-                Fail("copy");
+                if (!t || (!IsArrayTE(t) && t->kind != TY_SLICE)) Fail("copy", c->line);
+                if (IsArrayTE(t) && t->arr->akind == A_LIMITED) Fail("limited-value", c->line);
+                auto e = NewExpr(CoreExprKind::Copy, Ty(c->exprtype));
+                e->place = ToPlace(an[0], true);
+                e->org = Org(c->line, CoreOriginKind::Expr);
+                mod.profile = CoreProfile::Construction;
+                return e;
             }
             case B_POP_N: case B_RESIZE: case B_CLEAR: Fail("statement-as-value");
             case B_ALLOC_INDEX: case B_ALLOC_REF: case B_FREE: case B_ALLOC_SLICE:
@@ -1946,7 +2268,10 @@ private:
         vector<CoreRootRef> out;
         for (auto &alt : r.alts) {
             auto v = alt.root;
-            if (!v) continue;   // Static data.
+            if (!v) {
+                out.push_back({ CoreRootRef::Static, 0 });
+                continue;
+            }
             if (v->istemp) Fail("temporary-slice", sp->sf->line);
             if (v->isglobal) {
                 auto it = globalindex.find(v);
@@ -2021,7 +2346,7 @@ private:
         for (size_t i = 0; i < impl.results.size(); i++) {
             vector<CoreRootRef> roots;
             vector<VarDef *> classes;
-            if (mod.IsRefOrSlice(impl.results[i]) && i < sp->record.retroots.size())
+            if (mod.IsRefOrSlice(impl.results[i].type) && i < sp->record.retroots.size())
                 roots = RootsOf(sp->record.retroots[i].alts, sp, classes);
             for (auto c : classes) globalclasses.push_back({ k, true, (int)i, c });
             ctx.resultroots.push_back(std::move(roots));
@@ -2069,8 +2394,11 @@ private:
     }
 
     RootSet ArgRoots(const CoreArg &a, int k) {
-        if (a.kind == CoreArg::Ref) return PlaceRoots(*a.place, k);
-        return mod.IsRefOrSlice(a.expr->type) ? ExprRoots(*a.expr, k) : RootSet {};
+        return visit([&](const auto &arg) -> RootSet {
+            using Arg = decay_t<decltype(arg)>;
+            if constexpr (is_same_v<Arg, CoreArgReference>) return PlaceRoots(*arg.place, k);
+            else return mod.IsRefOrSlice(arg.expr->type) ? ExprRoots(*arg.expr, k) : RootSet {};
+        }, a);
     }
 
     // The roots of a reference- or slice-typed expression in context k.
@@ -2084,14 +2412,14 @@ private:
             case CoreExprKind::Ref: case CoreExprKind::Push: out = PlaceRoots(*e.place, k); break;
             case CoreExprKind::Slice: out = ViewRoots(*e.view, k); break;
             case CoreExprKind::Call: {
-                auto &res = mod.contexts[e.ctx].resultroots;
-                if (res.empty()) break;
-                for (auto &r : res[0]) {
-                    if (r.kind == CoreRootRef::Param) {
-                        auto a = ArgRoots(e.args[r.index], k);
-                        out.insert(a.begin(), a.end());
-                    } else if (r.kind == CoreRootRef::Global) out.insert(r);
-                }
+                auto &context = mod.contexts[e.ctx];
+                for (auto &roots : context.resultroots)
+                    for (auto &r : roots) {
+                        if (r.kind == CoreRootRef::Param) {
+                            auto a = ArgRoots(e.args[r.index], k);
+                            out.insert(a.begin(), a.end());
+                        } else if (r.kind == CoreRootRef::Global || r.kind == CoreRootRef::Static) out.insert(r);
+                    }
                 break;
             }
             case CoreExprKind::If: case CoreExprKind::Block: {
@@ -2141,9 +2469,10 @@ private:
                         here = ctxspecs[e.ctx]->sf->line;
                         // The slice variable passed, and the roots it has here.
                         auto &a = e.args[j];
-                        if (a.kind != CoreArg::Ref) Fail("reference-to-slice");
+                        auto argument = get_if<CoreArgReference>(&a);
+                        if (!argument) Fail("reference-to-slice");
                         RootSet slice;
-                        auto &p = *a.place;
+                        auto &p = *argument->place;
                         if (p.kind == CorePlace::Local) {
                             if (auto r = VarRoots((int)k, p.index)) slice.insert(r->begin(), r->end());
                         } else if (p.kind == CorePlace::Deref && p.expr->kind == CoreExprKind::Read &&
@@ -2160,7 +2489,11 @@ private:
                         for (size_t i = 0; i < e.args.size(); i++)
                             argroots.push_back(i == j ? RootSet {} : ArgRoots(e.args[i], (int)k));
                         for (auto &x : slice) {
-                            if (x.kind == CoreRootRef::Global) { named.insert(x); covered.insert(x); continue; }
+                            if (x.kind == CoreRootRef::Global || x.kind == CoreRootRef::Static) {
+                                named.insert(x);
+                                covered.insert(x);
+                                continue;
+                            }
                             auto found = false;
                             for (size_t i = 0; i < argroots.size() && !found; i++) {
                                 if (i == j || !argroots[i].count(x)) continue;

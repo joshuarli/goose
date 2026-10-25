@@ -37,6 +37,7 @@ structure Tables where
   nScopes : Nat
   nBlocks : Nat
   profile : ArtifactProfile := .pilot
+  nValues : Nat := 0
 
 /-- Resolve field components against earlier data types. Views are valid table
 entries but can never become a descriptor's stored field type. -/
@@ -187,30 +188,37 @@ def decRootRef (tb : Tables) (nParams : Nat) (j : Lean.Json) : Except String Roo
   | "r_param" => pure (.param (← checkIndex i nParams "parameter"))
   | _ => fail s!"unknown root reference tag {tag.quote}"
 
-def decRootRows (tb : Tables) (nParams : Nat) (expectedTag : String) (j : Lean.Json) :
+def decRootRows (tb : Tables) (nParams nRows : Nat) (rowKind expectedTag : String) (j : Lean.Json) :
     Except String (Array (Nat × List RootRef)) := do
   let rows ← (← asArr j "root rows").mapM fun row => do
     let (tag, fs) ← record row "root row"
     unless tag == expectedTag do fail s!"expected {expectedTag}, found tag {tag.quote}"
     arity tag fs 2
-    let i ← checkIndex (← asNat fs[0]! "root row parameter") nParams "parameter"
+    let i ← checkIndex (← asNat fs[0]! s!"root row {rowKind}") nRows rowKind
     let roots ← list fs[1]! "root set" (decRootRef tb nParams)
     pure (i, roots)
   let rec distinct : List (Nat × List RootRef) → Bool
     | [] => true
     | (i, _) :: rest => !(rest.any (·.1 == i)) && distinct rest
-  unless distinct rows.toList do fail s!"{expectedTag} rows repeat a parameter"
+  unless distinct rows.toList do fail s!"{expectedTag} rows repeat a {rowKind}"
   pure rows
 
 def decRootInfo (tb : Tables) (nParams nResults : Nat) (j : Lean.Json) : Except String RootInfo := do
   let (tag, fs) ← record j "root info"
   unless tag == "roots" do fail s!"expected roots, found tag {tag.quote}"
-  arity tag fs 3
-  let params ← decRootRows tb nParams "vr" fs[0]!
-  let contents ← decRootRows tb nParams "cr" fs[1]!
+  unless fs.size == 3 || fs.size == 4 || fs.size == 5 do fail "roots expects 3, 4, or 5 fields"
+  let params ← decRootRows tb nParams nParams "parameter" "vr" fs[0]!
+  let contents ← decRootRows tb nParams nParams "parameter" "cr" fs[1]!
   let results ← list fs[2]! "result root rows" (fun row => list row "root set" (decRootRef tb nParams))
   unless results.length == nResults do fail s!"root info has {results.length} result rows, expected {nResults}"
-  pure { params, contents, results := results.toArray }
+  let slots ← if fs.size == 5 && fs[3]! == Lean.Json.null then pure none
+    else if fs.size >= 4 then
+      some <$> decRootRows tb nParams tb.nSlots "slot" "sr" fs[3]!
+    else pure none
+  let values ← if fs.size == 5 then
+      some <$> decRootRows tb nParams tb.nValues "value" "er" fs[4]!
+    else pure none
+  pure { params, contents, results := results.toArray, slots, values }
 
 def decPart (j : Lean.Json) : Except String PrintPart := do
   let (tag, fs) ← record j "print part"
@@ -284,6 +292,7 @@ def decInst (tb : Tables) (j : Lean.Json) : Except String Inst := do
     def_ (.globalAddr (← checkIndex (← asNat fs[1]! "global") tb.nGlobals "global"))
   | "i_elem" => do arity tag fs 3; def_ (.refElem (← v 1) (← v 2))
   | "i_freeze" => do arity tag fs 2; def_ (.refFreeze (← v 1))
+  | "i_owner_borrow" => do arity tag fs 2; def_ (.ownerBorrow (← v 1))
   | "i_load" => do arity tag fs 2; def_ (.load (← v 1))
   | "i_snap" => do
     arity tag fs 3
@@ -461,7 +470,8 @@ def decFunc (m : Tables) (j : Lean.Json) : Except String Func := do
   if nInsts > Decode.maxNodesPerFunction then
     fail s!"more than {Decode.maxNodesPerFunction} instructions in one function"
   let blocks ← blocksJ.mapIdx (fun i b => Decode.inEntry "block" i (decBlock tb b)) |>.mapM id
-  let roots ← decRootInfo tb params.length results.length fs[6]!
+  let valueCount := blocks.foldl (fun n block => n + block.defs.length) 0
+  let roots ← decRootInfo { tb with nValues := valueCount } params.length results.length fs[6]!
   let summary ← Decode.decSummary m.profile m.nGlobals params.length fs[7]!
   let org ← decOrgOpt tb fs[8]!
   let certificate ← optional fs[9]! "fact certificate" (decCertificate tb)
@@ -493,7 +503,7 @@ def decodeModule (j : Lean.Json) : Except String Module := do
   let (types, structs) ← decVTypesWithStructs fs[3]! raw profile
   let nGlobals := (← asArr fs[4 + extra]! "globals").size
   let nFuncs := (← asArr fs[5 + extra]! "functions").size
-  let tb : Tables := ⟨types, nGlobals, nFuncs, origins.size, 0, 0, 0, profile⟩
+  let tb : Tables := ⟨types, nGlobals, nFuncs, origins.size, 0, 0, 0, profile, 0⟩
   let globals ← Decode.decodeMapped "global" fs[4 + extra]! (decGlobal tb)
   let funcs ← Decode.decodeMapped "func" fs[5 + extra]! (decFunc tb)
   let entry ← checkIndex (← asNat fs[6 + extra]! "entry") nFuncs "function"
@@ -652,6 +662,7 @@ def wOp (r : ValueId) : Op → W String
   | .globalAddr g => pure (wRec "i_global" [toString r, toString g])
   | .refElem v i => pure (wRec "i_elem" [toString r, toString v, toString i])
   | .refFreeze a => pure (wRec "i_freeze" [toString r, toString a])
+  | .ownerBorrow a => pure (wRec "i_owner_borrow" [toString r, toString a])
   | .load a => pure (wRec "i_load" [toString r, toString a])
   | .snapshot mode a => pure (wRec "i_snap" [toString r, quote (if mode == .owner then "owner" else "borrowed"), toString a])
   | .sliceView a => pure (wRec "i_sview" [toString r, toString a])
@@ -704,8 +715,13 @@ def wRootRef : RootRef → String
 
 def wRootInfo (r : RootInfo) : String :=
   let rows tag rs := wList (rs.toList.map fun (i, roots) => wRec tag [toString i, wList (roots.map wRootRef)])
-  wRec "roots" [rows "vr" r.params, rows "cr" r.contents,
+  let fields := [rows "vr" r.params, rows "cr" r.contents,
     wList (r.results.toList.map fun roots => wList (roots.map wRootRef))]
+  wRec "roots" (match r.values with
+    | some values => fields ++ [r.slots.map (rows "sr") |>.getD "null", rows "er" values]
+    | none => match r.slots with
+      | none => fields
+      | some slots => fields ++ [rows "sr" slots])
 
 def wSummary (profile : ArtifactProfile) : SummaryAnn → String
   | .unknown => wRec "summary_unknown" []

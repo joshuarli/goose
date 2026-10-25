@@ -1,18 +1,19 @@
 import Goose.Core.Roots
 import Goose.Core.Scopes
 import Goose.GIR.Typing
+import Goose.Lower.SourceRootCeilings
 
 /-!
 Lowering of a Core module to GIR-H: the reference for how every Core form
 becomes instructions, and for the numbering of every table.
 
-The lowering reads implementations for executable code and merges the root
-annotations of every context that specializes each implementation. Contexts
-also provide the implementation index of a call and of the entry.
+The lowering reads implementations for executable code and attaches each
+context's own root annotations to its function. Calls and entry retain their
+Core context indices.
 
 ## Numbering
 
-* Functions are the implementations, in order; a global's initializer is a
+* Functions are the contexts, in order; a global's initializer is a
   function of its own held by the global. Globals, slots (one per variable, same
   number), scopes (one per Core block, same number), the file table and the
   origin table are those of the Core module.
@@ -98,6 +99,11 @@ structure LoopCtx where
   breakTo : BlockId
   cont : ContKind
 
+inductive ValueRootSource
+  | conditionalScope (scope : ScopeId)
+  | refSliceVar (variableId : VarId)
+  deriving Inhabited, DecidableEq, Repr, BEq
+
 structure LS where
   blocks : Array BlockB
   /-- Type of every value so far, indexed by value id. -/
@@ -105,15 +111,17 @@ structure LS where
   cur : Option BlockId
   /-- Scopes entered, innermost first. -/
   stack : List ScopeId
+  valueRootRecipes : Array (ValueId × ValueRootSource) := #[]
 
 /-- What the lowering of one function reads: the Core module's tables, the
-function's slots and the parameter and result types of every implementation. -/
+function's slots and the parameter and result types of every context. -/
 structure LEnv where
   mod : Module
   slots : Array GIR.Slot
   vars : Array LocalVar
   globals : Array (Ty × VarKind)
   sigs : Array (List Ty × List Ty)
+  results : List Ty
 
 /-- The builder: reads the function's tables and threads the state. A plain
 function type, so that its `do` blocks unfold by definition. -/
@@ -132,15 +140,13 @@ instance : MonadStateOf LS B where
   set s' := fun _ _ => ((), s')
   modifyGet f := fun _ s => f s
 
-/-- Snapshot typing consults the same contents provenance as validation. The
-capability lookup is delayed until a snapshot needs it, so scalar emission does
-not walk the accumulated CFG. -/
 def tyEnv (env : LEnv) (s : LS) : GIR.TyEnv :=
   { slots := env.slots
     globals := env.globals
     sigs := env.sigs
     vals := s.vals
     structs := env.mod.structs
+    profile := env.mod.profile
     contentsWritable := fun v =>
       let f : GIR.Func :=
         { name := ""
@@ -151,21 +157,33 @@ def tyEnv (env : LEnv) (s : LS) : GIR.TyEnv :=
           blocks := s.blocks.map fun b => ⟨b.params, b.insts.toList⟩
           summary := .unknown
           org := none }
-      let m : GIR.Module :=
-        { files := env.mod.files
-          globals := #[]
-          funcs := #[]
-          entry := 0
-          origins := env.mod.origins
-          profile := env.mod.profile
-          structs := env.mod.structs }
-      (f.permissions m s.vals)[v]?.map (·.2) }
+      (f.permissionsFromTables (env.globals.map (·.2)) env.mod.structs s.vals)[v]?.map (·.2) }
 
 def curBlock : B (Option BlockId) := do pure (← get).cur
 
 def isLive : B Bool := do pure (← curBlock).isSome
 
 def setCur (b : Option BlockId) : B Unit := modify fun s => { s with cur := b }
+
+def recordValueRootSource (value : ValueId) (source : ValueRootSource) : B Unit :=
+  modify fun state =>
+    let reference := match state.vals[value]?.join with
+      | some (.data type) => type.isRefLike
+      | some (.view ..) => true
+      | none => false
+    if state.cur.isSome && reference then
+      { state with valueRootRecipes := state.valueRootRecipes.push (value, source) }
+    else state
+
+def recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) : B Unit :=
+  recordValueRootSource value (.conditionalScope sourceScope)
+
+def recordReadValueRootRecipe (value : ValueId) (place : Place) : B Unit := do
+  match place with
+  | .var variableId =>
+    if ((← read).vars[variableId]?).any (·.ty.isRefSlice) then
+      recordValueRootSource value (.refSliceVar variableId)
+  | _ => pure ()
 
 def pushInst (b : BlockId) (i : Inst) : B Unit :=
   modify fun s => { s with blocks := s.blocks.modify b fun blk => { blk with insts := blk.insts.push i } }
@@ -251,6 +269,33 @@ def freezeTo (m : Mutability) (r : ValueId) : B ValueId := do
   | .readOnly, .data (.ref .mutable _) => emitDef (.refFreeze r)
   | _, _ => pure r
 
+def borrowTo (m : Mutability) (r : ValueId) : B ValueId := do
+  let env ← read
+  let ty ← valTy r
+  let owner := match ty with
+    | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+    | _ => false
+  if m == .mutable && env.mod.profile == .shrink && owner then emitDef (.ownerBorrow r)
+  else freezeTo m r
+
+def coerceTo (target : Ty) (r : ValueId) (org : OriginId) : B ValueId := do
+  match target, (← valTy r) with
+  | .ref .readOnly _, .data (.ref .mutable _) => emitDef (.refFreeze r)
+  | .slice .readOnly _, .data (.slice .mutable _) =>
+    let view ← emitDef (.sliceView r)
+    emitDef (.viewSlice .readOnly view .omitted .omitted (some org))
+  | _, _ => pure r
+
+def coerceSlot (slot : SlotId) (value : ValueId) (org : OriginId) : B ValueId := do
+  match (← read).slots[slot]? with
+  | some destination => coerceTo destination.ty value org
+  | none => pure value
+
+def coerceResult (value : ValueId) (org : OriginId) : B ValueId := do
+  match (← read).results.head? with
+  | some destination => coerceTo destination value org
+  | none => pure value
+
 def pushScope (sc : ScopeId) : B Unit := modify fun s => { s with stack := sc :: s.stack }
 
 def popScope : B Unit := modify fun s => { s with stack := s.stack.drop 1 }
@@ -261,9 +306,6 @@ def inScope (sc : ScopeId) (k : B α) : B α := do
   let r ← k
   popScope
   pure r
-
-def implOfContext (c : ContextId) : B FnId := do
-  pure (((← read).mod.contexts[c]?).map (·.impl) |>.getD 0)
 
 /-! ### Expressions, places, views and statements -/
 
@@ -302,7 +344,7 @@ def eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) : B ValueId := do
     match (← read).vars[x]? with
     | some lv =>
       match lv.ty with
-      | .ref m _ => freezeTo m elem
+      | .ref m _ => borrowTo m elem
       | _ => pure elem
     | none => pure elem
   else emitDef (.load elem)
@@ -413,10 +455,12 @@ def lowerExpr : Expr → B ValueId
   | .bool b => emitDef (.constBool b)
   | .read p => do
     let r ← lowerPlace p
-    emitDef (.load r)
+    let value ← emitDef (.load r)
+    recordReadValueRootRecipe value p
+    pure value
   | .ref m p => do
     let r ← lowerPlace p
-    freezeTo m r
+    borrowTo m r
   | .slice m v lo hi org => do
     let vw ← lowerView v
     let l ← lowerBound lo
@@ -455,8 +499,7 @@ def lowerExpr : Expr → B ValueId
     emitDef (.conv k src dst a (some org))
   | .call c args org => do
     let vs ← lowerArgs args
-    let f ← implOfContext c
-    let r ← emitDef (.call f vs (some org))
+    let r ← emitDef (.call c vs (some org))
     if (← read).mod.noReturn c then emitTerm .unreachable
     pure r
   | .push owner e org => do
@@ -476,7 +519,9 @@ def lowerExpr : Expr → B ValueId
       setCur (some eb)
       let vf ← lowerBlock none [] true f
       let endF ← curBlock
-      joinValue endT vt endF vf
+      let result ← joinValue endT vt endF vf
+      recordValueRootRecipe result (sourceBlockScope t)
+      pure result
   | .blockE b => lowerBlock none [] true b
   | .arrLit t es => do
     let vs ← lowerExprs es
@@ -496,7 +541,7 @@ def lowerArg : Arg → B ValueId
   | .byVal e => lowerExpr e
   | .byRef m p => do
     let r ← lowerPlace p
-    freezeTo m r
+    borrowTo m r
 
 def lowerArgs : List Arg → B (List ValueId)
   | [] => pure []
@@ -581,6 +626,7 @@ def lowerPrintArgs : List PrintArg → B (List PrintPart)
 def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
   | .letS x e org => do
     let v ← lowerExpr e
+    let v ← coerceSlot x v org
     emitEffect (.slotInit x v (some org))
   | .assign p e org => do
     let r ← lowerPlace p
@@ -594,6 +640,7 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
     emitEffect (.store r res (some org))
   | .rebind x e org => do
     let v ← lowerExpr e
+    let v ← coerceSlot x v org
     let r ← emitDef (.slotAddr x)
     emitEffect (.store r v (some org))
   | .expr e _ => do
@@ -678,7 +725,9 @@ def lowerStmt (lc : Option LoopCtx) : Stmt → B Unit
         lowerBlock (some ⟨d, xb, .next hb .i64 i⟩) pre false body)
   | .ret e org => do
     let vs ← match e with
-      | some e => do pure [← lowerExpr e]
+      | some e => do
+        let v ← lowerExpr e
+        pure [← coerceResult v org]
       | none => pure []
     leaveTo 0
     emitTerm (.ret vs (some org))
@@ -717,7 +766,7 @@ end
 
 /-! ### Functions and the module -/
 
-def initState : LS := ⟨#[], #[], none, []⟩
+def initState : LS := ⟨#[], #[], none, [], #[]⟩
 
 def finishBlocks (blocks : Array BlockB) : Array GIR.Block :=
   blocks.map fun b => ⟨b.params, b.insts.toList⟩
@@ -727,34 +776,41 @@ def tyOfVar (impl : Impl) (x : VarId) : Ty :=
   | some lv => lv.ty
   | none => .unit
 
-def lowerEnv (m : Module) (vars : Array LocalVar) : LEnv :=
+def lowerEnv (m : Module) (vars : Array LocalVar) (results : List Ty) : LEnv :=
   { mod := m
+    results
     vars
     slots := vars.mapIdx fun i lv => ⟨lv.ty, lv.kind, lv.scope, i⟩
     globals := m.globals.map fun g => (g.ty, g.kind)
-    sigs := m.impls.map fun impl => (impl.params.toList.map (tyOfVar impl ·.var), impl.results.toList) }
+    sigs := m.contexts.map fun ctx =>
+      match m.impls[ctx.impl]? with
+      | some impl => (impl.params.toList.map (tyOfVar impl ·.var), impl.results.toList)
+      | none => ([], []) }
 
-/- A context can replace a parameter root with its concrete caller root. Keep
-the generic parameter root too, so GIR's context-independent body metadata
-covers every parameter alias that produced a specialized result root. -/
-def lowerRootInfo (m : Module) (implId : ImplId) (impl : Impl) : GIR.RootInfo :=
-  let contexts := m.contexts.filter (·.impl == implId)
+def lowerContextRootCeiling (ctx : Context) (impl : Impl) (roots : List RootRef) : List RootRef :=
+  let parameterRoots := impl.params.toList.zipIdx.filterMap fun (p, j) =>
+    match ctx.varRoots.find? (·.1 == p.var) with
+    | some (_, rootsForParam) =>
+      if rootsForParam.all roots.contains then some (.param j) else none
+    | none => none
+  unionRoots roots parameterRoots
+
+def lowerContextRootInfo (ctx : Context) (impl : Impl) : GIR.RootInfo :=
   let params := impl.params.toList.zipIdx.filterMap fun (p, i) =>
-    let roots := contexts.filterMap fun c => (c.varRoots.find? (·.1 == p.var)).map (·.2)
-    if roots.isEmpty then none else some (i, roots.foldl unionRoots [])
+    (ctx.varRoots.find? (·.1 == p.var)).map fun (_, roots) => (i, roots)
   let contents := impl.params.toList.zipIdx.filterMap fun (p, i) =>
-    let roots := contexts.filterMap fun c => (c.contentRoots.find? (·.1 == p.var)).map (·.2)
-    if roots.isEmpty then none else some (i, roots.foldl unionRoots [])
+    (ctx.contentRoots.find? (·.1 == p.var)).map fun (_, roots) => (i, roots)
   let results := (List.range impl.results.size).map fun i =>
-    (contexts.filterMap fun c => do
-      let roots ← c.resultRoots[i]?
-      let parameterRoots := impl.params.toList.zipIdx.filterMap fun (p, j) =>
-        match c.varRoots.find? (·.1 == p.var) with
-        | some (_, rootsForParam) =>
-          if roots.any rootsForParam.contains then some (.param j) else none
-        | none => none
-      some (unionRoots roots parameterRoots)).foldl unionRoots []
-  { params := params.toArray, contents := contents.toArray, results := results.toArray }
+    lowerContextRootCeiling ctx impl (ctx.resultRoots[i]?.getD [])
+  let slots := ctx.varRoots.filterMap fun (slot, roots) =>
+    match impl.vars[slot]? with
+    | some localVar =>
+      if !localVar.ty.isRefLike then none
+      else some (slot, if localVar.ty.isRefSlice && (impl.params[slot]?).any (·.var == slot) then [.param slot]
+        else lowerContextRootCeiling ctx impl roots)
+    | none => none
+  { params := params.toArray, contents := contents.toArray, results := results.toArray,
+    slots := some slots.toArray }
 
 /-- Core validation proves that a result-bearing body without a tail value
 cannot fall through when it diverges. A live frontier left by a constant loop
@@ -770,9 +826,8 @@ def finishFunction (impl : Impl) (v : ValueId) : B Unit := do
       emitTerm (.br sink [])
     else emitTerm (.ret (if impl.body.value.isSome then [v] else []) none)
 
-/-- Lower an implementation using its position in the module as its identity. -/
-def lowerImplAt (m : Module) (implId : ImplId) (impl : Impl) : GIR.Func :=
-  let env := lowerEnv m impl.vars
+def lowerImplState (m : Module) (impl : Impl) : LS :=
+  let env := lowerEnv m impl.vars impl.results.toList
   let act : B Unit := do
     let (b0, ps) ← newBlock (impl.params.toList.map fun p => .data (tyOfVar impl p.var))
     setCur (some b0)
@@ -780,33 +835,67 @@ def lowerImplAt (m : Module) (implId : ImplId) (impl : Impl) : GIR.Func :=
       (p.var, v, (impl.vars[p.var]?.map (·.org)).getD 0)
     let v ← lowerBlock none pre false impl.body
     finishFunction impl v
-  let ((), s) := act env initState
+  (act env initState).2
+
+def lowerImplFromState (m : Module) (impl : Impl) (s : LS) : GIR.Func :=
+  let env := lowerEnv m impl.vars impl.results.toList
   { name := impl.name
     params := impl.params.toList.map fun p => tyOfVar impl p.var
     results := impl.results.toList
     slots := env.slots
     scopes := scopeParents (blockScopes none impl.body)
     blocks := finishBlocks s.blocks
-    roots := lowerRootInfo m implId impl
     summary := impl.summary
     org := impl.vars[0]?.map (·.org) }
 
-/-- Lower one implementation without a supplied module index. This is used by
-the fragment proof for standalone implementations; module lowering uses
-`lowerImplAt` so same-named implementations keep distinct context metadata. -/
 def lowerImpl (m : Module) (impl : Impl) : GIR.Func :=
-  let implId := (m.impls.findIdx? (·.name == impl.name)).getD m.impls.size
-  lowerImplAt m implId impl
+  lowerImplFromState m impl (lowerImplState m impl)
+
+def lowerValueRootCeiling (env : PEnv) (table : SourceRootTable) : ValueRootSource → List RootRef
+  | .conditionalScope scope =>
+      lowerContextRootCeiling env.ctx env.impl (table[scope]?.join.getD [])
+  | .refSliceVar variableId =>
+      unionRoots ((env.ann variableId).getD [])
+        (if (env.impl.params[variableId]?).any (·.var == variableId) then [.param variableId] else [])
+
+def lowerValueRootRows (env : PEnv) (table : SourceRootTable)
+    (recipes : Array (ValueId × ValueRootSource)) : Option (Array (ValueId × List RootRef)) :=
+  if recipes.isEmpty then none else
+    some (recipes.map fun (value, source) => (value, lowerValueRootCeiling env table source))
+
+def lowerContextValueRoots (m : Module) (ctx : Context) (impl : Impl) (state : LS) :
+    Option (Array (ValueId × List RootRef)) :=
+  let env : PEnv := ⟨m, impl, ctx, []⟩
+  let initial := Array.replicate (scopeParents (blockScopes none impl.body)).size none
+  let table := (collectSourceBlockRoots env impl.body initial).2
+  lowerValueRootRows env table state.valueRootRecipes
+
+def lowerContextAt (m : Module) (ctx : Context) (impl : Impl) : GIR.Func :=
+  { lowerImpl m impl with roots := { lowerContextRootInfo ctx impl with
+      values := lowerContextValueRoots m ctx impl (lowerImplState m impl) } }
+
+def invalidContextFunction (ctx : Context) : GIR.Func :=
+  { name := ctx.decl
+    params := []
+    results := []
+    slots := #[]
+    scopes := #[]
+    blocks := #[]
+    summary := .unknown
+    org := none }
 
 /-- Lower a global's initializer to a function that returns the value. -/
 def lowerGlobal (m : Module) (g : Global) : GIR.Global :=
-  let env := lowerEnv m #[]
+  let env := lowerEnv m #[] [g.ty]
   let act : B Unit := do
     let (b0, _) ← newBlock []
     setCur (some b0)
     let v ← lowerExpr g.init
     emitTerm (.ret [v] (some g.org))
   let ((), s) := act env initState
+  let sourceEnv : PEnv := ⟨m, initImpl, initContext, []⟩
+  let initial := Array.replicate (scopeParents (exprScopes none g.init)).size none
+  let table := (collectSourceExprRoots sourceEnv g.init initial).2
   { name := g.name
     ty := g.ty
     kind := g.kind
@@ -817,17 +906,24 @@ def lowerGlobal (m : Module) (g : Global) : GIR.Global :=
         slots := #[]
         scopes := scopeParents (exprScopes none g.init)
         blocks := finishBlocks s.blocks
-        roots := { results := #[[]] }
+        roots := { results := #[[]], values := lowerValueRootRows sourceEnv table s.valueRootRecipes }
         summary := .unknown
         org := some g.org }
     org := g.org }
 
 /-- The reference lowering of a Core module. -/
 def lower (m : Module) : GIR.Module :=
+  let bodies := m.impls.map fun impl =>
+    let state := lowerImplState m impl
+    (impl, lowerImplFromState m impl state, state)
   { files := m.files
     globals := m.globals.map (lowerGlobal m)
-    funcs := m.impls.mapIdx fun implId impl => lowerImplAt m implId impl
-    entry := ((m.contexts[m.entry]?).map (·.impl)).getD 0
+    funcs := m.contexts.map fun ctx =>
+      match bodies[ctx.impl]? with
+      | some (impl, body, state) => { body with roots := { lowerContextRootInfo ctx impl with
+          values := lowerContextValueRoots m ctx impl state } }
+      | none => invalidContextFunction ctx
+    entry := m.entry
     origins := m.origins
     profile := m.profile
     structs := m.structs }

@@ -22,6 +22,12 @@ inside the compiler process. Those runs are compared with the same blessed
 outputs. A first-line `no-jit` marker leaves a test out of them, and a program
 the backend refuses outright is counted as a skip, not a failure.
 
+The language reference's examples (docs/reference.md) are checked by
+scripts/check_doc_examples.py, a process of its own like the samples' runner:
+every code block of the document compiles, the blocks marked `// error` fail,
+and where the JIT runs, each complete program's output is the one the
+document shows after it.
+
 The audio/ tests use the SDL3 PCM mixer without a device, the gfx/ tests
 use the SDL3 graphics module, the physics/ tests the Box3D
 physics module and the ui/ tests the Nuklear ui module. They always parse,
@@ -94,6 +100,8 @@ EXTRAS = (
     "extra/member_stores", "extra/compiler_units", "extra/runtime_lifecycle",
     "extra/clang", "extra/extern_types", "extra/native_rebuild", "extra/resource_paths", "extra/git_packages", "extra/driver_verbs",
     "extra/runtime_cache", "extra/s8_struct_contract",
+    "extra/cli_paths", "extra/exit_race", "extra/huge_pages",
+    "extra/native_toolchain", "extra/native_builder", "extra/reference_examples",
 )
 
 
@@ -635,13 +643,16 @@ class Runner:
             self.fail(f"{label} {path.name} (exit {code})", out + err)
             return False
         markers = error_markers(path)
-        # Match diagnostic headers, not echoed source (which may itself name
-        # the expected message). The missing-main error has no source location.
+        # Match diagnostic headers and structural expansion contexts, not
+        # echoed source (which may itself name the expected message).
+        # The missing-main error has no source location.
         diagnostics = []
         for line in err.splitlines():
             match = re.match(r"^\S.*:\d+(?::\d+)?: error: (.*)$", line)
             if match:
                 diagnostics.append(match[1])
+            elif line.startswith("  in const for "):
+                diagnostics.append(line.strip())
             elif line == "program needs exactly one global fn main()":
                 diagnostics.append(line)
         diagnostics = "\n".join(diagnostics)
@@ -1040,6 +1051,16 @@ class Runner:
                 self.fail(f"guarded base case {level} {name}",
                           f"copies of the body's start: got {got}, want {want}")
                 valid = False
+        # Min/max chains: ra_edit's alone is regrouped, its operands bound in
+        # the order written and the carried operand2 combined last.
+        bound = re.findall(r"\blet (operand\d+) = ", specs)
+        combined = re.findall(r"\blet [ab] = (operand\d+);", specs)
+        want = (["operand1", "operand2", "operand3"], ["operand1", "operand3", "operand2"]) \
+            if optimized else ([], [])
+        if (bound, combined) != want:
+            self.fail(f"min/max chains {level}",
+                      f"(bound, combined): got {(bound, combined)}, want {want}")
+            valid = False
         # Inlining heuristics: which bodies are left out of line.
         live = set(re.findall(r"^(?:inline )?fn (i[hl]_\w+)\(", specs, re.MULTILINE))
         left = {
@@ -1052,11 +1073,13 @@ class Runner:
             "ih_slow": True,
             "ih_front": True,
             "ih_work": not optimized,
-            # inline fn: inlined however big; its twin without the keyword
-            # stays; one returning two values stays a call in Goose.
+            # inline fn: inlined however big, and whatever function value
+            # it takes; its twin without the keyword stays; one returning
+            # two values stays a call in Goose.
             "il_big": not optimized,
             "il_plain": True,
             "il_pair": True,
+            "il_apply": not optimized,
         }
         for name, want in left.items():
             if (name in live) != want:
@@ -1071,9 +1094,11 @@ class Runner:
         # function of the fixture must have the one it is named for, and no
         # keep_ function any.
         bodies = {}
+        texts = {}
         for m in re.finditer(r"^static [^\n;]*?\b((?:shape|keep)_\w+?)_g\d*\([^\n]*\) \{\n(.*?)^\}\n",
                              text, re.MULTILINE | re.DOTALL):
             bodies[m[1]] = re.findall(r"/\* loop shape: ([^*]*?) \*/", m[2])
+            texts[m[1]] = m[2]
         strip = "strip-mined by"
         sums = "sum terms in blocks of 8"
         bound = "trip count bounded by"
@@ -1099,6 +1124,34 @@ class Runner:
                 valid = False
             elif (want not in got) if want else got:
                 self.fail(f"loop shapes {name}", f"got {got}, want {want or 'none'}")
+                valid = False
+        # A && or || condition is a chain of branches (CodeGen::GenBranch):
+        # neither the 0/1 flag the right operand sets inside an `if`, which
+        # a value keeps, nor the two flags combined with & or | of a loop that
+        # can be straight-line code (§6.11), nor an inlined bool call's result
+        # held for the branch (or the call left a call).
+        def forms(body):
+            got = set()
+            if re.search(r"uint8_t (t\d+) = \(uint8_t\)\([^\n]* != 0\);\n\s*if \(!?\1\) \{", body):
+                got.add("flag")
+            if re.search(r"\(uint8_t\)\(t\d+ [&|] \(uint8_t\)\(", body):
+                got.add("speculative")
+            if (re.search(r"^\s*uint8_t (t\d+);\n(?:.*\n)*?\s*if \(!?\(?\1\)?\) ", body, re.M)
+                    or re.search(r"\bclean_g\d*\(", body)):
+                got.add("call")
+            return got
+        chains = {
+            "shape_chain_while": set(), "shape_chain_skip": set(), "shape_chain_if": set(),
+            "shape_chain_guard": set(), "shape_chain_order": set(), "shape_chain_call": set(),
+            "keep_chain_value": {"flag"}, "keep_chain_spec": {"speculative"},
+        }
+        for name, want in chains.items():
+            if name not in texts:
+                self.fail(f"loop shapes {name}", "no C function of its own (inlined?)")
+                valid = False
+            elif forms(texts[name]) != want:
+                self.fail(f"loop shapes {name}",
+                          f"got {sorted(forms(texts[name])) or 'branches'}, want {sorted(want) or 'branches'}")
                 valid = False
         return valid
 
@@ -1447,6 +1500,25 @@ def main():
     r.gendir, r.dumpdir = gendir, dumpdir
     deepdir = gendir
 
+    # The language reference's examples, compiled and (through the JIT) run
+    # by their own checker, which reports a FAIL line per block that does not
+    # compile or print what the document shows, and a summary line last.
+    dargs = [sys.executable, str(tc.REPO_ROOT / "scripts" / "check_doc_examples.py"),
+             str(tc.REPO_ROOT / "docs" / "reference.md"), "--exe", str(exe),
+             "--jobs", str(args.jobs), "--out-dir", str(gendir / "doc_examples")]
+    if jit:
+        dargs.append("--run")
+
+    def doc_examples():
+        result = subprocess.run(dargs, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        lines = tc.decode(result.stdout).splitlines()
+        if result.returncode == 0 and lines:
+            r.ok("reference examples: " + lines[-1])
+        else:
+            r.say("\n".join(lines) if lines else "the checker printed nothing")
+            r.local.out.failures += max(1, sum(line.startswith("FAIL ") for line in lines))
+    doc_examples_future = r.task(doc_examples, alone=True) if wanted("extra/reference_examples") else None
+
     # One level of category directories; nested syntax helpers and the modules
     # of the goose_in_goose bootstrap are exercised through their entry points.
     tests = [f for f in fixture_files if f.parent.name not in ("errors", "errors_tc")]
@@ -1777,19 +1849,44 @@ def main():
         # its containers to compare with the standard ones directly.
         def compiler_unit(name):
             out_exe = gendir / f"{name}{tc.EXE_SUFFIX}"
-            ok, log = cc.compile(HERE / f"{name}.cpp", out_exe, cpp=True,
+            sources = [HERE / f"{name}.cpp"]
+            unit_extra = list(extra)
+            unit_libs = []
+            if name == "compiler_units_builder":
+                sources.extend((tc.REPO_ROOT / "src" / "process.cpp",
+                                tc.REPO_ROOT / "src" / "progress.cpp"))
+                unit_extra.insert(0, f"-I{tc.REPO_ROOT / 'test' / 'fixtures' / 'compiler_units_builder'}")
+                unit_extra.append(f"-I{tc.REPO_ROOT / 'third_party' / 'subprocess'}")
+                if not tc.IS_WINDOWS and not tc.IS_MACOS:
+                    unit_libs.append("-ldl")
+            ok, log = cc.compile(sources, out_exe, cpp=True,
                                  opt=2 if args.profile == "baseline" else 1,
-                                 extra=extra, log=gendir / f"{name}.cc.log")
+                                 extra=unit_extra, libs=unit_libs,
+                                 log=gendir / f"{name}.cc.log")
             if not ok:
                 r.fail(f"compiler-cc {name}", log)
             else:
-                code, out, err = tc.run_capture([out_exe])
+                run_args = [out_exe]
+                if name == "compiler_units_builder":
+                    run_args.extend((exe, tc.REPO_ROOT / "test" / "scale" / "units_contract.goose"))
+                code, out, err = tc.run_capture(run_args)
                 if code != 0 or tc.sanitizer_failure(err):
                     r.fail(f"compiler {name}", out + err)
                 else:
                     r.ok(f"compiler {name}")
-        for name in ("compiler_roots", "compiler_containers", "compiler_ident", "compiler_gir", "compiler_reader") if wanted("extra/compiler_units") else ():
+        for name in ("compiler_roots", "compiler_containers", "compiler_ident", "compiler_units",
+                     "compiler_units_builder", "compiler_core", "compiler_gir", "compiler_gir_contexts", "compiler_gir_globals", "compiler_gir_effects", "compiler_gir_reservations", "compiler_reader") if wanted("extra/compiler_units") else ():
             r.show_task(compiler_unit, name)
+
+        def units_last_record():
+            path = HERE / "scale" / "units_last_record.py"
+            code, out, err = tc.run_capture([sys.executable, path, "--goose", exe])
+            if code:
+                r.fail("units-last-record", out + err)
+            else:
+                r.ok("units-last-record")
+        if wanted("extra/compiler_units"):
+            r.show_task(units_last_record)
 
         # Direct runtime lifecycle checks use small region limits and allocator
         # instrumentation that cannot be expressed by a Goose program. Keep
@@ -1931,7 +2028,8 @@ def main():
 
     def driver_verbs():
         """The verb forms of the command line against the flag forms they
-        stand for: `goose run`, `goose check` and `goose version`."""
+        stand for: `goose run`, `goose check` and `goose version`, and the
+        help."""
         probe = gendir / "verbs.goose"
         tc.write_text(probe, 'fn main() { print("verbs"); }\n')
         checks = []
@@ -1946,6 +2044,38 @@ def main():
         code, out, err = tc.run_capture([exe, "version"])
         checks.append(("version", code == 0 and
                        re.match(r"goose runtime [0-9a-f]{12}\s*$", out) is not None, out + err))
+        # The help: `goose --help` on the commands, `goose <command> --help`
+        # and `goose help <topic>` on each, which between them name every
+        # option the driver reads, but for the hidden shader ones.
+        code, overview, err = tc.run_capture([exe, "--help"])
+        checks.append(("--help", code == 0 and "build" in overview and
+                       "--multi-test" not in overview, overview + err))
+        pages = overview
+        for cmd in ["run", "build", "check", "fetch", "toolchain", "version", "lint"]:
+            code, out, err = tc.run_capture([exe, cmd, "--help"])
+            checks.append((f"{cmd} --help", code == 0 and
+                           out.startswith(f"usage: goose {cmd}"), out + err))
+            pages += out
+        for topic in ["c", "internals", "lint"]:
+            code, out, err = tc.run_capture([exe, "help", topic])
+            checks.append((f"help {topic}", code == 0 and out.startswith("usage:"), out + err))
+            pages += out
+        hidden = {"--compile-shader", "--shader-source"}
+        options = set(re.findall(r'arg == "(-[^"]+)"',
+                                 (HERE.parent / "src" / "main.cpp").read_text(encoding="utf-8")))
+        missing = sorted(o for o in options - hidden if not re.search(re.escape(o) + r"\b", pages))
+        checks.append(("help on every option", len(options) > 20 and not missing,
+                       f"in no help: {missing}"))
+        code, out, err = tc.run_capture([exe, "help", "build"])
+        checks.append(("help build", code == 0 and "--dry-run" in out, out + err))
+        code, out, err = tc.run_capture([exe, "help", "nosuch"])
+        checks.append(("help nosuch (refused)", code == 1 and "no help on nosuch" in err,
+                       out + err))
+        code, out, err = tc.run_capture([exe])
+        checks.append(("(no file)", code == 1 and "usage:" in err and "--help" in err, out + err))
+        code, out, err = tc.run_capture([exe, "build"])
+        checks.append(("build (no file)", code == 1 and "usage: goose build" in err and
+                       "goose build --help" in err, out + err))
         # The compiler's own toolchain discovery: where this runner found a C
         # compiler, the compiler must find one too, and say so as JSON.
         code, out, err = tc.run_capture([exe, "toolchain", "--json"])
@@ -1980,6 +2110,17 @@ def main():
     if wanted("extra/driver_verbs"):
         r.show_task(driver_verbs)
 
+    def cli_paths():
+        from cli_paths import check_cli_paths
+        try:
+            check_cli_paths(exe, cc, gendir)
+            r.ok("command line paths: new -o directories, \".\" and \"..\" sources, rooted "
+                 "--include, unresolved imports")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("command line paths", str(e))
+    if wanted("extra/cli_paths"):
+        r.show_task(cli_paths)
+
     def runtime_cache():
         from runtime_cache import check_runtime_cache
         try:
@@ -1990,6 +2131,42 @@ def main():
     if cc and wanted("extra/runtime_cache"):
         r.show_task(runtime_cache)
 
+    def exit_race():
+        from exit_race import check_exit_race
+        try:
+            check_exit_race(exe, gendir)
+            r.ok("exit race: threads exiting at once end with their code")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("exit race", str(e))
+    if cc and wanted("extra/exit_race"):
+        r.show_task(exit_race)
+
+    def huge_pages():
+        from huge_pages import check_huge_pages
+        try:
+            skipped = check_huge_pages(exe, gendir)
+            if skipped:
+                r.say(f"skip huge pages ({skipped})")
+            else:
+                r.ok("huge pages: data stack regions start without them")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("huge pages", str(e))
+    if cc and wanted("extra/huge_pages"):
+        r.show_task(huge_pages)
+
+    def native_toolchain():
+        from native_toolchain import check_native_toolchain
+        try:
+            skipped = check_native_toolchain(exe, gendir, jit=jit)
+            if skipped:
+                r.say(f"skip native toolchain ({skipped})")
+            else:
+                r.ok("native toolchain: one C toolchain for a CMake package, the runtime "
+                     "and the link")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("native toolchain", str(e))
+    if cc and wanted("extra/native_toolchain"):
+        r.show_task(native_toolchain)
     # Flat structs need a cross-layer check: exported IR shape and native field
     # access are available here; Lean adds validation and parity when built.
     def s8_struct_contract():
@@ -2031,12 +2208,30 @@ def main():
     def native_rebuild():
         from native_rebuild import check_native_rebuild
         try:
-            check_native_rebuild(exe, gendir)
-            r.ok("native rebuild: a changed C source is rebuilt, an unchanged one is not")
+            skipped = check_native_rebuild(exe, gendir, jit=jit)
+            if skipped:
+                r.say(f"skip native rebuild ({skipped})")
+            else:
+                r.ok("native rebuild: edited C, new and excluded extern fns, CMake options, targets "
+                     "and C++")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("native rebuild", str(e))
     if cc and wanted("extra/native_rebuild"):
         r.show_task(native_rebuild)
+
+    def native_builder():
+        from native_builder import check_native_builder
+        try:
+            skipped = check_native_builder(exe, gendir, jit=jit)
+            if skipped:
+                r.say(f"skip native builder ({skipped})")
+            else:
+                r.ok("native builder: C appends to a builder through goose.h, a program's and "
+                     "a CMake package's")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("native builder", str(e))
+    if cc and wanted("extra/native_builder"):
+        r.show_task(native_builder)
 
     if show_goose_in_goose:
         show_goose_in_goose()
@@ -2091,6 +2286,10 @@ def main():
     r.section("long call chains and guard runs")
     for future in deep:
         r.show(future)
+
+    if doc_examples_future:
+        r.section("language reference examples (docs/reference.md)")
+        r.show(doc_examples_future)
 
     r.section("samples")
     if samples_future:

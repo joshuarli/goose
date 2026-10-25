@@ -353,6 +353,7 @@ inline void CodeGen::ResetFnState() {
     poolbases.clear();
     fvptr.clear();
     fnused.clear();
+    fnnextsuffix.clear();
     nrvo.clear();
     fdstsaves.clear();
     openat.clear();
@@ -803,8 +804,6 @@ inline void CodeGen::EmitGlobalInit(size_t from, size_t to, const string &fname)
     code += "}\n\n";
 }
 
-// One function per run of consecutive globals of a module: with units, each
-// module's initialization is its own function, in its globals unit.
 inline void CodeGen::EmitGlobalInit() {
     if (!emit_options.units) {
         EmitGlobalInit(0, ast.globals.size(), "gs_init_globals");
@@ -826,6 +825,13 @@ inline void CodeGen::EmitGlobalInit() {
         }
         from = to;
     }
+}
+
+inline string CodeGen::IndexTypeCheck(const string &x, TypeExpr *t, Line ln) {
+    auto n = GlobalLenLv(t->ix->arr);
+    if (!t->ix->upto) return cat("GS_IDX(", x, ", ", n, ", ", LocArgs(ln), ")");
+    return cat("((uint64_t)(", x, ") <= (uint64_t)(", n, ") ? (", x, ") : (gs_idxfail((int64_t)(",
+               x, "), (", n, "), ", LocArgs(ln), "), (int64_t)0))");
 }
 
 // A resizable global's receiving lvalue: its header's count, or the

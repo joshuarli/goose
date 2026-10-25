@@ -1,25 +1,8 @@
 import Goose.Core.Roots
 import Goose.GIR.Typing
+import Goose.GIR.RootSeeds
 
-/-!
-Where a reference may point, and the effects of a function body.
 
-A module has no root annotations, so provenance is computed from the body.
-Every reference, slice or view value gets the set of roots it may be rooted at:
-a slot of the function (a local), a global, or what the caller passed as a
-parameter. The set of a value is a union over everything that can flow into it,
-without regard to order, and a slot holds the union of everything stored in it.
-The result roots of a function are the roots of what it returns, in terms of
-its parameters and globals, and are mapped to the arguments at each call. The
-computation is a least fixed point, found by rounds bounded by the number of
-roots that could be added.
-
-The effects of a body are then the targets it reads, writes, grows and rebinds,
-whether it may abort and whether it prints, in the vocabulary of a summary:
-parameters and globals only. The rules mirror the Core rules for the same
-operations, so a summary that closes over a Core body also closes over its
-lowering.
--/
 
 namespace Goose.GIR
 
@@ -55,7 +38,7 @@ def rootsOfDef (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func)
   | .globalAddr g => [.global g]
   | .fieldAddr v _ | .refElem v _ | .viewSlice _ v _ _ _
   | .indexChecked v _ _ | .indexProven v _ => rootsAt p.vals v
-  | .refFreeze a | .sliceView a | .push a _ _ => rootsAt p.vals a
+  | .refFreeze a | .ownerBorrow a | .sliceView a | .push a _ _ => rootsAt p.vals a
   | .snapshot _ a => rootsAt p.vals a
   | .load a =>
     if valRefLike vt r then
@@ -82,9 +65,8 @@ def rootsOfDef (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func)
       | .local _ => []
   | _ => []
 
-/-- One round over the whole function; the flag says whether anything changed. -/
-def provRound (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func) (p : Prov) :
-    Prov × Bool :=
+def Func.provStep (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func)
+    (acc : Prov × Bool) (i : Inst) : Prov × Bool :=
   let edge (acc : Prov × Bool) (b : BlockId) (args : List ValueId) : Prov × Bool :=
     match f.blocks[b]? with
     | none => acc
@@ -92,35 +74,40 @@ def provRound (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func) 
       (tb.params.zip args).foldl (fun (p, ch) (prm, a) =>
         let (vs, c) := addTo p.vals prm.1 (rootsAt p.vals a)
         ({ p with vals := vs }, ch || c)) acc
-  f.blocks.foldl (fun acc blk => blk.insts.foldl (fun (p, ch) i =>
-    match i with
-    | .def r op =>
-      let (vs, c) := addTo p.vals r (rootsOfDef res vt f p r op)
-      ({ p with vals := vs }, ch || c)
-    | .eff (.slotInit s v _) =>
-      let (ss, c) := addTo p.slots s (rootsAt p.vals v)
-      ({ p with slots := ss }, ch || c)
-    | .eff (.store r v _) =>
-      (rootsAt p.vals r).foldl (fun (p, ch) root =>
-        match root with
-        | .local s =>
-          let (ss, c) := addTo p.slots s (rootsAt p.vals v)
-          ({ p with slots := ss }, ch || c)
-        | _ => (p, ch)) (p, ch)
-    | .term (.br b args) => edge (p, ch) b args
-    | .term (.condbr _ t ta e ea) => edge (edge (p, ch) t ta) e ea
-    | _ => (p, ch)) acc) (p, false)
+  let (p, ch) := acc
+  match i with
+  | .def r op =>
+    let (vs, c) := addTo p.vals r (rootsOfDef res vt f p r op)
+    ({ p with vals := vs }, ch || c)
+  | .eff (.slotInit s v _) =>
+    let (ss, c) := addTo p.slots s (rootsAt p.vals v)
+    ({ p with slots := ss }, ch || c)
+  | .eff (.store r v _) =>
+    (rootsAt p.vals r).foldl (fun (p, ch) root =>
+      match root with
+      | .local s =>
+        let (ss, c) := addTo p.slots s (rootsAt p.vals v)
+        ({ p with slots := ss }, ch || c)
+      | _ => (p, ch)) (p, ch)
+  | .term (.br b args) => edge (p, ch) b args
+  | .term (.condbr _ t ta e ea) => edge (edge (p, ch) t ta) e ea
+  | _ => (p, ch)
+
+/-- One round over the whole function; the flag says whether anything changed. -/
+def provRound (res : Array (List RootRef)) (vt : Array (Option VTy)) (f : Func) (p : Prov) :
+    Prov × Bool :=
+  f.blocks.foldl (fun acc blk => blk.insts.foldl (f.provStep res vt) acc) (p, false)
 
 /-- The starting provenance: each reference-like parameter of the entry block is
 rooted at its own parameter. -/
 def provStart (vt : Array (Option VTy)) (f : Func) : Prov :=
   let vals := match f.blocks[0]? with
-    | none => Array.replicate f.numValues []
+    | none => f.valueRootSeeds
     | some b =>
       (b.params.zipIdx).foldl (fun a ((v, _), i) =>
-        if valRefLike vt v && v < a.size then a.set! v [.param i] else a)
-        (Array.replicate f.numValues [])
-  ⟨Array.replicate f.slots.size [], vals⟩
+        if valRefLike vt v && v < a.size then a.set! v (unionRoots (rootsAt a v) [.param i]) else a)
+        f.valueRootSeeds
+  ⟨f.slotRootSeeds, vals⟩
 
 /-- Rounds until nothing changes. A round that changes something adds a root to
 a cell, so the number of rounds is at most the number of cells times roots. -/
@@ -144,7 +131,7 @@ def Func.returnedRoots (f : Func) (p : Prov) : List RootRef :=
 /-- Result roots of every function, by rounds over the whole module. -/
 def resultRoots (m : Module) (vts : Array (Array (Option VTy))) : Array (List RootRef) :=
   let nRoots := m.globals.size + m.funcs.foldl (fun n f => n + f.params.length + f.slots.size) 0
-  let initial := m.funcs.map fun _ => []
+  let initial := m.declaredResultRoots
   let one (res : Array (List RootRef)) : Array (List RootRef) × Bool :=
     let next := (m.funcs.zip vts).mapIdx fun k (f, vt) =>
       unionRoots (res[k]?.getD []) (f.returnedRoots (f.provenance res vt nRoots))
@@ -156,12 +143,11 @@ def resultRoots (m : Module) (vts : Array (Array (Option VTy))) : Array (List Ro
       if ch then go k res' else res'
   go (nRoots + m.funcs.size + 2) initial
 
-/-- A parameter annotation describes the concrete roots a specialization may
-refer to. An absent or empty row keeps the generic parameter root, so omission
-cannot erase effects while a caller is being analyzed. -/
+/-- A present parameter annotation supplies its concrete roots, including an
+empty set. An absent row retains the generic parameter root. -/
 def Func.parameterRoots (f : Func) (i : Nat) : List RootRef :=
   match f.roots.params.find? (·.1 == i) with
-  | some (_, roots) => if roots.isEmpty then [.param i] else roots
+  | some (_, roots) => roots
   | none => [.param i]
 
 def Func.contentRoots (f : Func) (i : Nat) : List RootRef :=
@@ -199,23 +185,13 @@ def argumentContents (caller : Func) (p : Prov) (value : ValueId) : List RootRef
     roots.flatMap caller.expandParameterRoot
   mapped.foldl (fun acc root => unionRoots acc [root]) []
 
-/-- Map the callee's content-root annotation through the arguments at a call.
-References to local slice variables and forwarded slice references retain the
-roots of their backing elements. Other arguments denote their own storage;
-global roots already have the same identity in both cases. -/
 def mapContentRoots (caller : Func) (p : Prov) (args : List ValueId) (roots : List RootRef) :
     List RootRef :=
   let mapped := roots.flatMap fun
     | .global g => [.global g]
     | .param j =>
       match args[j]? with
-      | some a =>
-        let referencesSlice := (rootsAt p.vals a).any fun
-          | .local s => (caller.slots[s]?).any (fun slot => slot.ty.isSlice)
-          | .param i => (caller.params[i]?).any Ty.isRefSlice
-          | .global _ => false
-        if referencesSlice then argumentContents caller p a
-        else (rootsAt p.vals a).flatMap caller.expandParameterRoot
+      | some a => (rootsAt p.vals a).flatMap caller.expandParameterRoot
       | none => []
     | .local _ => []
   mapped.foldl (fun acc root => unionRoots acc [root]) []
@@ -234,8 +210,8 @@ def ownerIsLimited (vt : Array (Option VTy)) (v : ValueId) : Bool :=
   | some (.limited ..) => true
   | _ => false
 
-def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
-  let vt := f.valueTypes m
+def Func.effectStep (m : Module) (vt : Array (Option VTy)) (f : Func) (p : Prov)
+    (e : Core.Eff) (i : Inst) : Core.Eff :=
   let call (e : Core.Eff) (g : FnId) (args : List ValueId) : Core.Eff :=
     match m.funcs[g]? with
     | none => { e with unknown := true }
@@ -267,97 +243,110 @@ def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
           shrinks := addTargets e.shrinks (mapTargets sm.shrinks)
           aborts := e.aborts || sm.aborts
           outputs := e.outputs || sm.outputs }
-  f.blocks.foldl (fun acc blk => blk.insts.foldl (fun e i =>
-    match i with
-    | .def _ op =>
-      match op with
-      | .load a | .arrayLen a =>
-        { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
-      | .snapshot _ a => { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
-      | .push a _ _ =>
-        let targets := targetsOf (rootsAt p.vals a)
-        let e := { e with grows := addTargets e.grows targets }
-        if m.profile == .shrink then
-          { e with
-            writes := addTargets e.writes targets
-            aborts := e.aborts || ownerIsLimited vt a }
-        else e
-      | .pop a _ =>
-        let targets := targetsOf (rootsAt p.vals a)
-        { e with
-          reads := addTargets e.reads targets
-          shrinks := addTargets e.shrinks targets
-          aborts := true }
-      | .bin o .. => if o.mayAbort then { e with aborts := true } else e
-      | .un .neg .. => { e with aborts := true }
-      | .conv .as .. => { e with aborts := true }
-      | .viewSlice .. | .indexChecked .. => { e with aborts := true }
-      | .call g args _ => call e g args
-      | _ => e
-    | .eff (.store r _ _) =>
-      let rs := rootsAt p.vals r
-      let e := { e with writes := addTargets e.writes (targetsOf rs) }
-      -- A store through a reference-to-slice parameter replaces the caller's slice.
-      let rebound := rs.filterMap fun
-        | .local s =>
-          match f.slots[s]? with
-          | some sl => if sl.ty.isRefLike && sl.var < f.params.length then some (Target.param sl.var) else none
-          | none => none
-        | .param j =>
-          match f.params[j]? with
-          | some t => if t.isRefSlice then some (Target.param j) else none
-          | none => none
-        | .global _ => none
-      { e with rebinds := addTargets e.rebinds rebound }
-    | .eff (.append r v _) =>
-      let targets := targetsOf (rootsAt p.vals r)
-      let sourceTargets := targetsOf (rootsAt p.vals v)
-      let e := { e with
-        reads := addTargets e.reads sourceTargets
-        grows := addTargets e.grows targets }
+  match i with
+  | .def _ op =>
+    match op with
+    | .load a | .arrayLen a =>
+      { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
+    | .snapshot _ a => { e with reads := addTargets e.reads (targetsOf (rootsAt p.vals a)) }
+    | .push a _ _ =>
+      let targets := targetsOf (rootsAt p.vals a)
+      let e := { e with grows := addTargets e.grows targets }
       if m.profile == .shrink then
         { e with
           writes := addTargets e.writes targets
-          aborts := e.aborts || ownerIsLimited vt r }
+          aborts := e.aborts || ownerIsLimited vt a }
       else e
-    | .eff (.popN r _ _) =>
-      let targets := targetsOf (rootsAt p.vals r)
+    | .pop a _ =>
+      let targets := targetsOf (rootsAt p.vals a)
       { e with
         reads := addTargets e.reads targets
         shrinks := addTargets e.shrinks targets
         aborts := true }
-    | .eff (.resize r _ fill _) =>
-      let targets := targetsOf (rootsAt p.vals r)
-      let e := { e with
-        reads := addTargets e.reads targets
-        shrinks := addTargets e.shrinks targets
-        aborts := true }
-      match fill with
-      | none => e
-      | some _ => { e with
-          writes := addTargets e.writes targets
-          grows := addTargets e.grows targets }
-    | .eff (.clear r _) =>
-      let targets := targetsOf (rootsAt p.vals r)
+    | .bin o .. => if o.mayAbort then { e with aborts := true } else e
+    | .un .neg .. => { e with aborts := true }
+    | .conv .as .. => { e with aborts := true }
+    | .viewSlice _ _ .omitted .omitted _ => e
+    | .viewSlice .. | .indexChecked .. => { e with aborts := true }
+    | .call g args _ => call e g args
+    | _ => e
+  | .eff (.store r _ _) =>
+    let rs := rootsAt p.vals r
+    let e := { e with writes := addTargets e.writes (targetsOf rs) }
+    let rebound := rs.filterMap fun
+      | .local s =>
+        match f.slots[s]? with
+        | some sl => if sl.ty.isRefLike && sl.var < f.params.length && (ownerTy vt r).any Ty.isRefLike then some (Target.param sl.var) else none
+        | none => none
+      | .param j =>
+        match f.params[j]? with
+        | some t => if t.isRefSlice && (ownerTy vt r).any Ty.isSlice then some (Target.param j) else none
+        | none => none
+      | .global _ => none
+    { e with rebinds := addTargets e.rebinds rebound }
+  | .eff (.append r v _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    let sourceTargets := targetsOf (rootsAt p.vals v)
+    let e := { e with
+      reads := addTargets e.reads sourceTargets
+      grows := addTargets e.grows targets }
+    if m.profile == .shrink then
       { e with
-        reads := addTargets e.reads targets
-        shrinks := addTargets e.shrinks targets }
-    | .eff (.replace r _ _) =>
-      let targets := targetsOf (rootsAt p.vals r)
-      { e with
-        reads := addTargets e.reads targets
         writes := addTargets e.writes targets
-        grows := addTargets e.grows targets
-        shrinks := addTargets e.shrinks targets }
-    | .eff (.print ..) => { e with outputs := true }
-    | .term (.abort ..) | .term (.exit ..) => { e with aborts := true }
-    | _ => e) acc) {}
+        aborts := e.aborts || ownerIsLimited vt r }
+    else e
+  | .eff (.popN r _ _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    { e with
+      reads := addTargets e.reads targets
+      shrinks := addTargets e.shrinks targets
+      aborts := true }
+  | .eff (.resize r _ fill _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    let e := { e with
+      reads := addTargets e.reads targets
+      shrinks := addTargets e.shrinks targets
+      aborts := true }
+    match fill with
+    | none => e
+    | some _ => { e with
+        writes := addTargets e.writes targets
+        grows := addTargets e.grows targets }
+  | .eff (.clear r _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    { e with
+      reads := addTargets e.reads targets
+      shrinks := addTargets e.shrinks targets }
+  | .eff (.replace r _ _) =>
+    let targets := targetsOf (rootsAt p.vals r)
+    { e with
+      reads := addTargets e.reads targets
+      writes := addTargets e.writes targets
+      grows := addTargets e.grows targets
+      shrinks := addTargets e.shrinks targets }
+  | .eff (.print ..) => { e with outputs := true }
+  | .term (.abort ..) | .term (.exit ..) => { e with aborts := true }
+  | _ => e
+
+def Func.effectsOfTypes (m : Module) (vt : Array (Option VTy)) (f : Func) (p : Prov) : Core.Eff :=
+  f.blocks.foldl (fun acc block => block.insts.foldl (f.effectStep m vt p) acc) {}
+
+def Func.effects (m : Module) (f : Func) (p : Prov) : Core.Eff :=
+  f.effectsOfTypes m (f.valueTypes m) p
 
 /-- Every found target is declared. -/
 def Func.targetsWithin (f : Func) (what : String) (found declared : List Target) : Except String Unit :=
   match found.find? (fun t => !declared.contains t) with
   | some t => throw s!"{f.name} {what} {showTarget t}, which its summary omits"
   | none => pure ()
+
+def Func.storageTargets (f : Func) (targets : List Target) : List Target :=
+  targets.flatMap fun
+    | .param index => rootsTargets (f.parameterRoots index)
+    | .global index => [.global index]
+
+private def Func.storageWithin (f : Func) (what : String) (found declared : List Target) : Except String Unit :=
+  f.targetsWithin what (f.storageTargets found) (f.storageTargets declared)
 
 /-- A boolean effect that is found must be declared. -/
 def Func.flagWithin (msg : String) (found declared : Bool) : Except String Unit :=
@@ -376,10 +365,10 @@ def Func.summaryClosed (f : Func) (e : Core.Eff) : Except String Unit :=
   | .unknown => pure ()
   | .known s => do
     f.noUnknownCallee e.unknown
-    f.targetsWithin "reads" e.reads s.reads
-    f.targetsWithin "writes" e.writes s.writes
-    f.targetsWithin "grows" e.grows s.grows
-    f.targetsWithin "shrinks" e.shrinks s.shrinks
+    f.storageWithin "reads" e.reads s.reads
+    f.storageWithin "writes" e.writes s.writes
+    f.storageWithin "grows" e.grows s.grows
+    f.storageWithin "shrinks" e.shrinks s.shrinks
     f.targetsWithin "rebinds" e.rebinds s.rebinds
     Func.flagWithin s!"{f.name} may abort, which its summary omits" e.aborts s.aborts
     Func.flagWithin s!"{f.name} prints, which its summary omits" e.outputs s.outputs

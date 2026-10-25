@@ -340,7 +340,11 @@ public:
         if (!t) { c.Tag('_'); return; }
         c.Tag('T').B(t->cq);
         switch (t->kind) {
-            case TY_INT: c.Tag('i').I(t->intstorage); break;
+            case TY_INT:
+                c.Tag('i').I(t->intstorage);
+                if (t->ix) c.Tag('x').Str(t->ix->name).Str(t->ix->ns).B(t->ix->upto);
+                else c.Tag('_');
+                break;
             case TY_FLT: c.Tag('f').I(t->fltstorage); break;
             case TY_BOOL: c.Tag('b'); break;
             case TY_VOID: c.Tag('v'); break;
@@ -393,7 +397,7 @@ public:
     void Signature(const SFunction *sf) {
         c.Tag('D').Str(mod.ModuleOf(sf->line.fileidx)).Str(sf->ns).Str(sf->name).Str(sf->cname);
         c.B(sf->isrec).B(sf->isinline).B(sf->issimd).B(sf->isthread).B(sf->isextern)
-            .B(sf->isexport).B(sf->isnested).B(sf->has_rets);
+            .B(sf->isexport).B(sf->isnested).B(sf->has_rets).B(sf->checkfree);
         c.U(sf->generics.size());
         for (auto &g : sf->generics) {
             c.Str(g.name);
@@ -578,6 +582,20 @@ public:
                 Type(x->idxtype);
                 Expr(x->iter);
                 Expr(x->body);
+                break;
+            }
+            case NK_ConstFor: {
+                auto x = (const ConstFor *)n;
+                c.I(x->source).U(x->names.size());
+                for (auto name : x->names) c.Str(name);
+                Types(x->types);
+                Exprs(x->constants);
+                Expr(x->body);
+                c.U(x->inits.size());
+                for (auto &init : x->inits) {
+                    c.Str(init.name).B(init.fromdefault);
+                    Expr(init.val);
+                }
                 break;
             }
             case NK_Return: {
@@ -1113,6 +1131,9 @@ class DepFinal {
                     Walk(x->child);
                     break;
                 }
+                case NK_ConstFor:
+                    assert(false && "const-for survived type checking");
+                    std::terminate();
                 case NK_RangeExpr: {
                     auto x = (const RangeExpr *)n;
                     Walk(x->lo);
@@ -1307,13 +1328,34 @@ class DepFinal {
             c.Str(CoreShrinkBoundaryName(unsupported.boundary))
                 .Str(mods.ModuleOf(unsupported.at.fileidx)).I(unsupported.at.line);
         {
+            auto types = [&](Canon &out, const vector<TypeExpr *> &arrays) {
+                vector<string> v;
+                for (auto t : arrays) {
+                    Canon x;
+                    if (t) x.Dig(TypeD(t));
+                    else x.Tag('_');
+                    v.push_back(x.Text());
+                }
+                sort(v.begin(), v.end());
+                v.erase(unique(v.begin(), v.end()), v.end());
+                out.U(v.size());
+                for (auto &x : v) out.Str(x);
+            };
             vector<string> v;
-            for (auto x : r.growexternals) v.push_back(names.Var(x));
+            for (auto &[root, arrays] : r.growexternals) {
+                Canon x;
+                x.Str(names.Var(root));
+                types(x, arrays);
+                v.push_back(x.Text());
+            }
             sort(v.begin(), v.end());
             c.U(v.size());
             for (auto &x : v) c.Str(x);
             c.U(r.growparams.size());
-            for (auto i : r.growparams) c.I(i);
+            for (auto &[i, arrays] : r.growparams) {
+                c.I(i);
+                types(c, arrays);
+            }
         }
         {
             vector<string> v;

@@ -462,12 +462,16 @@ inline Prov TypeCheck::SlotView(const Prov &p, TypeExpr *slice) {
 
 // Binds a reference variable to where p points. A pool's operations stay
 // available through it only where its type carries the freelist.
+// Bound to places at the classes of an activation only, it is a fact for
+// that activation's loops and rounds, as a rebind is (AddBinding).
 inline void TypeCheck::BindProv(VarDef *vd, const Prov &p) {
     vd->ref = p;
     vd->ref.reached = nullptr;
     if (!vd->type || !CarriesPool(vd->type)) vd->ref.reusable = 0;
     vd->refrootknown = true;
-    NoteFact(vd);
+    auto floor = p.None() ? 0 : (int)scopes.size();
+    for (auto &a : p.alts) floor = min(floor, ActivationFloor(a.root));
+    NoteFact(vd, floor);
 }
 
 // The first non-null binding of a reference variable fixes its provenance.
@@ -979,9 +983,7 @@ inline Val TypeCheck::MergeVals(const Val &a, bool areach, const Val &b, bool br
         }
         if (o.type->kind != TY_INT || !isint(c) || intlit(o)) return false;
         if (c.unsized) {
-            // A literal parameter adapts to the other branch like a
-            // constant.
-            RecordLitAdapt(c, o.type, at->line);
+            RecordLitAdapt(c, ast.NoIndex(o.type), at->line);
             return true;
         }
         if (!ConstsFit(c, o.type->intstorage)) return false;
@@ -1012,9 +1014,10 @@ inline Val TypeCheck::MergeVals(const Val &a, bool areach, const Val &b, bool br
         if (a.constfrom && b.constfrom) RelyOnNamed(b, at);
         v.constfrom = a.constfrom ? a.constfrom : b.constfrom;
     } else if (adapt(a, b)) {
-        v.type = b.type;
+        // A constant adapts to the number an index type holds (§3.11).
+        v.type = ast.NoIndex(b.type);
     } else if (adapt(b, a)) {
-        v.type = a.type;
+        v.type = ast.NoIndex(a.type);
     } else {
         v.type = UnifyBranch(a.type, b.type, at, wantvalue);
     }
@@ -1352,7 +1355,7 @@ inline Val TypeCheck::CheckBlockVal(Block *b, TypeExpr *expected, bool wantvalue
                                     Node *scopenode) {
     auto onpath = argpath == b;
     auto onjoin = joinpath == b;
-    PushScope(scopekind, scopenode);
+    PushScope(b->expansionboundary ? SK_EXPANSION : scopekind, scopenode);
     BlockScope bs(*this, b);
     CheckStmts(b);
     Val v = VoidVal();
@@ -1849,10 +1852,18 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
         } else {
             auto lo = CheckIntAny(r->lo);
             auto hi = CheckIntAny(r->hi);
+            // Bounds of one array's index or bound types: every value the
+            // binder takes is below the end, so at most the array's
+            // length, and is an index of it (§3.11).
+            auto lot = r->lo->exprtype, hit = r->hi->exprtype;
+            auto arr = IsIndexT(lot) && IsIndexT(hit) && lot->ix->arr == hit->ix->arr
+                           ? lot->ix->arr : nullptr;
             auto ct = UnifyNumeric(r, T_DOTDOT, lo, hi, lo.type, hi.type);
             RetypeOperands(r->lo, r->hi, lo, hi, ct);
             r->exprtype = ct;
             bindtype = ct;
+            if (arr && IsIntT(ct) && IsUnsigned(ct->intstorage))
+                bindtype = ast.IndexTypeOf(ct->intstorage, arr, false, x->line);
         }
     } else {
         auto iv = CheckV(x->iter, nullptr);
@@ -1876,7 +1887,8 @@ inline void TypeCheck::CheckFor(ForLoop *x) {
             // keeps the reference, the loop iterating it where it lies.
             auto nv = DecayRef(iv);
             x->iter->exprtype = nv.type;
-            bindtype = t;
+            // A count of an index or bound type: each value is below it.
+            bindtype = t->ix ? ast.IndexTypeOf(t->intstorage, t->ix->arr, false, x->line) : t;
             if (vartype) {
                 // The count is the end of the range from 0, as above.
                 if (!pastend(x->iter)) {
@@ -1997,12 +2009,14 @@ inline int TypeCheck::FindBreakScope(bool forcontinue) {
         if (scopes[i].kind == SK_LOOP) return i;
         if (!forcontinue && scopes[i].kind == SK_BLOCK) return i;
         if (scopes[i].kind == SK_FN) break;
+        if (scopes[i].kind == SK_EXPANSION) return -2;
     }
     return -1;
 }
 
 inline void TypeCheck::CheckBreak(Break *b) {
     auto si = FindBreakScope(false);
+    if (si == -2) Error(b, "break cannot cross a const for expansion boundary");
     if (si < 0) Error(b, "break outside of a loop or block");
     if (b->val) {
         if (!Is<LoopExpr>(scopes[si].node) && !Is<EarlyBlock>(scopes[si].node))
@@ -2104,6 +2118,7 @@ inline void TypeCheck::JoinBreakFlow(const Scope &sc, bool ownexit) {
 // next iteration starts in (CheckLoopPasses).
 inline void TypeCheck::CheckContinue(Node *n) {
     auto si = FindBreakScope(true);
+    if (si == -2) Error(n, "continue cannot cross a const for expansion boundary");
     if (si < 0) Error(n, "continue outside of a loop");
     auto &sc = scopes[si];
     sc.backedge = sc.backedges ? JoinFlow(sc.backedge, SaveFlow()) : SaveFlow();
@@ -2148,6 +2163,7 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
         d->line = vd->line;
         d->isvar = vd->isvar;
         d->reusable = vd->reusable;
+        d->resulttemp = vd->results;
         d->depth = CurDepth();
         d->ownerspec = frames.back().spec;
         return d;
@@ -2214,7 +2230,9 @@ inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
         CheckValue(vd->inits[0], nullptr);
         auto call = Is<Call>(vd->inits[0]);
         if (!call || call->rettypes.size() != vd->names.size())
-            Error(vd, cat((int64_t)vd->names.size(), " names need that many values"));
+            Error(vd, cat((int64_t)vd->names.size(), vd->results ? " targets" : " names",
+                          " need that many values", call ? cat(", and the call gives ",
+                          (int64_t)call->rettypes.size()) : string()));
         auto rets = lastcallrets;
         for (size_t i = 0; i < vd->names.size(); i++) {
             auto d = MakeDef(i);
@@ -2399,13 +2417,13 @@ inline Val TypeCheck::CheckAssignedValue(Assign *a, TypeExpr *target, TypeExpr *
             rebuilding = true;
             ShrinkThrough(a, "assign", ExprStr(a->lval), built, target);
         }
-        NoteGrow(a, built, cat("assign ", ExprStr(a->lval)));
+        NoteGrow(a, built, cat("assign ", ExprStr(a->lval)), target);
     }
     SlotScope ss(*this, true);
     auto base = cur.growlog.size();
     auto v = CheckValueAt(a->rhs, target, dest);
     if (arr && !built.None()) {
-        CheckGrowsSince(base, built, cat("the value assigned to ", ExprStr(a->lval)));
+        CheckGrowsSince(base, built, cat("the value assigned to ", ExprStr(a->lval)), target);
         CheckBuiltUses(a->rhs, a->lval, target, built, arr);
     }
     if (v.type->kind == TY_VOID && reachable)
@@ -2414,6 +2432,24 @@ inline Val TypeCheck::CheckAssignedValue(Assign *a, TypeExpr *target, TypeExpr *
 }
 
 inline void TypeCheck::CheckAssign(Assign *a) {
+    // A result of `a, b = f();` stands for the call's value, which a target
+    // takes as `a = f()` would take it: a non-fixed one is constructed there,
+    // which from the result's variable is a copy of it (§7.1, §4.1).
+    if (auto id = Is<Ident>(a->rhs)) {
+        auto r = LookupVar(id->name, id->ns);
+        if (r && r->resulttemp && r->type) {
+            auto t = r->type;
+            if (IsPlainRef(t) && ClassOf(t->ref->sub) != SC_FIXED)
+                Error(a, cat("result ", id->name.substr(id->name.find('#') + 1), " of the call is a "
+                             "reference to a value that is not fixed-size, which is not copied "
+                             "implicitly (§4.1): bind it with `let`, and assign a copy(...) of it"));
+            if (!IsRefOrSlice(t) && ClassOf(t) != SC_FIXED) {
+                auto cp = ast.New<Call>(a->rhs->line, ast.New<Ident>(a->rhs->line, "copy"));
+                cp->args.push_back(a->rhs);
+                a->rhs = cp;
+            }
+        }
+    }
     auto lv = CheckLValue(a->lval);
     // Generic code stores a whole value of a type parameter's type with `.=`:
     // it rebinds where the type is a reference, and assigns as `=`
@@ -2737,11 +2773,7 @@ inline bool TypeCheck::CheckRefRebindRoot(Node *at, VarDef *vd, const Val &rv,
     // A rebind to other storage keeps the lifetime bound but means the
     // variable no longer names one array: a read inside a loop this rebind
     // is in sees both on the next pass (CheckLoopPasses).
-    if (vd->ref.Add(rv)) {
-        NoteFact(vd);
-        changed = true;
-    }
-    return changed;
+    return AddBinding(vd, rv) || changed;
 }
 
 // A `let` binding or field is not assigned as a whole.
@@ -2783,6 +2815,7 @@ inline void TypeCheck::CompoundAssign(Assign *a, TypeExpr *st, bool writable) {
                  "instantiation, §9.5)");
     auto isbit = a->op == T_ANDEQ || a->op == T_OREQ || a->op == T_XOREQ;
     auto isshift = a->op == T_SHLEQ || a->op == T_SHREQ;
+    if (IsIndexT(st)) NoIndexUpdate(a, TName(a->op), st);
     if (st->kind == TY_INT && st->intstorage != IS_VARINT && isshift) {
         // A shift count is any integer type, masked to the width.
         CheckIntAny(a->rhs);
@@ -2841,6 +2874,13 @@ inline void TypeCheck::CheckIncDec(IncDec *x) {
     } else {
         NoteWritableContents(lv);
     }
+    if (st->ix) NoIndexUpdate(x, TName(x->op), st);
+}
+
+inline void TypeCheck::NoIndexUpdate(Node *at, const char *op, TypeExpr *st) {
+    Error(at, cat(op, " cannot update a ", TypeStr(st), ": what it computes is a plain ",
+                  IntStorageName(st->intstorage), "; compute it, then convert it back with `as ",
+                  TypeStr(st), "` (§3.11)"));
 }
 
 }  // namespace goose

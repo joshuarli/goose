@@ -33,6 +33,97 @@ theorem bind_run (x : B α) (f : α → B β) (le : LEnv) (ls : LS) :
 
 theorem pure_run (a : α) (le : LEnv) (ls : LS) : (pure a : B α) le ls = (a, ls) := rfl
 
+theorem lowerExpr_read_run (place : Place) (le : LEnv) (state : LS) :
+    lowerExpr (.read place) le state =
+      let (address, state1) := lowerPlace place le state
+      let (value, state2) := emitDef (.load address) le state1
+      let (_, state3) := recordReadValueRootRecipe value place le state2
+      (value, state3) := by
+  rfl
+
+theorem recordValueRootSource_run (value : ValueId) (source : ValueRootSource) (le : LEnv) (state : LS) :
+    recordValueRootSource value source le state =
+      ((), { state with valueRootRecipes :=
+        if state.cur.isSome && (match state.vals[value]?.join with
+          | some (.data type) => type.isRefLike
+          | some (.view ..) => true
+          | none => false)
+        then state.valueRootRecipes.push (value, source)
+        else state.valueRootRecipes }) := by
+  unfold recordValueRootSource
+  simp only [modify, modifyGet, MonadStateOf.modifyGet]
+  cases enabled : state.cur.isSome && (match state.vals[value]?.join with
+    | some (.data type) => type.isRefLike
+    | some (.view ..) => true
+    | none => false) <;> simp [enabled]
+
+theorem recordValueRootRecipe_run (value : ValueId) (sourceScope : ScopeId) (le : LEnv) (state : LS) :
+    recordValueRootRecipe value sourceScope le state =
+      ((), { state with valueRootRecipes :=
+        if state.cur.isSome && (match state.vals[value]?.join with
+          | some (.data type) => type.isRefLike
+          | some (.view ..) => true
+          | none => false)
+        then state.valueRootRecipes.push (value, .conditionalScope sourceScope)
+        else state.valueRootRecipes }) := by
+  simpa [recordValueRootRecipe] using
+    recordValueRootSource_run value (.conditionalScope sourceScope) le state
+
+theorem recordReadValueRootRecipe_run (value : ValueId) (place : Place) (le : LEnv) (state : LS) :
+    recordReadValueRootRecipe value place le state =
+      match place with
+      | .var variableId =>
+        if (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) then
+          recordValueRootSource value (.refSliceVar variableId) le state
+        else ((), state)
+      | _ => ((), state) := by
+  cases place with
+  | var variableId =>
+    cases enabled : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+      simp [recordReadValueRootRecipe, bind_run, read_apply, pure_run, enabled]
+  | global _ => simp [recordReadValueRootRecipe, pure_run]
+  | deref _ => simp [recordReadValueRootRecipe, pure_run]
+  | elem _ _ _ => simp [recordReadValueRootRecipe, pure_run]
+  | field _ _ => simp [recordReadValueRootRecipe, pure_run]
+
+theorem recordValueRootSource_push_source (value : ValueId) (source : ValueRootSource)
+    (le : LEnv) (state : LS) (recordedSource : ValueRootSource)
+    (recorded :
+      (recordValueRootSource value source le state).2.valueRootRecipes =
+        state.valueRootRecipes.push (value, recordedSource)) :
+    recordedSource = source ∧ state.cur.isSome = true ∧
+      (match state.vals[value]?.join with
+        | some (.data type) => type.isRefLike
+        | some (.view ..) => true
+        | none => false) = true := by
+  rw [recordValueRootSource_run] at recorded
+  by_cases current : state.cur.isSome
+  · by_cases live : (match state.vals[value]?.join with
+      | some (.data type) => type.isRefLike
+      | some (.view ..) => true
+      | none => false) = true
+    · simp [current, live] at recorded
+      have atLast := congrArg (fun recipes : Array (ValueId × ValueRootSource) =>
+        recipes[state.valueRootRecipes.size]?) recorded
+      simp only [Array.getElem?_push_size, Option.some.injEq] at atLast
+      exact ⟨(congrArg Prod.snd atLast).symm, current, live⟩
+    · simp [current, live] at recorded
+  · simp [current] at recorded
+
+theorem recordReadValueRootRecipe_push_source (value : ValueId) (variableId : VarId)
+    (le : LEnv) (state : LS) (source : ValueRootSource)
+    (recorded :
+      (recordReadValueRootRecipe value (.var variableId) le state).2.valueRootRecipes =
+        state.valueRootRecipes.push (value, source)) :
+    source = .refSliceVar variableId ∧
+      (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) = true := by
+  rw [recordReadValueRootRecipe_run] at recorded
+  by_cases readSource : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) = true
+  · simp [readSource] at recorded
+    have inversion := recordValueRootSource_push_source value (.refSliceVar variableId) le state source recorded
+    exact ⟨inversion.1, readSource⟩
+  · simp [readSource] at recorded
+
 theorem bind_eq {x : B α} {f : α → B β} {le : LEnv} {ls : LS} {r : β} {ls' : LS} :
     (x >>= f) le ls = (r, ls') ↔ ∃ a ls1, x le ls = (a, ls1) ∧ f a le ls1 = (r, ls') := by
   show (match x le ls with | (a, s1) => f a le s1) = (r, ls') ↔ _
@@ -172,14 +263,28 @@ structure LS.Adv (ls ls' : LS) : Prop where
   cur : ls'.cur = none ∨ ls'.cur = ls.cur ∨
     ∃ c, ls'.cur = some c ∧ ls.blocks.size ≤ c ∧ c < ls'.blocks.size
   stack : ls'.stack = ls.stack
+  recipePrefix : ∃ suffix, ls'.valueRootRecipes.toList = ls.valueRootRecipes.toList ++ suffix
 
 theorem LS.Adv.refl (ls : LS) : ls.Adv ls :=
-  ⟨.refl ls, Nat.le_refl _, fun _ _ _ h => h, Or.inr (Or.inl rfl), rfl⟩
+  { ext := .refl ls
+    vals := Nat.le_refl _
+    keep := fun _ _ _ h => h
+    cur := Or.inr (Or.inl rfl)
+    stack := rfl
+    recipePrefix := ⟨[], by simp⟩ }
 
 theorem LS.Adv.trans {a b c : LS} (h1 : a.Adv b) (h2 : b.Adv c) : a.Adv c := by
-  refine ⟨h1.ext.trans h2.ext, Nat.le_trans h1.vals h2.vals, fun i blk hne hb => ?_, ?_,
-    h2.stack.trans h1.stack⟩
-  · have hb1 := h1.keep i blk hne hb
+  obtain ⟨suffix1, recipes1⟩ := h1.recipePrefix
+  obtain ⟨suffix2, recipes2⟩ := h2.recipePrefix
+  refine {
+    ext := (h1.ext.trans h2.ext)
+    vals := Nat.le_trans h1.vals h2.vals
+    keep := ?_
+    cur := ?_
+    stack := h2.stack.trans h1.stack
+    recipePrefix := ⟨suffix1 ++ suffix2, ?_⟩ }
+  · intro i blk hne hb
+    have hb1 := h1.keep i blk hne hb
     have hlt : i < a.blocks.size := (Array.getElem?_eq_some_iff.mp hb).1
     refine h2.keep i blk ?_ hb1
     rcases h1.cur with h | h | ⟨c, hc, hc1, _⟩
@@ -194,6 +299,10 @@ theorem LS.Adv.trans {a b c : LS} (h1 : a.Adv b) (h2 : b.Adv c) : a.Adv c := by
       · exact Or.inr (Or.inl h')
       · exact Or.inr (Or.inr ⟨c', hc', hc1', Nat.lt_of_lt_of_le hc2' h2.ext.1⟩)
     · exact Or.inr (Or.inr ⟨c, hc, Nat.le_trans h1.ext.1 hc1, hc2⟩)
+  · calc
+      c.valueRootRecipes.toList = b.valueRootRecipes.toList ++ suffix2 := recipes2
+      _ = (a.valueRootRecipes.toList ++ suffix1) ++ suffix2 := by rw [recipes1]
+      _ = a.valueRootRecipes.toList ++ (suffix1 ++ suffix2) := List.append_assoc _ _ _
 
 /-! ### Primitive steps -/
 
@@ -222,7 +331,13 @@ theorem LS.Adv.modCur {ls : LS} {b : BlockId} (hb : ls.cur = some b) {F : BlockB
     (hF : Appends F) {vs : Array (Option VTy)} (hv : ls.vals.size ≤ vs.size) {c : Option BlockId}
     (hc : c = ls.cur ∨ c = none) :
     ls.Adv { ls with blocks := ls.blocks.modify b F, vals := vs, cur := c } := by
-  refine ⟨?_, hv, fun i blk hne hi => ?_, ?_, rfl⟩
+  refine {
+    ext := ?_
+    vals := hv
+    keep := fun i blk hne hi => ?_
+    cur := ?_
+    stack := rfl
+    recipePrefix := ⟨[], by simp⟩ }
   · have := (LS.Ext.refl ls).modify hF b
     exact this
   · have hbi : b ≠ i := fun h => hne (by rw [hb, h])
@@ -235,7 +350,13 @@ theorem LS.Adv.modCur {ls : LS} {b : BlockId} (hb : ls.cur = some b) {F : BlockB
 
 theorem LS.Adv.newBlk (ls : LS) (blk : BlockB) {vs : Array (Option VTy)} (hv : ls.vals.size ≤ vs.size) :
     ls.Adv { ls with blocks := ls.blocks.push blk, vals := vs } := by
-  refine ⟨⟨by simp, fun i b hi => ?_⟩, hv, fun i b _ hi => ?_, Or.inr (Or.inl rfl), rfl⟩
+  refine {
+    ext := ⟨by simp, fun i b hi => ?_⟩
+    vals := hv
+    keep := fun i b _ hi => ?_
+    cur := Or.inr (Or.inl rfl)
+    stack := rfl
+    recipePrefix := ⟨[], by simp⟩ }
   · have hlt : i < ls.blocks.size := (Array.getElem?_eq_some_iff.mp hi).1
     refine ⟨b, ?_, rfl, [], by simp⟩
     show (ls.blocks.push blk)[i]? = some b
@@ -250,7 +371,13 @@ theorem LS.Adv.newBlk (ls : LS) (blk : BlockB) {vs : Array (Option VTy)} (hv : l
 theorem LS.Adv.setCur {ls0 ls1 : LS} (h : ls0.Adv ls1) {b : BlockId}
     (hb : some b = ls0.cur ∨ (ls0.blocks.size ≤ b ∧ b < ls1.blocks.size)) :
     ls0.Adv { ls1 with cur := some b } := by
-  refine ⟨h.ext, h.vals, h.keep, ?_, h.stack⟩
+  refine {
+    ext := h.ext
+    vals := h.vals
+    keep := h.keep
+    cur := ?_
+    stack := h.stack
+    recipePrefix := h.recipePrefix }
   rcases hb with hb | ⟨hb1, hb2⟩
   · exact Or.inr (Or.inl hb)
   · exact Or.inr (Or.inr ⟨b, rfl, hb1, hb2⟩)
@@ -260,7 +387,13 @@ theorem LS.Adv.patch {ls0 ls1 : LS} (h : ls0.Adv ls1) (b : BlockId) (t : Term)
     (hb : some b = ls0.cur ∨ ls0.blocks.size ≤ b) :
     ls0.Adv { ls1 with
       blocks := ls1.blocks.modify b (fun blk => { blk with insts := blk.insts.push (.term t) }) } := by
-  refine ⟨h.ext.modify (appends_push _) b, h.vals, fun i blk hne hi => ?_, ?_, h.stack⟩
+  refine {
+    ext := (h.ext.modify (appends_push _) b)
+    vals := h.vals
+    keep := fun i blk hne hi => ?_
+    cur := ?_
+    stack := h.stack
+    recipePrefix := h.recipePrefix }
   · have hlt : i < ls0.blocks.size := (Array.getElem?_eq_some_iff.mp hi).1
     have hbi : b ≠ i := by
       rintro rfl
@@ -330,6 +463,332 @@ theorem adv_fork {cv : ValueId} {le : LEnv} {ls : LS} {b : BlockId} (hc : ls.cur
 /-- The builder action `x` only advances the state as `LS.Adv` allows. -/
 def AdvB (x : B α) : Prop := ∀ le ls r ls', x le ls = (r, ls') → ls.Adv ls'
 
+def RecipesUnchangedB (x : B α) : Prop :=
+  ∀ le ls, (x le ls).2.valueRootRecipes = ls.valueRootRecipes
+
+theorem RecipesUnchangedB.pure (a : α) : RecipesUnchangedB (Pure.pure a : B α) := by
+  intro le ls
+  rfl
+
+theorem RecipesUnchangedB.bind {x : B α} {f : α → B β} (hx : RecipesUnchangedB x)
+    (hf : ∀ a, RecipesUnchangedB (f a)) : RecipesUnchangedB (x >>= f) := by
+  intro le ls
+  rw [bind_run]
+  exact (hf (x le ls).1 le (x le ls).2).trans (hx le ls)
+
+theorem recipesUnchangedB_newBlock (types : List VTy) : RecipesUnchangedB (newBlock types) := by
+  intro le ls
+  unfold newBlock
+  simp [bind, pure, MonadStateOf.set]
+
+theorem recipesUnchangedB_emitDef (op : Op) : RecipesUnchangedB (emitDef op) := by
+  intro le state
+  cases current : state.cur with
+  | none => rw [emitDef_none op le current]
+  | some block => rw [emitDef_run op le current]
+
+theorem recipesUnchangedB_emitEffect (effect : Effect) : RecipesUnchangedB (emitEffect effect) := by
+  intro le state
+  cases current : state.cur with
+  | none => rw [emitEffect_none effect le current]
+  | some block => rw [emitEffect_run effect le current]
+
+theorem recipesUnchangedB_emitTerm (term : Term) : RecipesUnchangedB (emitTerm term) := by
+  intro le state
+  cases current : state.cur with
+  | none => rw [emitTerm_none term le current]
+  | some block => rw [emitTerm_run term le current]
+
+theorem recipesUnchangedB_setCur (cur : Option BlockId) : RecipesUnchangedB (setCur cur) := by
+  intro le state
+  rw [setCur_run]
+
+theorem recipesUnchangedB_pushScope (scope : ScopeId) : RecipesUnchangedB (pushScope scope) := by
+  intro le state
+  rw [pushScope_run]
+
+theorem recipesUnchangedB_popScope : RecipesUnchangedB (popScope : B Unit) := by
+  intro le state
+  rw [popScope_run]
+
+theorem recipesUnchangedB_patchTerm (block : BlockId) (term : Term) :
+    RecipesUnchangedB (patchTerm block term) := by
+  intro le state
+  rw [patchTerm_run]
+
+theorem recipesUnchangedB_get : RecipesUnchangedB (get : B LS) := by
+  intro le state
+  rfl
+
+theorem recipesUnchangedB_valTy (value : ValueId) : RecipesUnchangedB (valTy value) := by
+  unfold RecipesUnchangedB
+  intro le state
+  cases h : state.vals[value]? with
+  | none => simp [valTy, bind, pure, h]
+  | some entry => cases entry <;> simp [valTy, bind, pure, h]
+
+theorem recipesUnchangedB_intTyOf (value : ValueId) : RecipesUnchangedB (intTyOf value) := by
+  unfold RecipesUnchangedB
+  intro le state
+  cases h : state.vals[value]? with
+  | none => simp [intTyOf, valTy, bind, pure, h]
+  | some entry =>
+    cases entry with
+    | none => simp [intTyOf, valTy, bind, pure, h]
+    | some ty =>
+      cases ty with
+      | data ty => cases ty <;> simp [intTyOf, valTy, bind, pure, h]
+      | view mode elem => simp [intTyOf, valTy, bind, pure, h]
+
+theorem recipesUnchangedB_read : RecipesUnchangedB (read : B LEnv) := by
+  intro le state
+  rfl
+
+theorem recipesUnchangedB_freezeTo (mode : Mutability) (value : ValueId) :
+    RecipesUnchangedB (freezeTo mode value) := by
+  unfold freezeTo
+  exact RecipesUnchangedB.bind (recipesUnchangedB_valTy value) fun ty => by
+    cases mode with
+    | mutable =>
+      cases ty with
+      | data dataTy => cases dataTy <;> exact RecipesUnchangedB.pure value
+      | view _ _ => exact RecipesUnchangedB.pure value
+    | readOnly =>
+      cases ty with
+      | view _ _ => exact RecipesUnchangedB.pure value
+      | data dataTy =>
+        cases dataTy with
+        | ref targetMode _ =>
+          cases targetMode with
+          | mutable => exact recipesUnchangedB_emitDef (.refFreeze value)
+          | readOnly => exact RecipesUnchangedB.pure value
+        | _ => exact RecipesUnchangedB.pure value
+
+theorem recipesUnchangedB_borrowTo (mode : Mutability) (value : ValueId) :
+    RecipesUnchangedB (borrowTo mode value) := by
+  unfold borrowTo
+  exact RecipesUnchangedB.bind recipesUnchangedB_read fun env =>
+    RecipesUnchangedB.bind (recipesUnchangedB_valTy value) fun ty => by
+      cases mode with
+      | readOnly => exact recipesUnchangedB_freezeTo .readOnly value
+      | mutable =>
+        cases env.mod.profile with
+        | pilot => exact recipesUnchangedB_freezeTo .mutable value
+        | shrink =>
+          cases ty with
+          | view _ _ => exact recipesUnchangedB_freezeTo .mutable value
+          | data dataTy =>
+            cases dataTy with
+            | ref targetMode target =>
+              cases targetMode with
+              | readOnly => exact recipesUnchangedB_freezeTo .mutable value
+              | mutable =>
+                cases target with
+                | grow _ | growshrink _ => exact recipesUnchangedB_emitDef (.ownerBorrow value)
+                | _ => exact recipesUnchangedB_freezeTo .mutable value
+            | _ => exact recipesUnchangedB_freezeTo .mutable value
+
+theorem recipesUnchangedB_coerceTo (target : Ty) (value : ValueId) (org : OriginId) :
+    RecipesUnchangedB (coerceTo target value org) := by
+  unfold coerceTo
+  refine RecipesUnchangedB.bind (recipesUnchangedB_valTy value) fun source => ?_
+  cases target with
+  | ref targetMode target =>
+    cases targetMode with
+    | mutable => exact RecipesUnchangedB.pure value
+    | readOnly =>
+      cases source with
+      | view _ _ => exact RecipesUnchangedB.pure value
+      | data source =>
+        cases source with
+        | ref sourceMode _ =>
+          cases sourceMode with
+          | mutable => exact recipesUnchangedB_emitDef (.refFreeze value)
+          | readOnly => exact RecipesUnchangedB.pure value
+        | _ => exact RecipesUnchangedB.pure value
+  | slice targetMode elem =>
+    cases targetMode with
+    | mutable => exact RecipesUnchangedB.pure value
+    | readOnly =>
+      cases source with
+      | view _ _ => exact RecipesUnchangedB.pure value
+      | data source =>
+        cases source with
+        | slice sourceMode _ =>
+          cases sourceMode with
+          | mutable =>
+            exact RecipesUnchangedB.bind (recipesUnchangedB_emitDef (.sliceView value)) fun view =>
+              recipesUnchangedB_emitDef (.viewSlice .readOnly view .omitted .omitted (some org))
+          | readOnly => exact RecipesUnchangedB.pure value
+        | _ => exact RecipesUnchangedB.pure value
+  | int _ => exact RecipesUnchangedB.pure value
+  | bool => exact RecipesUnchangedB.pure value
+  | unit => exact RecipesUnchangedB.pure value
+  | arr _ _ => exact RecipesUnchangedB.pure value
+  | grow _ => exact RecipesUnchangedB.pure value
+  | growshrink _ => exact RecipesUnchangedB.pure value
+  | limited _ _ => exact RecipesUnchangedB.pure value
+  | tuple _ => exact RecipesUnchangedB.pure value
+  | structT _ _ => exact RecipesUnchangedB.pure value
+
+theorem recipesUnchangedB_coerceResult (value : ValueId) (org : OriginId) :
+    RecipesUnchangedB (coerceResult value org) := by
+  unfold coerceResult
+  exact RecipesUnchangedB.bind recipesUnchangedB_read fun env => by
+    cases env.results.head? with
+    | none => exact RecipesUnchangedB.pure _
+    | some destination => exact recipesUnchangedB_coerceTo destination value org
+
+theorem recipesUnchangedB_growOwner (value : ValueId) :
+    RecipesUnchangedB (growOwner value) := by
+  unfold growOwner
+  exact RecipesUnchangedB.bind (recipesUnchangedB_valTy value) fun ty =>
+    by
+      cases ty with
+      | view _ _ => exact RecipesUnchangedB.pure _
+      | data dataTy => cases dataTy <;> exact RecipesUnchangedB.pure _
+
+theorem recipesUnchangedB_regrowOf :
+    ∀ owner, RecipesUnchangedB (regrowOf owner)
+  | none => by simp [regrowOf, RecipesUnchangedB.pure]
+  | some value => by
+      unfold regrowOf
+      exact recipesUnchangedB_growOwner value
+
+theorem recipesUnchangedB_eachSampled (regrow : Bool) (view : ValueId) :
+    RecipesUnchangedB (eachSampled regrow view) := by
+  cases regrow <;> simp [eachSampled, RecipesUnchangedB.pure, recipesUnchangedB_emitDef]
+
+theorem recipesUnchangedB_eachLen (regrow : Bool) (owner : Option ValueId) (sampled : ValueId) :
+    RecipesUnchangedB (eachLen regrow owner sampled) := by
+  cases regrow <;> simp [eachLen, RecipesUnchangedB.pure, recipesUnchangedB_emitDef]
+
+theorem recipesUnchangedB_patchBrs (block : BlockId) :
+    ∀ branches, RecipesUnchangedB (patchBrs block branches)
+  | [] => by
+      simp [patchBrs, RecipesUnchangedB.pure]
+  | (source, value) :: rest => by
+      unfold patchBrs
+      exact RecipesUnchangedB.bind (recipesUnchangedB_patchTerm source (.br block [value])) fun _ =>
+        recipesUnchangedB_patchBrs block rest
+
+theorem recipesUnchangedB_patchBrs0 (block : BlockId) :
+    ∀ targets, RecipesUnchangedB (patchBrs0 block targets)
+  | [] => by
+      simp [patchBrs0, RecipesUnchangedB.pure]
+  | source :: rest => by
+      unfold patchBrs0
+      exact RecipesUnchangedB.bind (recipesUnchangedB_patchTerm source (.br block [])) fun _ =>
+        recipesUnchangedB_patchBrs0 block rest
+
+theorem recipesUnchangedB_fork (condition : ValueId) :
+    RecipesUnchangedB (fork condition) := by
+  unfold fork
+  exact RecipesUnchangedB.bind (recipesUnchangedB_newBlock []) fun (yes, _) =>
+    RecipesUnchangedB.bind (recipesUnchangedB_newBlock []) fun (no, _) =>
+      RecipesUnchangedB.bind (recipesUnchangedB_emitTerm (.condbr condition yes [] no [])) fun _ =>
+        RecipesUnchangedB.pure _
+
+theorem recipesUnchangedB_scFork (isAnd : Bool) (value : ValueId) :
+    RecipesUnchangedB (scFork isAnd value) := by
+  cases isAnd
+  · unfold scFork
+    exact RecipesUnchangedB.bind (recipesUnchangedB_newBlock []) fun (right, _) =>
+      RecipesUnchangedB.bind (recipesUnchangedB_newBlock [.data .bool]) fun (join, _) =>
+        RecipesUnchangedB.bind
+          (recipesUnchangedB_emitTerm (.condbr value join [value] right [])) fun _ =>
+            RecipesUnchangedB.pure _
+  · unfold scFork
+    exact RecipesUnchangedB.bind (recipesUnchangedB_newBlock []) fun (right, _) =>
+      RecipesUnchangedB.bind (recipesUnchangedB_newBlock [.data .bool]) fun (join, _) =>
+        RecipesUnchangedB.bind
+          (recipesUnchangedB_emitTerm (.condbr value right [] join [value])) fun _ =>
+            RecipesUnchangedB.pure _
+
+theorem recipesUnchangedB_joinValue {endT endF : Option BlockId} (vt vf : ValueId) :
+    RecipesUnchangedB (joinValue endT vt endF vf) := by
+  unfold joinValue
+  cases ht : endT with
+  | none =>
+    cases hf : endF with
+    | none => exact RecipesUnchangedB.bind (recipesUnchangedB_setCur none) fun _ =>
+        RecipesUnchangedB.pure 0
+    | some no =>
+      exact RecipesUnchangedB.bind (recipesUnchangedB_valTy vf) fun ty =>
+        RecipesUnchangedB.bind (recipesUnchangedB_newBlock [ty]) fun (join, ids) =>
+          RecipesUnchangedB.bind (recipesUnchangedB_patchBrs join [(no, vf)]) fun _ =>
+            RecipesUnchangedB.bind (recipesUnchangedB_setCur (some join)) fun _ =>
+              RecipesUnchangedB.pure (ids.headD 0)
+  | some yes =>
+    cases hf : endF with
+    | none =>
+      exact RecipesUnchangedB.bind (recipesUnchangedB_valTy vt) fun ty =>
+        RecipesUnchangedB.bind (recipesUnchangedB_newBlock [ty]) fun (join, ids) =>
+          RecipesUnchangedB.bind (recipesUnchangedB_patchBrs join [(yes, vt)]) fun _ =>
+            RecipesUnchangedB.bind (recipesUnchangedB_setCur (some join)) fun _ =>
+              RecipesUnchangedB.pure (ids.headD 0)
+    | some no =>
+      exact RecipesUnchangedB.bind (recipesUnchangedB_valTy vt) fun ty =>
+        RecipesUnchangedB.bind (recipesUnchangedB_newBlock [ty]) fun (join, ids) =>
+          RecipesUnchangedB.bind (recipesUnchangedB_patchBrs join [(yes, vt), (no, vf)]) fun _ =>
+            RecipesUnchangedB.bind (recipesUnchangedB_setCur (some join)) fun _ =>
+              RecipesUnchangedB.pure (ids.headD 0)
+
+theorem recipesUnchangedB_joinArms {endT endF : Option BlockId} :
+    RecipesUnchangedB (joinArms endT endF) := by
+  unfold joinArms
+  cases ht : endT with
+  | none =>
+    cases hf : endF with
+    | none => exact RecipesUnchangedB.bind (recipesUnchangedB_setCur none) fun _ =>
+        RecipesUnchangedB.pure _
+    | some no =>
+      exact RecipesUnchangedB.bind (recipesUnchangedB_newBlock []) fun (join, _) =>
+        RecipesUnchangedB.bind (recipesUnchangedB_patchBrs0 join [no]) fun _ =>
+          RecipesUnchangedB.bind (recipesUnchangedB_setCur (some join)) fun _ =>
+            RecipesUnchangedB.pure _
+  | some yes =>
+    cases hf : endF with
+    | none =>
+      exact RecipesUnchangedB.bind (recipesUnchangedB_newBlock []) fun (join, _) =>
+        RecipesUnchangedB.bind (recipesUnchangedB_patchBrs0 join [yes]) fun _ =>
+          RecipesUnchangedB.bind (recipesUnchangedB_setCur (some join)) fun _ =>
+            RecipesUnchangedB.pure _
+    | some no =>
+      exact RecipesUnchangedB.bind (recipesUnchangedB_newBlock []) fun (join, _) =>
+        RecipesUnchangedB.bind (recipesUnchangedB_patchBrs0 join [yes, no]) fun _ =>
+          RecipesUnchangedB.bind (recipesUnchangedB_setCur (some join)) fun _ =>
+            RecipesUnchangedB.pure _
+
+theorem recipesUnchangedB_leaveAll : ∀ scopes, RecipesUnchangedB (leaveAll scopes)
+  | [] => by
+      simp [leaveAll, RecipesUnchangedB.pure]
+  | scope :: rest => by
+      unfold leaveAll
+      exact RecipesUnchangedB.bind (recipesUnchangedB_emitEffect (.leave scope)) fun _ =>
+        recipesUnchangedB_leaveAll rest
+
+theorem recipesUnchangedB_leaveTo (depth : Nat) : RecipesUnchangedB (leaveTo depth) := by
+  unfold leaveTo
+  exact RecipesUnchangedB.bind recipesUnchangedB_get fun state =>
+    recipesUnchangedB_leaveAll (state.stack.take (state.stack.length - depth))
+
+theorem recipesUnchangedB_inScope (scope : ScopeId) {action : B α}
+    (preserves : RecipesUnchangedB action) : RecipesUnchangedB (inScope scope action) := by
+  unfold inScope
+  exact RecipesUnchangedB.bind (recipesUnchangedB_pushScope scope) fun _ =>
+    RecipesUnchangedB.bind preserves fun _ =>
+      RecipesUnchangedB.bind recipesUnchangedB_popScope fun _ =>
+        RecipesUnchangedB.pure _
+
+theorem recipesUnchangedB_whenLive (fallback : α) {action : BlockId → B α}
+    (preserves : ∀ block, RecipesUnchangedB (action block)) :
+    RecipesUnchangedB (whenLive fallback action) := by
+  intro le state
+  cases current : state.cur with
+  | none => rw [whenLive_none fallback action le current]
+  | some block => rw [whenLive_some fallback action le current]; exact preserves block le state
+
 theorem AdvB.pure (a : α) : AdvB (Pure.pure a : B α) := by
   intro le ls r ls' h
   rw [pure_run] at h
@@ -340,6 +799,58 @@ theorem AdvB.bind {x : B α} {f : α → B β} (hx : AdvB x) (hf : ∀ a, AdvB (
   intro le ls r ls' h
   obtain ⟨a, ls1, h1, h2⟩ := bind_eq.mp h
   exact (hx _ _ _ _ h1).trans (hf a _ _ _ _ h2)
+
+theorem advB_recordValueRootSource (value : ValueId) (source : ValueRootSource) :
+    AdvB (recordValueRootSource value source) := by
+  intro le state result after run
+  rw [recordValueRootSource_run] at run
+  obtain ⟨rfl, rfl⟩ := Prod.mk.inj run
+  refine {
+    ext := ?_
+    vals := ?_
+    keep := ?_
+    cur := ?_
+    stack := rfl
+    recipePrefix := ?_ }
+  · refine ⟨Nat.le_refl _, fun i block row => ?_⟩
+    exact ⟨block, by simpa using row, rfl, [], by simp⟩
+  · simp
+  · intro i block _ row
+    simpa using row
+  · simp
+  · by_cases enabled : state.cur.isSome && (match state.vals[value]?.join with
+      | some (.data type) => type.isRefLike
+      | some (.view ..) => true
+      | none => false)
+    · refine ⟨[(value, source)], ?_⟩
+      simp [enabled]
+    · refine ⟨[], ?_⟩
+      simp [enabled]
+
+theorem advB_recordValueRootRecipe (value : ValueId) (sourceScope : ScopeId) :
+    AdvB (recordValueRootRecipe value sourceScope) := by
+  simpa [recordValueRootRecipe] using
+    advB_recordValueRootSource value (.conditionalScope sourceScope)
+
+theorem advB_recordReadValueRootRecipe (value : ValueId) (place : Place) :
+    AdvB (recordReadValueRootRecipe value place) := by
+  cases place with
+  | var variableId =>
+    unfold recordReadValueRootRecipe
+    refine AdvB.bind ?_ fun le => ?_
+    · intro env state result after run
+      rw [read_apply] at run
+      obtain ⟨rfl, rfl⟩ := Prod.mk.inj run
+      exact .refl _
+    · by_cases refSlice : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice)
+      · simp [refSlice]
+        exact advB_recordValueRootSource value (.refSliceVar variableId)
+      · simp [refSlice]
+        exact AdvB.pure _
+  | global _ => simp [recordReadValueRootRecipe]; exact AdvB.pure _
+  | deref _ => simp [recordReadValueRootRecipe]; exact AdvB.pure _
+  | elem _ _ _ => simp [recordReadValueRootRecipe]; exact AdvB.pure _
+  | field _ _ => simp [recordReadValueRootRecipe]; exact AdvB.pure _
 
 theorem advB_emitDef (op : Op) : AdvB (emitDef op) := fun _ _ _ _ h => adv_emitDef h
 theorem advB_emitEffect (e : Effect) : AdvB (emitEffect e) := fun _ _ _ _ h => adv_emitEffect h
@@ -383,7 +894,13 @@ theorem advB_inScope {α : Type} (sc : ScopeId) {k : B α} (hk : AdvB k) : AdvB 
   rw [popScope_run] at h3
   obtain ⟨-, rfl⟩ := Prod.mk.inj h3
   have a2 := hk _ _ _ _ h2
-  exact ⟨a2.ext, a2.vals, a2.keep, a2.cur, by simp [a2.stack]⟩
+  exact {
+    ext := a2.ext
+    vals := a2.vals
+    keep := a2.keep
+    cur := a2.cur
+    stack := by simp [a2.stack]
+    recipePrefix := a2.recipePrefix }
 
 theorem advB_curBlock : AdvB curBlock := by
   intro le ls r ls' h
@@ -428,9 +945,35 @@ theorem advB_freezeTo (m : Mutability) (r : ValueId) : AdvB (freezeTo m r) := by
     | exact AdvB.pure _
     | (rename_i t; cases t <;> first | exact AdvB.pure _ | (rename_i m' _; cases m' <;> first | exact AdvB.pure _ | exact advB_emitDef _))
 
-theorem advB_implOfContext (c : ContextId) : AdvB (implOfContext c) := by
-  unfold implOfContext
-  exact AdvB.bind advB_read fun _ => AdvB.pure _
+theorem advB_borrowTo (m : Mutability) (r : ValueId) : AdvB (borrowTo m r) := by
+  unfold borrowTo
+  refine AdvB.bind advB_read fun le => ?_
+  refine AdvB.bind (advB_valTy r) fun t => ?_
+  split <;> dsimp only <;> split <;> first | exact advB_emitDef _ | exact advB_freezeTo _ r
+
+theorem advB_coerceTo (target : Ty) (r : ValueId) (org : OriginId) : AdvB (coerceTo target r org) := by
+  unfold coerceTo
+  refine AdvB.bind (advB_valTy r) fun source => ?_
+  split
+  · exact advB_emitDef _
+  · exact AdvB.bind (advB_emitDef _) (fun _ => advB_emitDef _)
+  · exact AdvB.pure _
+
+theorem advB_coerceSlot (slot : SlotId) (value : ValueId) (org : OriginId) :
+    AdvB (coerceSlot slot value org) := by
+  unfold coerceSlot
+  refine AdvB.bind advB_read fun le => ?_
+  cases le.slots[slot]? with
+  | none => exact AdvB.pure _
+  | some destination => exact advB_coerceTo _ _ _
+
+theorem advB_coerceResult (value : ValueId) (org : OriginId) :
+    AdvB (coerceResult value org) := by
+  unfold coerceResult
+  refine AdvB.bind advB_read fun le => ?_
+  cases le.results.head? with
+  | none => exact AdvB.pure _
+  | some destination => exact advB_coerceTo _ _ _
 
 theorem advB_growOwner (r : ValueId) : AdvB (growOwner r) := by
   unfold growOwner
@@ -626,6 +1169,30 @@ theorem intTyOf_eq {v : ValueId} {le : LEnv} {ls : LS} {t : IntTy} {ls' : LS}
     | data t' => cases t' <;> exact (Prod.mk.inj h).2.symm
     | view _ _ => exact (Prod.mk.inj h).2.symm
 
+theorem coerceTo_cases {target : Ty} {r : ValueId} {le : LEnv} {ls : LS}
+    {r' : ValueId} {ls' : LS} {org : OriginId} (h : coerceTo target r org le ls = (r', ls')) :
+    (r' = r ∧ ls' = ls) ∨
+    (∃ elem, target = .ref .readOnly elem ∧ emitDef (.refFreeze r) le ls = (r', ls')) ∨
+    (∃ elem view mid, target = .slice .readOnly elem ∧
+      emitDef (.sliceView r) le ls = (view, mid) ∧
+      emitDef (.viewSlice .readOnly view .omitted .omitted (some org)) le mid = (r', ls')) := by
+  unfold coerceTo at h
+  simp only [bind_run] at h
+  have hs := valTy_run r le ls
+  cases hv : valTy r le ls with
+  | mk source same =>
+    rw [hv] at hs h
+    simp only at hs h
+    subst hs
+    split at h
+    · exact Or.inr (Or.inl ⟨_, rfl, h⟩)
+    · simp only [bind_eq] at h
+      obtain ⟨view, mid, hview, hslice⟩ := h
+      exact Or.inr (Or.inr ⟨_, view, mid, rfl, hview, hslice⟩)
+    · rw [pure_run] at h
+      obtain ⟨hr, hls⟩ := Prod.mk.inj h
+      exact Or.inl ⟨hr.symm, hls.symm⟩
+
 theorem freezeTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS} {r' : ValueId} {ls' : LS}
     (h : freezeTo m r le ls = (r', ls')) :
     (r' = r ∧ ls' = ls) ∨ emitDef (.refFreeze r) le ls = (r', ls') := by
@@ -643,6 +1210,38 @@ theorem freezeTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS} {r' 
       first
         | exact Or.inl ⟨(Prod.mk.inj h).1.symm, (Prod.mk.inj h).2.symm⟩
         | exact Or.inr h
+
+theorem borrowTo_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS}
+    {r' : ValueId} {ls' : LS} (h : borrowTo m r le ls = (r', ls')) :
+    freezeTo m r le ls = (r', ls') ∨ emitDef (.ownerBorrow r) le ls = (r', ls') := by
+  unfold borrowTo at h
+  simp only [bind_run, read_apply] at h
+  have hs := valTy_run r le ls
+  cases hv : valTy r le ls with
+  | mk ty same =>
+    rw [hv] at hs h
+    simp only at hs h
+    subst hs
+    let owner := match ty with
+      | .data (.ref .mutable (.grow _)) | .data (.ref .mutable (.growshrink _)) => true
+      | _ => false
+    change (if (m == .mutable && le.mod.profile == .shrink && owner) = true then
+      emitDef (.ownerBorrow r) else freezeTo m r) le same = (r', ls') at h
+    by_cases borrow : (m == .mutable && le.mod.profile == .shrink && owner) = true
+    · rw [if_pos borrow] at h
+      exact Or.inr h
+    · rw [if_neg borrow] at h
+      exact Or.inl h
+
+theorem borrowTo_ref_cases {m : Mutability} {r : ValueId} {le : LEnv} {ls : LS}
+    {r' : ValueId} {ls' : LS} (h : borrowTo m r le ls = (r', ls')) :
+    (r' = r ∧ ls' = ls) ∨ emitDef (.refFreeze r) le ls = (r', ls') ∨
+      emitDef (.ownerBorrow r) le ls = (r', ls') := by
+  rcases borrowTo_cases h with freeze | owner
+  · rcases freezeTo_cases freeze with same | emitted
+    · exact Or.inl same
+    · exact Or.inr (Or.inl emitted)
+  · exact Or.inr (Or.inr owner)
 
 theorem adv_joinValue {ls0 ls1 : LS} (h : ls0.Adv ls1) {endT endF : Option BlockId} {vt vf : ValueId}
     (hT : ∀ b, endT = some b → Mine ls0 b) (hF : ∀ b, endF = some b → Mine ls0 b)
@@ -682,7 +1281,13 @@ theorem adv_joinValue {ls0 ls1 : LS} (h : ls0.Adv ls1) {endT endF : Option Block
     obtain ⟨-, rfl⟩ := Prod.mk.inj h1
     rw [pure_run] at hj
     obtain ⟨-, rfl⟩ := Prod.mk.inj hj
-    exact ⟨h.ext, h.vals, h.keep, Or.inl rfl, h.stack⟩
+    exact {
+      ext := h.ext
+      vals := h.vals
+      keep := h.keep
+      cur := Or.inl rfl
+      stack := h.stack
+      recipePrefix := h.recipePrefix }
   · refine key (fun p hp => ?_) hj
     simp at hp; subst hp; exact hF _ rfl
   · refine key (fun p hp => ?_) hj
@@ -721,7 +1326,13 @@ theorem adv_joinArms {ls0 ls1 : LS} (h : ls0.Adv ls1) {endT endF : Option BlockI
   · simp only [bind_eq] at hj
     rw [setCur_run] at hj
     obtain ⟨-, rfl⟩ := Prod.mk.inj hj
-    exact ⟨h.ext, h.vals, h.keep, Or.inl rfl, h.stack⟩
+    exact {
+      ext := h.ext
+      vals := h.vals
+      keep := h.keep
+      cur := Or.inl rfl
+      stack := h.stack
+      recipePrefix := h.recipePrefix }
   · refine key (fun p hp => ?_) hj
     simp at hp; subst hp; exact hF _ rfl
   · refine key (fun p hp => ?_) hj
@@ -859,10 +1470,11 @@ theorem advB_eachElemValue (x : VarId) (byRef : Bool) (elem : ValueId) :
     | some lv =>
       dsimp only
       cases lv.ty with
-      | ref m t => exact advB_freezeTo m elem
+      | ref m t => exact advB_borrowTo m elem
       | _ => exact AdvB.pure _
 
-theorem advB_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : AdvB a1) (h2 : AdvB a2) :
+theorem advB_ifE_core (cv : ValueId) (sourceScope : ScopeId) {a1 a2 : B ValueId}
+    (h1 : AdvB a1) (h2 : AdvB a2) :
     AdvB (whenLive 0 fun _ => do
       let (tb, eb) ← fork cv
       setCur (some tb)
@@ -871,12 +1483,14 @@ theorem advB_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : AdvB a1) (h2 : Ad
       setCur (some eb)
       let vf ← a2
       let endF ← curBlock
-      joinValue endT vt endF vf) := by
+      let result ← joinValue endT vt endF vf
+      recordValueRootRecipe result sourceScope
+      pure result) := by
   refine advB_whenLive _ fun b => ?_
   intro le ls0 r ls' h
   simp only [bind_eq] at h
   obtain ⟨⟨tb, eb⟩, ls1, hf, u1, ls2, hs1, vt, ls3, ha1, endT, ls4, hc1, u2, ls5, hs2, vf, ls6, ha2,
-    endF, ls7, hc2, hj⟩ := h
+    endF, ls7, hc2, result, ls8, hj, u3, ls9, hrecipe, hp⟩ := h
   obtain ⟨a1', mtb, meb, ltb, leb⟩ := adv_fork_step (.refl ls0) hf
   have a2' := adv_setCur_step a1' mtb ltb hs1
   have b2 := setCur_blocks hs1
@@ -901,7 +1515,9 @@ theorem advB_ifE_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : AdvB a1) (h2 : Ad
     intro b hb
     rw [e7c] at hb
     exact Mine.of_adv a5 (a6x.mine_cur hb)
-  exact adv_joinValue a6 hT hF hj
+  exact (adv_joinValue a6 hT hF hj).trans
+    ((advB_recordValueRootRecipe result sourceScope _ _ _ _ hrecipe).trans
+      (AdvB.pure result _ _ _ _ hp))
 
 theorem advB_ifS_some_core (cv : ValueId) {a1 a2 : B ValueId} (h1 : AdvB a1) (h2 : AdvB a2) :
     AdvB (whenLive () fun _ => do
@@ -1113,10 +1729,12 @@ theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
   | .bool b => by simp only [lowerExpr]; exact advB_emitDef _
   | .read p => by
     simp only [lowerExpr]
-    exact AdvB.bind (advB_lowerPlace p) fun _ => advB_emitDef _
+    exact AdvB.bind (advB_lowerPlace p) fun r =>
+      AdvB.bind (advB_emitDef (.load r)) fun value =>
+        AdvB.bind (advB_recordReadValueRootRecipe value p) fun _ => AdvB.pure value
   | .ref m p => by
     simp only [lowerExpr]
-    exact AdvB.bind (advB_lowerPlace p) fun r => advB_freezeTo m r
+    exact AdvB.bind (advB_lowerPlace p) fun r => advB_borrowTo m r
   | .slice m v lo hi org => by
     simp only [lowerExpr]
     exact AdvB.bind (advB_lowerView v) fun _ => AdvB.bind (advB_lowerBound lo) fun _ =>
@@ -1152,8 +1770,7 @@ theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
     exact AdvB.bind (advB_lowerExpr e) fun a => AdvB.bind (advB_intTyOf a) fun _ => advB_emitDef _
   | .call c args org => by
     simp only [lowerExpr]
-    exact AdvB.bind (advB_lowerArgs args) fun _ => AdvB.bind (advB_implOfContext c) fun _ =>
-      AdvB.bind (advB_emitDef _) fun r => AdvB.bind advB_read fun le => by
+    exact AdvB.bind (advB_lowerArgs args) fun _ => AdvB.bind (advB_emitDef _) fun r => AdvB.bind advB_read fun le => by
         cases hnr : le.mod.noReturn c <;> simp only [hnr, Bool.false_eq_true, ↓reduceIte] <;>
           first | exact AdvB.pure _ | exact AdvB.bind (advB_emitTerm _) fun _ => AdvB.pure _
   | .push owner e org => by
@@ -1166,7 +1783,8 @@ theorem advB_lowerExpr : ∀ e : Expr, AdvB (lowerExpr e)
   | .ifE c t f => by
     simp only [lowerExpr]
     exact AdvB.bind (advB_lowerExpr c) fun cv =>
-      advB_ifE_core cv (advB_lowerBlock none [] true t) (advB_lowerBlock none [] true f)
+      advB_ifE_core cv (sourceBlockScope t) (advB_lowerBlock none [] true t)
+        (advB_lowerBlock none [] true f)
   | .blockE b => by
     simp only [lowerExpr]
     exact advB_lowerBlock none [] true b
@@ -1187,7 +1805,7 @@ theorem advB_lowerArg : ∀ a : Arg, AdvB (lowerArg a)
   | .byVal e => by simp only [lowerArg]; exact advB_lowerExpr e
   | .byRef m p => by
     simp only [lowerArg]
-    exact AdvB.bind (advB_lowerPlace p) fun r => advB_freezeTo m r
+    exact AdvB.bind (advB_lowerPlace p) fun r => advB_borrowTo m r
 
 theorem advB_lowerArgs : ∀ as : List Arg, AdvB (lowerArgs as)
   | [] => by simp only [lowerArgs]; exact AdvB.pure _
@@ -1268,7 +1886,8 @@ theorem advB_lowerPrintArgs : ∀ as : List PrintArg, AdvB (lowerPrintArgs as)
 theorem advB_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, AdvB (lowerStmt lc s)
   | .letS x e org => by
     simp only [lowerStmt]
-    exact AdvB.bind (advB_lowerExpr e) fun _ => advB_emitEffect _
+    exact AdvB.bind (advB_lowerExpr e) fun v =>
+      AdvB.bind (advB_coerceSlot x v org) fun _ => advB_emitEffect _
   | .assign p e org => by
     simp only [lowerStmt]
     exact AdvB.bind (advB_lowerPlace p) fun _ => AdvB.bind (advB_lowerExpr e) fun _ => advB_emitEffect _
@@ -1279,7 +1898,9 @@ theorem advB_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, AdvB (lowerStmt lc 
       AdvB.bind (advB_emitDef _) fun _ => advB_emitEffect _
   | .rebind x e org => by
     simp only [lowerStmt]
-    exact AdvB.bind (advB_lowerExpr e) fun _ => AdvB.bind (advB_emitDef _) fun _ => advB_emitEffect _
+    exact AdvB.bind (advB_lowerExpr e) fun v =>
+      AdvB.bind (advB_coerceSlot x v org) fun _ =>
+        AdvB.bind (advB_emitDef _) fun _ => advB_emitEffect _
   | .expr e _ => by
     simp only [lowerStmt]
     exact AdvB.bind (advB_lowerExpr e) fun _ => AdvB.pure _
@@ -1350,8 +1971,8 @@ theorem advB_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, AdvB (lowerStmt lc 
     cases e with
     | some e =>
       simp only [lowerStmt]
-      exact AdvB.bind (advB_lowerExpr e) fun _ => AdvB.bind (AdvB.pure _) fun _ =>
-        AdvB.bind (advB_leaveTo 0) fun _ => advB_emitTerm _
+      exact AdvB.bind (advB_lowerExpr e) fun v => AdvB.bind (advB_coerceResult v org) fun _ =>
+        AdvB.bind (AdvB.pure _) fun _ => AdvB.bind (advB_leaveTo 0) fun _ => advB_emitTerm _
     | none =>
       simp only [lowerStmt]
       exact AdvB.bind (AdvB.pure _) fun _ => AdvB.bind (advB_leaveTo 0) fun _ => advB_emitTerm _
@@ -1384,6 +2005,22 @@ theorem advB_lowerStmt (lc : Option LoopCtx) : ∀ s : Stmt, AdvB (lowerStmt lc 
   | .exit e org => by
     simp only [lowerStmt]
     exact AdvB.bind (advB_lowerExpr e) fun _ => advB_emitTerm _
+
+@[simp] theorem lowerImplFromState_blocks (m : Module) (impl : Impl) (state : LS) :
+    (lowerImplFromState m impl state).blocks = finishBlocks state.blocks := rfl
+
+@[simp] theorem lowerImplFromState_params (m : Module) (impl : Impl) (state : LS) :
+    (lowerImplFromState m impl state).params = impl.params.toList.map fun p => tyOfVar impl p.var := rfl
+
+@[simp] theorem lowerImplFromState_results (m : Module) (impl : Impl) (state : LS) :
+    (lowerImplFromState m impl state).results = impl.results.toList := rfl
+
+@[simp] theorem lowerImplFromState_slots (m : Module) (impl : Impl) (state : LS) :
+    (lowerImplFromState m impl state).slots =
+      (lowerEnv m impl.vars impl.results.toList).slots := rfl
+
+@[simp] theorem lowerImplFromState_scopes (m : Module) (impl : Impl) (state : LS) :
+    (lowerImplFromState m impl state).scopes = scopeParents (blockScopes none impl.body) := rfl
 
 end
 

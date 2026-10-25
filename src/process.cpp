@@ -5,6 +5,7 @@
 #include "includes.h"
 #include "utils.h"
 #include "process.h"
+#include "progress.h"
 
 #ifdef _MSC_VER
     #pragma warning(push, 0)
@@ -64,6 +65,7 @@ ProcessResult RunProcess(const vector<string> &argv, const string &cwd, bool ech
         if (!n) break;
         r.output.append(buf, n);
         if (echo) fwrite(buf, 1, n, stderr);
+        ProgressOutput(buf, n);
     }
     int code = -1;
     #ifndef _WIN32
@@ -159,7 +161,7 @@ static bool IsFile(const string &path) {
     #endif
 }
 
-string FindOnPath(const string &name) {
+string FindOnPath(const string &name, const char *path) {
     if (name.find_first_of("/\\") != string::npos) return IsFile(name) ? name : "";
     vector<string> exts = { "" };
     #ifdef _WIN32
@@ -179,7 +181,7 @@ string FindOnPath(const string &name) {
     #else
         constexpr char sep = ':';
     #endif
-    auto path = getenv("PATH");
+    if (!path) path = getenv("PATH");
     if (!path) return "";
     string dirs = path;
     for (size_t i = 0; i <= dirs.size();) {
@@ -212,7 +214,8 @@ void SetEnvVar(const string &name, const string &value) {
     #endif
 }
 
-FileLock::FileLock(const string &path) {
+FileLock::FileLock(const string &path, const string &waiting) {
+    ProgressStep step(waiting);
     #ifdef _WIN32
         auto h = CreateFileA(path.c_str(), GENERIC_READ | GENERIC_WRITE,
                              FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr, OPEN_ALWAYS,
@@ -287,6 +290,25 @@ bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &o
     }
     for (auto e = table(); e->name; e++) out.emplace_back(e->name, e->addr);
     return true;
+}
+
+string MacSdkPath() {
+    string sdk;
+    #ifdef __APPLE__
+        // As TinyCC finds the SDK's libraries (tccmacho.c's
+        // tcc_add_macos_sdkpath): the SDK xcode-select made active, which
+        // libxcselect knows without running xcrun.
+        if (auto xcs = dlopen("libxcselect.dylib", RTLD_GLOBAL | RTLD_LAZY)) {
+            auto f = (int (*)(unsigned, char **))dlsym(xcs, "xcselect_host_sdk_path");
+            char *path = nullptr;
+            if (f) f(1, &path);
+            if (path) {
+                sdk = path;
+                free(path);
+            }
+        }
+    #endif
+    return sdk;
 }
 
 string CommandLineText(const vector<string> &argv) {

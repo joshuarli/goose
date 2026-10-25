@@ -31,6 +31,8 @@ struct GirTyEnv {
     const vector<GirTypeId> &vals;
     // The frame of a low function, when typing one.
     const vector<GirMember> *members = nullptr;
+    const vector<GirBlock> *blocks = nullptr;
+    const GirFunc *function = nullptr;
 };
 
 // A type error or the type.
@@ -69,12 +71,49 @@ inline bool GirFlat(const GirModule &m, GirTypeId t) {
     return GirFlat(m, t, open);
 }
 
+inline bool GirVariableElement(const GirModule &m, GirTypeId type) {
+    if (type < 0 || type >= (int)m.types.size()) return false;
+    auto &t = m.Type(type);
+    if (t.elem < 0 || t.elem >= type) return false;
+    if (t.kind == CoreType::VarArr)
+        return GirFlat(m, t.elem) || GirVariableElement(m, t.elem);
+    return t.kind == CoreType::Arr && GirVariableElement(m, t.elem);
+}
+
+inline bool GirNonfixed(const GirModule &m, GirTypeId type) {
+    auto &t = m.Type(type);
+    return t.kind == CoreType::VarArr || GirOwnerKind(t.kind) ||
+           (t.kind == CoreType::Arr && GirVariableElement(m, t.elem));
+}
+
+inline bool GirConstructible(const GirModule &m, GirTypeId type) {
+    auto &t = m.Type(type);
+    if (t.kind == CoreType::VarArr || t.kind == CoreType::Grow || t.kind == CoreType::Arr)
+        return GirFlat(m, t.elem) || (CoreHasConstruction(m.profile) && GirVariableElement(m, t.elem));
+    if (t.kind == CoreType::GrowShrink || t.kind == CoreType::Limited) return GirFlat(m, t.elem);
+    return GirFlat(m, type);
+}
+
+inline bool GirArrayKind(CoreType::Kind kind) {
+    return kind == CoreType::Arr || kind == CoreType::VarArr || GirOwnerKind(kind);
+}
+
+inline bool GirAdaptsTo(const GirModule &m, GirTypeId producer, GirTypeId receiver) {
+    if (producer == receiver) return true;
+    auto &source = m.Type(producer);
+    auto &target = m.Type(receiver);
+    if (target.kind == CoreType::Arr)
+        return source.kind == CoreType::Arr && source.elem == target.elem && source.count == target.count;
+    return GirArrayKind(source.kind) && GirArrayKind(target.kind) && source.elem == target.elem;
+}
+
 // What a reference may point to.
 inline bool GirRefTarget(const GirModule &m, GirTypeId t) {
     auto &c = m.Type(t);
     if (c.kind == CoreType::Int || c.kind == CoreType::Bool) return true;
-    if (c.kind == CoreType::Slice) return GirFlat(m, c.elem);
-    if (c.kind == CoreType::Arr || GirOwnerKind(c.kind)) return GirFlat(m, c.elem);
+    if (c.kind == CoreType::Slice)
+        return GirFlat(m, c.elem) || (CoreHasConstruction(m.profile) && GirVariableElement(m, c.elem));
+    if (GirArrayKind(c.kind)) return GirConstructible(m, t);
     return c.kind == CoreType::Struct && GirFlat(m, t);
 }
 
@@ -83,13 +122,14 @@ inline bool GirStorable(const GirModule &m, GirTypeId t) {
     auto &c = m.Type(t);
     switch (c.kind) {
         case CoreType::Int: case CoreType::Bool: return true;
-        case CoreType::Arr: case CoreType::Grow: case CoreType::GrowShrink: case CoreType::Limited:
-            return GirFlat(m, c.elem);
+        case CoreType::Arr: case CoreType::VarArr: case CoreType::Grow: case CoreType::GrowShrink: case CoreType::Limited:
+            return GirConstructible(m, t);
         case CoreType::Struct: return GirFlat(m, t);
         case CoreType::Ref:
             // Reference-to-slice is a parameter-only type, not a general slot type.
             return m.Type(c.elem).kind != CoreType::Slice && GirRefTarget(m, c.elem);
-        case CoreType::Slice: return GirFlat(m, c.elem);
+        case CoreType::Slice:
+            return GirFlat(m, c.elem) || (CoreHasConstruction(m.profile) && GirVariableElement(m, c.elem));
         default: return false;
     }
 }
@@ -98,7 +138,8 @@ inline bool GirStorable(const GirModule &m, GirTypeId t) {
 inline bool GirReadable(const GirModule &m, GirTypeId t) {
     auto &c = m.Type(t);
     if (c.kind == CoreType::Ref) return GirRefTarget(m, c.elem);
-    if (c.kind == CoreType::Slice) return GirFlat(m, c.elem);
+    if (c.kind == CoreType::Slice)
+        return GirFlat(m, c.elem) || (CoreHasConstruction(m.profile) && GirVariableElement(m, c.elem));
     return GirFlat(m, t);
 }
 
@@ -112,6 +153,8 @@ inline bool GirRefLike(const GirModule &m, GirTypeId t) {
 inline bool GirPassable(const GirModule &m, GirTypeId a, GirTypeId p) {
     auto &x = m.Type(a);
     auto &y = m.Type(p);
+    if (CoreHasConstruction(m.profile) && GirNonfixed(m, p))
+        return x.kind == CoreType::Ref && x.mut == CoreMut::Mut && x.elem == p;
     if (x.kind == y.kind && (x.kind == CoreType::Ref || x.kind == CoreType::Slice))
         return x.elem == y.elem && GirMutAtLeast(x.mut, y.mut);
     return a == p;
@@ -150,6 +193,7 @@ public:
 
     GirTyResult Of(const GirInst &i) {
         auto &m = env.m;
+        if (GirControlOf(i.op)) return Control(i);
         switch (i.op) {
             case GirOp::Int:
                 if (m.Type(i.ty).kind != CoreType::Int || !GirInRange(m.Type(i.ty).ity, i.text))
@@ -246,6 +290,14 @@ public:
                 if (!r.ok()) return r;
                 return GirTyOk(m.RefType(CoreMut::Const, m.Type(r.ty).elem));
             }
+            case GirOp::OwnerBorrow: {
+                auto r = Ref(i.a);
+                if (!r.ok()) return r;
+                auto &reference = m.Type(r.ty);
+                if (reference.mut != CoreMut::Mut || !GirResizableKind(m.Type(reference.elem).kind))
+                    return GirTyErr("owner borrow requires a mutable grow or growshrink reference");
+                return r;
+            }
             case GirOp::Load: {
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;
@@ -255,7 +307,7 @@ public:
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;
                 auto &pointee = m.Type(m.Type(r.ty).elem);
-                if (pointee.kind != CoreType::Arr && !GirOwnerKind(pointee.kind))
+                if (!GirArrayKind(pointee.kind))
                     return GirTyErr("snapshot of a reference to something that is not an array");
                 auto mut = i.snap == GirSnapshotMode::Owner ? CoreMut::Mut : m.Type(r.ty).mut;
                 return GirTyOk(m.ViewType(mut, pointee.elem));
@@ -286,7 +338,7 @@ public:
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;
                 auto k = m.Type(m.Type(r.ty).elem).kind;
-                if (k != CoreType::Arr && !GirOwnerKind(k))
+                if (!GirArrayKind(k))
                     return GirTyErr("length of a reference to something that is not an array");
                 return GirTyOk(m.IntType(CoreIntTy::I64));
             }
@@ -303,7 +355,7 @@ public:
                 auto &pointee = m.Type(m.Type(r.ty).elem);
                 if (!GirOwnerKind(pointee.kind))
                     return GirTyErr("push to a reference that does not point at an owner array");
-                if (pointee.kind != CoreType::Grow && m.profile != CoreProfile::Shrink)
+                if (pointee.kind != CoreType::Grow && !CoreHasShrink(m.profile))
                     return GirTyErr("shrink-profile push under core-pilot");
                 auto v = Data(i.b);
                 if (!v.ok()) return v;
@@ -314,7 +366,7 @@ public:
                 auto r = Ref(i.a);
                 if (!r.ok()) return r;
                 auto &owner = m.Type(m.Type(r.ty).elem);
-                if (m.profile != CoreProfile::Shrink || !GirOwnerKind(owner.kind))
+                if (!CoreHasShrink(m.profile) || !GirOwnerKind(owner.kind))
                     return GirTyErr("pop from a reference that does not point at a shrink-profile owner array");
                 return GirTyOk(owner.elem);
             }
@@ -333,14 +385,72 @@ public:
                 }
                 if (sig.second.empty()) return GirTyOk(m.UnitType());
                 if (sig.second.size() == 1) return GirTyOk(sig.second[0]);
-                return GirTyErr(cat("function ", i.idx, " has several results"));
+                if (!CoreHasConstruction(m.profile)) return GirTyErr(cat("function ", i.idx, " has several results"));
+                return GirTyOk(m.TupleType(sig.second));
+            }
+            case GirOp::Result: {
+                auto pack = Val(i.a);
+                if (!pack.ok()) return pack;
+                auto &tuple = m.Type(pack.ty);
+                if (tuple.kind != CoreType::Tuple || i.idx < 0 || i.idx >= (int)tuple.parts.size())
+                    return GirTyErr("result projection outside a call pack");
+                return GirTyOk(tuple.parts[i.idx]);
+            }
+            case GirOp::Render: {
+                auto operand = Val(i.a);
+                if (!operand.ok()) return operand;
+                auto &type = m.Type(operand.ty);
+                if (!CoreHasConstruction(m.profile) || m.low ||
+                    (type.kind != CoreType::View && !GirFlat(m, operand.ty)))
+                    return GirTyErr("render snapshot requires a fixed value or sampled view");
+                return GirTyOk(m.ViewType(CoreMut::Const, m.IntType(CoreIntTy::U8)));
+            }
+            case GirOp::Bytes: {
+                if (i.ty < 0 || i.ty >= (int)m.types.size()) return GirTyErr("static bytes type outside the table");
+                auto &slice = m.Type(i.ty);
+                if (slice.kind != CoreType::Slice || slice.mut != CoreMut::Const ||
+                    m.Type(slice.elem).kind != CoreType::Int || m.Type(slice.elem).ity != CoreIntTy::U8)
+                    return GirTyErr("static bytes require slice const u8");
+                return GirTyOk(i.ty);
+            }
+            case GirOp::CallConstruct: {
+                if (i.idx < 0 || i.idx >= (int)m.funcs.size()) return GirTyErr("construction callee outside the table");
+                auto &callee = m.funcs[i.idx];
+                if (i.vals.size() != callee.params.size()) return GirTyErr("construction call source argument count differs");
+                for (size_t parameter = 0; parameter < i.vals.size(); parameter++) {
+                    auto argument = Data(i.vals[parameter]);
+                    if (!argument.ok()) return argument;
+                    auto expected = callee.params[parameter];
+                    if (GirNonfixed(m, expected)) {
+                        auto &reference = m.Type(argument.ty);
+                        if (reference.kind != CoreType::Ref || reference.mut != CoreMut::Mut || reference.elem != expected)
+                            return GirTyErr("construction argument is not the owned parameter reference");
+                    } else if (!GirPassable(m, argument.ty, expected)) return GirTyErr("construction call argument type differs");
+                }
+                vector<GirTypeId> results;
+                size_t channel = 0;
+                for (size_t position = 0; position < callee.results.size(); position++) {
+                    auto type = callee.results[position];
+                    if (!GirNonfixed(m, type)) { results.push_back(type); continue; }
+                    if (channel >= i.vals2.size() || callee.resultProtocols.size() != callee.results.size())
+                        return GirTyErr("construction call omits a result destination or descriptor");
+                    auto destination = Val(i.vals2[channel++]);
+                    if (!destination.ok()) return destination;
+                    auto &carrier = m.Type(destination.ty);
+                    if (carrier.kind != CoreType::Dest || carrier.elem != type ||
+                        carrier.request != callee.resultProtocols[position].request)
+                        return GirTyErr("construction result destination type or request differs");
+                    results.push_back(m.CarrierType(CoreType::Built, type, carrier.request));
+                }
+                if (channel == 0 || channel != i.vals2.size()) return GirTyErr("construction call has no exact result channels");
+                return GirTyOk(results.size() == 1 ? results[0] : m.TupleType(std::move(results)));
             }
             case GirOp::Arr: {
                 auto &t = m.Type(i.ty);
                 if (t.kind != CoreType::Arr && !GirOwnerKind(t.kind))
                     return GirTyErr("array literal of a type that is not an array");
                 if ((t.kind == CoreType::GrowShrink || t.kind == CoreType::Limited) &&
-                    m.profile != CoreProfile::Shrink)
+                    !CoreHasShrink(m.profile))
                     return GirTyErr("shrink-profile literal under core-pilot");
                 if (t.kind == CoreType::Arr && (int64_t)i.vals.size() != t.count)
                     return GirTyErr(cat("array literal of ", i.vals.size(), " elements for a type of ", t.count));
@@ -392,7 +502,251 @@ public:
                 auto mut = fields[i.idx].binding == CoreVarKind::Var ? CoreMut::Mut : CoreMut::Const;
                 return GirTyOk(m.RefType(mut, fields[i.idx].type));
             }
+            case GirOp::ReceivingOpen: case GirOp::DestRenew: case GirOp::ExitWait: case GirOp::ExitReserve:
+            case GirOp::ExitIsNamed: case GirOp::ReservedDest: case GirOp::ReservedNamed: {
+                if (m.low || !CoreHasConstruction(m.profile))
+                    return GirTyErr("receiving ownership operation outside core-construction GIR-H");
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                auto expected = i.op == GirOp::ReceivingOpen ? CoreType::Dest :
+                    (i.op == GirOp::DestRenew || i.op == GirOp::ExitWait || i.op == GirOp::ExitReserve) ? CoreType::Receiving : CoreType::ExitReservation;
+                if (carrier.kind != expected) return GirTyErr("receiving ownership operation has another input capability");
+                if (i.op == GirOp::ExitIsNamed) return GirTyOk(m.BoolType());
+                if (i.op == GirOp::ExitReserve) if (auto slot = GirNamedExitBinding(i.exitSource)) {
+                    if (!env.function || *slot < 0 || *slot >= (int)env.slots.size() ||
+                        !GirAdaptsTo(m, env.slots[*slot].ty, carrier.elem) ||
+                        none_of(env.function->resultProtocols.begin(), env.function->resultProtocols.end(),
+                                [&](const auto &protocol) { return protocol.namedSlot == *slot; }))
+                        return GirTyErr("named exit source is not an exact in-scope named result binding");
+                }
+                auto result = i.op == GirOp::ReceivingOpen ? CoreType::Receiving :
+                    (i.op == GirOp::ExitWait || i.op == GirOp::ExitReserve) ? CoreType::ExitReservation :
+                    i.op == GirOp::ReservedNamed ? CoreType::Built : CoreType::Dest;
+                return GirTyOk(m.CarrierType(result, carrier.elem, carrier.request));
+            }
+            case GirOp::DestRefresh: case GirOp::ExitLand: case GirOp::ExitAdopt: case GirOp::ReceivingCancel: {
+                if (m.low || !CoreHasConstruction(m.profile))
+                    return GirTyErr("receiving ownership operation outside core-construction GIR-H");
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                auto expected = i.op == GirOp::ExitLand ? CoreType::ExitReservation : CoreType::Receiving;
+                if (carrier.kind != expected) return GirTyErr("receiving ownership operation has another input capability");
+                if (i.op == GirOp::ReceivingCancel) {
+                    for (auto value : i.vals) {
+                        auto carried = Val(value);
+                        if (!carried.ok()) return carried;
+                        if (m.Type(carried.ty).kind != CoreType::Built)
+                            return GirTyErr("receiving cancellation protects a value that is not a raw completion");
+                    }
+                    return GirTyOk(m.CarrierType(CoreType::Cancelled, carrier.elem, carrier.request));
+                }
+                auto previous = Val(i.b);
+                if (!previous.ok()) return previous;
+                auto raw = m.Type(previous.ty);
+                if (raw.kind != (i.op == GirOp::DestRefresh ? CoreType::Dest : CoreType::Built) ||
+                    raw.elem != carrier.elem || raw.request != carrier.request)
+                    return GirTyErr("receiving operation uses another raw carrier protocol");
+                return GirTyOk(i.op == GirOp::ExitAdopt
+                    ? m.CarrierType(CoreType::ExitReservation, carrier.elem, carrier.request) : previous.ty);
+            }
+            case GirOp::TargetReceiving: {
+                if (m.low || !CoreHasConstruction(m.profile) || i.idx < 0 || i.idx >= (int)m.targets.size() ||
+                    m.targets[i.idx].members.empty())
+                    return GirTyErr("receiving target is outside core-construction GIR-H");
+                auto &member = m.funcs[m.targets[i.idx].members[0]];
+                if (i.idx2 < 0 || i.idx2 >= (int)member.results.size() ||
+                    member.resultProtocols.size() != member.results.size() || !GirNonfixed(m, member.results[i.idx2]))
+                    return GirTyErr("receiving target has no nonfixed result channel");
+                return GirTyOk(m.CarrierType(CoreType::Receiving, member.results[i.idx2], member.resultProtocols[i.idx2].request));
+            }
+            case GirOp::DestPrepareNamed: {
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                if (!env.function || carrier.kind != CoreType::Dest || carrier.request != CoreRequest::Value ||
+                    i.idx < 0 || i.idx >= (int)env.slots.size() ||
+                    !GirNonfixed(m, env.slots[i.idx].ty) ||
+                    !GirAdaptsTo(m, env.slots[i.idx].ty, carrier.elem))
+                    return GirTyErr("named preparation has no compatible local destination");
+                return input;
+            }
+            case GirOp::DestAdapt: {
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                if (carrier.kind != CoreType::Dest || i.ty < 0 || i.ty >= (int)m.types.size() ||
+                    !GirNonfixed(m, i.ty) || !GirConstructible(m, i.ty) ||
+                    !GirArrayKind(m.Type(carrier.elem).kind) || !GirArrayKind(m.Type(i.ty).kind) ||
+                    !GirAdaptsTo(m, i.ty, carrier.elem) ||
+                    (i.request != CoreRequest::Value && i.request != CoreRequest::ElementRun))
+                    return GirTyErr("destination adaptation changes elements or has no receiving protocol");
+                return GirTyOk(m.CarrierType(CoreType::Dest, i.ty, i.request));
+            }
+            case GirOp::DestAdaptFinish: {
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                if (carrier.kind != CoreType::Built && carrier.kind != CoreType::Cancelled)
+                    return GirTyErr("destination adaptation restoration requires a closed producer carrier");
+                auto original = AdaptationOrigin(i.a);
+                if (!original.ok()) return original;
+                auto receiving = m.Type(original.ty);
+                return GirTyOk(m.CarrierType(carrier.kind, receiving.elem, receiving.request));
+            }
+            case GirOp::DestPublishRef: {
+                auto completed = Val(i.a);
+                if (!completed.ok()) return completed;
+                auto &carrier = m.Type(completed.ty);
+                if (carrier.kind != CoreType::Built || carrier.request != CoreRequest::Value)
+                    return GirTyErr("push publication requires a completed value destination");
+                return GirTyOk(m.RefType(CoreMut::Mut, carrier.elem));
+            }
+            case GirOp::DestOpen: {
+                if (m.low || m.profile != CoreProfile::Construction)
+                    return GirTyErr("construction destination under an earlier profile or stage");
+                if (i.ty < 0 || i.ty >= (int)m.types.size())
+                    return GirTyErr("destination type outside the type table");
+                GirTypeId receiverType = -1;
+                CoreRequest receiverRequest = CoreRequest::Value;
+                if (auto slot = get_if<GirDestSlotReceiver>(&i.destReceiver)) {
+                    if (slot->slot < 0 || slot->slot >= (int)env.slots.size())
+                        return GirTyErr("destination slot outside the slot table");
+                    receiverType = env.slots[slot->slot].ty;
+                } else if (auto global = get_if<GirDestGlobalReceiver>(&i.destReceiver)) {
+                    if (global->global < 0 || global->global >= (int)m.globals.size())
+                        return GirTyErr("destination global outside the global table");
+                    receiverType = m.globals[global->global].ty;
+                } else if (auto argument = get_if<GirDestArgReceiver>(&i.destReceiver)) {
+                    if (argument->function < 0 || argument->function >= (int)m.funcs.size() ||
+                        argument->parameter < 0 || argument->parameter >= (int)m.funcs[argument->function].params.size())
+                        return GirTyErr("destination call parameter outside the signature");
+                    receiverType = m.funcs[argument->function].params[argument->parameter];
+                } else {
+                    int value = -1;
+                    if (auto whole = get_if<GirDestWholeReceiver>(&i.destReceiver)) value = whole->reference;
+                    if (auto push = get_if<GirDestPushReceiver>(&i.destReceiver)) value = push->reference;
+                    if (auto append = get_if<GirDestAppendReceiver>(&i.destReceiver)) {
+                        value = append->reference;
+                        receiverRequest = CoreRequest::ElementRun;
+                    }
+                    auto reference = Ref(value);
+                    if (!reference.ok()) return reference;
+                    if (m.Type(reference.ty).mut != CoreMut::Mut)
+                        return GirTyErr("construction receiver is read-only");
+                    receiverType = m.Type(reference.ty).elem;
+                    if (holds_alternative<GirDestPushReceiver>(i.destReceiver)) {
+                        if (!GirOwnerKind(m.Type(receiverType).kind)) return GirTyErr("push receiver is not an owner array");
+                        receiverType = m.Type(receiverType).elem;
+                    }
+                }
+                if (!GirNonfixed(m, i.ty) || !GirConstructible(m, i.ty) ||
+                    !GirConstructible(m, receiverType) || i.request != receiverRequest)
+                    return GirTyErr("destination receiving type or request is not constructible");
+                if (!GirAdaptsTo(m, i.ty, receiverType))
+                    return GirTyErr("destination producer cannot adapt to its receiving type");
+                if (i.knownCount) {
+                    auto count = IntTy(*i.knownCount);
+                    if (!count.ok()) return count;
+                    if (count.ty != m.IntType(CoreIntTy::I64))
+                        return GirTyErr("destination element count is not i64");
+                }
+                CoreType result;
+                result.kind = CoreType::Dest;
+                result.elem = i.ty;
+                result.request = i.request;
+                return GirTyOk(m.Intern(result));
+            }
+            case GirOp::DestFinish: case GirOp::DestAbandon: {
+                auto dest = Val(i.a);
+                if (!dest.ok()) return dest;
+                auto &type = m.Type(dest.ty);
+                if (type.kind != CoreType::Dest &&
+                    !(i.op == GirOp::DestAbandon && type.kind == CoreType::Built))
+                    return GirTyErr("construction completion or abandonment has no owned carrier");
+                CoreType result;
+                result.kind = i.op == GirOp::DestFinish ? CoreType::Built : CoreType::Cancelled;
+                result.elem = type.elem;
+                result.request = type.request;
+                return GirTyOk(m.Intern(result));
+            }
+            case GirOp::DestChild: {
+                auto parent = Val(i.a);
+                if (!parent.ok()) return parent;
+                auto &carrier = m.Type(parent.ty);
+                if (carrier.kind != CoreType::Dest || m.Type(carrier.elem).elem != i.ty ||
+                    !GirNonfixed(m, i.ty) || !GirVariableElement(m, i.ty))
+                    return GirTyErr("nested destination does not match the next variable element");
+                return GirTyOk(m.CarrierType(CoreType::Dest, i.ty, CoreRequest::Value));
+            }
+            case GirOp::DestArg: {
+                auto completed = Val(i.a);
+                if (!completed.ok()) return completed;
+                auto &carrier = m.Type(completed.ty);
+                if (carrier.kind != CoreType::Built || carrier.request != CoreRequest::Value)
+                    return GirTyErr("owned argument requires a value completion");
+                return GirTyOk(m.RefType(CoreMut::Mut, carrier.elem));
+            }
+            case GirOp::DestValue: case GirOp::DestStage: case GirOp::DestRelocate: case GirOp::DestFit: {
+                auto input = Val(i.a);
+                if (!input.ok()) return input;
+                auto carrier = m.Type(input.ty);
+                auto open = i.op == GirOp::DestValue || i.op == GirOp::DestStage;
+                if (carrier.kind != (open ? CoreType::Dest : CoreType::Built))
+                    return GirTyErr("construction adapter has the wrong carrier state");
+                if (i.op == GirOp::DestValue) {
+                    if (carrier.request != CoreRequest::ElementRun) return GirTyErr("value adapter does not consume an element run");
+                    carrier.request = CoreRequest::Value;
+                }
+                if (i.op == GirOp::DestRelocate) {
+                    if (i.reason == GirEventReason::HeaderRemoval) {
+                        if (carrier.request != CoreRequest::Value) return GirTyErr("header removal requires a value completion");
+                        carrier.request = CoreRequest::ElementRun;
+                    } else return GirTyErr("exit landing requires a bounded reservation ticket");
+                }
+                return GirTyOk(m.Intern(carrier));
+            }
             // The low stage: scalars and addresses.
+            case GirOp::PtrEq: {
+                auto left = PtrOf(i.a), right = PtrOf(i.b);
+                if (!left.ok()) return left;
+                if (!right.ok()) return right;
+                return GirTyOk(m.BoolType());
+            }
+            case GirOp::SourceTargetEnter: return GirTyOk(m.PtrType());
+            case GirOp::SourceTargetGet: {
+                auto token = PtrOf(i.a);
+                if (!token.ok()) return token;
+                return GirTyOk(m.PtrType());
+            }
+            case GirOp::SourceNew: {
+                auto storage = IntTy(i.a);
+                if (!storage.ok()) return storage;
+                if (storage.ty != m.IntType(CoreIntTy::I64)) return GirTyErr("source storage identity is not i64");
+                for (auto path : i.vals) {
+                    auto index = IntTy(path);
+                    if (!index.ok()) return index;
+                    if (index.ty != storage.ty) return GirTyErr("source path index is not i64");
+                }
+                return GirTyOk(m.PtrType());
+            }
+            case GirOp::SourceChild: {
+                auto source = PtrOf(i.a), index = IntTy(i.b);
+                if (!source.ok()) return source;
+                if (!index.ok()) return index;
+                if (index.ty != m.IntType(CoreIntTy::I64)) return GirTyErr("source child index is not i64");
+                return GirTyOk(m.PtrType());
+            }
+            case GirOp::SourceParam: case GirOp::SourceEnter: case GirOp::SourceGlobal: return GirTyOk(m.PtrType());
+            case GirOp::SourceCallPush:
+                for (auto source : i.vals) if (source >= 0) { auto pointer = PtrOf(source); if (!pointer.ok()) return pointer; }
+                return GirTyOk(m.PtrType());
+            case GirOp::SourceCallGet: {
+                auto token = PtrOf(i.a);
+                if (!token.ok()) return token;
+                return GirTyOk(m.PtrType());
+            }
             case GirOp::PtrOffset: {
                 auto p = PtrOf(i.a), n = Data(i.b);
                 if (!p.ok()) return p;
@@ -414,9 +768,10 @@ public:
                 return GirTyOk(m.PtrType());
             case GirOp::LocalGet:
                 if (!env.members || i.idx < 0 || i.idx >= (int)env.members->size() ||
-                    (*env.members)[i.idx].kind != GirMember::Scalar)
+                    ((*env.members)[i.idx].kind != GirMember::Scalar &&
+                     (*env.members)[i.idx].kind != GirMember::Dynamic))
                     return GirTyErr(cat("frame member ", i.idx, " is not a scalar of the frame"));
-                return GirTyOk((*env.members)[i.idx].ty);
+                return GirTyOk((*env.members)[i.idx].kind == GirMember::Dynamic ? m.PtrType() : (*env.members)[i.idx].ty);
             case GirOp::StackAt: {
                 auto b = Data(i.a);
                 if (!b.ok()) return b;
@@ -437,6 +792,38 @@ public:
                 if (!p.ok()) return p;
                 return GirTyOk(m.IntType(CoreIntTy::I64));
             }
+            case GirOp::StaticBytes: return GirTyOk(m.PtrType());
+            case GirOp::ReturnFlagGet: return GirTyOk(m.IntType(CoreIntTy::I64));
+            case GirOp::TargetLoad:
+                if (i.idx < 0 || i.idx >= (int)m.lowtargets.size() || i.idx2 < 0 ||
+                    i.idx2 >= (int)m.lowtargets[i.idx].cells.size())
+                    return GirTyErr("target cell outside the target table");
+                return GirTyOk(m.lowtargets[i.idx].cells[i.idx2]);
+            case GirOp::TraceId:
+                if ((uint8_t)i.trace > (uint8_t)GirTraceKind::Destination)
+                    return GirTyErr("unknown construction trace id kind");
+                return GirTyOk(m.IntType(CoreIntTy::I64));
+            case GirOp::Format: {
+                auto scalar = Data(i.a), pointer = PtrOf(i.b);
+                if (!scalar.ok()) return scalar;
+                if (!pointer.ok()) return pointer;
+                auto &type = m.Type(scalar.ty);
+                switch (i.format) {
+                    case GirFormatKind::Int:
+                        if (type.kind != CoreType::Int || CoreIsUnsigned(type.ity))
+                            return GirTyErr("signed formatting requires a signed integer");
+                        break;
+                    case GirFormatKind::Uint:
+                        if (type.kind != CoreType::Int || !CoreIsUnsigned(type.ity))
+                            return GirTyErr("unsigned formatting requires an unsigned integer");
+                        break;
+                    case GirFormatKind::Bool:
+                        if (type.kind != CoreType::Bool) return GirTyErr("boolean formatting requires bool");
+                        break;
+                    default: return GirTyErr("unknown text formatting kind");
+                }
+                return GirTyOk(m.IntType(CoreIntTy::I64));
+            }
             default: return GirTyErr("not an instruction that defines a value");
         }
     }
@@ -446,11 +833,56 @@ public:
             return GirTyErr(cat("value %", v, " has no type"));
         return GirTyOk(env.vals[v]);
     }
+    GirTyResult Control(const GirInst &inst) {
+        auto contract = GirControlOf(inst.op);
+        if (!contract) return GirTyErr("unknown construction control operation");
+        if (!env.m.low || !CoreHasConstruction(env.m.profile))
+            return GirTyErr("construction control operation outside core-construction GIR-L");
+        auto operands = GirControlOperands(inst, contract->form);
+        if (operands.size() < contract->inputs.size() ||
+            (!contract->repeatedInput && operands.size() != contract->inputs.size()))
+            return GirTyErr("construction control operation has another operand count");
+        for (size_t position = 0; position < operands.size(); position++) {
+            auto input = Data(operands[position]);
+            if (!input.ok()) return input;
+            auto expected = position < contract->inputs.size() ? contract->inputs[position] : *contract->repeatedInput;
+            if (env.m.Type(input.ty).kind != expected ||
+                (expected == CoreType::Int && input.ty != env.m.IntType(CoreIntTy::I64)))
+                return GirTyErr("construction control operand has another primitive type");
+        }
+        if ((contract->form == GirControlForm::Parameter || contract->form == GirControlForm::OperandParameter) && inst.idx < 0)
+            return GirTyErr("construction control parameter position is negative");
+        if (contract->form == GirControlForm::Call && (inst.idx < 0 || inst.idx >= (int)env.m.funcs.size()))
+            return GirTyErr("construction control call names an unknown callee");
+        if (contract->form == GirControlForm::Call && inst.ownerBindings.size() + 1 != env.m.funcs[inst.idx].params.size())
+            return GirTyErr("construction call owner bindings do not align with primitive argument positions");
+        if (contract->form == GirControlForm::TargetPositions) {
+            if (inst.idx < 0 || inst.idx >= (int)env.m.lowtargets.size() ||
+                inst.ownerPositions.size() != env.m.lowtargets[inst.idx].channels.size())
+                return GirTyErr("owner target binding map does not align with logical result positions");
+            for (auto position : inst.ownerPositions)
+                if (position && (!env.function || *position <= 0 || *position >= (int)env.function->params.size()))
+                    return GirTyErr("owner target binding map has another primitive output position");
+        }
+        if (contract->form == GirControlForm::TargetResult &&
+            (inst.idx < 0 || inst.idx >= (int)env.m.lowtargets.size() || inst.idx2 < 0 ||
+                inst.idx2 >= (int)env.m.lowtargets[inst.idx].channels.size()))
+            return GirTyErr("owner target binding result is outside its logical result table");
+
+        if (!contract->result) return GirTyOk(env.m.UnitType());
+        return GirTyOk(*contract->result == CoreType::Bool ? env.m.BoolType() :
+            *contract->result == CoreType::Int ? env.m.IntType(CoreIntTy::I64) : env.m.PtrType());
+    }
+
     GirTyResult Data(int v) {
         auto t = Val(v);
         if (!t.ok()) return t;
-        if (env.m.Type(t.ty).kind == CoreType::View)
+        auto kind = env.m.Type(t.ty).kind;
+        if (kind == CoreType::View)
             return GirTyErr(cat("value %", v, " is a view where a data value is required"));
+        if (kind == CoreType::Dest || kind == CoreType::Built || kind == CoreType::Cancelled ||
+            kind == CoreType::Receiving || kind == CoreType::ExitReservation)
+            return GirTyErr(cat("value %", v, " is a construction carrier where a data value is required"));
         return t;
     }
     GirTyResult IntTy(int v) {
@@ -479,6 +911,94 @@ public:
     }
 
 private:
+    GirTyResult AdaptationOrigin(int value) const {
+        if (!env.blocks) return GirTyErr("destination adaptation has no control-flow lineage");
+        map<int, set<int>> origins;
+        map<pair<int, int>, set<int>> packed;
+        for (auto &block : *env.blocks) for (auto &inst : block.insts)
+            if (inst.op == GirOp::DestAdapt) origins[inst.res].insert(inst.a);
+        bool changed = true;
+        auto merge = [&](set<int> &to, const set<int> &from) {
+            auto before = to.size();
+            to.insert(from.begin(), from.end());
+            changed |= before != to.size();
+        };
+        while (changed) {
+            changed = false;
+            for (auto &block : *env.blocks) for (auto &inst : block.insts) {
+                switch (inst.op) {
+                    case GirOp::DestPrepareNamed: case GirOp::DestFinish: case GirOp::DestAbandon: case GirOp::DestValue:
+                    case GirOp::DestStage: case GirOp::DestFit: case GirOp::DestRelocate:
+                        merge(origins[inst.res], origins[inst.a]); break;
+                    case GirOp::CallConstruct: {
+                        auto &callee = env.m.funcs[inst.idx];
+                        size_t destination = 0;
+                        for (size_t result = 0; result < callee.results.size(); result++) {
+                            if (!GirNonfixed(env.m, callee.results[result])) continue;
+                            if (destination >= inst.vals2.size()) break;
+                            auto &from = origins[inst.vals2[destination++]];
+                            if (callee.results.size() == 1) merge(origins[inst.res], from);
+                            else merge(packed[{ inst.res, (int)result }], from);
+                        }
+                        break;
+                    }
+                    case GirOp::Result: merge(origins[inst.res], packed[{ inst.a, inst.idx }]); break;
+                    case GirOp::Br: case GirOp::CondBr: {
+                        auto edge = [&](int target, const vector<int> &values) {
+                            if (target < 0 || target >= (int)env.blocks->size()) return;
+                            auto &parameters = env.blocks->at(target).params;
+                            for (size_t position = 0; position < min(parameters.size(), values.size()); position++)
+                                merge(origins[parameters[position].first], origins[values[position]]);
+                        };
+                        edge(inst.idx, inst.vals);
+                        if (inst.op == GirOp::CondBr) edge(inst.idx2, inst.vals2);
+                        break;
+                    }
+                    case GirOp::Invoke: {
+                        auto &callee = env.m.funcs[inst.idx];
+                        size_t destination = 0;
+                        for (size_t result = 0; result < callee.results.size(); result++) {
+                            if (!GirNonfixed(env.m, callee.results[result])) continue;
+                            if (destination >= inst.vals2.size()) break;
+                            auto &from = origins[inst.vals2[destination++]];
+                            merge(origins[env.blocks->at(inst.a).params[result].first], from);
+                        }
+                        for (auto &escape : inst.escapes) {
+                            auto &target = env.m.funcs[env.m.targets[escape.target].members[0]];
+                            auto &parameters = env.blocks->at(escape.block).params;
+                            for (size_t position = 0; position < inst.vals2.size(); position++)
+                                merge(origins[parameters[target.results.size() + position].first], origins[inst.vals2[position]]);
+                        }
+                        auto forwarded = [&](int target, size_t offset, const vector<int> &values) {
+                            auto &parameters = env.blocks->at(target).params;
+                            for (size_t position = 0; position < values.size(); position++)
+                                merge(origins[parameters[offset + position].first], origins[values[position]]);
+                        };
+                        forwarded(inst.a, callee.results.size(), inst.forwarded);
+                        for (auto &escape : inst.escapes) {
+                            auto &target = env.m.funcs[env.m.targets[escape.target].members[0]];
+                            forwarded(escape.block, target.results.size() + inst.vals2.size(), escape.forwarded);
+                        }
+                        break;
+                    }
+                    default: break;
+                }
+            }
+        }
+        auto &found = origins[value];
+        GirTypeId original = -1;
+        for (auto source : found) {
+            if (source < 0 || source >= (int)env.vals.size() || env.vals[source] < 0)
+                return GirTyErr("destination adaptation lineage has no receiving type");
+            auto type = env.vals[source];
+            if (original >= 0 && original != type)
+                return GirTyErr("destination adaptation merges different receiving protocols");
+            original = type;
+        }
+        if (original < 0 || env.m.Type(original).kind != CoreType::Dest)
+            return GirTyErr("closed producer has no matching destination adaptation");
+        return GirTyOk(original);
+    }
     const GirTyEnv &env;
 };
 

@@ -22,6 +22,8 @@ add_executable(goose
     src/main.cpp
     src/process.cpp
     src/process.h
+    src/progress.cpp
+    src/progress.h
     src/report/os.cpp
     src/units/os.cpp
     src/units/build.h
@@ -53,6 +55,8 @@ add_executable(goose
     src/clone.h
     src/parser.h
     src/resolve.h
+    src/expansion_bind.h
+    src/typecheck_expansion.h
     src/builtins.h
     src/typecheck.h
     src/type_queries.h
@@ -66,6 +70,7 @@ add_executable(goose
     src/optimize_basecase.h
     src/optimize_tre.h
     src/optimize_loops.h
+    src/optimize_reassoc.h
     src/bce.h
     src/codegen.h
     src/codegen_types.h
@@ -86,6 +91,7 @@ add_executable(goose
     src/runtime/runtime_threads.h
     src/runtime/runtime_ext.h
     src/runtime/runtime_os.h
+    src/runtime/goose.h
     src/gfx.h
     src/core/core_ir.h
     src/core/core_json.h

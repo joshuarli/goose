@@ -1,55 +1,340 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** winding down 2026-10-14 at the owner's request. No new campaign work may start.
-**Branch:** `goose-ir`. **Base:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`, plus upstream `1cfe4b6` merged at `6292309` (owner's request, 2026-10-12). `master` is not touched.
-**Contracts:** the [specification](goose-ir-spec.md) says what is built; the [validation plan](goose-ir-validation.md) says how each claim is proved. This document says in what order, by whom, and when it is done.
+**Status:** resumed 2026-10-25 at the owner's request. Recovery, integration, cleanup, and local verification are active. Pushes remain unauthorized.
+**Branch:** `goose-ir`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
+**Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
-## Handoff (paused 2026-10-13)
+## Recovery checkpoint (2026-10-25)
 
-**Resume.** Prompt: `Act as integrator and resume docs/design/goose-ir-campaign.md from its handoff; never ask; stop only when every deliverable is met or parked.` First command, from the repository root: `git status --short && git log --oneline -1 goose-ir` (expect a clean tree). Everything under `.work/` is disposable; rebuild what you need:
+The former `goose-ir` tip `d440b9ab` predates the October 18 integration work.
+Recover the coherent `resume-summary-cpp-qualification` snapshot at `355a8928`,
+which includes semantic checkpoint `330a9e17` and the production capacity-summary repair.
+Both histories are retained. The existing CI files stay unchanged.
+An independent source and history review found the older branch's fixes present in this snapshot.
+
+The Core summary unit, saved GIR reservation unit, and native semantic audit pass on resume.
+The audit lists 171 claims with only `propext`, `Classical.choice`, and `Quot.sound`.
+All nine construction source fixtures pass exact output, status, and event comparisons.
+The resumed compiler and semantic sources match their retained build inputs.
+The rebuilt compiler passes the baseline's 678 native cases, 798 JIT cases,
+bootstrap, rejection checks, and documentation examples. The struct harness changed during
+that run and is rechecked separately through `--only extra/s8_struct_contract`.
+These checks do not close the remaining proof gates.
+
+The source repairs on `campaign/lean435` are already incorporated or superseded.
+Retain that branch and its worktree for the incomplete paranoid audit.
+The [Lean audit handoff](lean-435-paranoid-root-handoff.md) records 456 unqualified root pairs
+and the limits of the existing acceptance logs. Preserve its exports and continuation inputs.
+The repository pins Lean 4.35.0. The external managed default remains outside this recovery.
+
+Recovery fixes add seven missing expected-output fixtures and restore function origins
+to the specified first-variable-or-none rule. The origin regression fails before the fix
+and passes afterward. The Core summary and GIR units pass.
+
+The struct harness validates and executes both lowerings against the same exact expected
+outcome and stdout. C++ uses direct array-length instructions and reuses slot values,
+while Lean emits snapshots. Byte equality between these independent lowerings is not a
+qualification claim. Deterministic C++ exports and canonical GIR reencoding remain checked.
+Subshells isolate helper variables so nested checks cannot corrupt the fixture's paths or outcome.
+The pilot GIR golden now includes the production slot-root annotations.
+
+Cleanup removes 12.66 GB of reproducible binaries and build scratch from the winddown archive.
+Source, input packets, results, logs, proof exports, and active worktrees are retained.
+The three orphan sibling directories now live under `.work/archive/rfc9/`.
+Their BCE and name-cursor fixes are already integrated. Their older typechecker experiments
+are superseded. Retained root-owned compiler artifacts could not be removed without elevated access.
+The original sibling paths are gone. No branch is deleted and nothing is pushed.
+
+The imported snapshot has 33 pre-existing trailing-whitespace findings.
+The recovery edits pass `git diff --check resume-summary-cpp-qualification`.
+No formatter runs.
+
+Next delivery: complete the remaining construction and exit execution proofs,
+demand-invariant transfer, and paranoid audit before final campaign qualification.
+Whole-execution construction and exit proofs, demand-invariant transfer, and paranoid
+qualification remain open. Historical source receipts below keep their stated scope.
+
+## Current checkpoint
+
+The last fully qualified C++ construction packet is `d5861339`. Semantic checkpoint `330a9e17` includes full accepted-Core-to-GIR validation and the carried-named-ticket repair. All 2,630 Goose modules plus Main qualify under Lean 4.35; a fresh native executable passes the 171-claim audit. The 41-case model matrix, 328 sanitized native configurations, and nine standard-source fixtures agree exactly. Whole-evaluation ownership and exit proofs, explicit demand-invariant transfer, and paranoid qualification remain open. The production capacity-summary repair passes focused C++ and Lean controls; fresh compiler and resource qualification remain required.
+
+### Evidence by scope
+
+#### Source kernel and transitive audit
+
+The predecessor checkpoint `4f7ccf1a` matched frozen source `dc7cb23b`. Its closure covered 216 changed or new Lean roots since `09374665`, plus `Goose.Audit`, for 1,290 modules. The source-root selection is reproducible from `git diff --diff-filter=AM --name-only 09374665 dc7cb23b -- semantics/Goose`, retaining `.lean` paths present at `dc7cb23b`, converting paths to module names, sorting uniquely, and appending `Goose.Audit`. `verify_closure.py` fully rehashed the resulting dependency closure. The exact expanded command is in `.work/wt/resume-semantic-check-nextplain/.work/tmp/nextplain-command.txt`; its completion log is `nextplain-closure-restart.log`. A separate `Goose.Audit` import reported 171 claims using only `propext`, `Classical.choice`, and `Quot.sound`; its runner and output are `.work/tmp/nextplain-audit.lean` and `.work/tmp/nextplain-audit.jsonl` in that worktree. This predecessor receipt is source elaboration and a transitive declaration audit, not an executable `goose-semantics` build or audit.
+
+The predecessor full-source checkpoint is the region-aligned snapshot `d8b16216daee678d5f766e7665d070cc11e1beab`. From that source tree, derive roots with `git diff --diff-filter=AM --name-only cc063a86 d8b16216 -- semantics/Goose`, retaining `.lean` paths present at `d8b16216`, converting to sorted unique module names, and appending `Goose.Audit`. This produces 144 changed roots plus the audit module. `verify_closure.py` expanded that selection to 1,308 modules and fully rehashed them; the derived module order exactly matches the recorded command. The run reported all 171 registered claims with only `propext`, `Classical.choice`, and `Quot.sound`. Its invocation and result are in `.work/wt/resume-native-regions-aligned/.work/tmp/regions-aligned-check1-resumed.log`. This remains valid source elaboration and transitive audit evidence for `d8b16216`, not qualification for the newer metadata or Core-to-GIR changes.
+
+The newer metadata packet passed its incremental 85-root closure: 310 modules in 311 jobs. Its record is `.work/wt/resume-native-regions-aligned/.work/tmp/regions-aligned-check3.log`. A reviewed branch packet at `d14c85b6` plus controls `842c9e75` repairs a refSlice per-SSA read recipe by adding the actual `.read(.var q)` scope for refSlice variables and preserving aligned raw `Pq` roots. It passed 25 source controls, but source consumers and full Core-to-GIR preservation remain open; the packet is not integrated into `master`.
+
+The proof/source cohort `79aa4f55` changes 80 files, including source-symbol, root-collector, and `ifE` recipe proofs. Follow-up `e1049d9e` integrates 12 proof-only files. Accepted context/global occurrence replay is checked on its proof branch (`35e57a42`, `ccc25cb4`, `2c50671a`, and `7a2bf4d6`); the full cumulative source closure and 171-claim audit remain open for `0463de24`.
+
+The current `Goose.Lower.Validation.lower_validate_of_accepted` theorem proves `Core.validate module = .ok () → GIR.validate (lower module) = .ok ()` for both `core-pilot` and `core-shrink`. It adds no target-validation, callee-simulation, ownership, query-availability or independence premise. The cumulative source qualification passed 2,588 modules under Lean 4.35. The stronger 171-claim interpreted audit passed with only `propext`, `Classical.choice`, and `Quot.sound`. The fresh native executable also passes the stronger 171-claim audit; paranoid qualification remains pending. `TH-LOWER-03` remains deferred for explicit transfer of the per-point demand, retained-operand and iteration-run invariant. The forward, reverse, fault-freedom and converse-fuel claims retain their statements and limits.
+
+The earlier pilot-profile accepted-Core-to-`GIR.validate` theorem closed on branch `17c7a70e`. Its exact source closure covered 1,186 modules in 1,187 jobs under Lean 4.34.1 and used the three standard axioms. The theorem assumes only Core acceptance and the pilot profile; it adds no target-validation, callee-simulation, query-availability, or ownership-certificate premise. That earlier receipt did not close SHRINK validation.
+
+`SourceReady` receipts are profile- and source-specific. Branch `c9dae54e` checked the accepted-only factory and consuming-operand values over 1,129 modules and 1,130 jobs under Lean 4.34.1; model source blob `ffbb0ef` is an older ambient-call model. The current raw-owner model uses `07ad913d` with the actual-step fix `0a62e909`; proof port `621163f7` closed a 124-module source closure, 184 guards, and 311 standard-axiom audits. Those results do not qualify the newer `SourceReady` model. The current cumulative source qualification includes the coherent accepted-only validation endpoint and its source-derived call and writer proofs.
+
+To reproduce a source selection and closure, run from its target checkout and set `base` and `target` to the source pair named above. Use `09374665` and `dc7cb23b` for the predecessor selection instead:
 
 ```sh
-cmake -S . -B .work/build/goose-ir -G Ninja -DCMAKE_BUILD_TYPE=Debug && cmake --build .work/build/goose-ir --parallel 8
-git worktree add --detach .work/wt/parity-base goose-ir-parity-base
-cmake -S .work/wt/parity-base -B .work/build/base3 -G Ninja -DCMAKE_BUILD_TYPE=Debug && cmake --build .work/build/base3 --parallel 8
-(cd semantics && lake build) && semantics/.lake/build/bin/goose-semantics audit
-python3 test/run_tests.py --exe .work/build/goose-ir/goose --profile baseline --cc native --require-clang
+base=cc063a86
+target=d8b16216
+mapfile -t roots < <(
+    git diff --diff-filter=AM --name-only "$base" "$target" -- semantics/Goose |
+    while IFS= read -r path; do
+        case "$path" in
+            *.lean) git cat-file -e "$target:$path" 2>/dev/null || continue
+                   module=${path#semantics/}
+                   module=${module%.lean}
+                   printf '%s\n' "${module//\//.}" ;;
+        esac
+    done | sort -u
+)
+roots+=(Goose.Audit)
+module_args=()
+for module in "${roots[@]}"; do module_args+=(--module "$module"); done
+TMPDIR="$PWD/.work/tmp" python3 test/semantics/verify_closure.py --semantics-root semantics "${module_args[@]}"
 ```
 
-The Aincrad3 scratch copy, if needed: `mkdir -p .work/aincrad3 && git -C ~/d/aincrad3 archive ef1e1ef33b96fa68748e4ecf3cad37153a4de59c | tar -x -C .work/aincrad3`, then copy its one generated source from the checkout's staged build output, `~/d/aincrad3/.work/boundary-src/world-core-continue/protocol/schema_generated.goose`, to `.work/aincrad3/src/protocol/`. Build it with a scratch `GOOSE_HOME` under `.work/`.
+Three closed lowering results remain valid for the definitions they state. `28eb9cc1` proves forward lowering preservation for accepted Core modules at every source fuel bound. `1da41160` checks reverse execution and all-fuel target-fault exclusion. `770db8aa` proves the converse fuel bound `8 * (moduleSyntaxCap + 1) * (targetFuel + 2) + 1`; its 265-module closure and independent review passed. Neither direction assumes source termination or an owner-shape certificate. These model results do not establish C++ lowering or native-emitter correctness.
 
-**State.** Branch `goose-ir`, not pushed by the executor. Merged this session: the ground items; the Lean model, validator and tool for `core-pilot` with 81 audited theorems (numeric rules, fuel monotonicity, growth, the live-reference invariant, the safety theorem `validated_never_faults`, sharing and reuse, the lowering theorem for structured control); an independent review and its fixes; references to slice variables in the Lean model and the exporter; Core and IR export, the IR pipeline with its own C emitter (`--pipeline gir`), and its units; the cost report, stable keys, shared implementations, code-generation units, the units build driver with its object store, dependency recording, and a native-support unit for programs with C of their own; conformance and corpus harnesses, the synthetic family, the edit matrix; linter parity; upstream `1cfe4b6`; two runtime and build fixes cherry-picked. Gates reached: `G-PILOT`, `G-SHARE`, `G-ATTR` except frozen budgets, `G-UNITS` on its structural gates.
+#### Fresh executable semantics
 
-Known red at pause (historical): under `--pipeline gir`, corpus mode had two internal compiler errors (`GIR-V010`), on `optimizer/loop_shapes_countdown_abort` (a mutable slice over a `let` array) and `runtime/never_returns_exit` (a call that never returns). The Core validator had learned both rules; the IR validator, the C++ verifier and the lowering had not. The later GIR alignment is recorded in §13. Everything else listed under Verified was green at pause.
+The fresh native `goose-semantics` for `330a9e17` passes its actual 171-entry audit, including `lower_validate_of_accepted`, with only `propext`, `Classical.choice`, and `Quot.sound`. All 2,630 Goose sources plus Main qualify: 149 modules were rebuilt and 2,482 artifacts reused only after source and recursive-import identity checks. The native executable covers 2,014 modules, with five rebuilt objects and 2,009 objects reused after source, import, and package-initializer identity checks. All artifacts are regular private files. Results and the executable are under `resume-repaired-model-integration/.work/tmp/` (`source-qualification.log`, `native-build.log`, `native-audit.log`, `native-matrix.log`, and `native-current/goose-semantics`).
 
-**Open lanes.** Recreate a worktree with `git worktree add .work/wt/<lane> <branch>`.
+The executable passes 328 exact comparisons over 41 cases and both numeric profiles, including Core/GIR execution, writer roundtrips, and agreement checks. The unchanged `d5861339` production compiler passes 328 ASan/UBSan configurations and the nine-fixture source CLI trace suite against this fresh oracle, including rejection and trace-I/O controls. All 82 fresh C++ Core/GIR exports are byte-identical to the tested packet inputs. Canonical Lean Writer output has one fewer terminal newline; no input or observable event was normalized. Case 41 at equal fuel 30 remains inconclusive because the evaluators count different work.
 
-| Branch | Item | State | Next step |
-|---|---|---|---|
-| `goose-ir-sem-gir` | `T3` | wip: one commit holding `semantics/wip/Claims.stage2-partial.lean`, a non-compiling partial development outside the build. Two of three attempts used. | Stage 2 of the lowering theorem: loops (`while`, `forRange` without `break`/`continue` first), by induction on Core's fuel from the loop header, generalizing the statement and block claims over the loop context. Then calls and `ret`, then the whole profile. For-each over an array needs a typing fact from Core's validator. |
-| `upstream-pr/native-stack-bounds-main-thread-musl` | `U1` | parked by O8: fix `7cd7526`, cherry-picked here as `2de048a`. | After the campaign, on a quiet host: the before/after measurements, push to the fork, run the exact Docker reproducer against the pushed commit, open the draft. Description: `docs/design/upstream-drafts/native-stack-bounds-main-thread-musl.md`. |
-| `upstream-pr/native-package-rebuild-stamp` | `U1` | parked by O8: fix `8a3637b`, cherry-picked here as `510f495`. | As above. Description: `docs/design/upstream-drafts/native-package-rebuild-stamp.md` (its Dockerfile has a placeholder for the fix commit). |
-| `goose-ir-parity-base` | — | not a lane: `master` plus upstream `1cfe4b6` plus the two fixes, the reference for default-output parity. | Rebuild as above; add any further fix cherry-picked onto `goose-ir`. |
+The permanent argument-renewal and carried-named-ticket regressions pass the fresh CLI in both profiles. The carried-ticket fixture faults with `flow` in the frozen `8d2137f6` executable and now returns `AB\n` with exact events `begin 0, begin 1, write 1 0, write 0 0, publish 0, publish 1`. Its exact nested value-break form is unsupported by the source frontend. A C++ Core builder reproduces its original wire module exactly, but direct GIR lowering rejects its unknown summary. Running the real production summarizer produces independently accepted GIR whose model and eight sanitized native configurations agree with the accepted original Core. At `d5861339`, that summarized Core is rejected with `V-SUMMARY` because receiving-capacity uncertainty was omitted from its abort effect. A production summarizer fix is under review; no validator relaxation is proposed.
 
-**Historical pending list at pause (not current status).** The resumed work and
-latest dispositions are recorded in §13; use those entries when deciding what
-remains to do. The list below records what had not started at the pause.
+The older executable and results under `resume-candidate-integration/.work/tmp/native-current/` remain historical evidence for `8d2137f6`.
 
-1. Align the IR with the Core validator's newer rules (the known red above), and add IR support for references to slice variables (the IR part of `S4`; the pipeline reports them unsupported today).
-2. `B8`, remainder: route the five `test/packages` sidecar fixtures through `goose build --units` in the units corpus; then build Aincrad3's core entry in units mode and fill §11.3's table for it. Nothing was run on the core entry after `B8` landed.
-3. `S3b`: every unsupported feature per program and the forecast table (owner decision O9 depends on it).
-4. `T3` stages 2–4 (third attempt), then `H1`.
-5. `S8` (`core-shrink`; flat structs first, they block the most corpus programs), then `S9`.
-6. `H3` remainder (`LINT-07`: the linter suite against a units-built companion), `H4` (documentation; `--build-report-deps` and the `B8` flags are not yet in §8).
-7. P3: `O1` (bounds certificates), `O2` if its gate holds (the report now gives blocked bytes per cause), `O3` (budgets; needs a quiet host), `O4`, `O5`.
-8. `B5`, remainder: the Aincrad3 mode of `test/scale/edit_matrix.py` is still a stub.
-9. P4 close.
+Full paranoid qualification remains incomplete. Monolithic nanoda checks exceeded the guarded memory budget; dependency-closed official exports bound the check size. An external lean4lean replay-context bug required splitting one export and adding checked Init context while retaining every original root. Its split groups now pass all bundled kernels; remaining groups are pending. No checker or axiom allowlist was changed. The default Lean remains 4.34 until qualification finishes.
 
-Owed by the owner: the two upstream draft pull requests (O7, O8); any corpus reach floor, after the forecast (O9); whether to file the `redundant_cast` linter inconsistency on the fork; whether units or sharing become defaults (`X4`).
+#### Integrated C++ candidate
 
-**Verified at the stop.** On the final tree before the last fast-forward: compiler build; Lean build and audit (81 theorems, three allowed axioms); full baseline suite (all passed); linter suite; default-output parity (1,232 equal); linter parity (0 differences); the native-support unit check; corpus conformance against the Lean model (76 agree of 77 exported, 0 mismatch, 1 inconclusive by design). Reboot audit: no campaign worktree remains; the main checkout is clean; `.work/` is ignored and on ext4; no campaign process is running; every unmerged campaign branch is in the table above; the resume commands were rehearsed from a clean environment, with the two full compiler builds and the full Lean build replaced by a configure and a one-module build.
+The current packet `d5861339` integrates limited receiving construction, staged storage, and private cursor validation. Review found that `LocalGet` and `LocalSet` could bypass cursor protection. Both now reject private inline cursor members with `GIR-V090`, with negative controls that accepted before the fix. All three focused GIR units pass on the integrated commit. The candidate also passed a fresh serial Debug build, both GIR source scripts, and four numeric and optimization configurations of 56 sanitized receiving-lifetime guards. Those checks do not establish the remaining semantic or performance gates.
 
-Not rerun on the final tree, last green one or two merges earlier: the units edit matrix, unit locality, the units corpus, the dependency check, the report corpus, sharing and key-stability checks, the IR golden and invalid checks, the pilot harness, the fuzz unit tests. Never run: any timed measurement on a quiet host (**perf gate deferred: host busy**), so no budget is frozen and no speedup is claimed.
+Fresh exports from this packet passed 82 independent Core/GIR comparisons across 41 cases and both numeric profiles at sufficient fuel. All 328 ASan/UBSan native configurations matched exact status, stdout, diagnostics, and construction events. The nine standard-source fixtures also passed fresh CLI and semantic comparisons, including trace I/O controls. These comparisons used an explicit Lean 4.35 Main runner; they do not establish a fresh native semantic executable for the combined proof candidate. The runners and results are under `resume-cpp-integration/.work/tmp` (`run-native328-current.py`, `native328-current`, and `cpp-current-packet`).
+
+The checked candidate `a26a9783` is the source base for the six C++ commits now integrated at `153f44f0`. A Git comparison confirmed that `src`, `test`, the GIR specification, and native construction contract files are byte-identical between them. From `resume-cpp-closing`, all three focused GIR units passed:
+
+```sh
+TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir.cpp -pthread -lm -o .work/tmp/compiler_gir-closing && .work/tmp/compiler_gir-closing
+TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir_effects.cpp -pthread -lm -o .work/tmp/compiler_gir_effects-closing && .work/tmp/compiler_gir_effects-closing
+TMPDIR="$PWD/.work/tmp" clang++ -std=c++20 -O0 test/compiler_gir_reservations.cpp -pthread -lm -o .work/tmp/compiler_gir_reservations-closing && .work/tmp/compiler_gir_reservations-closing
+```
+
+A fresh Debug GCC `goose` build also passed on the candidate:
+
+```sh
+TMPDIR="$PWD/.work/tmp" cmake -S . -B .work/build-cpp-closing -DCMAKE_BUILD_TYPE=Debug
+TMPDIR="$PWD/.work/tmp" cmake --build .work/build-cpp-closing --target goose --parallel 2
+```
+
+The resulting `.work/build-cpp-closing/goose` passed four selected baseline fixtures (eight parse/roundtrip/typecheck checks, four generated-C `-O0`/`-O2` runs, and four TinyCC runs):
+
+```sh
+TMPDIR="$PWD/.work/tmp" python3 test/run_tests.py --exe .work/build-cpp-closing/goose --profile baseline --cc native --jobs 1 --batch 1 --only storage/relative_known_null --only storage/relative_store_facts --only storage/pool_reference_rebinds --only codegen/named_fn_value_scope
+```
+
+Both GIR source scripts passed:
+
+```sh
+TMPDIR="$PWD/.work/tmp" sh test/gir/source/check.sh .work/build-cpp-closing/goose
+TMPDIR="$PWD/.work/tmp" sh test/gir/source/check_regressions.sh .work/build-cpp-closing/goose
+```
+
+The source fixture was `.work/tmp/cpp-closing-source/conditional_reference.goose`. Its Core, high GIR, and low GIR exports passed parsing, typechecking, and lowering; the high GIR included the expected `er` source-root row, verified by `jaq`:
+
+```sh
+.work/build-cpp-closing/goose -O0 --pipeline gir --emit-core .work/tmp/cpp-closing-source/conditional_reference.core.json --emit-gir-high .work/tmp/cpp-closing-source/conditional_reference.high.json --emit-gir-low .work/tmp/cpp-closing-source/conditional_reference.low.json --check .work/tmp/cpp-closing-source/conditional_reference.goose
+jaq -e '.[6][] | select(.[0] == "func" and .[1] == "pick") | .[7][5] == [["er",9,[["r_param",0],["r_param",1]]]]' .work/tmp/cpp-closing-source/conditional_reference.high.json
+```
+
+These are bounded candidate checks, not a fresh semantic Main build, source9 comparison, full source corpus, or completed Core-to-GIR theorem. No stdout/stderr log files were captured for these commands; the export artifacts and GIR script scratch outputs remain under `.work/tmp` in the candidate worktree.
+
+Later commits `a6fa5be8`, `058a1b9f`, and `bff0b04e` on `campaign/cpp-closing` passed the three focused GIR units and a fresh Debug build. They are not integrated into `master`, and no source9 trace was run on this candidate. Its source exports still lack support for reference-to-slice and shrink-demand forms.
+
+The newer bounded C++ candidate `563e0b7a` on `campaign/call-transport-policy` passed a serial Debug build, all three focused GIR units, both GIR source scripts, and nine baseline fixtures. Its binary is 64,618,240 bytes. The sampled process-tree RSS was 4,030,796 KiB during the build and 276,476 KiB during the forced link-only run. The sample is not a peak or a hard memory bound. The candidate has no fresh Main build or full source differential; 17 pre-existing indentation warnings remain.
+
+#### Construction Core, GIR, and native execution
+
+The bounded construction packet combines native freeze `f8bbed7c`, high-GIR commits `4abec5a3` and `2dac55da`, independent high-GIR freeze `4e5d1c65`, and exact Core source `d03511ca`. It predates the later limited Stage/Fit helpers and is not evidence for current 61-control coverage or an integrated `master` Main build. Its earlier 224-configuration native matrix is a separate historical receipt: it checked hard-coded stdout, status, and event expectations, not Core or Main parity.
+
+The fresh Core probe decoded and validated 35 selected fixtures, then ran each in both numeric profiles at fuel 10,000. It recorded stdout, status, and encoded events. The comparison requires exact event equality, including semantic destination and storage identities; it does not rename identities or compare physical addresses as identities. From `resume-construction-ownership`, the command was `TMPDIR="$PWD/.work/tmp" LEAN_PATH="$PWD/semantics/.lake/build/lib/lean" /home/josh/.local/lib/lean4/v4.34.1/bin/lean -j1 -M4096 .work/tmp/rearm-final-35-core-probe.lean > .work/tmp/rearm-final-35-core-probe.log 2>&1`. The source and result are `rearm-final-35-core-probe.lean` and `.log`. The fixtures are the 35 `*.core.json` files under `resume-native-trace/.work/tmp/interrupted-native/rearm-frozen-packet`.
+
+The independent GIR-H check decoded, validated, and wrote back all 35 fixtures, then compared 70 release/debug executions with Core. Its case list and result are in `finish-construct-gir/.work/tmp/gir-current35-corpus.log`. The native selector is `test/compiler_gir_reservations.cpp`. The combined oracle comparison ran all 280 sanitized C executions against Core stdout, status, and trace events. The exact command was `TMPDIR="$PWD/.work/tmp" python3 .work/tmp/interrupted-native/compare-rearm-fresh-oracle.py` from `resume-native-trace`. The 248, 16, and 16 configuration records are in `rearm-final-matrix.log`, `rearm-named-matrix.log`, and `rearm-child-matrix.log`. The 280 generated C files and runtime headers matched the final emitter in `rearm-frozen-bytecompare.log`.
+
+The pre-rearm 224-run matrix is historical and uses fixed expected outputs and event arrays rather than Core or Main as an oracle. Its selector is the 28-case loop in `test/compiler_gir_reservations.cpp` at `1bde5daa`: `break`, `continue`, `call`, `named-borrow`, `owner-child`, `owner-named`, `cross-same`, `cross-different`, `deferred-cleanup`, `own-deferred-cleanup`, `value-break-cleanup`, `nested-break`, `nested-continue`, `waiting-implicit`, `waiting-explicit`, `waiting-nested-return`, `waiting-stop`, `waiting-built-before-tail`, `waiting-own-catch`, `waiting-guarded-call`, `waiting-delegated-argument`, `waiting-guarded-argument`, `adapted-open`, `adapted-built`, `adapted-nested`, `named-layout-result`, `named-layout-nested-read`, and `named-layout-helper-read`. Each case ran with debug off/on, `-O0`/`-O2`, and plain/traced output (28×2×2×2); C was compiled with AddressSanitizer and UndefinedBehaviorSanitizer. The saved runner and matrix log are `.work/tmp/interrupted-native/check-adaptation-final-matrix.py` and `adaptation-final-matrix.log` in `resume-native-trace`; the log records 224 exact rows, and the runner checks hard-coded output, status, and trace arrays. A rebuild can be reconstructed at that source with `clang++ -std=c++20 -O0 test/compiler_gir_reservations.cpp -pthread -lm -o .work/tmp/utility`; this is not the recovered original emitter build command, and no source identity for the historical utility binary was retained. The separate nine-fixture source comparison covers 36 runs and is not part of the 224 matrix.
+
+The four-profile native receiving-lifetime guards passed in `rearm-frozen-lifetimes.log`, run with `python3 test/semantics/native_receiving_lifetimes.py --emitter .work/tmp/interrupted-native/rearm-frozen-utility --sanitize`. The unsanitized nine-fixture Debug/release source comparison passed 36 `-O0`/`-O2` runs plus CLI and I/O controls. The command used `python3 test/semantics/native_construction_trace.py --goose .work/tmp/interrupted-native/driver-build/goose --semantics /home/josh/d/goose/.work/wt/resume-audit/semantics/.lake/build/bin/goose-semantics --cc clang`; its result is `rearm-frozen-source9.log`. These bounded receipts do not establish same-checkpoint parity with integrated `master` or a fresh Main build.
+
+Named-value sampling allocates no storage. A reference call retains one two-pointer `owner_ref` record per distinct binding in that callee scope; repeated samples reuse the record. That is 16 bytes on a 64-bit target, as described in the [native construction contract](goose-ir-construction-native.md). This is a representation fact, not a performance result.
+
+The fixed-array call evaluator repair is frozen on branch commits `69d7c1b0`, `0520a903`, and `f3a8e96f`, not integrated into `master`. The first commit passed a strict 21-module, 22-job closure and eight standard-axiom audits. Its direct fit and overflow checks show that a known fixed call avoids staging; overflow prints `effect\n`, emits no construction events, and leaves the prior storage sentinel unchanged. Unknown variable-array calls still stage. The second commit passed a strict 22-module, 23-job closure and twelve standard-axiom audits. Accepted Core and native exports agree in both profiles: dead fixed/live variable-array results print `ABC\n` and stage, while dead variable-array/live fixed results print `AB\n` without staging. The direct fixed-call fit prints `effect\nAB\n`; its overflow prints `effect\n` and has a capacity abort at origin 0 with no events.
+
+A nested recursive-query bug was reproduced in the same branch. In a `view.val` with a dead `arr2` branch and a live `arr3` branch, the typechecker derives `arr3` but the recursive declaration query picks `arr2`. Before the fix, evaluation for a limited capacity of two printed `effect\n` and emitted begin plus two writes before a capacity abort at origin 0; the expected overflow emits no construction events. Branch commit `f3a8e96f` fixes the query; `cd0174e9` adds the no-tail value-break overflow and fixed-source inversion cases. That 40-case Core corpus passed decode, validation, and evaluation in both profiles. Its canonical trace comparison was still pending at that checkpoint. The later canonical comparison passed for 40 cases in `.work/tmp/construction-delivery-8ce-canonical40`. The current native comparison and the separate case-41 GIR mismatch are described below. No integrated Main is established. Full `C-DIRECT` and `C-STAGE` still require query agreement, original-capacity-layout, renewal, and accepted inline-result proofs.
+
+The limited construction Stage/Fit tranche is branch-only. It adds `l_control_attempt_stage` and `l_control_attempt_fit`, bringing the closed low inventory to 61. The high validator permits Stage after a ticket, but native support is limited to a fresh, unexposed `Open0` attempt. Canonical Stage trace JSON remains `["stage", id, "capacity-check"]`. The prior 40-case GIR and 320 sanitized native comparisons predate the private-cursor guard and are historical. The fresh native run passed all 328 ASan/UBSan comparisons against the canonical Core output, with Core/H inputs and emitted C/runtime byte bindings checked. The 39 cursor controls and four 56-case receiving-lifetime suites passed. Logs are under `.work/wt/accelerate-native-current/.work/tmp/native-current/` (`matrix.log`, `lifetimes.log`, and `controls.log`).
+
+The independent GIR rerun in `accelerate-gir-parity` decoded, validated, and re-encoded all 41 records and matched their exact Core outcomes, stdout, and construction events in both profiles at fuel 100000. Its receipt is `.work/tmp/construction-gir-canonical41-sufficient-fuel.log`: exit 0 and 82 profile matches. Case 41 also matches at GIR fuel 32. At fuel 30, Core returns `effect\nA\n`, while GIR times out after `effect\n` with the same begin/write/publish events. These evaluators count different work. `TH-LOWER-01` permits a corresponding target fuel bound, and the existing `agree` command treats either-side timeout as inconclusive. The earlier scratch runner's equal-fuel assertion exceeded that contract. No interpreter fuel accounting or event normalization changed. These checks use the pending construction overlay in that worktree; they do not qualify integrated `master` or a fresh Main executable. The low-fuel Core query regression remains a separate required check.
+
+#### Resource and performance
+
+The current C++ packet `d5861339` passes the same-workload compiler-memory gate against `24ba0840`. Both use serial Clang 23.1.3 Release builds and the same Aincrad3 `src/world-core-continue.goose -O1 --check` input. Five alternating runs per side completed successfully with identical diagnostics and work counts within each side. Baseline ru_maxrss ranges from 1,580,352 to 1,586,480 KiB (median 1,582,700); candidate ranges from 1,683,756 to 1,687,104 KiB (median 1,686,348). Even maximum candidate divided by minimum baseline is 1.0675, below the 1.10 limit. Process traces confirmed no child processes, so these are hard compiler-process peaks. The run maintained the 18 GiB available-memory guard. Release binaries are 5,637,480 and 10,447,824 bytes; no binary-size threshold is defined. The gated CPU comparison follows below. The runner and individual reports are under `.work/tmp/cpp-current-resource/`.
+
+Five alternating Release runs per side passed readiness checks immediately before and after each CPU measurement. Both commands use the same Aincrad3 source at `-O2`, with report collection disabled. Every run parsed 7,051 declarations from 177 files and checked 14,710 specializations. Emitted C was stable within each side and passed Clang syntax checking outside the timed region.
+
+| Command | Baseline CPU seconds (min / median / max) | Candidate CPU seconds (min / median / max) |
+| --- | --- | --- |
+| `--check` | 4.814217 / 4.841570 / 5.371013 | 5.091032 / 5.160924 / 5.902769 |
+| `--standalone` emission | 6.024175 / 6.240335 / 6.735160 | 6.397680 / 6.481692 / 6.871062 |
+
+Candidate medians are 6.6% and 3.9% higher. The differences between minima are smaller than the observed run spreads, so neither fails the prescribed spread-based gate. Separate profiling attributes most sampled CPU to typechecking and bounds-check elimination. Emitted C sizes are 67,085,728 baseline and 65,262,980 candidate bytes. The measurement runner and individual readiness/compiler outputs are under `.work/tmp/cpp-current-resource/` (`cpu_gate.py` and `cpu-samples.tsv`).
+
+Two sampled process-tree cases measured the predecessor's warm 1,290-module closure at about 1.09 GiB and an existing serial compiler fixture at about 1.52 GiB. The samples and sampler are `nextplain-rss-warm.log`, `verifier-rss-real-inputs.log`, and `sample-verifier-rss.py` in `resume-semantic-check-nextplain/.work/tmp`. These predecessor observations do not qualify the current sources.
+
+Matched serial Debug builds with Clang 23.1.3 and `-g` succeeded for baseline `24ba0840` and candidate `563e0b7a`. The baseline binary is 25,671,216 bytes; its sampled process-tree RSS maximum was 963,640 KiB. The candidate binary is 56,836,592 bytes; its sampled maximum was 1,968,664 KiB. Both builds used `cmake --build .work/build-perf-debug --target goose --parallel 1`. Their logs are `.work/tmp/baseline-debug-build.out` and `.work/tmp/candidate-debug-build.out` in `accelerate-perf-baseline` and `accelerate-perf-candidate`, respectively. The sampler checks descendants every 50 ms, can miss intervening peaks, and can count shared pages twice. These are full-build resource observations, not hard memory bounds or an isolated regression measurement. The incremental-memory gate remains unrun. No timing result qualifies; timing gates await the required semantic and executable qualification.
+
+#### Remaining proof obligations
+
+Full accepted-Core-to-GIR validation is proved for both artifact profiles. The actual-call owner-alias repair propagates possible owner aliases from call arguments through contexts, global initializers and recursive forwarding. `V-WHOLE` and `C-NOGROW` validation use those aliases. Name-only roots propagate independently of effects. The repair rejects the same-owner clear-before-copy regression while preserving harmless aliased reads and copies between distinct owners. This closes the validator bug. The whole-evaluation `C-NOGROW` ownership theorem remains open.
+
+The replacement-content-flow model uses the callee's actual touched roots at a call. Forwarding an argument alone no longer adds it to the caller's exported touch footprint. Call queries still include argument dependencies and callee accesses. Virtual slice contents and assigned writes remain in the analysis. `ReplacementCallForwardingChecks.lean` covers accepted pure forwarding, rejection of actual owner sampling, and contents propagation.
+
+The `V050` refSlice recipe repair and raw owner-dependency refinements are included in the qualified source packet. Actual source occurrences, seeded provenance, normalized queries, call footprints and lexical writer intervals now compose into the full accepted validation theorem. Explicit transfer of Core's demand and retained-operand invariant to GIR execution remains open. The remaining construction obligations include:
+
+- Preserve fixed-inline result representation kinds through actual evaluation. The observed gap is in the model; no direct C++ regression is confirmed.
+- Complete `C-DIRECT` and `C-STAGE` proofs for fixed-inline result representation and fixed-array calls. The evaluator repair is frozen through branch commit `f3a8e96f`, but query agreement, capacity-layout, renewal, and accepted inline-result obligations remain open.
+
+The actual initial `runModule` cannot return an unhandled nonlocal escape: `runModule_no_unhandled_nonlocal` has no acceptance or certificate premise. Its source descent covers all invocation cases and the 53 statement/loop/push/global sites. The focused 105-module closure passes Lean 4.35 at default limits; 158 public theorem audits and two projection-definition audits use only the three standard axioms. This excludes unhandled escape, without establishing successful landing or outside-root preservation.
+
+Rooted `returnFrom` and `returnFromForward` proofs identify the nearest entered handler after normal operands and distinguish an operand's own escape. Native cleanup frames preserve post-operand stdout and object bindings across all outcomes; lexical scope release preserves reads of surviving roots. Their 113-module Lean 4.35 closure and 32 public axiom audits pass. These are execution components; storage preservation and successful landing remain open.
+
+`Goose.Proofs.ExitExecution.argumentReceivingRenewal` preserves an accepted regression in which a normally returning argument writes and abandons the prepared output, then the call renews it and returns `[9]`. Acceptance, exact output/events, and abandoned/resumable/published destination states pass Lean 4.35 with the three standard axioms. The exported Core packet also matches in both numeric profiles through the qualified executable. Production source parity is unsupported for this additional case: the exact while/value-break form is rejected, and the loop-expression alternative is unsupported by the GIR pipeline. An accepted substitute has different events and does not qualify the case. Normal argument evaluation cannot be assumed to leave its output untouched.
+
+An accepted nested two-result regression exposed borrowed cleanup rearming a ready ticket while its exact `pendingNamed` carrier remained live. The repaired evaluator preserves that ticket until owning completion materializes it; unused ready marks still rearm on ordinary break and continue. The actual full program now returns `AB\n` with the expected construction events. The repaired 119-module closure and 57 declaration audits pass Lean 4.35 at default limits with only the standard axioms. This preserves the existing protocol rather than allowing an invalidated named handoff in the proof contract.
+
+The whole-evaluation `TH-CON` and `TH-EXIT` proofs remain open. Existing lifecycle, token, destination, and receiving-boundary lemmas are components, not whole execution proofs. The remaining work includes positive-fuel source induction and accepted `runModule`, reservation `SourceState` preservation through renew/reserve/select/cancel/materialize/restore, actual receiving-boundary and ownership transport, protected-prefix geometry and byte-frame behavior, and extraction of the seven construction rules plus post-operand `TH-EXIT`.
+
+The proof boundary excludes correctness of the C++ frontend/exporter, C++ emitter, C compiler or linker, and operating system. See the [trust ledger](../../semantics/trust.md).
+
+## Historical handoff (2026-10-14; superseded)
+
+The handoff below describes the paused 2026-10-14 snapshot. Its branch inventory, worktree state, commands, and next steps are historical and do not describe the current checkpoint.
+
+**Resume:** "Resume the paused Goose IR campaign from docs/design/goose-ir-campaign.md. Finish the remaining gates unattended. Take recommended decisions by default." First run `git status --short --branch`. On an authorized resume, cancel campaign closeout before selecting work. Recreate a missing selected worktree under `.work/wt` from its named branch.
+
+**State at pause:** The integration branch is `master`. The code checkpoint before this handoff is `a9d3c620`. Winddown started at `dffdf0c2` after the completed integration checkpoint `66b8cdcc`. No work is pushed.
+
+This winddown integrated accepted callee sources, actual global-initializer and entry frames, and the typed block constructor. It also integrated source-versus-receiver exit ownership, exact producer counts, explicit receiving adaptation, producer normalization, and checked allocation and trace-prefix kernel frames. Four positive lowering fixture records now use recognized origin kinds. Their programs, assertions and source lines are unchanged.
+
+The independent Core judgment now proves `validate m = .ok () → WellFormed m`, including unconditional origin validity. Adversarial review found no P1 or P2 defect. Its Audit registration and coverage entry were integrated on resume in `f6ef88c6`. The fresh executable audit from `432c7d19` passed all 158 registered claims with the three allowed axioms. A final audit after the active proof changes remains open. The universal BCE replacement proof is merged. The last full executable audit checked 157 claims at `9e888683`; no fresh full audit of the current code is claimed.
+
+**Known red:** Whole-profile lowering and validation preservation remain incomplete. The unmerged readonly-destination change `920c9e42` invalidates unrestricted legacy fragment claims. Replace those claims with accepted-state composition before integration. The construction whole-execution and exit gates remain incomplete.
+
+At `66b8cdcc`, raw-byte high GIR rejects with `GIR-V060`. The source-values high GIR executes correctly but re-encoding changes its declared type table. Native exports of raw bytes and source values fail `GIR-V090` stack-header ownership. Source-exit high export fails return-descriptor matching. These source fixtures are committed at `test/semantics/golden/construction_raw_bytes.goose`, `test/semantics/sem_construction_source_values.goose`, and `test/semantics/sem_construction_source_exit.goose`. The paused branch does not claim these integration failures are fixed.
+
+Production BCE qualification is also red. The seven fixtures on `goose-ir-finish-bce` export and independently validate, but the required guarded case emits zero proven indexes. Read that branch's `docs/design/goose-ir-bce-qualification.md` before changing certificate rules. H2 structural requalification passed at `c1070ef0`; §11.3 records its scope. Final performance measurements and campaign-wide gates have not run. O2 remains unadmitted, and the earlier O3 timing was invalidated.
+
+**Standing decisions:** The owner accepts recommended decisions by default. E10 qualifies the production builder boundary for independent C flags, target identity and runtime identity. Construction-only struct descriptors carry display names. Repeat-copy and operand-time byte snapshots are explicit operations. Array, fill, if and block records carry source origins. The third native result pointer addresses `{count, destination_id}` as two i64 fields. Pilot and shrink wire records remain unchanged.
+
+Recommended construction-only publication, adapter, provenance and target operations are approved. The parked implementation uses `i_dest_publish_ref`, `i_dest_adapt` and `i_dest_adapt_finish`. Adapter finish preserves the built or cancelled kind and restores the original receiving metadata. Document exact wire operands and native target operations before integrating those unfinished changes. No owner decision is pending.
+
+**Open lanes:** The owner accelerated the campaign on 2026-10-17. Accepted-state lowering, validation preservation, generic expression SSA typing, native construction handlers, construction execution proofs, production BCE, H2 closeout, exact-module verification tooling, and independent construction GIR review have separate owners. The Core audit registration and H2 probe repairs are integrated. Construction GIR wire checks are committed and under independent review. The paused inventory below records their starting branches. Incomplete working edits were committed on their lane branches before stopping. The table below names all 37 unmerged local branches. Eleven are current campaign lanes or the performance baseline. Twenty-six are owner-managed refs. A different branch history does not prove its patch is missing from master. Review specific file deltas and dependencies.
+
+| Unmerged branch | Tip | Item | State | Next step after resume |
+|---|---|---|---|---|
+| `backup/master-before-upstream-20261010` | `3a25b43c` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `bookkeeping/gs-003-diverging-dead-code/base` | `6417b91e` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `bookkeeping/gs-004-default-init-order/base` | `3a25b43c` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `experiment/emitted-body-diagnostics` | `6be31c0c` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `feat-semantic-linter` | `6d538382` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `fix/codegen-local-name-cursor-rfc9-fork` | `54f1a765` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `fix/gs-002-callee-local-provenance` | `cd00459d` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `fix/gs-003-diverging-dead-code` | `3a25b43c` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `fix/gs-004-default-init-order` | `4a2c8bf5` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `fix/lint-facts-limit-512mib` | `0c127337` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `fix/lint-root-depthkey-context` | `6be31c0c` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `fuzzygoose` | `592aee41` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `goose-ir` | `d440b9ab` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `goose-ir-finish-bce` | `a1b1ed32` | G-BCE | parked: universal model proof merged. Qualification tests82e9fa82 and a1b1ed32 unmerged | Read the branch qualification document. Production pilot sources emit no proven index because snapshots use i_vlen while F-LEN requires i_alen. |
+| `goose-ir-finish-construct-backend` | `dcdc9227` | S9, G-CONSTRUCT | parked: low target handlers and provenance remain unfinished in dcdc9227 | Check compiler_gir, then reproduce the three committed construction source fixtures. Complete target handlers before claiming native qualification. |
+| `goose-ir-finish-construct-core` | `1a45de91` | TH-CON-01, TH-EXIT-01 | parked: checked kernel stages through 678fd9c2 merged. Additional destination proof snapshot 1a45de91 is unverified | Review only the final destination proof delta. Compose it with the evaluator and whole-execution proofs. |
+| `goose-ir-finish-construct-execution-proofs` | `62fcd00b` | TH-CON-01, TH-EXIT-01 | parked: execution-prefix and terminal-state proof stages plus unfinished mutual invariant in 62fcd00b | Build ConstructionExecutionChecks and ExitExecutionChecks against the current shared kernel. Finish fresh-activation and trace protocol closure. |
+| `goose-ir-finish-construct-gir` | `53c0c738` | S9, G-CONSTRUCT | parked: borrowed publication and explicit adapters in 53c0c738 require checking | Check independent GIR syntax, writer, verifier, interpreter and guards together. Reproduce raw-byte V060 and type-table roundtrip. |
+| `goose-ir-finish-lower` | `631e1665` | TH-LOWER-01, TH-LOWER-03 | parked: readonly destination migration920c9e42 and canonical families. MutationStatements snapshot 631e1665 unfinished | Review typed closure and replace false unrestricted legacy claims before integrating920c9e42. Compose the accepted-state mutual induction. |
+| `goose-ir-finish-lower-call` | `dad0c5e3` | TH-LOWER-01, TH-LOWER-03 | parked: full TypedExpressionFamily through dad0c5e3 awaiting coherent lowering integration | Use smaller accepted-source block callbacks. Integrate with the main typed statement and function family, not an assumed whole-call simulation. |
+| `goose-ir-finish-lower-each` | `ff5320f4` | TH-LOWER-01, TH-LOWER-03 | parked: canonical foreach stages through ff5320f4 await the typed statement family | Review the canonical foreach commits ending ff5320f4. Derive live owner shape from accepted execution, not a body simulation premise. |
+| `goose-ir-finish-lower-source-contexts` | `9174eac7` | TH-LOWER-01, TH-LOWER-03 | parked: startup through a6b6124b merged. Child-source stages444c4849 through 9174eac7 await typed-family integration | Compare helpers with the caller requirements and integrate the missing child-source stages in order. |
+| `goose-ir-finish-lower-validation` | `0c91823e` | TH-LOWER-02, TH-LOWER-03 | parked: validation stages through 0c91823e depend on readonly destination migration | Integrate only after 920c9e42 and typed legacy replacements. Finish whole-module typing, dominance, scope, storage and lifetime preservation. |
+| `goose-ir-finish-perf-base` | `24ba0840` | O3, final performance gates | parked baseline: upstream46356c26 plus matching runtime stack correction24ba0840 | Keep baseline flags aligned. Measure only after perf-gate-ready succeeds before and after each timed run. |
+| `goose-ir-parity-base` | `011acacf` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `goose-ir-view-source-only` | `733bfc0c` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `integrate/upstream-20261010` | `c01d8f9d` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `perf/rfc9-bce-upstream-qualification` | `23366273` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `qualify/upstream-fee060c-20261011` | `ad8f2a87` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `review/cached-callee-references` | `925d52bb` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `review/pr18-latest` | `a3556c11` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `review/reordered-reference-fields` | `865b1aa6` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `upstream-pr/cached-callee-references` | `298bd817` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `upstream-pr/gs-004-reordered-reference-initializers` | `81004d20` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `upstream-pr/native-package-rebuild-stamp` | `8a3637b1` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `upstream-pr/native-stack-bounds-main-thread-musl` | `7cd75268` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+| `upstream-pr/reordered-reference-fields` | `d68e4427` | owner-managed ref | parked: no campaign item scheduled | Preserve this ref. Review independently before reuse or deletion. |
+
+**Retained worktrees:** All registered worktrees are under the repository. The nine retained trees below are clean and allowed by the closeout guard. Their caches are disposable. Their sources and findings are committed, so none is required after reboot.
+
+| Path | Branch | HEAD | Status | Reason |
+|---|---|---|---|---|
+| `.work/wt/finish-construct-backend` | `goose-ir-finish-construct-backend` | `dcdc9227` | clean | Incremental C++ compiler and GIR test artifacts for unfinished handler work. |
+| `.work/wt/finish-construct-execution-proofs` | `goose-ir-finish-construct-execution-proofs` | `62fcd00b` | clean | Incremental Lean dependency cache for the named parked proof lane. |
+| `.work/wt/finish-construct-gir` | `goose-ir-finish-construct-gir` | `53c0c738` | clean | Incremental Lean dependency cache for the named parked proof lane. |
+| `.work/wt/finish-lower` | `goose-ir-finish-lower` | `631e1665` | clean | Incremental Lean dependency cache for the named parked proof lane. |
+| `.work/wt/finish-lower-call` | `goose-ir-finish-lower-call` | `dad0c5e3` | clean | Incremental Lean dependency cache for the named parked proof lane. |
+| `.work/wt/finish-lower-validation` | `goose-ir-finish-lower-validation` | `0c91823e` | clean | Incremental Lean dependency cache for the named parked proof lane. |
+| `.work/wt/finish-perf-base` | `goose-ir-finish-perf-base` | `24ba0840` | clean | Matched baseline sources and release artifact. Timing remains unqualified. |
+| `.work/wt/verify` | `detached` | `a9d3c620` | clean | Exact merged Core and lowering dependency cache. Expensive single-thread proof builds are reusable only for equivalent sources. |
+| `.work/wt/verify-construct` | `detached` | `c4d51371` | clean | Checked construction kernel and exit dependency cache. |
+
+**Cleanup:** Twenty-five integrated branch refs were deleted after ancestry or complete patch-equivalence checks. Forty-three tags preserve frozen experiments and retired candidate histories. Completed and obsolete campaign trees were removed. Six dirty sibling experiments were archived before checkout removal. Their snapshots now use local archive tags. Their original named refs were unchanged. The archive commits retain detached baseline tips too. Two unregistered partial directories remain because root-owned generated files blocked deletion. `../goose-rfc9-gig-perf-20261011` remains unregistered and untouched. Read [the cleanup record](goose-ir-winddown-cleanup.md) for their paths and archive refs. No registered external worktree remains.
+
+**Not started:** On resume, first check the parked code against the current shared interfaces. Complete accepted-state lowering and validation preservation. Complete independent construction GIR, native target handlers and the whole-execution proofs. Then qualify production BCE and rerun H2. Finish the required baseline, linter, JIT, corpus and bounded fuzz gates. Run the final axiom audit and quiet-host performance comparison last. Pushes remain unauthorized.
+
+**Verified:** At `08567a89`, sequential selected Lake closures passed 76 modules for source-context and typed-block checks and 19 modules for the first exit/kernel slice. At `c4d51371`, the construction closure passed 39 modules, including 50 destination guards, 80 execution guards, 47 typing guards and the combined typing/runtime proof. At `a9d3c620`, the fixture closure passed 95 modules for TypedExpressionChecks and CallChecks. Lake used actual `-j1 -M4096` Lean flags. Six new exit/allocation theorem audits use only `propext`, `Classical.choice` and `Quot.sound`. Units-matrix tests pass 14 cases. The semantic runner self-test passes 30 cases. Whitespace checks pass.
+
+The main checkout and all retained trees were checked for uncommitted files. Worktree pruning completed. `.work` is ignored through `.git/info/exclude` and is on ext4. No Lean, Lake, compiler, build, fuzz or watcher process remains from this campaign. No campaign wakeup is scheduled through the available tool interface. User crontab inspection reports no crontab. Privileged root-cron inspection was denied; `atq` and `systemctl` are unavailable.
+
+The Codex Stop command is `"$HOME/.local/bin/codex-campaign-closeout.py" hook`. Its trusted configuration was reviewed. This API session cannot invoke interactive `/hooks`; the configured command was checked directly. The configured command was exercised during winddown. All nine retained trees are allowed. Interactive hook UI verification remains unavailable.
+
+**Rehearse resume:** Run this inspection block in a clean environment. It starts no lane and performs no build. On a real resume, follow the standing decisions and the next steps above.
+
+```sh
+set -eu
+cd /home/josh/d/goose
+git status --short --branch
+git log -5 --oneline master
+git merge-base --is-ancestor 46356c26a94f0e1723b3b61ad56b93a7da70878f master
+git worktree list
+git branch --no-merged master
+sed -n '1,260p' docs/design/goose-ir-campaign.md
+for branch in $(git for-each-ref --no-merged=master --format='%(refname:short)' refs/heads); do
+    git show --no-patch --format='%h %s' "$branch"
+done
+for path in docs/design/goose-ir-spec.md docs/design/goose-ir-validation.md docs/design/goose-ir-winddown-cleanup.md docs/development.md docs/testing.md semantics/coverage.json semantics/decisions.md semantics/trust.md; do
+    git show "master:$path" >/dev/null
+done
+git show goose-ir-finish-bce:docs/design/goose-ir-bce-qualification.md >/dev/null
+git show goose-ir-finish-lower:semantics/Goose/Lower/MutationStatements.lean >/dev/null
+git show goose-ir-finish-construct-execution-proofs:semantics/Goose/Proofs/ConstructionExecution.lean >/dev/null
+git show archive/winddown-20261014-validation-scratch:semantics/Goose/Construct/ExecutionChecks.lean >/dev/null
+git worktree list --porcelain | sed -n 's/^worktree //p' |
+while IFS= read -r path; do
+    test -z "$(git -C "$path" status --porcelain --untracked-files=all)"
+done
+```
 
 **Goal.** Two outcomes, pursued together. First, an executable, mechanically checked semantics for a Goose fragment and an opt-in IR pipeline that must agree with it. Second, a measurably shorter edit-build-verify loop for large programs: attribution of where build cost comes from, fewer emitted bodies with no weaker checking, and reuse of unchanged native code. A better-structured compiler that still regenerates and recompiles the whole program after a small edit does not meet the goal.
 
@@ -70,7 +355,7 @@ Not rerun on the final tree, last green one or two merges earlier: the units edi
 ## 1. Charter
 
 - Decide, log the call in §10, and keep going. Never ask, never wait for approval, send no progress report. Run until every deliverable is met or every remaining item is parked.
-- Hard stops, each of which parks the item and moves on: an action outside this repository other than reading the Aincrad3 checkout and the upstream draft pull requests of O7; anything §7 forbids; a loop that cannot check anything. Pushing is forbidden except the one fix branch each O7 pull request needs, pushed to the fork and never to upstream.
+- Hard stops, each of which parks the item and moves on: an action outside this repository other than reading the Aincrad3 checkout and the upstream draft pull requests of O7; anything §7 forbids; a loop that cannot check anything. Under the current working contract, pushing and opening external pull requests require a separate owner request; keep O7 at locally prepared drafts until then.
 - Fix on the way, in its own commit, what is egregious: a loop command over 5 minutes on a quiet host; a CPU-time regression over 2× against the baseline on a command whose new flags are absent; a test red on the baseline that blocks the item. Record anything else and leave it.
 - Parity before optimization. No item of phase P3 starts while a P1 item is neither done nor parked.
 - A failing item gets three attempts, each ending in a root-cause statement (`root-cause`); Tier B theorems get two. Then it is parked with a finding, and work continues with whatever does not depend on it.
@@ -78,7 +363,7 @@ Not rerun on the final tree, last green one or two merges earlier: the units edi
 - Bookkeeping is minimal: no provenance, hashes or manifests beyond what a deliverable needs.
 - Run as wide as file ownership and memory allow (`orchestrate`). Start with four lanes; widen from measured peak memory, keeping 16 GB free. Budget 4 GB for a C++ lane building at `--parallel 4` (the compiler's own build peaked near 2 GB) and 8 GB for a Lean lane. Aincrad3 measurements are run by the integrator alone, one at a time.
 - Lanes are `worker`. The lanes proving `TH-SAFE-01` and `TH-LOWER-01` and the theorem-statement reviewer are `expert`. The final adversarial review is `god`.
-- Lane worktrees are `.work/wt/<lane>` on branch `goose-ir-<lane>`; each builds in its own `build/`. The integrator verifies merged commits from `.work/wt/verify`. All scratch is under `.work/`, never `/tmp`. After a lane merges and its checks pass on the merged tree, the integrator removes its worktree and deletes its branch; a parked lane keeps its branch.
+- Lane worktrees are `.work/wt/<lane>` on branch `goose-ir-<lane>`; each builds in its own `build/`. The integrator verifies merged commits from `.work/wt/verify`. Keep all scratch under `.work/`. After a lane merges and its checks pass on the merged tree, the integrator removes its worktree and deletes its branch; a parked lane keeps its branch.
 - Every commit is a Conventional Commit scoped by workstream (`feat(units): …`). Item ids go in the body.
 - Code comments never cite this document, its item ids, gates or theorem ids.
 - Follow `AGENTS.md`: no formatters on existing `.goose` files; new `.goose` fixtures may be formatted with `scripts/format_goose.py`; `/usr/bin/rg` and `/usr/bin/fd` if the ones on `PATH` fail to execute.
@@ -97,7 +382,7 @@ Not rerun on the final tree, last green one or two merges earlier: the units edi
 | O6 | Build scalability is a primary requirement with its own gates, not a consequence hoped for from the IR. |
 | O9 | Corpus reach has no percentage target (2026-10-13). The target is completeness within the profile: every repository program whose features all lie in the implemented profiles exports, validates and agrees, with each exception explained. Reach is reported at each profile gate beside a forecast of what the next feature set would unlock (`S3b`), and any floor is set from that forecast, by the owner, after it exists. |
 | O8 | The host stays noisy for the rest of the campaign (2026-10-12). The final verification gates of an O7 pull request — the before/after measurements, the exact Docker reproducer against the pushed fix commit, the push itself and opening the draft — are deferred until after the campaign ends. During the campaign a confirmed defect gets its fix branch, its regression test, its locally verified reproduction and its drafted description, and is listed in §14. |
-| O7 | A genuine compiler defect found along the way gets a draft pull request to upstream, following the guidelines. They are in two places: this repository's `AGENTS.md` ("Upstream pull requests") and the Aincrad3 checkout's `docs/GOOSE-WORKFLOW.md`; where they differ, the stricter applies. In short: the defect violates a supported language or runtime contract and is confirmed on the failing baseline; it is reduced to a small public fixture; the fix branch starts from upstream `master` and carries one fix, its regression test and no fork tooling; the exact Docker reproducer is run locally with Clang 23 and the current stable GCC and shows the baseline failure and the fixed result; a before/after `test/goose_in_goose` comparison and the affected normal workloads are measured on a quiet host; the title is a Conventional Commit and the body is What, Why, How, Testing, Reproduction; the pull request stays a draft and is never merged by the executor. Linter defects are fork matters and are not sent upstream. The fix is also cherry-picked onto `goose-ir`. |
+| O7 | A genuine compiler defect found along the way gets a draft pull request to upstream, following the guidelines. They are in two places: this repository's `AGENTS.md` ("Upstream pull requests") and the Aincrad3 checkout's `docs/GOOSE-WORKFLOW.md`; where they differ, the stricter applies. In short: the defect violates a supported language or runtime contract and is confirmed on the failing baseline; it is reduced to a small public fixture; the fix branch starts from upstream `master` and carries one fix, its regression test and no fork tooling; the exact Docker reproducer is run locally with Clang 23 and the current stable GCC and shows the baseline failure and the fixed result; a before/after `test/goose_in_goose` comparison and the affected normal workloads are measured on a quiet host; the title is a Conventional Commit and the body is What, Why, How, Testing, Reproduction; the pull request stays a draft and is never merged by the executor. Linter defects are fork matters and are not sent upstream. The fix is also cherry-picked onto `master`. |
 
 ### 2.2 Prescribed
 
@@ -281,9 +566,9 @@ The full baseline suite runs at `G-PILOT`, `G-SHARE`, `G-UNITS`, `G-GIR` and the
 
 **Pre-authorized, all additive and opt-in:** the flags `--emit-core FILE`, `--emit-gir-high FILE`, `--emit-gir-low FILE`, `--pipeline legacy|gir`, `--build-report FILE`, `--share`, `--emit-units DIR`, and for `goose build`: `--units`, `--rebuild`, `--verify-reuse`; the report format `goose-build-report/1`; the store directories under a program's existing build directory; `src/runtime/runtime_units.h`; `--only` and `--goose-arg` in `test/run_tests.py`; `--semantics` and `--pipeline` in `fuzz/driver.py`; new files in `CMakeLists.txt`'s source list; new entries in the C++ unit-test list.
 
-**Also authorized (O7):** pushing one fix branch per confirmed defect to the fork and opening a draft pull request against upstream from it.
+**O7 local preparation:** build and verify one fix branch per confirmed defect and prepare its draft description. Pushing the branch or opening an external pull request requires a separate owner request under the current working contract.
 
-**Forbidden:** changing the behavior or default output bytes of any existing command; facts v1, diagnostics v1, contracts v1, lint configuration, baselines, lint statuses, warning text; `docs/goose_spec.md`; existing fixtures and expected outputs; the five existing runtime files; the checker's acceptance of any program; `.github/workflows`; a new dependency in C++ or Lean; making any new mode the default; `master`.
+**Forbidden:** changing the behavior or default output bytes of any existing command; facts v1, diagnostics v1, contracts v1, lint configuration, baselines, lint statuses, warning text; `docs/goose_spec.md`; existing fixtures and expected outputs; the five existing runtime files; the checker's acceptance of any program; `.github/workflows`; a new dependency in C++ or Lean; making any new mode the default. The owner redirected campaign work to `master` on 2026-10-14, superseding the original branch restriction.
 
 Each change made is appended to §8.
 
@@ -422,7 +707,7 @@ Candidate `f0aa066`. Debug compiler, busy host: counts are exact, times are one 
 
 The merged-tree run recorded the following results before the H2 harness audit: the units edit matrix passed every row with reuse verification on (cold 7 units; warm no-op runs nothing; comment edit recompiles one locations unit and no code unit; leaf edit one unit; contract changes rebuild everything and return warm; damaged, truncated and half-published entries are detected and rebuilt; a failing edit reports its error and no stale success), a seeded 60-step random sequence did not diverge from a clean build, 575 corpus programs built from units with none failing, locality and dependency checks passed, and the full suite was green. These are historical results; they do not establish the audited H2 assertions.
 
-**H2 acceptance is parked, not complete.** The audited harness now checks stdout, observes actual publish and link interruption points, checks E16's intermediate build, and reports nonzero ordinary random builds as failures. A targeted E13 run passed both observed interruptions and clean-build recovery. The strengthened seeded sequence was not rerun within its three-attempt budget, so the historical 60-step result is not current evidence. E10's raw independent C flags, target-only, and runtime-text-only dimensions are structurally unavailable through the current compiler interface; the harness marks them `unavailable`, and an E10 run exits with `incomplete` instead of treating them as passes. H2 remains parked until those dimensions are covered or its acceptance contract is revised.
+**H2 structural acceptance passed at `c1070ef0`.** The Debug compiler passed E10–E16 and the 60-step randomized sequence with seed 1 under `--verify-reuse`. E13 passed both observed interruption points and clean-build recovery. E10 covered its CLI profile, define, compiler and binary variants, then probed `UnitContractValues.c_flags`, `.target` and `.runtime_version` through `MakeContract` and `BuildUnitObjects`. The target probe used the host compiler with a synthetic target identity. The runtime probe changed the runtime identity without rebuilding the runtime text. E10 therefore qualifies the production builder boundary for these contract fields, as recorded in the standing decisions. It does not establish CLI selectors for those fields, cross-compilation, or a runtime-text-only full compiler build. These runs establish correctness, not performance.
 
 Before `B8`, Aincrad3's core entry did not build in units mode for two reasons in its included native headers: they read runtime-internal state that exists only when the runtime is pasted into the same translation unit, and they spell compiler-generated C type names. The public corpus had the same unqualified boundary for programs that link C of their own.
 
@@ -494,12 +779,14 @@ The most common exact multi-feature sets are `string-value + struct` (7 programs
 - Nonlocal-target ids under stable naming come from the target's context key, not its declaration key: the legacy protocol distinguishes target specializations, and two contexts of one target need distinct ids.
 - A reference to a slice variable (a `T[:]&` parameter, or a captured slice variable after closure conversion) is outside `core-pilot` for now: the exporter reports it unsupported. Writing a slice through such a reference is a stored reference, which needs content roots in the annotation and in the safety invariant; adding that while the safety proof is in progress would move its target. It returns as item `S4` after `T1`, because the `order` fuzz lane relies on it.
 - `return`, `break` and `continue` inside an expression block are outside `core-pilot`: the Lean validator rejects them and the exporter reports them unsupported. Modelling them needs a body result threaded through expression evaluation, which the pilot's proofs do not need.
-- The GIR-H wire encoding is defined by the Lean lane, and the Lean lowering's output for each Core golden is the golden the C++ lowering must reproduce byte for byte. One reference lowering makes the C++ lowering instance-checkable by comparison instead of only by behaviour.
+- Historical lowering comparison: the original plan required C++ and Lean to reproduce the same GIR bytes. The 2026-10-25 recovery supersedes that policy for independently optimized lowering. Each emitted module must validate and agree with Core on the checked fixture outcomes. Canonical reencoding and deterministic exports remain byte comparisons. These finite checks do not prove the C++ lowerer correct.
 - `V-ROOT` no longer requires a same-scope root to be declared first. The compiler accepts rebinding a reference to a later-declared variable of its own scope, and that is safe because a scope's variables end together; the stricter rule would have rejected valid programs for no safety gain.
 - Unary minus on an unsigned type is a compile error in Goose. The numeric model keeps a total definition for it; the Lean validator rejects it under `V-TYPE`.
 - The checker already groups roots into classes: one helper called with many distinct globals and many locals at different depths gets two specializations, not one per call site. The synthetic family therefore has to vary the dimensions that do multiply specializations; `B1`'s dimension attribution on Aincrad3 says which those are, and `B5` builds its members from that.
 
 ## 13. Campaign log
+
+- **Resumed 2026-10-17 at the owner's request.** Integration starts from `8eb50c00`, which includes upstream updates after the pause. Campaign closeout is inactive. Five lanes resume accepted-state lowering, construction GIR, native handlers, whole-execution proofs, and independent Core audit registration. Retained per-lane Lean caches are empty. Seed focused builds from a copy of the main checkout's `.lake/build`, then let Lake revalidate inputs. The external Aincrad3-owned worktree is preserved. No new gate result or performance claim is made.
 
 *(append-only; one line per gate or phase end. Resumed entries here supersede
 the pending statuses in the paused handoff above.)*
@@ -523,7 +810,7 @@ the pending statuses in the paused handoff above.)*
 
   Overall, 82 of 120 cases agreed and 38 were unsupported: 20 aggregate arithmetic cases and 18 temporary-slice resize cases. This compared legacy behavior with GIR native/JIT paths; it used no Lean oracle or sanitizers. The run used the frozen C++ compiler and Clang 23.1.3. No timing or memory result is claimed; performance remains deferred on the busy host, and O8 upstream drafts remain parked.
 - **`S8` proof work resumed 2026-10-13; still in progress.** The lexical pilot now frames all future bindings and preserves initialized value-storage types (`PilotStoreLe`). Shrink protection follows the exact checked mutation requests; sampled loop-body demand is tracked. Frames carry initialized non-reference storage roots and visible-binding metadata; call preservation classifies owner capabilities, and scope footprints and retained aliases are carried through release. Typed-call child demand is access-aware: a slice holder stays live through the relevant argument prefix, while an unrelated reference holder is dropped. Exact-excerpt `while` and `range` kernels are green under the three-axiom allowlist, but the per-element loop kernel is incomplete. A limited `foreach` regression has only scratch proof evidence, not full semantic closure. The capability-guard/proof-bridge follow-up is pending. No `G-SHRINK` or `S9` completion is claimed. Executable, audit and fuzz gates await exact closure for every step form; the performance gate is also blocked pending closure and remains deferred because the host is busy. O8 upstream drafts remain deferred.
-- `H2` is parked, not complete. The earlier units edit-matrix and seeded 60-step randomized run in §11.3 are historical results, not current gate evidence. The audited harness passed the targeted E13 interruption/recovery case, but the strengthened seeded sequence was not rerun within its three-attempt budget; E10's raw independent C flags, target-only, and runtime-text-only dimensions are structurally unavailable and marked `unavailable`, so H2 remains incomplete as detailed in §11.3.
+- `H2` structural acceptance passed at `c1070ef0`, as detailed in §11.3. The E10 builder probes qualify raw C flags, target identity and runtime identity through the production builder boundary. They do not claim CLI selectors, cross-compilation or a runtime-text-only full compiler build.
 - `S4` GIR alignment merged as `c4d9d8b` (`gir-h/0.3`): reference content roots and call effects now align across Core lowering, Lean GIR and the C++ verifier, including the Core validator's no-return flow. The commit's focused fixture checks are `gir_never_returns_exit.gir-h.json`, `gir_rejected_v050_root_underapprox.json`, `gir_rejected_v050_slice_content_read.json`, `gir_rejected_v050_slice_param_rebind.json`, and `gir_rejected_v050_call_parameter_global.json`, exercised by the GIR golden and invalid check scripts. No timed gate is claimed here.
 - `S4` completed: the order fuzz lane exported without `unsupported` and all 2,000 seeded cases agreed. The Lean Core slice-reference roots and safety proof, Core exporter, GIR lowering/validation alignment, and forwarded-content-root fix are integrated (`ab44a0b`, `aeb9649`, `c4d9d8b`, `5790fd1`, `760158e`). `TH-SAFE-01` remains audited; the exact order-gate result closes S4's stated acceptance.
 - Flat structs have integrated Lean Core and Lean GIR slices. Core evaluation, strict decoding/writing, nominal typing, field places, layout/permission validation, fixtures, and the constructor/field fuel, memory, safety, and sharing proof cases are recorded in `26c2154`, `f39b1a8`, `2d28da4`, and `551a733`; Lean GIR syntax, evaluation, typing, validation, JSON, and Core lowering are integrated in `0c4e7cb`, with forwarded slice-root checks in `760158e`. This is the implemented flat-struct slice only: S8 shrink operations and `G-SHRINK` remain active, while S9 construction has contract work but no implementation or gate result in this checkpoint.
@@ -571,10 +858,17 @@ the pending statuses in the paused handoff above.)*
 - `G1` merged: Lake project with a build-time axiom audit, the `goose-core/0.2` tag table (specification §12.1), three goldens. P0 complete.
 - `G2` merged: `test/scale/gen.py` (issue #9's program, parameterized) and `test/scale/parity.py` (1,120 emissions compared; base against itself equal, `--no-bce` differs in 696).
 
+- **Resumed 2026-10-14 on `master`.** The local `master` was fast-forwarded from `62366eb4` to `d440b9ab`, the former `goose-ir` tip (423 commits; no divergence). The `goose-ir` and `origin/goose-ir` refs were left unchanged, and no push was run. Continue with O3; prior post-run host-load failure invalidated its timing, so no budget is frozen.
+
+- **Paused after rebase 2026-10-14.** Rebased `master` onto upstream `46356c26a94f0e1723b3b61ad56b93a7da70878f`, preserving fork tooling and the frozen campaign with integration corrections folded into replayed commits. Rechecked 67 unmerged refs, 29 clean in-repo lane worktrees and 12 preserved external worktrees (six dirty); no lane was started or integrated. Debug build and focused integration checks passed, including the corrected native/display reader exemptions and obsolete write allowance. Replaced the stale handoff with the branch-by-branch paused handoff and rehearsed its inspection commands in a clean environment. Strict path audit cannot pass because of the preserved external worktrees; privileged cron and `at` inspection remains incomplete. O3 still has no valid timing result; no measurements or pushes were run by this executor.
+
+- **Paused 2026-10-14 after requested winddown.** Integrated accepted startup/block composition and checked construction exit, adaptation, allocation and trace-prefix stages. Focused Lake closures, 14 units tests, 30 runner self-tests and six local axiom checks passed. Committed incomplete lane edits, deleted 25 integrated refs, preserved 43 archive tags, removed obsolete checkouts and scratch, and retained nine clean caches under ignored `.work`. The handoff names every unmerged ref and reproduces inspection in a clean environment. Full lowering, construction, production BCE, H2 and final performance gates remain open. No push.
+
 ## 14. For the owner afterwards
 
 - A confirmed linter inconsistency, not changed here because linter behaviour is frozen for the campaign: `redundant_cast` warnings carry an empty specialization list where `docs/lint/facts-v1.md` describes contexts. Minimal input in §12. Either the documentation or the producer should change, on the fork.
-- Upstream draft pull requests owed under O7 and deferred by O8, each with its branch and drafted description: (1) `upstream-pr/native-stack-bounds-main-thread-musl`, commit `7cd7526`, description at `.work/wt/u1/.work/pr/description.md` — still owed: the before/after `test/goose_in_goose` and normal-workload measurement on a quiet host, pushing the branch to the fork, running the exact Docker reproducer against the pushed commit, opening the draft. Note for the description: GCC 16.2 on musl could not be run; the musl results use GCC 15.2.
+- Upstream draft pull requests owed under O7 and deferred by O8, each with its branch and drafted description: (1) `upstream-pr/native-stack-bounds-main-thread-musl`, commit `7cd7526`, committed description at `docs/design/upstream-drafts/native-stack-bounds-main-thread-musl.md` — still owed: the before/after `test/goose_in_goose` and normal-workload measurement on a quiet host, pushing the branch to the fork, running the exact Docker reproducer against the pushed commit, opening the draft. Note for the description: GCC 16.2 on musl could not be run; the musl results use GCC 15.2.
+- The native-package rebuild draft is committed at `docs/design/upstream-drafts/native-package-rebuild-stamp.md`, on branch `upstream-pr/native-package-rebuild-stamp`. Upstream `c57587a1` and later native-build changes supersede its implementation; reassess its disposition before any external action.
 - §11's attribution: whether the frontend or native compilation dominates Aincrad3's loop decides whether `X1` and `X2` are the next campaign.
 - §8 and `semantics/decisions.md`: every contract change and every disagreement with the legacy compiler.
 - `semantics/coverage.json`: theorems passing, parked, and the reviewer's answers.

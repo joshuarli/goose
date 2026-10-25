@@ -13,7 +13,6 @@ string RuntimeObjectSource();
 string DirOf(const string &path);
 
 struct BuildOptions {
-    string ccrequest;         // --cc
     bool debug = false;       // --debug: GS_DEBUG=1, debug information, no C optimization
     bool verbose = false;     // -v: print every command and what it prints
     bool dryrun = false;      // --dry-run: print the commands and run nothing
@@ -77,13 +76,19 @@ struct Builder {
         if (opts.dryrun || opts.verbose) fprintf(msgs, "%s\n", CommandLineText(argv).c_str());
         if (opts.dryrun) return true;
         fflush(msgs);
-        auto r = RunProcess(argv, "", opts.verbose);
+        ProcessResult r;
+        {
+            ProgressStep step(what);
+            r = RunProcess(argv, "", opts.verbose);
+        }
         if (!logfile.empty()) WriteFileMakingDirs(logfile, r.output);
         if (r.started && r.code == 0) return true;
-        fprintf(stderr, "%s failed%s:\n    %s\n", what.c_str(),
-                r.started ? cat(" (exit ", r.code, ")").c_str() : "", CommandLineText(argv).c_str());
-        if (!opts.verbose) fputs(r.output.c_str(), stderr);
-        if (!logfile.empty()) fprintf(stderr, "(the output is in %s)\n", logfile.c_str());
+        auto msg = cat(what, " failed", r.started ? cat(" (exit ", r.code, ")") : string(), ":\n    ",
+                       CommandLineText(argv), "\n");
+        if (!opts.verbose) msg += r.output;
+        if (!logfile.empty())
+            Append(msg, msg.back() == '\n' ? "" : "\n", "(the output is in ", logfile, ")");
+        ProgressPrint(msg);
         return false;
     }
 
@@ -182,8 +187,9 @@ inline string RuntimeObject(const Builder &b) {
     if (ec) throw CompileError { cat("cannot create ", dir, ": ", ec.message()) };
     // Every first build shares these paths. Wait before writing the source
     // or invoking the compiler, then recheck what the previous builder left.
-    FileLock lock(cat(dir, "/build.lock"));
+    FileLock lock(cat(dir, "/build.lock"), "waiting for another goose compiling the runtime");
     if (PathExists(obj)) return obj;
+    ProgressStep step(cat("compiling the runtime for ", b.tc.desc), true);
     if (!WriteFileMakingDirs(src, RuntimeObjectSource()))
         throw CompileError { cat("cannot write ", src) };
     // A failed or interrupted compiler may leave a partial object. Only a
@@ -192,25 +198,20 @@ inline string RuntimeObject(const Builder &b) {
     filesystem::remove(filesystem::path(tmp), ec);
     if (ec) throw CompileError { cat("cannot remove ", tmp, ": ", ec.message()) };
     if (!b.CompileObject(src, tmp, "compiling the runtime", log)) return "";
-    filesystem::rename(filesystem::path(tmp), filesystem::path(obj), ec);
+    ec = RenamePath(tmp, obj);
     if (ec) throw CompileError { cat("cannot publish ", obj, ": ", ec.message()) };
     return obj;
 }
 
 // What `goose build` does once the compiler has written the program's C to
-// `cfile` in `builddir`: finds the toolchain, the runtime object and the
-// response files of the native parts `nativersps` (native.h and builtin.h,
-// found by the caller), and links the executable, named by -o, the
-// program's sidecar (`output`) or the root file. The exit code.
+// `cfile` in `builddir`: finds the runtime object for the toolchain `tc`,
+// which built the native parts whose response files are `nativersps`
+// (native.h and builtin.h, found by the caller), and links the executable,
+// named by -o, the program's sidecar (`output`) or the root file. The exit
+// code.
 inline int BuildExecutable(const string &rootfile, const string &cfile, const string &builddir,
-                           const BuildOptions &opts, const string &exedir, FILE *msgs,
-                           const vector<string> &nativersps, const string &output) {
-    Toolchain tc;
-    string why;
-    if (!FindToolchain(opts.ccrequest, tc, why)) {
-        fprintf(stderr, "%s\n", why.c_str());
-        return 1;
-    }
+                           const Toolchain &tc, const BuildOptions &opts, const string &exedir,
+                           FILE *msgs, const vector<string> &nativersps, const string &output) {
     Builder b { tc, opts, msgs };
     vector<string> objects;
     if (!opts.standalone) {
@@ -228,6 +229,11 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
         #ifdef _WIN32
             if (exe.size() < 4 || exe.compare(exe.size() - 4, 4, ".exe") != 0) exe += ".exe";
         #endif
+    }
+    if (!opts.dryrun) {
+        std::error_code ec;
+        auto exedirpath = filesystem::path(exe).parent_path();
+        if (!exedirpath.empty()) filesystem::create_directories(exedirpath, ec);
     }
     if (!b.Link(cfile, objects, rsps, exe, builddir, cat(builddir, "/cc.log"))) return 1;
     if (!opts.dryrun) fprintf(msgs, "built %s\n", exe.c_str());

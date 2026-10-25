@@ -43,6 +43,14 @@ R"GSRT(/* Goose runtime — the part every compiler-generated C file starts with
 #define _CRT_SECURE_NO_WARNINGS 1
 #endif
 
+/* The POSIX and BSD declarations the runtime uses (sigaltstack, stack_t,
+   MAP_ANONYMOUS, ...) are what glibc's headers declare by default, but a
+   strict ISO mode (-std=c11, -std=c23) hides them unless this comes before
+   the first system header. */
+#if !defined(_WIN32) && !defined(_DEFAULT_SOURCE)
+#define _DEFAULT_SOURCE 1
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
@@ -182,14 +190,14 @@ GS_API GS_NORETURN void gs_ovf(int64_t a, const char *op, int64_t b, const char 
 GS_API GS_NORETURN void gs_ovf_neg(int64_t a, const char *type, const char *file, int line);
 GS_API GS_NORETURN void gs_asfail_i(const char *why, int64_t v, const char *type,
                                     const char *file, int line);
-GS_API GS_NORETURN void gs_asfail_u(const char *why, uint64_t v, const char *type,
+)GSRT"
+R"GSRT(GS_API GS_NORETURN void gs_asfail_u(const char *why, uint64_t v, const char *type,
                                     const char *file, int line);
 /* f32: d is an f32's value, and takes that type's text form. */
 GS_API GS_NORETURN void gs_asfail_f(const char *why, double d, int f32, const char *type,
                                     const char *file, int line);
 
-)GSRT"
-R"GSRT(/* Bounds check as one unsigned compare; the index operand must be side-effect
+/* Bounds check as one unsigned compare; the index operand must be side-effect
    free (the compiler guarantees this at emission). The failing arm's int64_t
    gives the result the type of (i) and an int64_t together, and its call is
    one the C compiler knows does not return, also where gs_idxfail is in the
@@ -367,14 +375,14 @@ static int gs_memeq(const void *a, const void *b, size_t n) {
 
 /* ---------------------------------------------------------------------------
    Integer semantics (§6.2): every operation runs at its operands' type. The
-   operations compute wide (so wrap is defined in C), truncate back, and — when
+)GSRT"
+R"GSRT(   operations compute wide (so wrap is defined in C), truncate back, and — when
    the generated C is compiled with -DGS_DEBUG=1 — abort when the wide result
    does not fit the type. Shifts mask their count to the width; division is
    zero-checked always.
 
    Only division and modulo check anything in a release build, so only they
-)GSRT"
-R"GSRT(   need to be functions there; everything else is a macro whose body is the
+   need to be functions there; everything else is a macro whose body is the
    expression the release function would have returned. An optimizing backend
    inlines either form to the same instruction, but a backend that does not
    inline (libtcc, or any -O0 build) would otherwise pay a call for every
@@ -539,14 +547,14 @@ static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 #define gs_shr_u32(a, n) ((uint32_t)((uint64_t)(a) >> ((n) & 31)))
 
 #define gs_add_i64(a, b, f, l) ((int64_t)((uint64_t)(a) + (uint64_t)(b)))
-#define gs_sub_i64(a, b, f, l) ((int64_t)((uint64_t)(a) - (uint64_t)(b)))
+)GSRT"
+R"GSRT(#define gs_sub_i64(a, b, f, l) ((int64_t)((uint64_t)(a) - (uint64_t)(b)))
 #define gs_mul_i64(a, b, f, l) ((int64_t)((uint64_t)(a) * (uint64_t)(b)))
 #define gs_neg_i64(a, f, l)    ((int64_t)(0u - (uint64_t)(a)))
 #define gs_shl_i64(a, n) ((int64_t)((uint64_t)(a) << ((n) & 63)))
 #define gs_shr_i64(a, n) ((int64_t)((a) >> ((n) & 63)))
 
-)GSRT"
-R"GSRT(#define gs_add_u64(a, b) ((uint64_t)((a) + (b)))
+#define gs_add_u64(a, b) ((uint64_t)((a) + (b)))
 #define gs_sub_u64(a, b) ((uint64_t)((a) - (b)))
 #define gs_mul_u64(a, b) ((uint64_t)((a) * (b)))
 #define gs_shl_u64(a, n) ((uint64_t)((a) << ((n) & 63)))
@@ -659,6 +667,39 @@ static uint64_t gs_divu_q(uint64_t x, uint64_t magic, uint8_t more) {
 #endif
 }
 
+/* The same for a dividend and divisor that fit in 32 bits, with a 32-bit
+   magic: x / d is the high half of a 32x32 product, which a C compiler
+   vectorizes where it keeps the 64x64 one scalar, and which needs no
+   128-bit arithmetic, so only a zero divisor gets GS_DIVU_NONE. */
+static uint32_t gs_divu32_gen(uint32_t d, uint8_t *more) {
+    int k = 31;
+    uint64_t n;
+    uint32_t m, rem;
+    if (d == 0) { *more = GS_DIVU_NONE; return 0; }
+    while (!(d >> k)) k--;
+    if (!(d & (d - 1))) { *more = (uint8_t)k; return 0; }
+    n = (uint64_t)1 << (32 + k);
+    m = (uint32_t)(n / d);
+    rem = (uint32_t)(n % d);
+    if (d - rem < ((uint32_t)1 << k)) {
+        *more = (uint8_t)k;
+    } else {
+        uint32_t twice = rem + rem;
+        m += m;
+        if (twice >= d || twice < rem) m++;
+        *more = (uint8_t)(k | GS_DIVU_ADD);
+    }
+    return m + 1;
+}
+
+static uint32_t gs_divu32_q(uint32_t x, uint32_t magic, uint8_t more) {
+    uint32_t q;
+    if (!magic) return x >> more;
+    q = (uint32_t)(((uint64_t)magic * x) >> 32);
+    if (more & GS_DIVU_ADD) return (((x - q) >> 1) + q) >> (more & GS_DIVU_SHIFT);
+    return q >> more;
+}
+
 /* `as!` float-to-int: truncate toward zero, wrap modulo 2^64 (§6.3). Defined
    the same on every platform, unlike a raw C cast of an out-of-range value.
    A value lies in the i64 range exactly when its truncation does, and there
@@ -711,7 +752,8 @@ static uint64_t gs_f2uchk(double d, int f32, const char *file, int line) {
     return v;
 }
 #define GS_RANGE(v, lo, hi, t, f, l) gs_rangechk((v), (lo), (hi), (t), (f), (l))
-#define GS_RANGE_U(v, hi, t, f, l)   gs_rangechk_u((v), (hi), (t), (f), (l))
+)GSRT"
+R"GSRT(#define GS_RANGE_U(v, hi, t, f, l)   gs_rangechk_u((v), (hi), (t), (f), (l))
 #define GS_F2I(d, s, lo, hi, t, f, l) gs_f2ichk((d), (s), (lo), (hi), (t), (f), (l))
 #define GS_F2U(d, s, f, l)            gs_f2uchk((d), (s), (f), (l))
 
@@ -737,14 +779,18 @@ typedef struct {
     uint8_t *top;
 } gs_stack;
 
+/* The program defines what goose.h gives C compiled on its own (gs_stack
+   here, gs_rhdr, gs_rref and gs_bld_append after the generated types), so
+   an --include header including it gets nothing more. */
+#define GOOSE_H 1
+
 /* Starts the runtime on main's thread: the program's arguments, each
    region's usable reservation and trailing guard gap, the address space
    budgeted for regions over the whole program, and the most regions the
    main program and any one worker hold (the compiler's static counts),
    which size their registries and give hardware_threads() its cap. */
 GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
-)GSRT"
-R"GSRT(                        uint64_t budget, int64_t mainregions, int64_t workerregions);
+                        uint64_t budget, int64_t mainregions, int64_t workerregions);
 /* A fresh region, registered to the calling thread program. */
 GS_API uint8_t *gs_reserve_region(void);
 /* The calling thread program's stack use, on stderr (GS_STACK_STATS):
@@ -901,7 +947,8 @@ static int64_t gs_uleb_size(const uint8_t *p) {
     return (int64_t)(q - p) + 1;
 }
 
-/* An inline array's length prefix is one byte unless the array holds 128
+)GSRT"
+R"GSRT(/* An inline array's length prefix is one byte unless the array holds 128
    elements or more, so the two macros below are what the compiler emits for
    it: a load, a test, and the byte. The continuation is a call the caller's
    loop does not contain, and reaching it means there is a large array to
@@ -943,8 +990,7 @@ static int64_t gs_zig_write(uint8_t *p, int64_t v) {
 
 /* ---------------------------------------------------------------------------
    Verified loading (docs/design/serialization.md): what the generated
-)GSRT"
-R"GSRT(   gs_verify_<T> walkers are built from. The bytes are untrusted until the
+   gs_verify_<T> walkers are built from. The bytes are untrusted until the
    walk finishes, so every read here is bounded by the image end and reports
    a malformed encoding instead of running past it. */
 
@@ -1020,7 +1066,6 @@ GS_API void gs_out_flt(double v);
 GS_API void gs_out_f32(float v);
 GS_API void gs_out_bool(int64_t v);
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
-GS_API void gs_out_nl(void);
 
 /* Byte search behind std's find_any and find_pair (runtime_impl.h): the
    first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
@@ -1057,14 +1102,22 @@ static const char *gs_errmsgs[] = {
     "pop_n count negative or beyond the array's length",
 };
 
+/* Ends the process with `code`, its streams flushed: every runtime error
+   and exit() comes here. The first thread to call it ends the process
+   without the C library's teardown, which two threads running at once
+   crash in on Windows, and which nothing of the program needs; any later
+   caller waits for that. Under TinyCC the program runs inside the
+   compiler, where exit() on the main thread returns to it instead. */
+static GS_NORETURN void gs_end(int code);
+
 GS_API GS_NORETURN void gs_panic(const char *msg) {
     fprintf(stderr, "goose runtime error: %s\n", msg);
-    exit(1);
+    gs_end(1);
 }
 
 GS_API GS_NORETURN void gs_abort(int err, const char *file, int line) {
     fprintf(stderr, "goose runtime error: %s (%s:%d)\n", gs_errmsgs[err], file, line);
-    exit(1);
+    gs_end(1);
 }
 
 GS_API GS_NORETURN void gs_abort_msg(const uint8_t *msg, int64_t len, const char *file,
@@ -1072,41 +1125,40 @@ GS_API GS_NORETURN void gs_abort_msg(const uint8_t *msg, int64_t len, const char
     fputs("goose runtime error: ", stderr);
     fwrite(msg, 1, (size_t)len, stderr);
     fprintf(stderr, " (%s:%d)\n", file, line);
-    exit(1);
+    gs_end(1);
 }
 
 GS_API GS_NORETURN void gs_exit(int64_t code) {
-    fflush(stdout);
-    exit((int)code);
+    gs_end((int)code);
 }
 
 GS_API GS_NORETURN void gs_idxfail(int64_t i, int64_t n, const char *file, int line) {
     fprintf(stderr, "goose runtime error: index %lld out of bounds (length %lld) "
             "(%s:%d)\n", (long long)i, (long long)n, file, line);
-    exit(1);
+    gs_end(1);
 }
 
 GS_API GS_NORETURN void gs_divfail(const char *file, int line) {
     fprintf(stderr, "goose runtime error: division by zero (%s:%d)\n", file, line);
-    exit(1);
+    gs_end(1);
 }
 
 GS_API GS_NORETURN void gs_divovf(const char *file, int line) {
     fprintf(stderr, "goose runtime error: integer overflow in division (%s:%d)\n", file, line);
-    exit(1);
+    gs_end(1);
 }
 
 GS_API GS_NORETURN void gs_ovf(int64_t a, const char *op, int64_t b, const char *type,
                                const char *file, int line) {
     fprintf(stderr, "goose runtime error: integer overflow (debug): %lld %s %lld at %s "
             "(%s:%d)\n", (long long)a, op, (long long)b, type, file, line);
-    exit(1);
+    gs_end(1);
 }
 
 GS_API GS_NORETURN void gs_ovf_neg(int64_t a, const char *type, const char *file, int line) {
     fprintf(stderr, "goose runtime error: integer overflow (debug): -(%lld) at %s (%s:%d)\n",
             (long long)a, type, file, line);
-    exit(1);
+    gs_end(1);
 }
 
 /* The message of a failing `as` check, with the source value as text. */
@@ -1114,7 +1166,7 @@ static GS_NORETURN void gs_asfail(const char *why, const char *num, const char *
                                   const char *file, int line) {
     fprintf(stderr, "goose runtime error: as conversion %s (debug): %s as %s (%s:%d)\n",
             why, num, type, file, line);
-    exit(1);
+    gs_end(1);
 }
 
 GS_API GS_NORETURN void gs_asfail_i(const char *why, int64_t v, const char *type,
@@ -1221,7 +1273,8 @@ static size_t gs_overflow_text(char *buf, const gs_region *r) {
     }
     p = gs_text(p, " data stacks grew past the ");
     p = gs_size(p, r->usable);
-    p = gs_text(p, " reserved for it");
+)GSRT"
+R"GSRT(    p = gs_text(p, " reserved for it");
     if (r->usable < gs_region_reserve) {
         p = gs_text(p, " (halved from ");
         p = gs_size(p, gs_region_reserve);
@@ -1233,8 +1286,7 @@ static size_t gs_overflow_text(char *buf, const gs_region *r) {
 }
 
 /* The calling thread program's registry, empty, as it starts. */
-)GSRT"
-R"GSRT(static void gs_regions_begin(int64_t capacity) {
+static void gs_regions_begin(int64_t capacity) {
     gs_regions_cap = (long)capacity;
     gs_regions = (gs_region *)calloc((size_t)(capacity > 0 ? capacity : 1), sizeof(gs_region));
     if (!gs_regions) gs_panic("out of memory allocating the data stack registry");
@@ -1263,6 +1315,8 @@ GS_API void gs_release_regions(void) {
 #define WIN32_LEAN_AND_MEAN
 #define NOMINMAX
 #include <windows.h>
+#include <io.h>
+#include <fcntl.h>
 
 static size_t gs_page_size = 0;
 #define GS_COMMIT_CHUNK (1u << 20)
@@ -1341,6 +1395,15 @@ static uint8_t *gs_os_reserve(size_t usable, size_t size) {
 static void gs_release_region(const gs_region *r) {
     if (!VirtualFree(r->base, 0, MEM_RELEASE))
         gs_panic("cannot release data stack address space");
+}
+
+/* Whether this is the first call of gs_end; and where the later ones wait. */
+static int gs_end_first(void) {
+    static volatile LONG ended;
+    return !InterlockedExchange(&ended, 1);
+}
+static GS_NORETURN void gs_park(void) {
+    for (;;) Sleep(INFINITE);
 }
 
 #else  /* posix */
@@ -1428,7 +1491,8 @@ static void gs_native_stack_init(int primordial) {
         else free(ss.ss_sp);
     }
     #if defined(__APPLE__)
-        hi = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
+)GSRT"
+R"GSRT(        hi = (uintptr_t)pthread_get_stackaddr_np(pthread_self());
         lo = hi - pthread_get_stacksize_np(pthread_self());
     #elif defined(__linux__)
         pthread_attr_t attr;
@@ -1484,6 +1548,11 @@ static uint8_t *gs_os_reserve(size_t usable, size_t size) {
         munmap(p, size);
         gs_panic("cannot protect data stack guard gap");
     }
+    /* Most stacks hold a few bytes, which a transparent huge page at the
+       start would commit 2 MB for. */
+    #ifdef MADV_NOHUGEPAGE
+        madvise(p, usable < (2u << 20) ? usable : (2u << 20), MADV_NOHUGEPAGE);
+    #endif
     return (uint8_t *)p;
 }
 
@@ -1491,7 +1560,29 @@ static void gs_release_region(const gs_region *r) {
     if (munmap(r->base, r->size)) gs_panic("cannot release data stack address space");
 }
 
+/* Whether this is the first call of gs_end; and where the later ones wait.
+   TinyCC names the memory orders in its stdatomic.h alone. */
+#ifndef __ATOMIC_SEQ_CST
+#define __ATOMIC_SEQ_CST 5
 #endif
+static int gs_end_first(void) {
+    static int ended;
+    return !__atomic_fetch_add(&ended, 1, __ATOMIC_SEQ_CST);
+}
+static GS_NORETURN void gs_park(void) {
+    for (;;) pause();
+}
+
+#endif
+
+static GS_NORETURN void gs_end(int code) {
+    if (!gs_end_first()) gs_park();
+    fflush(NULL);
+    #ifdef __TINYC__
+        if (gs_current_thread_id < 0) exit(code);
+    #endif
+    _Exit(code);
+}
 
 /* The smallest a region gets before a refusal is fatal. */
 #define GS_REGION_MIN (1u << 20)
@@ -1620,7 +1711,8 @@ static int64_t gs_sp_find(gs_sppath *p, int64_t idx) {
     gs_spleaf *lf;
     p->h = GS_SPHEAD(p)->height;
     for (l = 0; l < p->h; l++) {
-        gs_spinner *in = GS_SPINNER(p, i);
+)GSRT"
+R"GSRT(        gs_spinner *in = GS_SPINNER(p, i);
         for (k = 1; k < in->n && in->key[k] <= idx; k++) {}
         p->node[l] = i;
         p->pos[l] = k - 1;
@@ -1863,7 +1955,8 @@ static void gs_sp_near(gs_sppath *p, gs_sppath *q, int64_t idx, gs_spnear *s) {
     *q = *p;
     if (gs_sp_nextleaf(q)) {
         s->np = q;
-        s->nl = GS_SPLEAF(q, q->node[q->h]);
+)GSRT"
+R"GSRT(        s->nl = GS_SPLEAF(q, q->node[q->h]);
         s->nk = 0;
     }
 }
@@ -2071,7 +2164,8 @@ static GS_SSSE3 GS_INLINE __m128i gs_bsm_tables(const gs_bsm *m, __m128i x) {
 #define GS_ANY_LOOP(TEST)                                                              \
     int64_t i = 0;                                                                     \
     unsigned k;                                                                        \
-    for (; i + 16 <= n; i += 16) {                                                     \
+)GSRT"
+R"GSRT(    for (; i + 16 <= n; i += 16) {                                                     \
         k = (unsigned)_mm_movemask_epi8(TEST(GS_LOAD(p + i)));                         \
         if (k) return i + gs_ctz32(k);                                                 \
     }                                                                                  \
@@ -2208,6 +2302,13 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     // and interleaves correctly with stderr diagnostics. Revisit if print
     // throughput ever matters.
     setvbuf(stdout, NULL, _IONBF, 0);
+    #ifdef _WIN32
+        // The bytes a program writes are the bytes that come out, '\n' one
+        // byte as on every other platform, rather than a "\r\n" the CRT's
+        // text mode makes of it byte by byte.
+        _setmode(_fileno(stdout), _O_BINARY);
+        _setmode(_fileno(stderr), _O_BINARY);
+    #endif
     gs_regions_init();
     gs_regions_begin(mainregions);
     gs_native_stack_init(1);
@@ -2245,7 +2346,8 @@ GS_API int64_t gs_fmt_u64(uint8_t *dst, uint64_t v) {
         unsigned r = (unsigned)(v % 100);
         v /= 100;
         p -= 2;
-        p[0] = (uint8_t)gs_digit_pairs[2 * r];
+)GSRT"
+R"GSRT(        p[0] = (uint8_t)gs_digit_pairs[2 * r];
         p[1] = (uint8_t)gs_digit_pairs[2 * r + 1];
     }
     if (v >= 10) {
@@ -2462,7 +2564,8 @@ GS_API int64_t gs_fmt_f64(uint8_t *dst, double v) {
         return 4;
     }
     memcpy(&b, &v, sizeof b);
-    return gs_fmt_float(dst, (int)(b >> 63), b & (((uint64_t)1 << 52) - 1),
+)GSRT"
+R"GSRT(    return gs_fmt_float(dst, (int)(b >> 63), b & (((uint64_t)1 << 52) - 1),
                         (int)(b >> 52) & 0x7FF, 53, -1074);
 }
 
@@ -2521,7 +2624,6 @@ GS_API void gs_out_f32(float v) {
 }
 GS_API void gs_out_bool(int64_t v) { fputs(v ? "true" : "false", stdout); }
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { fwrite(p, 1, (size_t)len, stdout); }
-GS_API void gs_out_nl(void) { fputc('\n', stdout); }
 )GSRT"
     ) },
     { "runtime_threads.h", string_view(
@@ -2537,14 +2639,38 @@ R"GSRT(/* Goose runtime — threads and typed queues (§11.2), as runtime.h decl
    data stack budget holds beside the main program (gs_rt_start), so a pool
    sized by it never runs the program out of address space. */
 #ifdef _WIN32
+/* The CPUs the process may run on, which `start /affinity` or a job object
+   can make fewer than the machine has. */
 static int64_t gs_os_threads(void) {
+    DWORD_PTR proc, sys;
+    if (GetProcessAffinityMask(GetCurrentProcess(), &proc, &sys) && proc) {
+        int64_t n = 0;
+        for (; proc; proc &= proc - 1) n++;
+        return n;
+    }
     SYSTEM_INFO si;
     GetSystemInfo(&si);
     return (int64_t)si.dwNumberOfProcessors;
 }
 #else
 #include <unistd.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
+/* The CPUs the process may run on, which taskset or a cgroup cpuset can make
+   fewer than the machine has. Linux asks the system call itself: glibc
+   declares sched_getaffinity and CPU_COUNT only under _GNU_SOURCE. */
 static int64_t gs_os_threads(void) {
+    #ifdef __linux__
+        unsigned long mask[1024 / (8 * sizeof(unsigned long))];
+        long len = syscall(SYS_sched_getaffinity, 0, sizeof mask, mask);
+        if (len > 0) {
+            int64_t n = 0;
+            for (long i = 0; i < len / (long)sizeof(unsigned long); i++)
+                for (unsigned long w = mask[i]; w; w &= w - 1) n++;
+            if (n > 0) return n;
+        }
+    #endif
     long n = sysconf(_SC_NPROCESSORS_ONLN);
     return n > 0 ? (int64_t)n : 1;
 }
@@ -2712,7 +2838,8 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
 
 GS_API void gs_thread_wait(int64_t id, const char *file, int line) {
     gs_mutex_lock(&gs_threads_mutex);
-    if (id < 0 || id >= gs_numthreads) gs_abort(GS_E_THREADID, file, line);
+)GSRT"
+R"GSRT(    if (id < 0 || id >= gs_numthreads) gs_abort(GS_E_THREADID, file, line);
     if (id == gs_current_thread_id) gs_abort(GS_E_THREADSELF, file, line);
     for (;;) {
         gs_thread *t = gs_threads;
@@ -2744,8 +2871,7 @@ GS_API void gs_qinit(gs_queue *q) {
 GS_API void gs_qput(gs_queue *q, const void *data, int64_t size) {
     struct gs_qstate *s = *q;
     gs_qnode *n = (gs_qnode *)malloc(sizeof(gs_qnode) + (size_t)size);
-)GSRT"
-R"GSRT(    if (!n) gs_panic("out of memory in qput");
+    if (!n) gs_panic("out of memory in qput");
     n->next = NULL;
     n->size = size;
     memcpy(n + 1, data, (size_t)size);
@@ -2878,6 +3004,59 @@ GS_LIBM float gs_powf(float x, float y) GS_LIBM2(powf)
 static int64_t gs_find_any(sl_u8 s, const void *set) { return gs_scan_any(s.data, s.len, set); }
 static int64_t gs_find_pair(sl_u8 s, const void *a, int64_t d, const void *b) {
     return gs_scan_pair(s.data, s.len, a, d, b);
+}
+
+/* std's popcount, clz and ctz (64 for zero): the instruction where the C
+   compiler has one, and counting under TinyCC. MSVC's popcount is an
+   instruction past x86-64's baseline, which /arch:AVX and up promise. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
+static int64_t gs_popcount(uint64_t x) {
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
+    return __builtin_popcountll(x);
+#elif defined(_MSC_VER) && defined(_M_X64) && defined(__AVX__)
+    return (int64_t)__popcnt64(x);
+#else
+    int64_t n = 0;
+    while (x) {
+        x &= x - 1;
+        n++;
+    }
+    return n;
+#endif
+}
+static int64_t gs_clz(uint64_t x) {
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
+    return x ? __builtin_clzll(x) : 64;
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+    unsigned long i;
+    return _BitScanReverse64(&i, x) ? 63 - (int64_t)i : 64;
+#else
+    int64_t n = 0;
+    if (!x) return 64;
+    while (!(x >> 63)) {
+        x <<= 1;
+        n++;
+    }
+    return n;
+#endif
+}
+static int64_t gs_ctz(uint64_t x) {
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
+    return x ? __builtin_ctzll(x) : 64;
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+    unsigned long i;
+    return _BitScanForward64(&i, x) ? (int64_t)i : 64;
+#else
+    int64_t n = 0;
+    if (!x) return 64;
+    while (!(x & 1)) {
+        x >>= 1;
+        n++;
+    }
+    return n;
+#endif
 }
 
 GS_API uint8_t gs_os_read_file(sl_u8 path, gs_rref out);
@@ -3508,6 +3687,48 @@ GS_API uint64_t gs_os_random_u64(void) {
     seed = gs_os_mix64(seed ^ (uint64_t)(uintptr_t)&counter);
     return gs_os_mix64(seed ^ ++counter);
 }
+)GSRT"
+    ) },
+    { "goose.h", string_view(
+R"GSRT(/* goose.h -- for C compiled on its own, a package's or a program's sidecar
+   C (docs/packages.md): the Goose values an extern fn hands it that C
+   cannot spell from the layouts alone (spec §7.10, C.2). A `u8[>..]&`
+   parameter arrives as a gs_rref, the resizable's header and its data
+   stack, and C appends to it with gs_bld_append; the stack's top is where
+   the bytes go, and nothing else of it is C's to touch.
+
+   The compiler writes this header beside every native part it builds and
+   puts it on that part's include path, `#include "goose.h"`, and builds
+   the part again whenever the header changes. The generated program
+   defines all of it itself (runtime.h, runtime_ext.h), and GOOSE_H with
+   it, so an --include header may include this one too. */
+
+#ifndef GOOSE_H
+#define GOOSE_H
+
+#include <stdint.h>
+#include <string.h>
+
+typedef struct {
+    uint8_t *top;
+} gs_stack;
+
+#pragma pack(push, 1)
+typedef struct { uint8_t *base; int64_t len; } gs_rhdr;
+typedef struct { gs_rhdr *hdr; gs_stack *stk; } gs_rref;
+#pragma pack(pop)
+
+/* Appends n bytes to the u8[>..] a builder reference points at: the
+   resizable's elements top its stack, so the bytes go at the stack top and
+   the header's count grows. */
+static inline void gs_bld_append(gs_rref b, const void *p, int64_t n) {
+    if (n <= 0) return;
+    memcpy(b.stk->top, p, (size_t)n);
+    b.stk->top += n;
+    b.hdr->len += n;
+}
+
+#endif
 )GSRT"
     ) },
 };

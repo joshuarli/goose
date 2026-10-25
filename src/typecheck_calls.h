@@ -46,10 +46,7 @@ inline Val TypeCheck::CheckCall(Call *c, TypeExpr *expected) {
 }
 
 inline Val TypeCheck::CheckNamedCall(Call *c, Ident *id, TypeExpr *expected) {
-    // A variable in scope hides the functions of its name. A global
-    // one does not: no variable can be called, so the call names the
-    // functions the namespaces declare, which a global variable of the same
-    // name is declared beside.
+    if (!id->expansionerror.empty()) Error(id, string(id->expansionerror));
     if (auto vd = LookupVar(id->name, id->ns); vd && !vd->isglobal)
         Error(c, cat(id->name, " is a variable, not a function"));
     const FnValBind *fb;
@@ -168,6 +165,7 @@ inline FnValBind TypeCheck::LocalFnValue(const vector<SFunction *> &fns, FnSpec 
 }
 
 inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
+    if (d->accessorowner) Error(d, "const for field accessor is not callable");
     auto entryreach = reachable;
     Val ov;
     {
@@ -465,6 +463,7 @@ inline Val TypeCheck::ResolveCall(Call *c, vector<SFunction *> &cands, FnSpec *e
     // Arguments the re-check rebound by reference replace the originals.
     c->SetArgNodes(argnodes);
     c->spec = spec;
+    CheckfreeCallee(c, spec->sf);
     reachable = reachable && argsreach;
     ApplyCalleeRebinds(spec);
     if (auto rec = RecordOf(spec); rec && !rec->mayreturn) reachable = false;
@@ -961,6 +960,10 @@ inline bool TypeCheck::HasGenerics(TypeExpr *t) {
         case TY_SLICE:  return HasGenerics(t->sub);
         case TY_REF:    return HasGenerics(t->ref->sub);
         case TY_VARIANT: return HasGenerics(t->var->adt);
+        case TY_FN:
+            for (auto a : t->fn->args) if (HasGenerics(a)) return true;
+            for (auto r : t->fn->rets) if (HasGenerics(r)) return true;
+            return false;
         default: return false;
     }
 }
@@ -1197,6 +1200,7 @@ inline Val TypeCheck::TryDispatch(Call *c, vector<SFunction *> &cands, FnSpec *e
     }
     // Like an ordinary call's, the cases' rebinds follow the argument checks.
     for (auto sp : c->dispatch) ApplyCalleeRebinds(sp);
+    for (auto sp : c->dispatch) CheckfreeCallee(c, sp->sf);
     // The cases are alternatives of one call, like a match's arms: the result
     // is only as long-lived, exact and writable as every case's result. A case
     // checked without recording a root for a result only returns null there or
@@ -2358,7 +2362,8 @@ inline void TypeCheck::ValidateNeeds(FnSpec *spec, Node *callnode) {
         if (frames[found].spec != t)
             Error(callnode, "recursive call changes the enclosing specialization of a "
                             "long-distance return");
-        for (auto i = found + 1; i < (int)frames.size(); i++) AddNeed(frames[i].spec, t);
+        for (auto i = found + 1; i < (int)frames.size(); i++)
+            if (frames[i].spec != t) AddNeed(frames[i].spec, t);
     }
 }
 
@@ -2381,9 +2386,25 @@ inline void TypeCheck::AddNeed(FnSpec *s, FnSpec *t) {
     }
 }
 
-// A fixed-size value C takes by value: a scalar, bool, or a flat
-// fixed struct or array (packed, no references).
+inline SFunction *TypeCheck::TextFn() {
+    for (auto i = frames.size(); i-- > 0;)
+        if (frames[i].sf) return frames[i].sf;
+    return nullptr;
+}
+
+inline void TypeCheck::CheckfreeCallee(Node *at, SFunction *callee) {
+    auto t = TextFn();
+    if (!t || !t->checkfree || !callee || callee->checkfree || callee->isextern) return;
+    Error(at, cat("checkfree fn ", t->qname, " calls ", callee->qname, ", which is not "
+                  "checkfree: the bounds checks left in it would run inside ", t->qname,
+                  " (§7.14)"));
+}
+
 inline bool TypeCheck::ExternValueOk(TypeExpr *t, string &why) {
+    if (HoldsIndexT(t)) {
+        why = "C code is not checked against the array an index type names (§3.11)";
+        return false;
+    }
     switch (t->kind) {
         case TY_INT:
             if (t->intstorage == IS_VARINT) { why = "varints have no C form"; return false; }
@@ -2637,7 +2658,16 @@ inline bool TypeCheck::SameRecord(const FnRecord &a, const FnRecord &b, const Fn
     }
     if (a.shrinkexternals != b.shrinkexternals || a.shrinkparams != b.shrinkparams)
         return why("shrinks");
-    if (a.growexternals != b.growexternals || a.growparams != b.growparams)
+    auto samegrows = [&](const auto &x, const auto &y) {
+        if (x.size() != y.size()) return false;
+        for (auto i = x.begin(), j = y.begin(); i != x.end(); ++i, ++j) {
+            if (i->first != j->first || i->second.size() != j->second.size()) return false;
+            for (size_t k = 0; k < i->second.size(); k++)
+                if (!sametype(i->second[k], j->second[k])) return false;
+        }
+        return true;
+    };
+    if (!samegrows(a.growexternals, b.growexternals) || !samegrows(a.growparams, b.growparams))
         return why("growths");
     if (a.writeexternals != b.writeexternals || a.writeparams != b.writeparams)
         return why("writable contents");
@@ -2733,6 +2763,7 @@ inline void TypeCheck::CheckSpecBodyOnce(FnSpec *spec, vector<Val> *argvals, Lin
     f.scopebase = (int)scopes.size();
     f.varbase = (int)vars.size();
     f.callline = callline;
+    f.expansiontrace = ActiveExpansionTrace();
     f.exits = &exits;
     frames.push_back(f);
     auto fi = (int)frames.size() - 1;
@@ -3294,7 +3325,8 @@ inline void TypeCheck::CheckReturn(Return *r) {
     auto tspec = frames[tf].spec;
     r->target = frames[tf].sf;
     r->targetspec = tspec;
-    for (auto i = tf + 1; i < (int)frames.size(); i++) AddNeed(frames[i].spec, tspec);
+    for (auto i = tf + 1; i < (int)frames.size(); i++)
+        if (frames[i].spec != tspec) AddNeed(frames[i].spec, tspec);
     // Values.
     vector<Val> vals;
     auto expectone = [&](size_t i) -> TypeExpr * {
@@ -3473,14 +3505,24 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
     auto env = ast.NewFunValEnv();
     env->sf = named ? named->sf : nullptr;
     env->lexparent = fb.env;
+    // A block runs inside the function calling it, as text of the function
+    // it was written in: a checkfree caller takes only one written in a
+    // checkfree function (§7.14).
+    auto writer = named ? named->sf : CurRealFrame().sf;
+    if (auto t = TextFn(); t && t != writer && t->checkfree && !(writer && writer->checkfree))
+        Error(c, cat("checkfree fn ", t->qname, " calls a block written in ",
+                     writer ? cat("fn ", writer->qname) : string("a global initializer"),
+                     ", which is not checkfree: the bounds checks left in it would run "
+                     "inside ", t->qname, " (§7.14)"));
     Frame f;
-    f.sf = named ? named->sf : CurRealFrame().sf;
+    f.sf = writer;
     f.spec = CurRealFrame().spec;
     f.lexspec = env;
     f.lexframe = fb.env ? LexFrame(fb.env) : 0;
     f.scopebase = (int)scopes.size();
     f.varbase = (int)vars.size();
     f.callline = c->line;
+    f.expansiontrace = c->expansiontrace;
     f.isfunval = true;
     f.bodyidx = (int)outerbodies.size();
     frames.push_back(f);
@@ -3492,6 +3534,8 @@ inline Val TypeCheck::CheckFunValCall(Call *c, const FnValBind &fb, TypeExpr *ex
         if (IsRefOrSlice(ptypes[i])) {
             BindRefProvenance(vd, argvals[i]);
             if (ptypes[i]->cq) vd->ref.writable = false;
+        } else if (HoldsPlainRef(ptypes[i])) {
+            NoteHolderBinding(vd, argvals[i], c->args[i]);
         }
         // A literal parameter handed to the block stays one inside it.
         if (argvals[i].unsized && !params[i].type && !params[i].isvar) {

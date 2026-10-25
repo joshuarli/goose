@@ -33,7 +33,7 @@ private def receiver : Func :=
   { empty with
     name := "receiver"
     params := [refSliceTy]
-    roots := { params := #[(0, [.param 0])], contents := #[(0, [.param 0])] }
+    roots := { params := #[(0, [.param 0])], contents := #[(0, [.global 0])] }
     blocks := #[⟨[(0, .data refSliceTy)], [.term (.ret [] none)]⟩] }
 
 private def forwarder : Func :=
@@ -60,10 +60,12 @@ private def omitted (m : Module) : Bool := match validate m with
 
 #guard accepted mod
 #guard omitted ({ mod with funcs := mod.funcs.set! 2 { receiver with roots := { params := #[(0, [.param 0])], contents := #[(0, [])] } } })
-#guard omitted ({ mod with funcs := mod.funcs.set! 2 { receiver with roots := { params := #[(0, [])], contents := #[(0, [.param 0])] } } })
+#guard omitted ({ mod with funcs := mod.funcs.set! 2 { receiver with roots := { params := #[(0, [])], contents := #[(0, [.global 0])] } } })
+#guard omitted ({ mod with funcs := mod.funcs.set! 2 { receiver with roots := { params := #[(0, [.param 0])], contents := #[(0, [.param 0])] } } })
 
 private def provenance : Prov := ⟨#[], #[[.param 0]]⟩
-#guard mapContentRoots forwarder provenance [0] [.param 0] == [.global 0]
+#guard mapContentRoots forwarder provenance [0] [.param 0] == [.param 0]
+#guard argumentContents forwarder provenance 0 == [.global 0]
 #guard mapContentRoots forwarder provenance [0] [.global 0] == [.global 0]
 #guard mapContentRoots { forwarder with params := [.ref .mutable backingTy] }
   provenance [0] [.param 0] == [.param 0]
@@ -80,11 +82,18 @@ private def localSliceCaller : Func :=
       .eff (.enter 0), .def 1 (.snapshot .borrowed 0),
       .def 2 (.viewSlice .mutable 1 .omitted .omitted (some 0)),
       .eff (.slotInit 1 2 (some 0)), .def 3 (.slotAddr 1),
-      .def 4 (.call 2 [3] (some 0)), .eff (.leave 0), .term (.ret [] none)]⟩] }
+      .def 4 (.call 2 [3, 0] (some 0)), .eff (.leave 0), .term (.ret [] none)]⟩] }
 
-private def localSliceModule : Module := { mod with funcs := #[empty, localSliceCaller, receiver] }
+private def localReceiver : Func :=
+  { receiver with
+    params := [refSliceTy, .ref .mutable backingTy]
+    roots := { params := #[(0, [.param 0]), (1, [.param 1])], contents := #[(0, [.param 1])] }
+    blocks := #[⟨[(0, .data refSliceTy), (1, .data (.ref .mutable backingTy))], [.term (.ret [] none)]⟩] }
+
+private def localSliceModule : Module := { mod with funcs := #[empty, localSliceCaller, localReceiver] }
 #guard accepted localSliceModule
-#guard omitted ({ localSliceModule with funcs := localSliceModule.funcs.set! 2 { receiver with roots := { params := #[(0, [.param 0])], contents := #[(0, [])] } } })
+#guard omitted ({ localSliceModule with funcs := localSliceModule.funcs.set! 2 { localReceiver with roots := { localReceiver.roots with contents := #[(0, [])] } } })
+#guard omitted ({ localSliceModule with funcs := localSliceModule.funcs.set! 2 { localReceiver with roots := { localReceiver.roots with contents := #[(0, [.param 0])] } } })
 
 private def globalSliceCaller : Func :=
   { empty with
