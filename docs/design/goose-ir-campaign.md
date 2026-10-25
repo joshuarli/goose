@@ -54,6 +54,13 @@ The binary grows by 264 bytes, and peak process RSS remains below 1.73 GB.
 Candidate report overhead is 12.7%, so the proposed 10% cap remains unmet.
 This experiment does not replace production-configuration qualification.
 
+Function-value key numbering now shares that pointer-set implementation with both report walks.
+The same five-sample protocol compares the retained node-set compiler with this additional change:
+report-on CPU medians are 5.834 and 5.655 seconds, with ranges 5.816–5.972 and 5.553–5.769 seconds.
+Report-off ranges overlap, exact non-timing outputs agree, and the binary shrinks by 16 bytes.
+Measured report overhead remains 11.5%, above the proposed cap.
+A separate single-varying-dimension fast path was discarded: its report-on median rose by 0.3% within overlapping ranges.
+
 ## Feature-completion priority (2026-10-25)
 
 The owner redirected the campaign toward feature completeness using the test-pyramid philosophy.
