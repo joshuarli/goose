@@ -4,6 +4,31 @@
 **Branch:** `goose-ir`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
+## Unattended completion (2026-10-25)
+
+The owner requested continued execution until campaign completion and invoked AFK.
+Local checkpoint `1197e996` contains limited-array capture support and its focused C++ and runtime checks.
+Its 310-module Lean closure now passes under pinned 4.35.0 after detecting an earlier 4.34.1 PATH mismatch.
+All current lanes use the pinned 4.35.0 explicitly.
+
+Four isolated lanes own source-demand correspondence (`campaign/afk-demand`),
+construction backing and ownership (`campaign/afk-construction`), exit storage observations (`campaign/afk-exit`), and accepted runtime root correspondence (`campaign/afk-construct-roots`).
+Their worktrees are `.work/wt/afk-demand`, `.work/wt/afk-construction`, `.work/wt/afk-exit`, and `.work/wt/afk-construct-roots`.
+The integrator owns verification and profile completeness.
+The next proof milestone is an accepted-execution invariant, not another endpoint-only wrapper.
+The current runtime protocol theorem preserves protocol metadata but does not establish object backing or byte separation.
+Construction and exit proofs must derive those properties from accepted reachable execution.
+
+The semantic runner now checks high GIR validation, execution, re-encoding and Core agreement for pilot and shrink as well as construction.
+Three hostile GIR-oracle controls fail before the repair and pass afterward; 30 classified self-test cases remain correct.
+Four selected pilot and shrink sources agree through the expanded runner, with the rebindable-reference control still unsupported.
+The closure helper now rejects a mismatched Lean release before compiling any module; its 14 tests pass.
+
+Integrated proof components preserve successful packed scans and fixed-value reads across protected byte prefixes.
+Accepted validation supplies the required struct field bounds.
+Construction references now have explicit source-root interpretations, checked argument/result substitution, and local binding preservation.
+These components pass focused 4.35.0 closures but do not close the universal construction, exit or demand invariants.
+
 ## Feature-completion priority (2026-10-25)
 
 The owner redirected the campaign toward feature completeness using the test-pyramid philosophy.
@@ -24,7 +49,7 @@ The two limited-capture cases match exact legacy and native GIR output.
 Core and GIR evaluation agree in both numeric profiles through the interpreted semantic commands.
 The C++ GIR verifier suite covers explicit limited-owner borrows and rejects raw binding addresses and readonly borrows.
 The rebindable-reference capture control retains its `captured-reference` rejection.
-The changed Lean modules and their 310-module dependency closure pass, including the limited-borrow guards and permission proofs.
+The limited-borrow guards and permission proofs pass their 310-module dependency closure under pinned Lean 4.35.0.
 These checks do not qualify the whole project or its performance gates.
 
 [`accepted_callee_parameter_prologue`](../../semantics/Goose/Lower/DemandParameterPrologue.lean)
