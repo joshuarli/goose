@@ -430,7 +430,7 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
       match producer with
       | .call .. | .values _ => pure ()
       | _ => fail .type "receive requires call or values producer"
-      let results ← typeExpr fuel { env with use := .result } producer
+      let results ← typeExpr fuel { env with use := .result, resultRequests := types.map (fun ty => if ty.nonfixed then .value else .register) } producer
       require (results.length == types.length && (results.zip types).all (fun (a,b) => a.passesTo b))
         .result "receive result type mismatch"
       pure { env with visible := ids ++ env.visible }

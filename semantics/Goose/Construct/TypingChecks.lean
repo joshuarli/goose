@@ -147,3 +147,43 @@ private def valueBlock (statements : List Stmt) (tail : Option Expr := none) : E
   | _ => false
 
 end Goose.Construct.TypingChecks
+
+namespace Goose.Construct.TypingChecks
+
+private def receiverTypingEnv (types : List Ty) (requests : List Goose.Core.Request) : TypingEnv :=
+  let callee := { implementation with
+    params := #[], vars := #[], results := ((types.zip requests).map fun (ty,request) => ⟨ty,request,none⟩).toArray }
+  { env with
+    module := { module with impls := #[callee] }, variables := (types.map fun ty => ⟨"received",ty,.immutable,0,0⟩).toArray, visible := [], request := .elementRun, resultRequests := [.register] }
+
+private def receiveCallAccepts (types : List Ty) (requests : List Goose.Core.Request) : Bool :=
+  match (typeStatement 256 (receiverTypingEnv types requests)
+      (.receive [0,1] (.call 0 [] 0) 0)).run 0 with
+  | .ok (next,2) => next.visible == [0,1]
+  | _ => false
+
+#guard receiveCallAccepts [.int .i64,.bool] [.register,.register]
+#guard receiveCallAccepts [.varr (.int .u8),.ref .readOnly (.grow (.int .u8))] [.value,.register]
+
+#guard match (typeStatement 256
+    (receiverTypingEnv [.varr (.int .u8),.bool] [.elementRun,.register])
+    (.receive [0,1] (.call 0 [] 0) 0)).run 0 with
+  | .error rejection => rejection.rule == .call
+  | _ => false
+
+private def receivedValuesEnv : TypingEnv :=
+  let callee := { implementation with params := #[], vars := #[], results := #[⟨.varr (.int .u8),.value,none⟩] }
+  { (receiverTypingEnv [.varr (.int .u8),.bool] [.value,.register]) with
+    module := { module with impls := #[callee] } }
+
+#guard match (typeStatement 256 receivedValuesEnv
+    (.receive [0,1] (.values [.call 0 [] 0,.bool true]) 0)).run 0 with
+  | .ok (next,2) => next.visible == [0,1]
+  | _ => false
+
+#guard match (typeStatement 256 receivedValuesEnv
+    (.receive [0,1] (.values [.call 0 [] 0,.lit .i64 1]) 0)).run 0 with
+  | .error rejection => rejection.rule == .result
+  | _ => false
+
+end Goose.Construct.TypingChecks
