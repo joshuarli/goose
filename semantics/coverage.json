@@ -220,7 +220,7 @@
   "id": "TH-LOWER-03",
   "theorem": "Goose.Lower.Validation.lower_validate_of_accepted, Goose.Lower.typedModule_simulation, Goose.Lower.acceptedModule_reflection, Goose.Lower.acceptedModule_never_faults",
   "statement": "The core-shrink target requires validation preservation, transfer of Core's demand and retained-operand invariant to lowered GIR, done-run preservation, and fault freedom for every fuel-indexed run of a validated lowering.",
-  "evidence": "TH-LOWER-VALIDATION-STAGES records full actual GIR validation. TH-LOWER-01-REST and TH-LOWER-02 retain the runtime, reflection, fault and converse-fuel results.",
+  "evidence": "TH-LOWER-VALIDATION-STAGES records full actual GIR validation. TH-LOWER-01-REST and TH-LOWER-02 retain the runtime, reflection, fault and converse-fuel results. Checked actual-fuel literal-assignment prefix transfer is recorded separately; it does not close the general invariant.",
   "limits": "Full Lean GIR validation and runtime preservation are proved from Core acceptance. Explicit transfer of the demanded-variable, retained-operand and iteration-run invariant to GIR execution remains open. These are Lean model results, with no production C++ or core-construction conformance claim.",
   "reviewer": "Validation and runtime endpoints require only Core acceptance. Explicit invariant transfer remains open."
  },
@@ -317,14 +317,14 @@
  },
  {
   "feature": "TH-CERT-01",
-  "label": "deferred",
+  "label": "model-proved",
   "id": "TH-CERT-01",
-  "theorem": "Goose.Proofs.Bounds.checkEvidence_sound",
-  "statement": "If the executable evidence checker accepts a function, its certificate has one well-typed duplicate-free fact set per block, an empty entry set, every block transfer succeeds, and every claimed successor fact is derived on each checked predecessor edge.",
-  "differs_from_target": "This is the structural half of TH-CERT-01. FunctionEvidenceValid records the checker derivation but does not state that a derived fact holds in every runtime frame that reaches the corresponding block, so it does not supply TH-BCE-01's semantic premise.",
-  "evidence": "Goose/Proofs/Bounds.lean; Goose/Proofs/Bounds.checkEvidence_sound is in the axiom audit. The accepted evidence fixture and four adversarial GIR-V080 fixtures exercise missing, forged, call-killed and scope-killed evidence.",
-  "limits": "Parked after three proof attempts. Completing the target requires a reachable-frame invariant and induction through every instruction, CFG edge, call, join and loop. The executable checker and negative validation matrix remain useful without a theorem-gate claim.",
-  "reviewer": "pending: the target theorem is incomplete"
+  "theorem": "Goose.Proofs.Bounds.checkEvidence_sound; Goose.Proofs.Bounds.reachable_facts",
+  "statement": "For accepted GIR validation, the executable checker derives structurally valid certificates and every certificate fact holds at every actually reachable program point, including entries, calls, instructions and CFG edges.",
+  "differs_from_target": "No semantic fact-validity premise remains. Actual reachability and accepted GIR validation derive PointFactsHold.",
+  "evidence": "Goose/Proofs/Bounds.lean; Goose/Evidence/Reachable.lean. Both theorems appear in the 171-claim executable audit. test/gir/bce/check.sh passes on the recovered compiler: four positive source cases, three conservative kill controls, and forged certificate rejections.",
+  "limits": "The result concerns Lean GIR definitions. The C++ proposer is independently checked on emitted instances. C++ translation correctness and native performance are separate obligations.",
+  "reviewer": "Source and current audit checked on resume; final adversarial review remains pending."
  },
  {
   "feature": "TH-BCE-01",
@@ -418,5 +418,35 @@
   "limits": "Byte splicing does not prove the extracted suffix is a completed logical value or that protocol ownership preserves its interval. Full TH-CON-01 and TH-EXIT-01 remain open pending evaluator and protocol proofs.",
   "reviewer": "Independent six-question review through ac7f9e64 and defect-fix review through08c39176. Reachable protected-descendant and effect omissions were reproduced and fixed before integration; no new P1/P2 in bounded follow-up.",
   "evidence": "Goose/Proofs/{Construct,Exit}.lean; Goose/Construct guard modules pass on merged source; registered axiom audit."
+ },
+ {
+  "feature": "Accepted construction value representation fragment",
+  "label": "model-proved",
+  "theorem": "Goose.Construct.validated_implementation_typing; Goose.Proofs.ConstructionRepresentation.fixedInitializer_evaluation; Goose.Proofs.ConstructionRepresentation.accepted_integerArray_callValue",
+  "statement": "Validation derives implementation typing. Accepted zero-parameter integer-array literal calls return a value with the fixed logical shape and preserve construction state.",
+  "assumptions": "Explicit fixed-initializer fragment, register result, and call depth below maxCallDepth; theorem statements retain their fuel bounds.",
+  "limits": "ValueRepresentation establishes logical type and shape, not reference liveness, storage bounds, integer range, alias safety, or the seven universal TH-CON-01 clauses.",
+  "reviewer": "Independent source and completion reviews found no hidden whole-execution premise; reviewed at a289f963.",
+  "evidence": "Full 2643-module source qualification, matching native/interpreted 183-claim audits, and five independent kernels at a289f963."
+ },
+ {
+  "feature": "Normalized exit-channel completion",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ExitExecution.LandedResultChannels.finishChannels; Goose.Proofs.ExitExecution.finishActivation_catches_landed; Goose.Proofs.ExitExecutionLandingChecks.nestedNamedExit_execution; Goose.Proofs.ExitExecutionLandingChecks.nestedNamedExit_outside_storage",
+  "statement": "Already-landed result channels finish without an error, preserve construction state, and remove the caught activation. A concrete nested mixed-result exit preserves outside storage.",
+  "assumptions": "Channels already satisfy LandedResultChannels. Concrete execution checks use their specified programs, fuels and numeric profiles.",
+  "limits": "Does not derive landing geometry or relocation safety from arbitrary accepted execution; full TH-EXIT-01 remains open.",
+  "reviewer": "Independent source and completion reviews at a289f963.",
+  "evidence": "Full source qualification, 183-claim audit and five independent kernels at a289f963."
+ },
+ {
+  "feature": "Actual-fuel demand transfer for literal assignments",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_literal_assignments_carried_prefix_invariant; Goose.Lower.DemandStoppedTraversal.runAt",
+  "statement": "Finite literal-assignment instruction prefixes retain their incoming immutable operands and run samples, with an ordered map from actual target program points to source phases. Traces use actual decreasing evaluator fuel and include stopping executions.",
+  "assumptions": "Explicit literal-assignment syntax fragment, accepted source contexts, canonical lowering/frame relation, and stated retained-input map.",
+  "limits": "No general expression, call, control-flow, run-creation or whole-module demand transfer. TH-LOWER-03 remains deferred.",
+  "reviewer": "Independent review identified and corrected the former uniform-fuel contract; final statements reviewed at a289f963.",
+  "evidence": "Full source qualification, matching native/interpreted 183-claim audit and five independent kernels at a289f963."
  }
 ]

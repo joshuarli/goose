@@ -4,6 +4,53 @@
 **Branch:** `goose-ir`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
+## Completion checkpoint (2026-10-25)
+
+The owner requested completion after recovery. The accepted starting revision is `27feef55`.
+Local commits remain authorized by the campaign workflow. Pushes remain unauthorized.
+
+Four isolated lanes address construction representation and ownership, exit landing,
+source-demand transfer, and the independent Lean audit. Existing endpoint proofs stay intact.
+The demand proof uses a separate finite-prefix relation to label actual GIR instructions
+with source occurrences and retained slot or SSA values. Construction needs an accepted
+runtime representation invariant because its executable syntax is distinct from Core.
+These new proof contracts must derive initial validity from validation and preserve it
+through actual execution. They cannot assume the whole-run claim they aim to prove.
+
+The production BCE qualification passes again with the recovered compiler and semantic tool.
+Four sources emit proven indexes. Three kill controls keep checked indexes.
+Forged certificates fail independent validation. `TH-CERT-01` now records both structural
+checker soundness and the already-proved reachable-fact theorem.
+The units-built linter passes full linter parity and the existing linter suite.
+The native reuse matrix passes E00–E16, including interrupted-build recovery;
+60 randomized edit steps at seed 1 pass with reuse verification.
+
+The logical checkpoint `a289f963` passes full qualification of 2,643 source modules.
+Its fresh native and interpreted audits agree byte-for-byte on 183 unique claims,
+using only `Classical.choice`, `Quot.sound`, and `propext`.
+All five bundled independent kernels accept both the theorem export and `Main.main`.
+The theorem roots have 39,978 dependencies; the runtime root has 16,528.
+Their union of 43,870 dependencies is covered by 44,368 exported constants.
+The collector checks actual transitive logical dependencies, including opaque bodies
+and inductive recursors, rather than every unused constant imported from Lean.
+This does not verify native code generation, external implementations, or initializers.
+The largest kernel check uses 4,386,066,432 bytes RSS, below the 8 GiB lane budget.
+
+The checked components cover fixed integer-array initializer calls, completion of
+already-landed exit channels, and actual-fuel literal-assignment prefixes carrying
+incoming operands and runs. Their assumptions and limits are in `semantics/coverage.json`.
+They do not establish universal construction ownership or relocation, arbitrary exit
+landing geometry, or general demand transfer through calls and control flow.
+`TH-CON-01`, `TH-EXIT-01`, and the explicit invariant part of `TH-LOWER-03` remain open.
+
+At this checkpoint the full baseline passes; the legacy units corpus passes 704
+programs with zero failures and 50 native-layer or parse-only skips.
+Fresh native semantic conformance records 105 pilot agreements, two explicit unsupported
+features, three construction agreements, and all nine source trace fixtures in both
+numeric profiles and at native O0/O2. The full GIR units corpus exposed additional
+production exporter, lowering and cross-unit runtime defects; their repair and rerun
+remain required before close.
+
 ## Recovery checkpoint (2026-10-25)
 
 The former `goose-ir` tip `d440b9ab` predates the October 18 integration work.
