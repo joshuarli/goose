@@ -1,5 +1,5 @@
 import Goose.Proofs.ConstructionRootedBacking
-import Goose.Proofs.ExitExecutionStoragePrefixReads
+import Goose.Proofs.ExitExecutionStoredPrefixReads
 
 set_option Elab.async false
 
@@ -88,40 +88,6 @@ theorem RootedBackingState.observations (layout : LayoutEnv) (state : ExecutionS
   exact ((valid.values root retained value present).occurrence_backing layout state value stored occurrence).observation
     layout state stored
 
-private theorem sampledStored_prefixFrame (before after : ExecutionState) (limit : Nat → Nat)
-    (stored : StoredValue) (frame : StoredBackingPrefixFrame before after limit stored)
-    (original current : ReceivingStorage)
-    (originalFound : before.construction.storage[stored.storage]? = some original)
-    (currentFound : after.construction.storage[stored.storage]? = some current)
-    (published : current.publishedCount = original.publishedCount)
-    (run : SampledRun)
-    (sampled : sampledStored stored before = .ok (original.bytes, run) before) :
-    sampledStored stored after = .ok (current.bytes, run) after := by
-  cases named : stored.destination with
-  | none =>
-      simp only [sampledStored, getStorage, EvalM.get, bind, originalFound, pure, named] at sampled
-      cases type : elementType stored.ty with
-      | none => simp only [type, Goose.Construct.fault, EvalM.stop] at sampled; cases sampled
-      | some element =>
-          simp only [type, ExecutionStep.ok.injEq, Prod.mk.injEq] at sampled
-          have same := sampled.1.2
-          rw [← same]
-          simp only [sampledStored, getStorage, EvalM.get, bind, currentFound, pure, named, type]
-  | some id =>
-      have rows := frame.destination id named
-      cases found : before.construction.destinations[id]? with
-      | none =>
-          simp only [sampledStored, getStorage, getDestination, EvalM.get, bind, originalFound,
-            pure, named, found, Goose.Construct.fault, EvalM.stop] at sampled
-          cases sampled
-      | some destination =>
-          rw [found] at rows
-          cases progress : destination.progress <;>
-            cases type : elementType stored.ty <;>
-              simp_all only [sampledStored, getStorage, getDestination, EvalM.get, bind,
-                pure, progressCount, Goose.Construct.fault, EvalM.stop,
-                ExecutionStep.ok.injEq, Prod.mk.injEq, true_and, and_true, reduceCtorEq]
-
 theorem StoredBackingObservation.prefix_frame (layout : LayoutEnv) (before after : ExecutionState)
     (limit : Nat → Nat) (stored : StoredValue)
     (observation : StoredBackingObservation layout before limit stored)
@@ -132,8 +98,8 @@ theorem StoredBackingObservation.prefix_frame (layout : LayoutEnv) (before after
   have same := Option.some.inj (originalFound.symm.trans present)
   subst original
   refine ⟨current, run, fuel, finish, currentFound,
-    sampledStored_prefixFrame before after limit stored frame storage current present currentFound
-      published run sampled, bytes.elementsEnd fuel layout run.element
+    Goose.Proofs.ExitExecution.sampledStored_storage_transport stored before after storage current run
+      present currentFound published frame.destination sampled, bytes.elementsEnd fuel layout run.element
         (storedWrittenRun stored run).count run.byteStart finish measured upper, lower, upper⟩
 
 theorem StoredValueBacking.prefix_frame (layout : LayoutEnv) (before after : ExecutionState)
