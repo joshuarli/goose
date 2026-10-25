@@ -68,6 +68,7 @@ inductive CompletedCarrierLandingFrame (before : ExecutionState) (incoming sourc
       (stored : before.construction.storage[replacement.storage]? = some storage)
       (sameStorage : anchor.storage = replacement.storage)
       (ordered : anchor.capability.start ≤ replacement.capability.start)
+      (inside : replacement.capability.start ≤ storage.bytes.size)
       (parentBound : ∀ parentId parent, parentUpdate = some (parentId, parent) → parentId < before.construction.destinations.size)
       (parentDifferent : ∀ parentId parent, parentUpdate = some (parentId, parent) → parentId ≠ source)
       (parentFootprint : ∀ parentId parent, parentUpdate = some (parentId, parent) →
@@ -158,7 +159,7 @@ theorem landCarriersInto_construct_completed (layout : LayoutEnv) (origin : Orig
     refine ⟨after, ?_, sourceBacked, ⟨postReady⟩, channelFrame.2.2,
       .commit ready.receiving count replacement ready.receivingDestination storage parentUpdate chain ready.resolved
         present built ready.receivingPresent storedLookup (congrArg DestinationBacking.writeStorage sameBacking)
-        ordered parentBound parentDifferent parentFootprint⟩
+        ordered startBound parentBound parentDifferent parentFootprint⟩
     have different : (ready.receiving != source) = true := by simp [current]
     simp only [landCarriersInto, List.length_cons, List.length_nil, bne_self_eq_false,
       Bool.false_eq_true, ↓reduceIte, List.zip_cons_cons, List.zip_nil_left, List.forIn_cons,
