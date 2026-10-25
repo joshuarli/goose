@@ -1913,3 +1913,74 @@ private def invokePublishesLocalRef : Module :=
   | _ => false)
 
 end Goose.Construct.GIR.Checks
+
+namespace Goose.Construct.GIR.Checks
+
+private def growWholeReplacement : Module :=
+  let ty := Ty.grow (.int .u8)
+  moduleOf #[function "entry" #[⟨[],[
+    .eff (.enter 0), .def 0 (.destOpen (.slot 0) ty .value none (some 0)),
+    .eff (.destBytes 0 [65] (some 0)), .def 1 (.destFinish 0 (some 0)),
+    .eff (.destPublish 1 (some 0)), .def 2 (.slotAddr 0), .eff (.clear 2 (some 0)),
+    .def 3 (.destOpen (.whole 2) ty .value none (some 0)),
+    .eff (.destBytes 3 [66] (some 0)), .def 4 (.destFinish 3 (some 0)),
+    .eff (.destPublish 4 (some 0)), .def 5 (.slotAddr 0), .def 6 (.snapshot .owner 5),
+    .eff (.print [.val 6] (some 0)), .eff (.leave 0), .term (.ret [] (some 0))]⟩]
+    #[⟨ty,.mutable,0,0⟩]]
+
+#guard (Validate.validate growWholeReplacement).isOk
+#guard observation growWholeReplacement == some ([66,10],
+  [.begin 0,.write 0 0,.publish 0,.begin 1,.write 1 0,.publish 1])
+#guard roundTrip growWholeReplacement
+
+private def growPop : Module :=
+  { growWholeReplacement with funcs := growWholeReplacement.funcs.map fun f =>
+    { f with blocks := f.blocks.map fun block =>
+      { block with insts := block.insts.map fun
+        | .eff (.clear reference origin) => .def 7 (.pop reference origin)
+        | inst => inst } } }
+
+#guard (match Validate.validate growPop with | .error error => error.code == .v010 | _ => false)
+
+private def refreshedArgument : Module :=
+  let entry := function "entry" #[⟨[],[
+    .def 0 (.destOpen (.arg 1 0) byteTy .value none (some 0)),
+    .def 1 (.receivingOpen 0), .def 2 (.destRenew 1),
+    .eff (.destBytes 2 [65,255] (some 0)), .def 3 (.destRefresh 1 2),
+    .def 4 (.destFinish 3 (some 0)), .eff (.receivingDrop 1),
+    .def 5 (.destArg 4 (some 0)), .def 6 (.call 1 [5] (some 0)),
+    .term (.ret [] (some 0))]⟩]
+  moduleOf #[entry,ownedArgument.funcs[1]]
+
+#guard (Validate.validate refreshedArgument).isOk
+#guard observation refreshedArgument == some ([65,255,10],
+  [.begin 0,.write 0 0,.write 0 1,.publish 0])
+#guard roundTrip refreshedArgument
+
+private def wrongRefreshedArgumentRegion : Module :=
+  let entry := refreshedArgument.funcs[0]
+  let entry := { entry with slots := #[⟨byteTy,.mutable,0,0⟩], blocks := entry.blocks.map fun block =>
+    { block with insts := [.eff (.enter 0)] ++ block.insts.flatMap fun
+      | .def id (.destOpen _ ty request count origin) => [.def id (.destOpen (.slot 0) ty request count origin)]
+      | .term term => [.eff (.leave 0),.term term]
+      | inst => [inst] } }
+  { refreshedArgument with funcs := #[entry,refreshedArgument.funcs[1]] }
+
+#guard (match Validate.validate wrongRefreshedArgumentRegion with
+  | .error error => error.code == .v060 && error.message == "dest_arg completion has no dr_arg provenance"
+  | _ => false)
+
+private def misdirectedRefreshedArgument : Module :=
+  let entry := refreshedArgument.funcs[0]
+  let entry := { entry with blocks := entry.blocks.map fun block =>
+    { block with insts := block.insts.map fun
+      | .def id (.call _ args origin) => .def id (.call 2 args origin)
+      | inst => inst } }
+  { refreshedArgument with funcs := #[entry,refreshedArgument.funcs[1],
+    { refreshedArgument.funcs[1] with name := "other" }] }
+
+#guard (match Validate.validate misdirectedRefreshedArgument with
+  | .error error => error.code == .v060 && error.message == "constructed argument transferred to wrong callee/parameter"
+  | _ => false)
+
+end Goose.Construct.GIR.Checks

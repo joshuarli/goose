@@ -266,7 +266,7 @@ private def checkEffect (f : Func) (env : TyEnv) : Effect → Check Unit
       unless owner.growing && owner.element? == some element do violation .v010 "append types differ"
   | .clear reference _ => do
       let (_, owner) ← checkTypeResult (env.refTy reference)
-      unless owner.growing && !((owner matches .grow _)) do violation .v010 "shrink operation requires growshrink or limited"
+      unless owner.growing do violation .v010 "clear requires growing owner"
   | .popN reference count _ => do
       let (_, owner) ← checkTypeResult (env.refTy reference)
       unless owner matches .growshrink _ | .limited .. do violation .v010 "pop_n requires shrinkable owner"
@@ -1539,17 +1539,11 @@ private def checkOwnership (m : Module) (functionId : FnId) (f : Func) (returns 
                   unless !(provenance.values[built]?.getD []).any state.adaptedOwners.contains do violation .v060 "argument transfer requires restored receiving adaptation"
                   state ← consume state built
                   state := clearWriter state built
-                  let rec producer : Nat → ValueId → Option (FnId × Nat)
-                    | 0, _ => none
-                    | fuel + 1, id => do
-                        let inst ← f.blocks.toList.flatMap (·.insts) |>.find? fun
-                          | .def result _ => result == id
-                          | _ => false
-                        match inst with
-                        | .def _ (.destOpen (.arg callee position) ..) => some (callee,position)
-                        | .def _ (.destAdapt input _ _ _) | .def _ (.destAdaptFinish input _) | .def _ (.destFinish input _) | .def _ (.destFit input _) | .def _ (.destStage input _) => producer fuel input
-                        | _ => none
-                  let some (callee,position) := producer f.numValues built | violation .v060 "dest_arg completion has no dr_arg provenance"
+                  let argumentRegions := (provenance.values[built]?.getD []).filterMap fun
+                    | .receiver (.arg callee position) => some (callee,position)
+                    | _ => none
+                  let [(callee,position)] := argumentRegions |
+                    violation .v060 "dest_arg completion has no dr_arg provenance"
                   state := { state with arguments := (result,callee,position) :: state.arguments }
               | .destNamed slot _ =>
                   unless state.named.contains slot do violation .v060 "named result is unbound or already returned"
