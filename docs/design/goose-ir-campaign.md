@@ -1,8 +1,28 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** resumed 2026-10-25 at the owner's request. Recovery, integration, cleanup, and local verification are active. Pushes remain unauthorized.
+**Status:** feature completion is active. Focused correctness checks accompany changes. Performance qualification remains deferred and does not block implementation. Pushes remain unauthorized.
 **Branch:** `goose-ir`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
+
+## Feature-completion priority (2026-10-25)
+
+The owner redirected the campaign toward feature completeness using the test-pyramid philosophy.
+The current implementation work covers limited-array capacity queries, immutable reference
+captures in nested functions, and generic parameter-prologue correspondence.
+Existing independent Core evaluation and exact runtime expectations are the feature oracles.
+
+Normal iteration runs the changed regression and relevant controls through exact native selectors.
+A compiler change may rebuild the Debug `goose` target. A proof change checks its changed
+modules against imports whose source and dependencies still match the qualified cache.
+Reuse the existing native semantic tool when its interpreter and schema are unchanged.
+The semantic runner rejects unknown `--case` names before execution.
+
+Comprehensive baselines, whole corpora, exhaustive matrices, complete Lean/native qualification
+and five-kernel replays are manual-only workloads. Run one only after an explicit request
+for that named workload. Completing a focused change does not automatically select them.
+Keep their existing requirements visible without treating a scoped pass as global acceptance.
+Do not wait for or retry performance gates during feature implementation.
+Deferred timing remains unmet and cannot qualify release or campaign closure.
 
 ## Production qualification update (2026-10-25)
 

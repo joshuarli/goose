@@ -1,7 +1,7 @@
 # Goose IR specification
 
 **Schemas:** Goose Core 0.2; GIR-H 0.4 and GIR-L 0.2 for pilot/shrink, GIR-H 0.5 and GIR-L 0.3 for construction. **Revision date:** 2026-10-17.
-**Status:** Design contract for the [campaign](goose-ir-campaign.md). The C++ compiler implements `core-pilot`, flat fixed structs, and a checked subset of shrink operations through Core, GIR-H and native execution. The Lean Core model implements shrink-owner semantics with proved demand-aware safety for accepted Core modules. Whole-profile shrink lowering safety, complete source-to-native qualification, and construction remain pending. This specification does not claim their gates have passed.
+**Status:** Implementation contract for the [campaign](goose-ir-campaign.md). The opt-in C++ pipeline implements bounded pilot, shrink and construction operations through Core, GIR and native execution. The narrower boundaries below identify remaining implementation work. Universal demand transfer, construction and exit proofs remain open. Feature development proceeds with focused correctness checks; comprehensive qualification is separate and manual-only.
 **Baseline:** `62366eb45fadeb2d0be1d840ff0c43c5c2cebf0a`.
 **Companion:** [proof, conformance and qualification plan](goose-ir-validation.md).
 
@@ -35,7 +35,12 @@ A profile is an implementation-support boundary, not a source dialect. An artifa
 | `core-shrink` | Grow-shrink `T[>..<]`; limited `T[..k]`; `pop`, `pop_n`, `resize`, `clear`, whole assignment of a resizable; flat fixed structs. |
 | `core-construction` | Variable arrays `T[]` and string values; grow-only arrays of variable elements; nonfixed by-value parameters and results built in the receiver's storage; `copy`; named results; `return … from`. |
 
-The current implementation boundary is narrower than the full profile definitions above. Core 0.2, GIR-H 0.4 and GIR-L support the bounded flat fixed-struct slice with scalar fields as specified in §§12.4–12.5. The Lean Core model also implements shrink-owner semantics, while the demand-aware safety proof and GIR/native shrink path remain pending. Other `core-shrink` operations and all of `core-construction` remain prospective contracts.
+The implementation boundary is narrower than the full profile definitions above.
+Implemented paths include flat fixed structs, shrink-owner mutations and receiving construction,
+including nonfixed calls, named results and targeted returns.
+The exact supported forms and remaining boundaries are specified in §§12.4–12.10.
+A planned profile operation that remains unsupported is implementation work.
+The universal proof obligations and final qualification remain separate from that support boundary.
 
 Excluded from all three, each with its own feature id: references or slices stored in fields or elements (`stored-reference`), optionals, ADTs, relative references, pools and `reusable`, `varint`, floats, elementwise arithmetic, generics beyond what specialization already resolved, function values, threads, `extern fn`, serialization, declarations without initializers, temporaries viewed as slices, zero-size values.
 
