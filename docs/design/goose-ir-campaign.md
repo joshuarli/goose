@@ -51,6 +51,29 @@ numeric profiles and at native O0/O2. The full GIR units corpus exposed addition
 production exporter, lowering and cross-unit runtime defects; their repair and rerun
 remain required before close.
 
+The Release compiler at this checkpoint passes the same-workload memory gate against
+`24ba0840`: five alternating Aincrad3 `-O1 --check` runs give median RSS of
+1,585,320 KiB baseline and 1,687,728 KiB candidate. Maximum candidate divided by
+minimum baseline is 1.0662, below 1.10. Binary sizes are 5,637,480 and 10,331,008 bytes;
+there is no binary-size threshold. Five post-warmup interleaved CPU samples per side,
+each bracketed by successful readiness checks, give these results:
+
+| Command | Baseline CPU seconds (min / median / max) | Candidate CPU seconds (min / median / max) |
+| --- | --- | --- |
+| `-O2 --check` | 5.290299 / 5.424787 / 7.093570 | 5.381467 / 5.597723 / 7.477569 |
+| `-O2 --standalone` | 6.392496 / 6.746008 / 9.202553 | 6.749555 / 7.243514 / 8.120179 |
+
+Both sides parse 7,051 declarations in 177 files and check 14,710 specializations.
+Emitted C is deterministic within each side and passes Clang syntax checking.
+The candidate medians are higher, within the observed spread; no speedup is claimed.
+These receipts qualify `a289f963`, not later production fixes. Report-enabled overhead,
+quiet production-mode edit-loop timings, units runtime and O5 LTO remain unqualified.
+The structural edit matrix's reuse-verification compiles are excluded from timing evidence.
+The remaining §11 budgets are not frozen, and `G-CLOSE` has not passed.
+
+The checkpoints below retain earlier recovery history. Their pending-state statements
+describe those revisions; this completion checkpoint records the current qualification.
+
 ## Recovery checkpoint (2026-10-25)
 
 The former `goose-ir` tip `d440b9ab` predates the October 18 integration work.
