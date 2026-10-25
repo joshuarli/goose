@@ -114,6 +114,105 @@ def unionRoots (a b : List RootRef) : List RootRef :=
 
 def subsetRoots (a b : List RootRef) : Bool := a.all b.contains
 
+mutual
+private def expressionParameterRebindings : Expr → List (VarId × Expr)
+  | .lit .. | .bool _ | .bytes .. | .resultLocal .. => []
+  | .read place | .ref _ place | .copy _ place _ | .pop place _ => placeParameterRebindings place
+  | .slice _ view lo hi _ => viewParameterRebindings view ++ boundParameterRebindings lo ++ boundParameterRebindings hi
+  | .len view => viewParameterRebindings view
+  | .un _ expression _ | .not expression | .conv _ _ expression _ | .fill _ expression _ =>
+      expressionParameterRebindings expression
+  | .bin _ left right _ | .cmp _ left right | .and left right | .or left right =>
+      expressionParameterRebindings left ++ expressionParameterRebindings right
+  | .call _ arguments _ => argumentParameterRebindings arguments
+  | .push place expression _ => placeParameterRebindings place ++ expressionParameterRebindings expression
+  | .ifE condition left right _ =>
+      expressionParameterRebindings condition ++ blockParameterRebindings left ++ blockParameterRebindings right
+  | .blockE block _ => blockParameterRebindings block
+  | .arrLit _ expressions _ | .structLit _ expressions | .values expressions =>
+      expressionsParameterRebindings expressions
+  | .str _ arguments _ => printParameterRebindings arguments
+
+private def placeParameterRebindings : Place → List (VarId × Expr)
+  | .var _ | .global _ => []
+  | .deref expression => expressionParameterRebindings expression
+  | .elem view index _ => viewParameterRebindings view ++ expressionParameterRebindings index
+  | .field place _ => placeParameterRebindings place
+
+private def viewParameterRebindings : View → List (VarId × Expr)
+  | .of place => placeParameterRebindings place
+  | .val expression => expressionParameterRebindings expression
+
+private def boundParameterRebindings : Bound → List (VarId × Expr)
+  | .expr expression | .fromEnd expression => expressionParameterRebindings expression
+  | .omitted => []
+
+private def expressionsParameterRebindings : List Expr → List (VarId × Expr)
+  | [] => []
+  | expression :: rest => expressionParameterRebindings expression ++ expressionsParameterRebindings rest
+
+private def argumentParameterRebindings : List Arg → List (VarId × Expr)
+  | [] => []
+  | .byVal expression :: rest | .construct expression :: rest =>
+      expressionParameterRebindings expression ++ argumentParameterRebindings rest
+  | .byRef _ place :: rest => placeParameterRebindings place ++ argumentParameterRebindings rest
+
+private def blockParameterRebindings : Block → List (VarId × Expr)
+  | .mk _ statements tail => statementParameterRebindings statements ++
+      (match tail with | none => [] | some expression => expressionParameterRebindings expression)
+
+private def statementParameterRebindings : List Stmt → List (VarId × Expr)
+  | [] => []
+  | statement :: rest =>
+      (match statement with
+      | .rebind variableId expression _ => (variableId, expression) :: expressionParameterRebindings expression
+      | .letS _ expression _ | .expr expression _ | .assertS expression _ | .exit expression _ |
+        .receive _ expression _ | .retForward expression _ | .breakValue expression _ |
+        .returnFromForward _ expression _ => expressionParameterRebindings expression
+      | .assign place expression _ | .assignOp _ place expression _ | .assignWhole place expression _ |
+        .appendValue place expression _ | .appendConstruct place expression _ | .popN place expression _ =>
+          placeParameterRebindings place ++ expressionParameterRebindings expression
+      | .append place view _ => placeParameterRebindings place ++ viewParameterRebindings view
+      | .clear place _ => placeParameterRebindings place
+      | .resize place size fill _ => placeParameterRebindings place ++ expressionParameterRebindings size ++
+          (match fill with | none => [] | some expression => expressionParameterRebindings expression)
+      | .ifS condition left right _ => expressionParameterRebindings condition ++ blockParameterRebindings left ++
+          (match right with | none => [] | some block => blockParameterRebindings block)
+      | .while condition body _ => expressionParameterRebindings condition ++ blockParameterRebindings body
+      | .forRange _ lo hi body _ =>
+          expressionParameterRebindings lo ++ expressionParameterRebindings hi ++ blockParameterRebindings body
+      | .forEach _ _ view _ body _ => viewParameterRebindings view ++ blockParameterRebindings body
+      | .ret expression _ => match expression with | none => [] | some expression => expressionParameterRebindings expression
+      | .retValues expressions _ | .returnFrom _ expressions _ => expressionsParameterRebindings expressions
+      | .print arguments _ => printParameterRebindings arguments
+      | .brk _ | .cont _ | .abort .. => []) ++ statementParameterRebindings rest
+
+private def printParameterRebindings : List PrintArg → List (VarId × Expr)
+  | [] => []
+  | .text _ :: rest => printParameterRebindings rest
+  | .expr expression :: rest => expressionParameterRebindings expression ++ printParameterRebindings rest
+  | .view view :: rest => viewParameterRebindings view ++ printParameterRebindings rest
+end
+
+private def mutableValueParameter (impl : Impl) (variableId : VarId) : Bool :=
+  (impl.vars[variableId]?).any (fun localVar => localVar.kind == .mutable && localVar.ty.isRefLike) &&
+    impl.params.any (fun parameter => parameter.var == variableId && parameter.mode == .byValue)
+
+def parameterBodyRootContext (module : Module) (impl : Impl) (context : Context) : V Context := do
+  if !(impl.params.any fun parameter => mutableValueParameter impl parameter.var) then return context
+  let assignments := (blockParameterRebindings impl.body).filter fun (variableId, _) => mutableValueParameter impl variableId
+  let mut current := context
+  let bound := impl.params.size * (module.globals.size + impl.vars.size + impl.params.size + 1) + 1
+  for _ in [0:bound] do
+    let mut next := current
+    for (variableId, expression) in assignments do
+      let roots ← (AccessEnv.mk module impl current).exprRoots expression
+      next := { next with varRoots := next.varRoots.map fun (id, previous) =>
+        (id, if id == variableId then unionRoots previous roots else previous) }
+    if next.varRoots == current.varRoots then return current
+    current := next
+  reject .root "mutable parameter root closure did not converge"
+
 def showRoot : RootRef → String
   | .static => "static"
   | .local x => s!"local {x}"
@@ -1115,7 +1214,8 @@ private def checkContextFacts (m : Module) (ctx : Context)
   let actualEscapes ← match bodyTargets m with
     | .ok escapes => pure escapes
     | .error message => reject .call message
-  let env : PEnv := ⟨m, impl, ctx, [], none, escaping, actualEscapes, aliases, names⟩
+  let bodyContext ← parameterBodyRootContext m impl ctx
+  let env : PEnv := ⟨m, impl, bodyContext, [], none, escaping, actualEscapes, aliases, names⟩
   let ((), st) ← (do
       let (_, _) ← rpBlockValue env [] impl.body
       if let some expression := impl.body.value then
