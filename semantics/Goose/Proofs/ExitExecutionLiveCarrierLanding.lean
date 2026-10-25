@@ -57,6 +57,24 @@ private theorem replacementPath_use (state : ConstructionState) (receiving sourc
     subst actual
     exact ⟨parent, use⟩
 
+inductive CompletedCarrierLandingFrame (before : ExecutionState) (incoming source : Nat) : ExecutionState → Prop
+  | current : CompletedCarrierLandingFrame before incoming source before
+  | commit (receiving count : Nat) (replacement anchor : PendingDestination) (storage : ReceivingStorage)
+      (parentUpdate : Option (DestinationId × PendingDestination)) (chain : List DestinationId)
+      (resolved : destinationCurrent before.construction incoming = .ok receiving)
+      (present : before.construction.destinations[source]? = some replacement)
+      (built : replacement.progress = .built count)
+      (receivingPresent : before.construction.destinations[receiving]? = some anchor)
+      (stored : before.construction.storage[replacement.storage]? = some storage)
+      (sameStorage : anchor.storage = replacement.storage)
+      (ordered : anchor.capability.start ≤ replacement.capability.start)
+      (parentBound : ∀ parentId parent, parentUpdate = some (parentId, parent) → parentId < before.construction.destinations.size)
+      (parentDifferent : ∀ parentId parent, parentUpdate = some (parentId, parent) → parentId ≠ source)
+      (parentFootprint : ∀ parentId parent, parentUpdate = some (parentId, parent) →
+        anchor.use = .child parentId ∨ anchor.use = .replacement parentId) :
+      CompletedCarrierLandingFrame before incoming source
+        { before with construction := committedExitState before.construction source receiving count replacement anchor storage parentUpdate chain }
+
 theorem landCarriersInto_construct_completed (layout : LayoutEnv) (origin : OriginId)
     (state : ExecutionState) (ambient : OwnershipAmbient) (incoming source : Nat)
     (context : OwnershipExecutionContext state ambient)
@@ -65,9 +83,10 @@ theorem landCarriersInto_construct_completed (layout : LayoutEnv) (origin : Orig
     ∃ after, landCarriersInto origin [.construct incoming] [.completed source] state = .ok () after ∧
       CarrierResultBacking layout after (.completed source) ∧
       Nonempty (ReceivingCarrierLandingReady after incoming source) ∧
-      after.construction.exitReservations = state.construction.exitReservations := by
+      after.construction.exitReservations = state.construction.exitReservations ∧
+      CompletedCarrierLandingFrame state incoming source after := by
   by_cases current : ready.receiving = source
-  · exact ⟨state, landCarriersInto_current origin state incoming source ready current, backed, ⟨ready⟩, rfl⟩
+  · exact ⟨state, landCarriersInto_current origin state incoming source ready current, backed, ⟨ready⟩, rfl, .current⟩
   cases backed with
   | completed id count replacement stored present built sampled backing =>
     have same := Option.some.inj (ready.sourcePresent.symm.trans present)
@@ -136,7 +155,10 @@ theorem landCarriersInto_construct_completed (layout : LayoutEnv) (origin : Orig
         (destinationSuccessorKeysInactive_built_terminal state.construction context.source.inactiveKeys source replacement present count built)
     have postReady : ReceivingCarrierLandingReady after incoming source :=
       ⟨source, adopted, adopted, resolvedAfter, adoptedPresent, adoptedPresent, .refl _, parentReady, Nat.le_refl _⟩
-    refine ⟨after, ?_, sourceBacked, ⟨postReady⟩, channelFrame.2.2⟩
+    refine ⟨after, ?_, sourceBacked, ⟨postReady⟩, channelFrame.2.2,
+      .commit ready.receiving count replacement ready.receivingDestination storage parentUpdate chain ready.resolved
+        present built ready.receivingPresent storedLookup (congrArg DestinationBacking.writeStorage sameBacking)
+        ordered parentBound parentDifferent parentFootprint⟩
     have different : (ready.receiving != source) = true := by simp [current]
     simp only [landCarriersInto, List.length_cons, List.length_nil, bne_self_eq_false,
       Bool.false_eq_true, ↓reduceIte, List.zip_cons_cons, List.zip_nil_left, List.forIn_cons,
@@ -153,10 +175,11 @@ theorem landCarriersInto_completion_completed (layout : LayoutEnv) (origin : Ori
     (ready : ReceivingCarrierLandingReady state selected source) :
     ∃ after, landCarriersInto origin [.completion token] [.completed source] state = .ok () after ∧
       CarrierResultBacking layout after (.completed source) ∧
-      CarrierLandingReady after (.completion token) (.completed source) := by
-  obtain ⟨after, landed, sourceBacking, ⟨postReady⟩, tickets⟩ :=
+      CarrierLandingReady after (.completion token) (.completed source) ∧
+      CompletedCarrierLandingFrame state selected source after := by
+  obtain ⟨after, landed, sourceBacking, ⟨postReady⟩, tickets, frame⟩ :=
     landCarriersInto_construct_completed layout origin state ambient selected source context backed ready
-  refine ⟨after, ?_, sourceBacking, .completion token incoming selected source role snapshot ?_ postReady⟩
+  refine ⟨after, ?_, sourceBacking, .completion token incoming selected source role snapshot ?_ postReady, frame⟩
   · simpa only [landCarriersInto, List.length_cons, List.length_nil, bne_self_eq_false,
       Bool.false_eq_true, ↓reduceIte, List.zip_cons_cons, List.zip_nil_left, List.forIn_cons,
       List.forIn_nil, EvalM.get, ticket, bind, pure] using landed
