@@ -1,0 +1,141 @@
+import Goose.Proofs.ConstructionAcceptedState
+import Goose.Proofs.ConstructionRootCorrespondenceWrites
+
+set_option Elab.async false
+
+namespace Goose.Proofs.ConstructionAcceptedExecution
+open Goose.Construct
+open Goose.Core (RootInst)
+open Goose.Proofs.ConstructionRepresentation
+open Goose.Proofs.ConstructionRootCorrespondence
+open Goose.Proofs.ConstructionExecutionOwnership
+
+def RootTypesExtend (before after : RootTypes) : Prop :=
+  ∀ root ty, before root = some ty → after root = some ty
+
+def registerRootType (types : RootTypes) (root : RootInst) (ty : Ty) : RootTypes :=
+  fun other => if other = root then some ty else types other
+
+def RootTypeCompatible (types : RootTypes) (root : RootInst) (ty : Ty) : Prop :=
+  ∀ previous, types root = some previous → previous = ty
+
+theorem registerRootType_extends (types : RootTypes) (root : RootInst) (ty : Ty)
+    (compatible : RootTypeCompatible types root ty) : RootTypesExtend types (registerRootType types root ty) := by
+  intro other previous present
+  by_cases same : other = root
+  · subst other
+    rw [compatible previous present]
+    simp only [registerRootType, ↓reduceIte]
+  · simp only [registerRootType, same, ↓reduceIte]
+    exact present
+
+theorem LocationTyped.types_extend (before after : RootTypes) (extended : RootTypesExtend before after)
+    (location : Goose.Core.Loc) (ty : Ty) (valid : LocationTyped before location ty) :
+    LocationTyped after location ty := by
+  obtain ⟨rootType, declared, path⟩ := valid
+  exact ⟨rootType, extended location.root rootType declared, path⟩
+
+theorem PointerTypedValue.types_extend (before after : RootTypes) (extended : RootTypesExtend before after)
+    (ty : Ty) (value : Value) (valid : PointerTypedValue before ty value) : PointerTypedValue after ty value := by
+  induction valid with
+  | integer ty value => exact .integer ty value
+  | boolean value => exact .boolean value
+  | unit => exact .unit
+  | reference mutability ty location target =>
+    exact .reference mutability ty location (target.types_extend before after extended location ty)
+  | slice mutability ty owner location start count target sequence =>
+    exact .slice mutability ty owner location start count
+      (target.types_extend before after extended location owner) sequence
+  | array element count values children ih => exact .array element count values ih
+  | record id fields values children ih => exact .record id fields values ih
+  | stored ty value => exact .stored ty value
+
+theorem registerRootType_frontier (types : RootTypes) (state : ExecutionState)
+    (root : RootInst) (ty : Ty)
+    (previous : ∀ act scope id ty, types (.local act scope id) = some ty →
+      act < state.nextAct ∧ scope < state.nextScope)
+    (fresh : ∀ act scope id, root = .local act scope id → act < state.nextAct ∧ scope < state.nextScope) :
+    ∀ act scope id otherTy, registerRootType types root ty (.local act scope id) = some otherTy →
+      act < state.nextAct ∧ scope < state.nextScope := by
+  intro act scope id registered present
+  by_cases same : RootInst.local act scope id = root
+  · exact fresh act scope id same.symm
+  · exact previous act scope id registered (by simpa only [registerRootType, same, ↓reduceIte] using present)
+
+theorem bindRoot_registeredHeap (types : RootTypes) (before : ExecutionState) (root : RootInst)
+    (ty : Ty) (value : Value) (compatible : RootTypeCompatible types root ty)
+    (previous : ∀ other otherTy item, types other = some otherTy → before.objects.lookup other = some item →
+      ValueRepresentation otherTy item ∧ PointerTypedValue types otherTy item)
+    (represented : ValueRepresentation ty value) (pointers : PointerTypedValue types ty value) :
+    ∃ after, bindRoot root value before = .ok () after ∧
+      RootTypesExtend types (registerRootType types root ty) ∧
+      ∀ other otherTy item, registerRootType types root ty other = some otherTy →
+        after.objects.lookup other = some item → ValueRepresentation otherTy item ∧
+          PointerTypedValue (registerRootType types root ty) otherTy item := by
+  obtain ⟨after, bound, objects⟩ := bindRoot_objects root value before
+  have extended := registerRootType_extends types root ty compatible
+  refine ⟨after, bound, extended, ?_⟩
+  intro other otherTy item declared present
+  by_cases same : other = root
+  · subst other
+    have typeSame : ty = otherTy := by simpa only [registerRootType, ↓reduceIte, Option.some.injEq] using declared
+    have valueSame : value = item := by simpa only [objects, List.lookup, beq_self_eq_true, Option.some.injEq] using present
+    subst otherTy item
+    exact ⟨represented, pointers.types_extend types _ extended ty value⟩
+  · have oldDeclared : types other = some otherTy := by simpa only [registerRootType, same, ↓reduceIte] using declared
+    have oldPresent := (bindRoot_lookup_other root other value before after bound same).symm.trans present
+    have valid := previous other otherTy item oldDeclared oldPresent
+    exact ⟨valid.1, valid.2.types_extend types _ extended otherTy item⟩
+
+theorem bindRoot_stored_context (before : ExecutionState) (ambient : OwnershipAmbient)
+    (root : RootInst) (stored : StoredValue) (valid : OwnershipExecutionContext before ambient) :
+    ∃ after, bindRoot root (.stored stored) before = .ok () after ∧ OwnershipExecutionContext after ambient := by
+  cases ordinal : before.objectOrdinals.lookup root with
+  | none =>
+    let after := { before with
+      objects := (root, .stored stored) :: before.objects.filter (fun entry => entry.1 != root)
+      objectOrdinals := (root, stored.object.getD stored.storage) :: before.objectOrdinals.filter (fun entry => entry.1 != root) }
+    refine ⟨after, ?_, ?_⟩
+    · simp [bindRoot, ordinal, setObjectOrdinal, bindStaticRoot, EvalM.get, EvalM.set, bind, after]
+    · exact ⟨valid.source, valid.retention, ⟨valid.runtime.activations, valid.runtime.breaks⟩,
+        valid.reservations, valid.receiving, valid.bounds, ⟨valid.identities.activations, valid.identities.breaks⟩⟩
+  | some ordinal =>
+    let after := { before with
+      objects := (root, .stored stored) :: before.objects.filter (fun entry => entry.1 != root) }
+    refine ⟨after, ?_, ?_⟩
+    · simp [bindRoot, ordinal, bindStaticRoot, EvalM.get, EvalM.set, bind, after]
+    · exact ⟨valid.source, valid.retention, ⟨valid.runtime.activations, valid.runtime.breaks⟩,
+        valid.reservations, valid.receiving, valid.bounds, ⟨valid.identities.activations, valid.identities.breaks⟩⟩
+
+theorem bindRoot_freshStored_registered (layout : LayoutEnv) (types : RootTypes)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (liveRoots : RootInst → Prop)
+    (root : RootInst) (ty : Ty) (stored : StoredValue)
+    (context : OwnershipExecutionContext before ambient) (backing : RootedBackingState layout before liveRoots)
+    (heap : ∀ other otherTy item, types other = some otherTy → before.objects.lookup other = some item →
+      ValueRepresentation otherTy item ∧ PointerTypedValue types otherTy item)
+    (compatible : RootTypeCompatible types root ty) (represented : ValueRepresentation ty (.stored stored))
+    (backed : StoredValueBacking layout before stored) (fresh : before.objectOrdinals.lookup root = none) :
+    ∃ after, bindRoot root (.stored stored) before = .ok () after ∧
+      OwnershipExecutionContext after ambient ∧
+      RootedBackingState layout after (fun other => other = root ∨ liveRoots other) ∧
+      RootTypesExtend types (registerRootType types root ty) ∧
+      (∀ other otherTy item, registerRootType types root ty other = some otherTy →
+        after.objects.lookup other = some item → ValueRepresentation otherTy item ∧
+          PointerTypedValue (registerRootType types root ty) otherTy item) ∧
+      after.construction = before.construction := by
+  obtain ⟨after, evaluated, context⟩ := bindRoot_stored_context before ambient root stored context
+  obtain ⟨backedAfter, backedResult, validBacking, construction⟩ :=
+    bindRoot_freshStored_backing layout before liveRoots root stored backing backed fresh
+  have same := evaluated.symm.trans backedResult
+  cases same
+  obtain ⟨typedAfter, typedResult, extended, validHeap⟩ := bindRoot_registeredHeap types before root ty
+    (.stored stored) compatible heap represented (.stored ty stored)
+  have same := evaluated.symm.trans typedResult
+  cases same
+  exact ⟨after, evaluated, context, validBacking, extended, validHeap, construction⟩
+
+#print axioms bindRoot_registeredHeap
+#print axioms registerRootType_frontier
+#print axioms bindRoot_freshStored_registered
+
+end Goose.Proofs.ConstructionAcceptedExecution
