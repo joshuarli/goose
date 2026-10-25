@@ -158,10 +158,31 @@ theorem elementInterval_prefix_transport (fuel backingFuel : Nat) (layout : Layo
   equal.elementInterval fuel layout run index start finish interval
     (elementInterval_within_run fuel backingFuel layout before run index start finish final interval backing)
 
+theorem elementInterval_result_inv (fuel : Nat) (layout : LayoutEnv) (bytes : ByteArray)
+    (run : SampledRun) (index start finish : Nat)
+    (interval : elementInterval fuel layout bytes run index = .ok (start, finish)) :
+    index < run.count ∧ elementsEnd fuel layout run.element index bytes run.byteStart = .ok start ∧
+      packedEnd fuel layout run.element bytes start = .ok finish := by
+  simp only [elementInterval] at interval
+  split at interval
+  · cases interval
+  · rename_i inside
+    cases first : elementsEnd fuel layout run.element index bytes run.byteStart with
+    | error reason => simp only [first, bind, Except.bind] at interval; cases interval
+    | ok begin =>
+      simp only [first, bind, Except.bind] at interval
+      cases ending : packedEnd fuel layout run.element bytes begin with
+      | error reason => simp only [ending] at interval; cases interval
+      | ok endByte =>
+        simp only [ending] at interval
+        obtain ⟨rfl, rfl⟩ := Prod.mk.inj (Except.ok.inj interval)
+        exact ⟨by omega, rfl, ending⟩
+
 #print axioms packedEnd_success_unique
 #print axioms elementsEnd_prefix_bound
 #print axioms elementsEnd_success_unique
 #print axioms elementInterval_within_run
 #print axioms elementInterval_prefix_transport
+#print axioms elementInterval_result_inv
 
 end Goose.Proofs.ExitExecution
