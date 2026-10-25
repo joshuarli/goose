@@ -8944,7 +8944,47 @@ void OwnerReferencesLowerThroughExplicitBorrowFormation() {
     }
 }
 
+GirModule ConstructionScalarIndexModule() {
+    auto module = Base();
+    module.profile = CoreProfile::Construction;
+    auto integer = module.IntType(CoreIntTy::I64);
+    auto array = module.Intern(CoreType { .kind = CoreType::Arr, .elem = integer, .count = 2 });
+    GirFunc function;
+    function.name = "at";
+    function.params = { integer };
+    function.results = { integer };
+    function.resultProtocols = { { CoreRequest::Register, nullopt } };
+    function.roots.results = { {} };
+    function.summary.unknown = true;
+    function.scopes = { -1 };
+    function.slots = { { integer, CoreVarKind::Let, 0, 0 }, { array, CoreVarKind::Let, 0, 1 } };
+    auto literal = Def(GirOp::Arr, 3); literal.ty = array; literal.vals = { 1, 2 };
+    auto owner = Def(GirOp::Slot, 4); owner.idx = 1;
+    auto view = Def(GirOp::Snap, 5); view.snap = GirSnapshotMode::Owner; view.a = 4;
+    auto parameter = Def(GirOp::Slot, 6); parameter.idx = 0;
+    auto index = Def(GirOp::Load, 7); index.a = 6;
+    auto element = Def(GirOp::Index, 8); element.a = 5; element.b = 7; element.org = 0;
+    auto value = Def(GirOp::Load, 9); value.a = 8;
+    GirBlock block;
+    block.params = { { 0, integer } };
+    block.insts = { Enter(0), Init(0, 0), Int(module, 1, "1"), Int(module, 2, "2"),
+        literal, Init(1, 3), owner, view, parameter, index, element, value, Leave(0), Ret({ 9 }) };
+    function.blocks = { block };
+    module.funcs.push_back(std::move(function));
+    return module;
+}
+
+void ConstructionScalarIndexKeepsItsProgramValue() {
+    auto high = ConstructionScalarIndexModule();
+    assert(Code(high) == "");
+    auto low = GirToLow(high).Lower();
+    auto violation = GirVerifier(low).Verify();
+    if (violation) fprintf(stderr, "%s: %s\n", violation->code.c_str(), violation->message.c_str());
+    assert(!violation);
+}
+
 int main() {
+    ConstructionScalarIndexKeepsItsProgramValue();
     OwnerBorrowsMakeMutableOwnerAuthorityExplicit();
     OwnerReferencesLowerThroughExplicitBorrowFormation();
     ConstructionTargetDestinationsForwardProgressThroughCalls();

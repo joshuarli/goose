@@ -2442,6 +2442,7 @@ private:
     }
 
     int LoadScalarBytes(GirTypeId ty, int src) {
+        if (CoreHasConstruction(h.profile)) return PLoadV(ty, src);
         GirMember member;
         member.kind = GirMember::Scalar;
         member.ty = ty;
