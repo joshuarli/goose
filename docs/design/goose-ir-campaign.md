@@ -60,6 +60,7 @@ report-on CPU medians are 5.834 and 5.655 seconds, with ranges 5.816–5.972 and
 Report-off ranges overlap, exact non-timing outputs agree, and the binary shrinks by 16 bytes.
 Measured report overhead remains 11.5%, above the proposed cap.
 A separate single-varying-dimension fast path was discarded: its report-on median rose by 0.3% within overlapping ranges.
+A borrowed cached-variable-name trial was also discarded: its 0.8% median reduction was within the observed spread.
 
 ## Feature-completion priority (2026-10-25)
 
