@@ -3410,8 +3410,31 @@ inline Val TypeCheck::RetAltVal(FnSpec *spec, const RootAlt &alt, vector<Val> &a
         auto x = m;
         auto ar = view ? a.held.AsRoots() : ClassArgRoots(spec->argtypes[p], a);
         x.TakeAlts(alt.exact ? ar : Bounds(ar));
+        auto root = ar.Root();
+        auto closed = false;
+        auto record = RecordOf(spec);
+        auto byteview = record && std::any_of(record->retroots.begin(), record->retroots.end(),
+                                            [](const RetRoot &r) { return r.byteview; });
+        auto callback = std::any_of(frames.begin(), frames.end(),
+                                    [](const Frame &f) { return f.isfunval; });
+        if (!callback && !byteview && !alt.exact && !IsRefOrSlice(t) &&
+            !spec->inprogress && ar.Exact() &&
+            root && root->type && root->type->kind != TY_ARRAY &&
+            ClassOf(root->type) == SC_FIXED &&
+            !root->isglobal && !IsRefOrSlice(root->type) &&
+            root->ownerspec == CurRealFrame().spec) {
+            vector<TypeExpr *> pointees;
+            RefPointees(t, pointees);
+            Roots candidates;
+            for (auto of : pointees)
+                if (of) candidates.Add(RootCandidates(of, Depth(root), false, false, true));
+            if (!candidates.None()) {
+                x.TakeAlts(candidates);
+                closed = true;
+            }
+        }
         for (auto &xa : x.alts) xa.slotread = alt.slotread && xa.slotread;
-        if (alt.classread)
+        if (alt.classread && !closed)
             for (size_t k = 0; k < x.alts.size(); k++)
                 x.alts[k].classread = ar.alts[k].exact && IsClassRoot(ar.alts[k].root);
         // The argument itself, or a view of it, where the result is no load
