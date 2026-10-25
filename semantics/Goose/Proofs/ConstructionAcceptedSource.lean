@@ -64,7 +64,7 @@ structure SourceFrameCompatible {config : EvalConfig} (accepted : AcceptedModule
   sourceVariables : frame.source.impl.vars = frame.typing.variables
   scopes : frame.source.scopes = frame.interpretation.environment.scopes.map Prod.fst
   globalCount : frame.interpretation.globalCount = config.module.globals.size
-  globals : frame.typing.globalLimit ≤ frame.initialized
+  globals : frame.typing.globalLimit ≤ config.module.globals.size
   initialized : frame.initialized ≤ config.module.globals.size
   declarations : frame.rootCursor.nextVar ≤ frame.typingCounter
   typingBound : frame.typingCounter ≤ frame.typing.variables.size
@@ -73,21 +73,30 @@ structure SourceFrameCompatible {config : EvalConfig} (accepted : AcceptedModule
   currentScope : ∀ scope rest, frame.source.scopes = scope :: rest → frame.typing.scope = scope
   origin : SourceOrigin accepted frame
 
+def GlobalEffectsAvailable (interpretation : RootInterpretation) (initialized : Nat) (effects : Eff) : Prop :=
+  ∀ target, target ∈ effects.reads ++ effects.writes ++ effects.grows ++ effects.shrinks →
+    ∀ global, (match target with
+      | .global id => global = id
+      | .param id => interpretation.parameters id (.global global)) → global < initialized
+
 structure CheckedValue (frame : ConstructionSourceFrame) (expression : Expr) (ty : Ty)
     (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState) : Prop where
   typing : typeExpr frame.typingFuel frame.typing expression frame.typingCounter = .ok ([ty], typingAfter)
   provenance : (rpExpr frame.source expression).run frame.rootCursor = .ok (roots, rootsAfter)
+  available : GlobalEffectsAvailable frame.interpretation frame.initialized rootsAfter.eff
 
 structure CheckedPlace (frame : ConstructionSourceFrame) (place : Place) (ty : Ty)
     (binding contents : Bool) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState) : Prop where
   typing : typePlace frame.typingFuel frame.typing place frame.typingCounter =
     .ok ((ty, binding, contents), typingAfter)
   provenance : (rpPlace frame.source place).run frame.rootCursor = .ok (roots, rootsAfter)
+  available : GlobalEffectsAvailable frame.interpretation frame.initialized rootsAfter.eff
 
 structure CheckedView (frame : ConstructionSourceFrame) (view : View) (element : Ty)
     (writable : Bool) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState) : Prop where
   typing : typeView frame.typingFuel frame.typing view frame.typingCounter = .ok ((element, writable), typingAfter)
   provenance : (rpView frame.source view).run frame.rootCursor = .ok (roots, rootsAfter)
+  available : GlobalEffectsAvailable frame.interpretation frame.initialized rootsAfter.eff
 
 #print axioms acceptedModule
 #print axioms AcceptedModule.aliases_size
