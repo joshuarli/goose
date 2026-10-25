@@ -274,7 +274,7 @@ theorem typedViewFuelBound_of {sourceFuel fuel : Nat} {cfg : Cfg} {results : Lis
     (child : TypedPlaceFuelBound sourceFuel fuel cfg results place) :
     TypedViewFuelBound (sourceFuel + 1) fuel cfg results (.of place) := by
   intro env state source metadata ls after id pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨childSource, typing, roots⟩ := source.ofChild
+  obtain ⟨childSource, typing, roots, _⟩ := source.ofChild
   have childMetadata : SourceResults childSource.typingEnv childSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata

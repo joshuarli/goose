@@ -220,7 +220,7 @@ theorem typedViewReflection_of {fuel : Nat} {cfg : Cfg} {results : List Ty} {pla
     (child : TypedPlaceReflection fuel cfg results place) :
     TypedViewReflection fuel cfg results (.of place) := by
   intro env state source metadata ls after id pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨childSource, typing, roots⟩ := source.ofChild
+  obtain ⟨childSource, typing, roots, _⟩ := source.ofChild
   have childMetadata : SourceResults childSource.typingEnv childSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata

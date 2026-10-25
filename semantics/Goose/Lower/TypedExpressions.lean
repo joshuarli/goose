@@ -231,6 +231,17 @@ structure ViewSource (cfg : Cfg) (env : Env) (view : View) (state : St) where
   rooted : rpView rootsEnv view rootsStart = .ok (roots, rootsEnd)
   effects : EffLe rootsEnd.eff world.E
 
+structure ViewSource.PlaceChildAt {cfg : Cfg} {env : Env} {place : Place} {state : St}
+    (source : ViewSource cfg env (.of place) state) (child : PlaceSource cfg env place state) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [0]
+  plans : child.plans = source.plans
+  context : HEq child.context
+    (source.context.child rfl 0 (.place place) .place rfl (by trivial))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+  inputFuture : child.context.inputFuture = source.context.inputFuture
+  outputFuture : child.context.outputFuture = source.context.outputFuture
+
 structure PlaceSource.ViewChildAt {cfg : Cfg} {env : Env} {place : Place} {view : View}
     {state childState : St} (source : PlaceSource cfg env place state)
     (child : ViewSource cfg env view childState) (index : Nat)
@@ -968,7 +979,7 @@ theorem PlaceSource.fieldChild {cfg : Cfg} {env : Env} {place : Place} {state : 
 theorem ViewSource.ofChild {cfg : Cfg} {env : Env} {place : Place} {state : St}
     (source : ViewSource cfg env (.of place) state) :
     ∃ child : PlaceSource cfg env place state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv := by
+      child.rootsEnv = source.rootsEnv ∧ source.PlaceChildAt child := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyView] at ht
@@ -1008,7 +1019,10 @@ theorem ViewSource.ofChild {cfg : Cfg} {env : Env} {place : Place} {state : St}
     typingEnd := finish, ty := ty, mutable := mutable, contents := contents, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl,
+      ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+        ec.child_retained_subset rfl 0 (.place place) .place rfl (by trivial) member,
+        hinput, hfuture⟩⟩
   · exact ec.child_activeMatches rfl 0 (.place place) .place rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.place place) .place rfl
@@ -2124,7 +2138,7 @@ theorem typedViewClaim_zero (cfg : Cfg) (results : List Ty) (view : View) :
 theorem typedViewClaim_of {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) : TypedViewClaim (n + 1) cfg results (.of place) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨child, htyping, hroots⟩ := source.ofChild
+  obtain ⟨child, htyping, hroots, _⟩ := source.ofChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata

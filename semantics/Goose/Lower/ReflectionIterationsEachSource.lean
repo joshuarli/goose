@@ -50,7 +50,7 @@ theorem EachPlan.sourceReflection {fuel : Nat} {cfg : Cfg} {env : Env} {initial 
     rw [plan.viewTyping,plan.viewRoots]; exact metadata
   cases view with
   | of place =>
-    obtain ⟨child,typing,roots⟩ := plan.viewSource.ofChild
+    obtain ⟨child,typing,roots, _⟩ := plan.viewSource.ofChild
     have childMetadata : SourceResults child.typingEnv child.rootsEnv results := by
       rw [typing,roots]; exact viewMetadata
     simp only [lowerEachSource,bind_eq] at lowering

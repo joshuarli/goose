@@ -76,7 +76,7 @@ theorem EachPlan.sourceSimulation {n : Nat} {cfg : Cfg} {env : Env} {initial : S
     exact metadata
   cases view with
   | of place =>
-    obtain ⟨child, typing, roots⟩ := plan.viewSource.ofChild
+    obtain ⟨child, typing, roots, _⟩ := plan.viewSource.ofChild
     apply lowerEachSource_of_sim_at n cfg env cx _ input output frame point initial place owner irView
       lowered generated extension
     intro address middle hplace hext childGenerated
@@ -161,7 +161,7 @@ theorem EachPlan.sourceMode_variable {cfg : Cfg} {env : Env} {initial : St} {x o
       ((owner, irView), middle)) :
     (regrowOf owner (lowerEnv cfg.mod env.vars results) middle).1 =
       eachSourceRegrows source.rootsEnv.access (.of (.var ownerId)) := by
-  obtain ⟨child, typing, roots⟩ := plan.viewSource.ofChild
+  obtain ⟨child, typing, roots, _⟩ := plan.viewSource.ofChild
   have typed := child.typed
   simp only [tyPlace] at typed
   rw [st_bind_ok] at typed
@@ -180,7 +180,7 @@ theorem EachPlan.sourceMode_global {cfg : Cfg} {env : Env} {initial : St} {x : V
       ((owner, irView), middle)) :
     (regrowOf owner (lowerEnv cfg.mod env.vars results) middle).1 =
       eachSourceRegrows source.rootsEnv.access (.of (.global globalId)) := by
-  obtain ⟨child, typing, roots⟩ := plan.viewSource.ofChild
+  obtain ⟨child, typing, roots, _⟩ := plan.viewSource.ofChild
   have typed := child.typed
   simp only [tyPlace] at typed
   split at typed

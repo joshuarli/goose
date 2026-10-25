@@ -181,7 +181,7 @@ theorem typedStatementReflection_each_place {fuel : Nat} {cfg : Cfg} {results : 
   apply typedStatementReflection_each_of_mode (sourceView := .of place) child eachs
   intro env state source input point owner irView middle finalPoint atPoint generated lowering finalAt
   obtain ⟨plan⟩ := source.eachPlan
-  obtain ⟨childSource,typing,roots⟩ := plan.viewSource.ofChild
+  obtain ⟨childSource,typing,roots, _⟩ := plan.viewSource.ofChild
   have mode := eachSourceMode_of_live_place childSource shape lowering generated finalAt
   simpa only [roots,plan.viewRoots] using mode
 

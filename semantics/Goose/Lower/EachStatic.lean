@@ -75,7 +75,7 @@ theorem typedStatementLoopSimulation_each_place {n : Nat} {cfg : Cfg} {results :
   apply typedStatementLoopSimulation_each_of_mode (view := .of place) childSimulation blocks
   intro env state source input point owner irView middle finalPoint atPoint generated lowered finalAt
   obtain ⟨plan⟩ := source.eachPlan
-  obtain ⟨child, typing, roots⟩ := plan.viewSource.ofChild
+  obtain ⟨child, typing, roots, _⟩ := plan.viewSource.ofChild
   have mode := eachSourceMode_of_live_place child shape lowered generated finalAt
   simpa only [roots, plan.viewRoots] using mode
 
