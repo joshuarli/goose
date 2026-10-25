@@ -109,6 +109,28 @@ check_result_channel_lifetimes() {
         fail "multiple scalar results did not select the construction profile"
 }
 
+check_request_variant_symbols() (
+    name=gir_request_variant_symbols
+    source=$here/$name.goose
+    for opt in 0 2; do
+        cfile=$work/$name-O$opt.c
+        program=$work/$name-O$opt-single
+        "$goose" "-O$opt" --pipeline gir --standalone -o "$cfile" "$source" \
+            >"$work/$name-O$opt-single.export.out" 2>"$work/$name-O$opt-single.export.err"
+        clang "-O$opt" -DGS_DEBUG=1 "$cfile" -lm -pthread -o "$program"
+        "$program" >"$work/$name-O$opt-single.out"
+        [ "$(cat "$work/$name-O$opt-single.out")" = 'AB AB' ] ||
+            fail "$name merged value and element-run result variants in single C"
+        program=$work/$name-O$opt-units
+        GOOSE_HOME=$work/request-variant-home "$goose" build "-O$opt" --pipeline gir --units \
+            --debug --cc clang -o "$program" "$source" \
+            >"$work/$name-O$opt-units.build.out" 2>"$work/$name-O$opt-units.build.err"
+        "$program" >"$work/$name-O$opt-units.out"
+        cmp "$work/$name-O$opt-single.out" "$work/$name-O$opt-units.out" ||
+            fail "$name changed between single and split C"
+    done
+)
+
 check_fixed_append() (
     name=$1
     profile=$2
@@ -185,5 +207,6 @@ check_static_root gir_static_root_holder struct-whole-const
 check_named_bitnot
 check_named_result_later_operand
 check_result_channel_lifetimes
+check_request_variant_symbols
 
 echo "GIR static-root, named-bitnot, and result-channel regressions passed"

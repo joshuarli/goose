@@ -2042,6 +2042,21 @@ private:
         return out;
     }
 
+    static string StableKeySymbol(const string &key) {
+        static constexpr char digits[] = "0123456789abcdef";
+        string out;
+        for (unsigned char byte : key) {
+            if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
+                (byte >= '0' && byte <= '9')) out += byte;
+            else {
+                out += '_';
+                out += digits[byte >> 4];
+                out += digits[byte & 15];
+            }
+        }
+        return out;
+    }
+
     // The names of what is emitted come from stable keys where the module
     // carries them, so that nothing is named by order of arrival.
     vector<string> fsym, gsym, filesym;
@@ -2058,7 +2073,7 @@ private:
         for (size_t f = 0; f < m.funcs.size(); f++) {
             auto &fn = m.funcs[f];
             fsym.push_back(name(fn.key.empty() ? cat("gir_f", f, "_", Sanitize(fn.name))
-                                               : cat(Sanitize(fn.name), "_g_", fn.key)));
+                                               : cat(Sanitize(fn.name), "_g_", StableKeySymbol(fn.key))));
         }
         for (size_t g = 0; g < m.lowglobals.size(); g++) {
             auto &lg = m.lowglobals[g];
