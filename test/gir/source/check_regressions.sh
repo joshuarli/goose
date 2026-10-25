@@ -108,6 +108,52 @@ check_fixed_append sem_core_pilot_capture_grow core-pilot
 check_fixed_append sem_core_shrink_owner_ops core-shrink
 check_fixed_append sem_mem06_limited_fixed_array_reuse core-shrink
 
+check_refined_integer_boundary() (
+    for name in bound_type_abort index_type_abort; do
+        source=$root/test/codegen/$name.goose
+        for debug in 0 1; do
+            if "$goose" --pipeline legacy --jit "-DGS_DEBUG=$debug" "$source" \
+                >"$work/$name-legacy-$debug.out" 2>"$work/$name-legacy-$debug.err"; then
+                fail "$name did not abort under the legacy pipeline"
+            fi
+            rg -F -f "$root/test/expected/$name.stderr" "$work/$name-legacy-$debug.err" >/dev/null ||
+                fail "$name lost its legacy bounds diagnostic"
+            for pipeline in core gir; do
+                artifact=$work/$name-$pipeline-$debug
+                rm -f "$artifact.core" "$artifact.high" "$artifact.low"
+                rm -rf "$artifact-units"
+                if [ "$pipeline" = core ]; then
+                    set -- --check
+                    marker='unsupported in core-pilot: refined-integer'
+                else
+                    set -- --pipeline gir --emit-gir-high "$artifact.high" \
+                        --emit-gir-low "$artifact.low" --emit-units "$artifact-units"
+                    marker='unsupported in pipeline gir: refined-integer'
+                fi
+                if "$goose" "-DGS_DEBUG=$debug" --emit-core "$artifact.core" "$@" "$source" \
+                    >"$artifact.out" 2>"$artifact.err"; then
+                    fail "$name lost its refined integer constraint under $pipeline"
+                fi
+                rg -F "$marker" "$artifact.err" >/dev/null || {
+                    cat "$artifact.out" "$artifact.err" >&2
+                    fail "$name failed without its refined integer unsupported diagnostic"
+                }
+                [ ! -e "$artifact.core" ] && [ ! -e "$artifact.high" ] && [ ! -e "$artifact.low" ] ||
+                    fail "$name published an artifact after rejection"
+                no_unit_files "$artifact-units" || fail "$name published partial units after rejection"
+            done
+        done
+    done
+    name=sem_num06_casts_in_range_debug
+    if ! "$goose" --pipeline gir --jit -DGS_DEBUG=1 "$root/test/semantics/$name.goose" \
+        >"$work/$name.out" 2>"$work/$name.err"; then
+        cat "$work/$name.out" "$work/$name.err" >&2
+        fail "ordinary integer casts failed under GIR"
+    fi
+    cmp "$root/test/expected/$name.out" "$work/$name.out"
+)
+
+check_refined_integer_boundary
 check_static_root gir_static_root_global stored-reference
 check_static_root gir_static_root_holder struct-whole-const
 check_named_bitnot

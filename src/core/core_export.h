@@ -392,10 +392,7 @@ private:
         if (!t) Fail("struct");
         CoreType ct;
         switch (t->kind) {
-            case TY_INT:
-                ct.kind = CoreType::Int;
-                ct.ity = IntTy(t->intstorage);
-                return mod.Intern(ct);
+            case TY_INT: return Ty(t);
             case TY_BOOL: return mod.BoolType();
             case TY_ARRAY:
                 if (t->arr->akind != A_FIXED || t->arr->size <= 0) Fail("struct");
@@ -484,6 +481,7 @@ private:
         CoreType ct;
         switch (t->kind) {
             case TY_INT:
+                if (t->ix) Fail("refined-integer", t->line);
                 ct.kind = CoreType::Int;
                 ct.ity = IntTy(t->intstorage);
                 break;
