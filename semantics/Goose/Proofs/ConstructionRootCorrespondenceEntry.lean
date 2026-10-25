@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionRootCorrespondenceWrites
+import Goose.Proofs.ConstructionRootCorrespondenceAliases
 import Goose.Construct.Validate
 
 set_option Elab.async false
@@ -50,6 +51,14 @@ theorem parameterBodyRootContext_emptyParameters (module : Module) (implementati
 
 def EntryInterpretation (environment : RuntimeActivation) (globalCount : Nat) : RootInterpretation :=
   ⟨environment, globalCount, fun _ _ => False⟩
+
+theorem freshAct_emptyParameters_frontier (environment : RuntimeActivation) (globalCount : Nat)
+    (state : ExecutionState) :
+    freshAct state = .ok state.nextAct { state with nextAct := state.nextAct + 1 } ∧
+      RootFrontier (EntryInterpretation { environment with act := state.nextAct } globalCount) (state.nextAct + 1) := by
+  refine ⟨rfl, Nat.lt_succ_self _, ?_⟩
+  intro index act scope variableId impossible
+  exact impossible.elim
 
 theorem entry_aliasComplete (environment : RuntimeActivation) (globalCount : Nat) :
     AliasComplete (EntryInterpretation environment globalCount) [] := by

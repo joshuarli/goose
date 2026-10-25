@@ -60,6 +60,30 @@ theorem instantiates_before {interpretation : RootInterpretation} {nextAct : Nat
   | «local» id descriptor scope declared active => exact frontier.1
   | parameter id root actual => exact frontier.2 id _ _ _ actual
 
+theorem rootFrontier_mono {interpretation : RootInterpretation} {before after : Nat}
+    (frontier : RootFrontier interpretation before) (advanced : before ≤ after) : RootFrontier interpretation after :=
+  ⟨Nat.lt_of_lt_of_le frontier.1 advanced,
+    fun index act scope variableId supplied => Nat.lt_of_lt_of_le (frontier.2 index act scope variableId supplied) advanced⟩
+
+theorem call_rootFrontier (caller : RootInterpretation) (callee : RuntimeActivation)
+    (arguments : List (List RootRef)) (nextAct : Nat)
+    (callerFrontier : RootFrontier caller callee.act) (calleeFrontier : callee.act < nextAct) :
+    RootFrontier (CallInterpretation caller callee arguments) nextAct := by
+  refine ⟨calleeFrontier, ?_⟩
+  intro index act scope variableId supplied
+  obtain ⟨roots, rootsAt, symbolic, member, actual⟩ := supplied
+  exact Nat.lt_trans (instantiates_before callerFrontier symbolic act scope variableId actual) calleeFrontier
+
+theorem freshAct_callFrontier (caller : RootInterpretation) (callee : RuntimeActivation)
+    (arguments : List (List RootRef)) (state : ExecutionState)
+    (frontier : RootFrontier caller state.nextAct) :
+    freshAct state = .ok state.nextAct { state with nextAct := state.nextAct + 1 } ∧
+      RootFrontier caller (state.nextAct + 1) ∧
+      RootFrontier (CallInterpretation caller { callee with act := state.nextAct } arguments) (state.nextAct + 1) := by
+  refine ⟨?_, rootFrontier_mono frontier (Nat.le_succ _), ?_⟩
+  · simp only [freshAct, bind, EvalM.get, EvalM.set, pure]
+  · exact call_rootFrontier caller { callee with act := state.nextAct } arguments _ frontier (Nat.lt_succ_self _)
+
 theorem call_aliasComplete (caller : RootInterpretation) (callee : RuntimeActivation)
     (arguments : List (List RootRef)) (callerAliases calleeAliases : List (RootRef × RootRef))
     (complete : AliasComplete caller callerAliases)

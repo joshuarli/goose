@@ -80,4 +80,45 @@ theorem bindStaticRoot_localCorrespondence (interpretation : RootInterpretation)
       exact found
     exact previous other oldMember actual foundValue beforeResolved oldFound location reference
 
+theorem bindRoot_objects (root : RootInst) (value : Value) (before : ExecutionState) :
+    ∃ after, bindRoot root value before = .ok () after ∧
+      after.objects = (root, value) :: before.objects.filter (fun entry => entry.1 != root) := by
+  cases ordinal : before.objectOrdinals.lookup root <;> cases value <;>
+    simp only [bindRoot, bind, EvalM.get, ordinal, Option.isNone, Bool.false_eq_true, ite_false,
+      ite_true, setObjectOrdinal, EvalM.set, pure, reserveRootObject,
+      liftConstruction, reserveStorage, ConstructionM.get, ConstructionM.set, bindStaticRoot] <;>
+    exact ⟨_, rfl, rfl⟩
+
+theorem bindRoot_localCorrespondence (interpretation : RootInterpretation) (context : Context)
+    (visible : List VarId) (before : ExecutionState) (id : VarId) (root : RootInst)
+    (value : Value) (annotation : List RootRef)
+    (resolved : rootOf interpretation.environment id before = .ok root before)
+    (annotated : (context.varRoots.find? (·.1 == id)).map Prod.snd = some annotation)
+    (rooted : DirectValueRooted interpretation annotation value)
+    (previous : LocalRootCorrespondence interpretation context visible before) :
+    ∃ after, bindRoot root value before = .ok () after ∧
+      LocalRootCorrespondence interpretation context (id :: visible) after := by
+  obtain ⟨simple, simpleBound, valid⟩ := bindStaticRoot_localCorrespondence interpretation context visible before
+    id root value annotation resolved annotated rooted previous
+  obtain ⟨after, bound, objects⟩ := bindRoot_objects root value before
+  refine ⟨after, bound, localRootCorrespondence_objects interpretation context (id :: visible) simple after ?_ valid⟩
+  simp only [bindStaticRoot, bind, EvalM.get, EvalM.set] at simpleBound
+  cases simpleBound
+  exact objects.symm
+
+theorem writeLoc_localCorrespondence (fuel : Nat) (layout : LayoutEnv)
+    (interpretation : RootInterpretation) (context : Context) (visible : List VarId)
+    (before : ExecutionState) (id : VarId) (root : RootInst) (old value : Value) (annotation : List RootRef)
+    (resolved : rootOf interpretation.environment id before = .ok root before)
+    (found : before.objects.lookup root = some old)
+    (annotated : (context.varRoots.find? (·.1 == id)).map Prod.snd = some annotation)
+    (rooted : DirectValueRooted interpretation annotation value)
+    (previous : LocalRootCorrespondence interpretation context visible before) :
+    ∃ after, writeLoc (fuel + 1) layout ⟨root, []⟩ value before = .ok () after ∧
+      LocalRootCorrespondence interpretation context (id :: visible) after := by
+  obtain ⟨after, bound, valid⟩ := bindRoot_localCorrespondence interpretation context visible before
+    id root value annotation resolved annotated rooted previous
+  refine ⟨after, ?_, valid⟩
+  simpa only [writeLoc, bind, EvalM.get, found, writeValuePath, pure] using bound
+
 end Goose.Proofs.ConstructionRootCorrespondence
