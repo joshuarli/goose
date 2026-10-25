@@ -4,6 +4,41 @@
 **Branch:** `goose-ir`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
+## Production qualification update (2026-10-25)
+
+Compiler sources through `02d57ad3` pass the full baseline, including 678 native
+programs, 798 JIT programs, bootstrap, rejection tests and samples.
+Both GIR source checks pass. The GIR units corpus passes 264 supported programs
+with zero failures. Its 597 skips comprise 545 explicit unsupported programs,
+49 native-layer programs, one parse-only fixture, one extern-function fixture,
+and one captured-reference fixture.
+
+The final production compiler passes the Aincrad3 E00–E03 structural reuse checks.
+E01 performs no native compilation and skips linking. E02 changes only the locations
+unit. E03 changes only one code unit. Each edit reuses the other 458 objects.
+Edited rows verify reuse against recompilation. Their durations are not timing evidence.
+
+Five alternating memory samples pass against baseline `24ba0840` on the same
+Aincrad3 input. Median RSS is 1,582,828 KiB baseline and 1,684,072 KiB candidate.
+Maximum candidate divided by minimum baseline is 1.0659, below 1.10.
+The Release binaries are 5,637,480 and 10,415,648 bytes. No size threshold is specified.
+
+Five interleaved samples per condition pass readiness checks before and after each run.
+Median CPU seconds with reports off are 5.349411 baseline and 5.611698 candidate
+for `-O2 --check`, and 6.770916 baseline and 7.078505 candidate for standalone C emission.
+Reports raise candidate medians to 6.671604 and 8.293610 seconds respectively.
+The 18.9% checking overhead and 17.2% emission overhead exceed the proposed 10% cap.
+Reports preserve compiler output and emitted C exactly. Report consistency checks pass.
+The report cost remains open. These measurements do not establish cold-build or runtime budgets.
+
+Semantic revision `29513a68` adds actual short-circuit demand transfer and indexed
+operand invocation replay. The ledger keeps their limits explicit.
+It also rejects shrinking through retained interior aliases and admits alias-free grow clears.
+Alias protection lasts until scope exit. Bindings still being initialized do not protect
+their future roots. Independent review reproduced and verified the initializer correction.
+The revised 195-claim source, native and independent-kernel qualifications are pending.
+The three universal proof obligations remain open. `G-CLOSE` has not passed.
+
 ## Completion checkpoint (2026-10-25)
 
 The owner requested completion after recovery. The accepted starting revision is `27feef55`.
