@@ -1445,12 +1445,14 @@ private:
             case B_APPEND: {
                 auto an = c->ArgNodes();
                 auto source = Pointee(an[1]->exprtype);
-                if (IsArrayTE(source) && source->arr->akind == A_FIXED && !NonfixedValueType(Ty(source))) {
+                auto sourceType = Ty(source);
+                if (CoreHasConstruction(mod.profile) && IsArrayTE(source) &&
+                    source->arr->akind == A_FIXED && !NonfixedValueType(sourceType)) {
                     auto s = MakeStmt(CoreStmtKind::AppendValue, c->line, CoreOriginKind::Expr);
                     s.place = OwnerPlace(an[0]);
                     s.expr = Value(an[1]);
                     out.stmts.push_back(std::move(s));
-                } else if (IsArrayTE(source) && NonfixedValueType(Ty(source)) &&
+                } else if (CoreHasConstruction(mod.profile) && IsArrayTE(source) && NonfixedValueType(sourceType) &&
                            (Is<ArrayLit>(an[1]) || Is<Call>(an[1]))) {
                     auto s = MakeStmt(CoreStmtKind::AppendConstruct, c->line, CoreOriginKind::Expr);
                     s.place = OwnerPlace(an[0]);

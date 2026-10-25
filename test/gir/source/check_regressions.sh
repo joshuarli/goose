@@ -83,6 +83,31 @@ check_named_result_later_operand() {
         "$core" >/dev/null || fail "$name Core export retained a named-local result"
 }
 
+check_fixed_append() (
+    name=$1
+    profile=$2
+    source=$root/test/semantics/$name.goose
+    for opt in 0 2; do
+        core=$work/$name-O$opt.core.json
+        cfile=$work/$name-O$opt.c
+        program=$work/$name-O$opt
+        if ! "$goose" "-O$opt" --pipeline gir --standalone --emit-core "$core" \
+            -o "$cfile" "$source" >"$work/$name-O$opt.export.out" 2>"$work/$name-O$opt.export.err"; then
+            cat "$work/$name-O$opt.export.err" >&2
+            fail "$name failed under GIR O$opt"
+        fi
+        "$jaq" -e --arg profile "$profile" '.[2] == $profile' "$core" >/dev/null ||
+            fail "$name changed its semantic profile"
+        clang "-O$opt" -DGS_DEBUG=1 "$cfile" -lm -pthread -o "$program"
+        "$program" >"$work/$name-O$opt.out"
+        cmp "$root/test/expected/$name.out" "$work/$name-O$opt.out"
+    done
+)
+
+check_fixed_append sem_core_pilot_capture_grow core-pilot
+check_fixed_append sem_core_shrink_owner_ops core-shrink
+check_fixed_append sem_mem06_limited_fixed_array_reuse core-shrink
+
 check_static_root gir_static_root_global stored-reference
 check_static_root gir_static_root_holder struct-whole-const
 check_named_bitnot
