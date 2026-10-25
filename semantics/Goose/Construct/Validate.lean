@@ -494,4 +494,77 @@ def validate (module : Module) : V Unit := do
   for global in List.range module.globals.size do checkInitRoots module global
   checkModuleExitRoots module
 
+private theorem validation_bind_ok {α β : Type} (action : V α) (next : α → V β) (result : β) :
+    (action >>= next) = .ok result ↔ ∃ value, action = .ok value ∧ next value = .ok result := by
+  cases action <;> simp [bind, Except.bind]
+
+private theorem validation_forIn_yields {α : Type} (rows : List α)
+    (body : α → PUnit.{1} → V (ForInStep PUnit.{1}))
+    (checked : forIn rows PUnit.unit body = .ok PUnit.unit)
+    (yields : ∀ row token step, body row token = .ok step → step = .yield PUnit.unit) :
+    ∀ row ∈ rows, body row PUnit.unit = .ok (.yield PUnit.unit) := by
+  induction rows with
+  | nil => simp
+  | cons row rows ih =>
+      rw [List.forIn_cons] at checked
+      obtain ⟨step, head, tail⟩ := (validation_bind_ok _ _ _).mp checked
+      have equal := yields row PUnit.unit step head
+      subst step
+      intro selected member
+      rcases List.mem_cons.mp member with equal | member
+      · subst selected; exact head
+      · exact ih tail selected member
+
+theorem validated_implementation_typing (module : Module) (id : ImplId) (implementation : Impl)
+    (accepted : validate module = .ok ()) (present : module.impls[id]? = some implementation) :
+    ∃ bodyTypes declared, typeBlock 4096 {
+      module := module
+      implementation := some implementation
+      variables := implementation.vars
+      visible := List.range implementation.params.size
+      scope := implementation.body.scope
+      loops := 0
+      use := if implementation.results.isEmpty then .ordinary else .result
+      request := .value
+      resultRequests := implementation.results.toList.map (·.request)
+      globalLimit := module.globals.size } implementation.body implementation.params.size =
+        .ok (bodyTypes, declared) := by
+  unfold validate at accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨token, implementations, _⟩ := (validation_bind_ok _ _ _).mp accepted
+  cases token
+  have each := validation_forIn_yields _ _ implementations (by
+    intro index token step checked
+    cases found : module.impls[index]? with
+    | none => simp only [found] at checked; cases checked
+    | some function =>
+        simp only [found] at checked
+        obtain ⟨value, _, tail⟩ := (validation_bind_ok _ _ _).mp checked
+        cases value
+        exact (Except.ok.inj tail).symm)
+  have checked := each id (List.mem_range.mpr (Array.getElem?_eq_some_iff.mp present).1)
+  simp only [present] at checked
+  obtain ⟨value, checked, _⟩ := (validation_bind_ok _ _ _).mp checked
+  cases value
+  unfold checkImplementation at checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  dsimp only [] at checked
+  split at checked
+  · split at checked
+    · cases checked
+    · obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+      obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+      obtain ⟨⟨bodyTypes, declared⟩, replay, _⟩ := (validation_bind_ok _ _ _).mp checked
+      exact ⟨bodyTypes, declared, replay⟩
+  · cases checked
+
 end Goose.Construct

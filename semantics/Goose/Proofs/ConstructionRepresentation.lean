@@ -292,6 +292,18 @@ theorem fixedInitializer_evaluation {fuel : Nat} {ty : Ty} {expression : Expr}
         subst selected
         exact shape
 
+theorem fixedInitializer_produce {fuel : Nat} {ty : Ty} {expression : Expr}
+    (initializer : FixedInitializer fuel ty expression) (config : EvalConfig)
+    (environment : RuntimeActivation) (state : ExecutionState) :
+    ∃ value, evalProduce (fuel + 1) config environment [.register ty] expression state =
+      .ok [.register value] state ∧ ValueRepresentation ty value := by
+  obtain ⟨value, evaluated, represented⟩ := fixedInitializer_evaluation initializer config environment state
+  refine ⟨value, ?_, represented⟩
+  cases initializer <;>
+    simp [evalProduce, List.mapM_cons, List.mapM_nil, selectCompletionChannel,
+      bind, pure, evaluated]
+
+#print axioms fixedInitializer_produce
 #print axioms initial_acceptedRepresentationInput
 #print axioms fixedInitializer_evaluation
 #print axioms checkedFixedArray_length
