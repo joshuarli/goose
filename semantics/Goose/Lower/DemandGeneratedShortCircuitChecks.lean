@@ -136,18 +136,19 @@ private def addressed : GIR.Frame := entered.set 4 (.val (.ref ⟨.global 0, []�
 private def valued : GIR.Frame := addressed.set 5 (.val (.bool true))
 private def leftScope : GIR.Frame := { valued with scopes := [] }
 private def joined : GIR.Frame := leftScope.set 3 (.val (.bool true))
-private def initialState : St := ⟨LifetimeChecks.clearedOwner, "", 0, 0⟩
+private def initialState : St :=
+  ⟨Store.empty.introduce (.global 0) (.limited (.int .i64) 1 LifetimeChecks.physicalSlots 1), "", 0, 0⟩
 private def enteredState : St := { initialState with nextScope := 1 }
 private def clearedState : St :=
   { enteredState with store := ⟨(enteredState.store.roots.erase (.global 0)).insert (.global 0)
     (.limited (.int .i64) 1 LifetimeChecks.physicalSlots 0)⟩ }
 private def sampledAt (runtime : DemandRuntimePoint) : Prop :=
   runtime.frame.vals[1]? = some (.view LifetimeChecks.sampledView) ∧
-    runtime.state.store.read LifetimeChecks.sampledView.loc =
-      .ok (.limited (.int .i64) 1 LifetimeChecks.physicalSlots 0)
+    ∃ logicalLength, logicalLength ≤ 1 ∧ runtime.state.store.read LifetimeChecks.sampledView.loc =
+      .ok (.limited (.int .i64) 1 LifetimeChecks.physicalSlots logicalLength)
 
-private theorem sampled_rows_realize (world : World) (env : Env) {runtime : DemandRuntimePoint}
-    (valid : sampledAt runtime) : required.Realizes (sourceModule true true) world env runtime := by
+private theorem sampled_rows_realize {module : Core.Module} (world : World) (env : Env) {runtime : DemandRuntimePoint}
+    (valid : sampledAt runtime) : required.Realizes module world env runtime := by
   constructor
   · intro cell member
     cases member
@@ -156,38 +157,56 @@ private theorem sampled_rows_realize (world : World) (env : Env) {runtime : Dema
     subst cell
     apply Or.inl
     refine ⟨LifetimeChecks.sampledView, .readOnly, .int .i64, valid.1, rfl, ?_⟩
+    obtain ⟨logicalLength, bounded, read⟩ := valid.2
     have flat : Goose.Proofs.Memory.FlatTy (.limited (.int .i64) 1)
-        (.limited (.int .i64) 1 LifetimeChecks.physicalSlots 0) := by
-      simp only [Goose.Proofs.Memory.FlatTy, Nat.zero_le, true_and]
+        (.limited (.int .i64) 1 LifetimeChecks.physicalSlots logicalLength) := by
+      simp only [Goose.Proofs.Memory.FlatTy, bounded, true_and]
+      refine ⟨by simpa [LifetimeChecks.physicalSlots] using bounded, ?_⟩
       intro i value found
       cases i with
       | zero => simp [LifetimeChecks.physicalSlots] at found; subst value; rfl
       | succ i => simp [LifetimeChecks.physicalSlots] at found
     constructor
     · refine ⟨LifetimeChecks.sampledView.loc, 0, 1, rfl, rfl, ?_⟩
-      exact ⟨.limited (.int .i64) 1 LifetimeChecks.physicalSlots 0,
-        LifetimeChecks.physicalSlots, valid.2, rfl, by decide,
+      exact ⟨.limited (.int .i64) 1 LifetimeChecks.physicalSlots logicalLength,
+        LifetimeChecks.physicalSlots, read, rfl, by decide,
         Or.inr (Or.inr (Or.inr ⟨1, flat⟩))⟩
     · intro root target
       change LifetimeChecks.sampledView.loc.root = root at target
       exact ⟨.global 0, by simp [sampledAlias], target.symm⟩
 
+theorem actual_live_snapshot_step : DemandInstructionStep context 9
+    ⟨(0, 1), (⟨0, [], {}, 0⟩ : GIR.Frame).set 0 (.val (.ref ⟨.global 0, []⟩)), initialState⟩
+    ⟨(0, 2), sampled, initialState⟩ := by
+  apply DemandInstructionStep.definition (id := 1) (op := .snapshot .owner 0) (by cbv)
+  simp [execOp, execPure, getVal, getCell, Frame.set, initialState, Store.introduce,
+    Store.empty, Store.read, Val.get?, readLoc, expectRef, expectArray,
+    LifetimeChecks.physicalSlots, LifetimeChecks.sampledView, bind_apply, pure_apply]
+
+theorem actual_rhs_clear_decreases_logical_length :
+    enteredState.store.read LifetimeChecks.sampledView.loc =
+      .ok (.limited (.int .i64) 1 LifetimeChecks.physicalSlots 1) ∧
+    execEff context.fn addressed (.clear 4 (some 0)) enteredState = .ok addressed clearedState ∧
+    clearedState.store.read LifetimeChecks.sampledView.loc =
+      .ok (.limited (.int .i64) 1 LifetimeChecks.physicalSlots 0) := by
+  exact ⟨by cbv, by cbv, by cbv⟩
+
 private theorem leftTraversal : DemandTraversal context sampledAt 1 9
     ⟨(0, 2), sampled, initialState⟩ ⟨(0, 3), conditioned, initialState⟩ := by
-  refine .next (by cbv) (.definition (id := 2) (op := .constBool true) (by cbv) (by rfl))
-    (.done 8 (by cbv))
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv) (.definition (id := 2) (op := .constBool true) (by cbv) (by rfl))
+    (.done 8 (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv))
 
 private theorem rightTraversal : DemandTraversal context sampledAt 5 7
     ⟨(1, 0), conditioned, initialState⟩ ⟨(1, 5), leftScope, clearedState⟩ := by
-  refine .next (by cbv) (.effect (effect := .enter 0) (by cbv) (by rfl)) ?_
-  refine .next (by cbv) (.definition (id := 4) (op := .globalAddr 0) (by cbv) (by rfl)) ?_
-  refine .next (by cbv) (.effect (effect := .clear 4 (some 0)) (by cbv) (by cbv)) ?_
-  refine .next (by cbv) (.definition (id := 5) (op := .constBool true) (by cbv) (by rfl)) ?_
-  refine .next (by cbv) (.effect (effect := .leave 0) (by cbv) (by cbv)) (.done 2 (by cbv))
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv) (.effect (effect := .enter 0) (by cbv) (by rfl)) ?_
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv) (.definition (id := 4) (op := .globalAddr 0) (by cbv) (by rfl)) ?_
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv) (.effect (effect := .clear 4 (some 0)) (by cbv) actual_rhs_clear_decreases_logical_length.2.1) ?_
+  refine .next (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv) (.definition (id := 5) (op := .constBool true) (by cbv) (by rfl)) ?_
+  refine .next (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv) (.effect (effect := .leave 0) (by cbv) (by cbv)) (.done 2 (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv))
 
 private theorem continuationTraversal : DemandTraversal context sampledAt 1 1
     ⟨(2, 0), joined, clearedState⟩ ⟨(3, 0), joined, clearedState⟩ := by
-  refine .next (by cbv) (.control (branch := .conditional 3 3 [] 4 []) (by cbv) ?_) (.done 0 (by cbv))
+  refine .next (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv) (.control (branch := .conditional 3 3 [] 4 []) (by cbv) ?_) (.done 0 (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv))
   cbv
 
 theorem actual_taken_traversal : DemandTraversal context sampledAt 9 9
@@ -221,12 +240,12 @@ private def skipJoined : GIR.Frame := falseConditioned.set 3 (.val (.bool false)
 
 private theorem skipLeftTraversal : DemandTraversal skipContext sampledAt 1 3
     ⟨(0, 2), sampled, initialState⟩ ⟨(0, 3), falseConditioned, initialState⟩ := by
-  refine .next (by cbv) (.definition (id := 2) (op := .constBool false) (by cbv) (by rfl))
-    (.done 2 (by cbv))
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv) (.definition (id := 2) (op := .constBool false) (by cbv) (by rfl))
+    (.done 2 (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv))
 
 private theorem skipContinuationTraversal : DemandTraversal skipContext sampledAt 1 1
     ⟨(2, 0), skipJoined, initialState⟩ ⟨(4, 0), skipJoined, initialState⟩ := by
-  refine .next (by cbv) (.control (branch := .conditional 3 3 [] 4 []) (by cbv) ?_) (.done 0 (by cbv))
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv) (.control (branch := .conditional 3 3 [] 4 []) (by cbv) ?_) (.done 0 (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv))
   cbv
 
 theorem actual_skip_traversal : DemandTraversal skipContext sampledAt 3 3
@@ -243,6 +262,45 @@ theorem actual_skip_runtime_prefix_rows (world : World) (env : Env)
     (steps : DemandRuntimePrefix skipContext taken ⟨(0, 2), sampled, initialState⟩ runtime) :
     required.Realizes (sourceModule true true) world env runtime :=
   sampled_rows_realize world env (actual_skip_traversal.runtimePrefix_invariant bound steps)
+
+private def orContext : FnCtx := ⟨⟨.release, lower (sourceModule false false)⟩, function false false⟩
+private def orEntered : GIR.Frame := { falseConditioned with scopes := [(0, 0)] }
+private def orAddressed : GIR.Frame := orEntered.set 4 (.val (.ref ⟨.global 0, []⟩))
+private def orValued : GIR.Frame := orAddressed.set 5 (.val (.bool true))
+private def orLeftScope : GIR.Frame := { orValued with scopes := [] }
+private def orJoined : GIR.Frame := orLeftScope.set 3 (.val (.bool true))
+
+theorem actual_or_taken_traversal : DemandTraversal orContext sampledAt 9 9
+    ⟨(0, 2), sampled, initialState⟩ ⟨(3, 0), orJoined, clearedState⟩ := by
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv)
+    (.definition (id := 2) (op := .constBool false) (by cbv) (by rfl)) ?_
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv)
+    (.control (point := (0, 3)) (frame := falseConditioned) (state := initialState)
+      (after := initialState) (target := 1) (branch := .conditional 2 2 [2] 1 [])
+      (next := falseConditioned) (by cbv) (by cbv)) ?_
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv)
+    (.effect (next := orEntered) (after := enteredState) (effect := .enter 0) (by cbv) (by rfl)) ?_
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv)
+    (.definition (id := 4) (op := .globalAddr 0) (by cbv) (by rfl)) ?_
+  refine .next (by refine ⟨?_, 1, by decide, ?_⟩ <;> cbv)
+    (.effect (next := orAddressed) (after := clearedState) (effect := .clear 4 (some 0)) (by cbv) (by cbv)) ?_
+  refine .next (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv)
+    (.definition (id := 5) (op := .constBool true) (by cbv) (by rfl)) ?_
+  refine .next (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv)
+    (.effect (next := orLeftScope) (after := clearedState) (effect := .leave 0) (by cbv) (by cbv)) ?_
+  refine .next (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv)
+    (.control (point := (1, 5)) (frame := orLeftScope) (state := clearedState)
+      (after := clearedState) (target := 2) (branch := .jump 2 [5])
+      (next := orJoined) (by cbv) (by cbv)) ?_
+  refine .next (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv)
+    (.control (branch := .conditional 3 3 [] 4 []) (next := orJoined) (by cbv) (by cbv))
+    (.done 0 (by refine ⟨?_, 0, by decide, ?_⟩ <;> cbv))
+
+theorem actual_or_taken_runtime_prefix_rows (world : World) (env : Env)
+    {taken : Nat} {runtime : DemandRuntimePoint} (bound : taken ≤ 9)
+    (steps : DemandRuntimePrefix orContext taken ⟨(0, 2), sampled, initialState⟩ runtime) :
+    required.Realizes (sourceModule false false) world env runtime :=
+  sampled_rows_realize world env (actual_or_taken_traversal.runtimePrefix_invariant bound steps)
 
 theorem physically_removed_run_rejected (world : World) (env : Env) :
     ¬ required.Realizes (sourceModule true true) world env
