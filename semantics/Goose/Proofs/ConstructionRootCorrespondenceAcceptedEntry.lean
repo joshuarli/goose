@@ -28,7 +28,7 @@ theorem acceptedEntryFrame (config : EvalConfig) (accepted : AcceptedModule conf
   have member : (original, config.module.entry) ∈ config.module.contexts.toList.zipIdx := by
     apply List.mem_of_getElem? (i := config.module.entry)
     simp only [List.getElem?_zipIdx, Array.getElem?_toList, originalAt, Option.map_some, Nat.zero_add]
-  obtain ⟨calls, contextFacts, _⟩ := (Classical.choose_spec accepted.roots).2.1
+  obtain ⟨calls, contextFacts, callsCovered⟩ := (Classical.choose_spec accepted.roots).2.1
     (original, config.module.entry) member
   obtain ⟨escaping, names, contextFactsAt⟩ := contextFacts
   obtain ⟨bodyImplementation, bodyContext, targetEscapes, roots, rootAfter,
@@ -86,7 +86,7 @@ theorem acceptedEntryFrame (config : EvalConfig) (accepted : AcceptedModule conf
     initializing := by intro id absent; cases absent
     currentScope := by intro scope rest absent; cases absent
     origin := by
-      refine ⟨original, calls, originalAt, implementationAt, rfl, rfl, closed, rfl, contextFactsAt,
+      refine ⟨original, calls, originalAt, implementationAt, rfl, rfl, closed, rfl, contextFactsAt, callsCovered,
         targetsChecked, roots, rootAfter, ?_⟩
       simpa only [frame, source] using rootsChecked }
   have aliases : AliasComplete interpretation source.aliases :=
