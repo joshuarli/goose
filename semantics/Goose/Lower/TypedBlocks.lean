@@ -232,7 +232,7 @@ theorem typedBlockLoopSimulation_succ (n : Nat) (cfg : Cfg) (results : List Ty)
       have heffects : Core.Sound.EffLe source.rootsEnd.eff statements.world.E := by
         rw [hworld]
         exact source.effects
-      obtain ⟨child, hchildTyping, hchildRoots, hchildTy⟩ := statements.valueChild expr
+      obtain ⟨child, hchildTyping, hchildRoots, hchildTy, _⟩ := statements.valueChild expr
         hblockValue source.ty source.typingEnd source.roots source.rootsEnd htv hrv heffects
         n .unit hraw
       obtain ⟨finalTyping, same, frame, hnormal⟩ := (statements.result n (.normal .unit) hraw).frame

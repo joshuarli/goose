@@ -1068,6 +1068,16 @@ private theorem stmts_visible {tenv tenv' : TEnv} {sc tn tn' : Nat} {ss : List S
       DemandNode.visibleAfter] using h1.trans h2
 
 
+structure StmtsSource.ValueChildAt {cfg : Cfg} {env : Env} {stmts : List Stmt} {state after : St}
+    (source : StmtsSource cfg env stmts state) (expression : Expr) (hasValue : source.value = some expression)
+    (child : ExprSource cfg env expression after) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [source.all.length]
+  plans : child.plans = source.plans
+  context : HEq child.context (source.context.child rfl source.all.length (.expression expression) .expression
+    (by rw [hasValue]; exact blockValueChild?) (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+
 theorem StmtsSource.valueChild {cfg : Cfg} {env : Env} {stmts : List Stmt} {state after : St}
     (source : StmtsSource cfg env stmts state) (expr : Expr)
     (hasValue : source.value = some expr) (ty : Ty) (typingEnd : Nat)
@@ -1077,7 +1087,8 @@ theorem StmtsSource.valueChild {cfg : Cfg} {env : Env} {stmts : List Stmt} {stat
     (effects : EffLe rootsEnd.eff source.world.E)
     (fuel : Nat) (value : Val) (done : execStmts fuel cfg env stmts state = .ok (.normal value) after) :
     ∃ child : ExprSource cfg env expr after,
-      child.typingEnv = source.typingAfter ∧ child.rootsEnv = source.rootsEnv ∧ child.ty = ty := by
+      child.typingEnv = source.typingAfter ∧ child.rootsEnv = source.rootsEnv ∧ child.ty = ty ∧
+      source.ValueChildAt expr hasValue child := by
   have result := source.result fuel (.normal value) done
   obtain ⟨finalTyping, same, frame, normal⟩ := result.frame
   have finalEq := normal value rfl
@@ -1140,7 +1151,10 @@ theorem StmtsSource.valueChild {cfg : Cfg} {env : Env} {stmts : List Stmt} {stat
     typingStart := tn', typingEnd := typingEnd, ty := ty, rootsStart := rst',
     rootsEnd := rootsEnd, roots := roots, active := hAct, access := hAcc,
     protection := hMay ▸ hProtected, observed := ?_, classified := result.classified,
-    permission := hp, frame := hInput, typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl⟩
+    permission := hp, frame := hInput, typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl,
+    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member => bc.child_retained_subset rfl all.length
+      (.expression expr) .expression blockValueChild?
+      (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) member⟩⟩
   rw [hMay]
   exact result.observed
 

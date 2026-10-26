@@ -137,7 +137,7 @@ theorem typedBlockReflection_mk {fuel : Nat} {cfg : Cfg} {results : List Ty}
                 rw [roots,rootsEnd]; exact source.rootedValue
               have effects : Core.Sound.EffLe source.rootsEnd.eff sourceS.world.E := by
                 rw [world]; exact source.effects
-              obtain ⟨child,childTyping,childRoots,childTy⟩ := sourceS.valueChild expr blockValue
+              obtain ⟨child,childTyping,childRoots,childTy, _⟩ := sourceS.valueChild expr blockValue
                 source.ty source.typingEnd source.roots source.rootsEnd typed rooted effects n .unit raw
               obtain ⟨final,same,frame,normal⟩ := (sourceS.result n (.normal .unit) raw).frame
               have finalEq := normal .unit rfl

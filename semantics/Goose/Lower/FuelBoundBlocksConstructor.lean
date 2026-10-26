@@ -106,7 +106,7 @@ theorem typedBlockFuelBound_mk {sourceFuel fuel : Nat} {cfg : Cfg} {results : Li
                 rw [roots,rootsEnd]; exact source.rootedValue
               have effects : Core.Sound.EffLe source.rootsEnd.eff sourceS.world.E := by
                 rw [world]; exact source.effects
-              obtain ⟨child,childTyping,childRoots,childTy⟩ := sourceS.valueChild expr blockValue
+              obtain ⟨child,childTyping,childRoots,childTy, _⟩ := sourceS.valueChild expr blockValue
                 source.ty source.typingEnd source.roots source.rootsEnd typed rooted effects sourceFuel .unit raw
               obtain ⟨final,same,frame,normal⟩ := (sourceS.result sourceFuel (.normal .unit) raw).frame
               have finalEq := normal .unit rfl
