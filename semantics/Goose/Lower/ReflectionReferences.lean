@@ -6,48 +6,6 @@ namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Proofs.Fuel
 open Goose.Core.Sound
 
-private theorem postAfterReadValueRootRecipe {cfg : Cfg} {env : Env} {cx : FnCtx}
-    {ls ls1 ls2 : LS} {fr fr' : GIR.Frame} {pt : Pt} {cells : List (ValueId × RVal)}
-    (post : Post cfg env cx ls fr ls1 fr' pt cells)
-    {value : ValueId} {place : Place} {le : LEnv}
-    (recorded : recordReadValueRootRecipe value place le ls1 = ((), ls2)) :
-    Post cfg env cx ls fr ls2 fr' pt cells := by
-  have hrecordState : (recordReadValueRootRecipe value place le ls1).2 = ls2 :=
-    congrArg Prod.snd recorded
-  have hblocks : ls2.blocks = ls1.blocks := by
-    rw [← hrecordState]
-    cases place with
-    | var variableId =>
-      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
-        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
-    | _ => simp [recordReadValueRootRecipe_run]
-  have hvals : ls2.vals = ls1.vals := by
-    rw [← hrecordState]
-    cases place with
-    | var variableId =>
-      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
-        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
-    | _ => simp [recordReadValueRootRecipe_run]
-  have hcur : ls2.cur = ls1.cur := by
-    rw [← hrecordState]
-    cases place with
-    | var variableId =>
-      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
-        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
-    | _ => simp [recordReadValueRootRecipe_run]
-  have hstack : ls2.stack = ls1.stack := by
-    rw [← hrecordState]
-    cases place with
-    | var variableId =>
-      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
-        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
-    | _ => simp [recordReadValueRootRecipe_run]
-  rcases post with ⟨hpp, hhas, hlt, hmono, hsame, hrel⟩
-  refine ⟨by simpa [LS.pp, hblocks, hcur] using hpp, hhas, ?_, ?_, hsame,
-    hrel.stack_eq hstack⟩
-  · simpa [hvals] using hlt
-  · simpa [hvals] using hmono
-
 def TypedArgReflection (fuel : Nat) (cfg : Cfg) (results : List Ty) (arg : Arg) : Prop :=
   ∀ (env : Env) (state : St) (source : ArgSource cfg env state arg),
     source.resultsMatch results →
@@ -73,7 +31,7 @@ theorem typedExprReflection_read {fuel : Nat} {cfg : Cfg} {results : List Ty} {p
     (child : TypedPlaceReflection fuel cfg results place) :
     TypedExprReflection fuel cfg results (.read place) := by
   intro env state source metadata ls after resultId pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨placeSource, typing, roots⟩ := source.readChild
+  obtain ⟨placeSource, typing, roots, _⟩ := source.readChild
   have placeMetadata : SourceResults placeSource.typingEnv placeSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata
@@ -108,7 +66,7 @@ theorem typedExprReflection_read {fuel : Nat} {cfg : Cfg} {results : List Ty} {p
           simp only [execPure, getVal_of cell, expectRef, pure_bind])
     exact ReflectAtFuel.mono loadReflection (by
       intro readValue final point'' frame'' postAfterLoad
-      exact postAfterReadValueRootRecipe postAfterLoad record)
+      exact Post.recordReadValueRootRecipe postAfterLoad record)
   exact composition.of_source (fun n => ⟨n + 1, by simp only [evalExpr]⟩)
 
 theorem typedExprReflection_ref {fuel : Nat} {cfg : Cfg} {results : List Ty} {place : Place}

@@ -409,7 +409,7 @@ theorem field_owner_source (artifact : ArtifactProfile) (profile : NumProfile)
     (cfg := ⟨profile, fieldModule artifact⟩) (state := fieldPrefixState) (g := 1)
     (global := ⟨"field", .bool, .mutable, .read (.field (.global 0) 0), 0⟩)
     accepted rfl (field_prefix artifact profile accepted).invariant
-  obtain ⟨field, hfieldTyping, hfieldRoots⟩ := source.readChild
+  obtain ⟨field, hfieldTyping, hfieldRoots, _⟩ := source.readChild
   obtain ⟨owner, hownerTyping, hownerRoots⟩ := field.fieldChild 0
   have ht := owner.typed
   rw [hownerTyping, hfieldTyping, htyping] at ht
@@ -553,7 +553,7 @@ theorem indexed_children_source (artifact : ArtifactProfile) (profile : NumProfi
     (cfg := ⟨profile, indexedModule artifact index⟩) (state := viewOwnerState) (g := 1)
     (global := ⟨"selected", .bool, .mutable, .read (.elem (.of (.global 0)) (.lit .i64 index) 0), 0⟩)
     accepted rfl (indexed_prefix artifact profile index accepted).invariant
-  obtain ⟨place, hplaceTyping, hplaceRoots⟩ := source.readChild
+  obtain ⟨place, hplaceTyping, hplaceRoots, _⟩ := source.readChild
   obtain ⟨intTy, view, hviewTyping, hviewRoots, _, next⟩ := place.elemChildren 0
   obtain ⟨operand, hoperandTyping, hoperandRoots, hoperandType, _⟩ := next 3
     ⟨⟨.global 0, []⟩, 0, 3, false⟩ { viewOwnerState with nextAct := 2 } (by cbv)
@@ -756,7 +756,7 @@ theorem push_children_source (artifact : ArtifactProfile) (profile : NumProfile)
     (global := ⟨"pushed", .bool, .mutable,
       .read (.deref (.push (.global 0) (.bool true) (pushOrigin artifact))), 0⟩)
     accepted rfl (push_prefix artifact profile capacity accepted).invariant
-  obtain ⟨place, hplaceTyping, hplaceRoots⟩ := source.readChild
+  obtain ⟨place, hplaceTyping, hplaceRoots, _⟩ := source.readChild
   obtain ⟨push, hpushTyping, hpushRoots, mutability, target, hpushType⟩ := place.derefChild (by rfl)
   obtain ⟨owner, hownerTyping, hownerRoots, next⟩ := push.pushChildren (pushOrigin artifact)
   obtain ⟨value, hvalueTyping, hvalueRoots⟩ := next 2 ⟨.global 0, []⟩
@@ -794,7 +794,7 @@ theorem full_push_source (profile : NumProfile) (accepted : Core.validate fullPu
     (cfg := ⟨profile, fullPushModule⟩) (state := fullPushPrefixState) (g := 1)
     (global := ⟨"pushed", .bool, .mutable, .read (.deref (.push (.global 0) (.bool true) (some 0))), 0⟩)
     accepted rfl (full_push_prefix profile accepted).invariant
-  obtain ⟨place, hplaceTyping, hplaceRoots⟩ := source.readChild
+  obtain ⟨place, hplaceTyping, hplaceRoots, _⟩ := source.readChild
   obtain ⟨push, hpushTyping, hpushRoots, mutability, target, hpushType⟩ := place.derefChild (by rfl)
   exact ⟨push⟩
 

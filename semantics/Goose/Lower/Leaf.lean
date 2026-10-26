@@ -246,4 +246,47 @@ theorem Post.rescope {cfg : Cfg} {env env' : Env} {cx : FnCtx} {ls lsp lsk ls_f 
     rw [hfr, h1, hfr0]
 
 
+theorem Post.recordReadValueRootRecipe {cfg : Cfg} {env : Env} {cx : FnCtx}
+    {ls ls1 ls2 : LS} {fr fr' : GIR.Frame} {pt : Pt} {cells : List (ValueId × RVal)}
+    (post : Post cfg env cx ls fr ls1 fr' pt cells)
+    {value : ValueId} {place : Place} {le : LEnv}
+    (recorded : Goose.Lower.recordReadValueRootRecipe value place le ls1 = ((), ls2)) :
+    Post cfg env cx ls fr ls2 fr' pt cells := by
+  have hrecordState : (Goose.Lower.recordReadValueRootRecipe value place le ls1).2 = ls2 :=
+    congrArg Prod.snd recorded
+  have hblocks : ls2.blocks = ls1.blocks := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  have hvals : ls2.vals = ls1.vals := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  have hcur : ls2.cur = ls1.cur := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  have hstack : ls2.stack = ls1.stack := by
+    rw [← hrecordState]
+    cases place with
+    | var variableId =>
+      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
+        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
+    | _ => simp [recordReadValueRootRecipe_run]
+  rcases post with ⟨hpp, hhas, hlt, hmono, hsame, hrel⟩
+  refine ⟨by simpa [LS.pp, hblocks, hcur] using hpp, hhas, ?_, ?_, hsame,
+    hrel.stack_eq hstack⟩
+  · simpa [hvals] using hlt
+  · simpa [hvals] using hmono
+
+
 end Goose.Lower

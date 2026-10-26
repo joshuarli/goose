@@ -12,48 +12,6 @@ open Goose.Core.Sound (World EvaluationContext Observation Frame ShrinkProtected
   PreservesValues PilotStoreLe Gam OwnerRooted PreservesForbiddenOwnerRoots MutationFootprint
   effectMutationRoots PlaceOk Targets)
 
-private theorem postAfterReadValueRootRecipe {cfg : Cfg} {env : Env} {cx : FnCtx}
-    {ls ls1 ls2 : LS} {fr fr' : GIR.Frame} {pt : Pt} {cells : List (ValueId × RVal)}
-    (post : Post cfg env cx ls fr ls1 fr' pt cells)
-    {value : ValueId} {place : Place} {le : LEnv}
-    (recorded : recordReadValueRootRecipe value place le ls1 = ((), ls2)) :
-    Post cfg env cx ls fr ls2 fr' pt cells := by
-  have hrecordState : (recordReadValueRootRecipe value place le ls1).2 = ls2 :=
-    congrArg Prod.snd recorded
-  have hblocks : ls2.blocks = ls1.blocks := by
-    rw [← hrecordState]
-    cases place with
-    | var variableId =>
-      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
-        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
-    | _ => simp [recordReadValueRootRecipe_run]
-  have hvals : ls2.vals = ls1.vals := by
-    rw [← hrecordState]
-    cases place with
-    | var variableId =>
-      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
-        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
-    | _ => simp [recordReadValueRootRecipe_run]
-  have hcur : ls2.cur = ls1.cur := by
-    rw [← hrecordState]
-    cases place with
-    | var variableId =>
-      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
-        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
-    | _ => simp [recordReadValueRootRecipe_run]
-  have hstack : ls2.stack = ls1.stack := by
-    rw [← hrecordState]
-    cases place with
-    | var variableId =>
-      by_cases href : (le.vars[variableId]?).any (fun lv => lv.ty.isRefSlice) <;>
-        simp [recordReadValueRootRecipe_run, recordValueRootSource_run, href]
-    | _ => simp [recordReadValueRootRecipe_run]
-  rcases post with ⟨hpp, hhas, hlt, hmono, hsame, hrel⟩
-  refine ⟨by simpa [LS.pp, hblocks, hcur] using hpp, hhas, ?_, ?_, hsame,
-    hrel.stack_eq hstack⟩
-  · simpa [hvals] using hlt
-  · simpa [hvals] using hmono
-
 structure ExprSource (cfg : Cfg) (env : Env) (expr : Expr) (state : St) where
   accepted : Core.validate cfg.mod = .ok ()
   plans : Array (Array DemandPoint)
@@ -230,6 +188,17 @@ structure ViewSource (cfg : Cfg) (env : Env) (view : View) (state : St) where
   typed : tyView typingEnv view typingStart = .ok ((element, mutable), typingEnd)
   rooted : rpView rootsEnv view rootsStart = .ok (roots, rootsEnd)
   effects : EffLe rootsEnd.eff world.E
+
+structure ExprSource.ReadChildAt {cfg : Cfg} {env : Env} {place : Place} {state : St}
+    (source : ExprSource cfg env (.read place) state) (child : PlaceSource cfg env place state) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [0]
+  plans : child.plans = source.plans
+  context : HEq child.context
+    (source.context.child rfl 0 (.place place) .place rfl (by trivial))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+  inputFuture : child.context.inputFuture = source.context.inputFuture
+  outputFuture : child.context.outputFuture = source.context.outputFuture
 
 structure ViewSource.PlaceChildAt {cfg : Cfg} {env : Env} {place : Place} {state : St}
     (source : ViewSource cfg env (.of place) state) (child : PlaceSource cfg env place state) : Prop where
@@ -811,7 +780,7 @@ theorem PlaceSource.derefChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St
 theorem ExprSource.readChild {cfg : Cfg} {env : Env} {place : Place} {state : St}
     (source : ExprSource cfg env (.read place) state) :
     ∃ child : PlaceSource cfg env place state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv := by
+      child.rootsEnv = source.rootsEnv ∧ source.ReadChildAt child := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyExpr] at ht
@@ -854,7 +823,10 @@ theorem ExprSource.readChild {cfg : Cfg} {env : Env} {place : Place} {state : St
     typingEnd := finish, ty := ty, mutable := mutable, contents := contents, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl,
+      ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+        ec.child_retained_subset rfl 0 (.place place) .place rfl (by trivial) member,
+        hinput, hfuture⟩⟩
   · exact ec.child_activeMatches rfl 0 (.place place) .place rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.place place) .place rfl
@@ -2283,7 +2255,7 @@ theorem typedExprClaim_not {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Exp
 theorem typedExprClaim_read {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) : TypedExprClaim (n + 1) cfg results (.read place) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨child, htyping, hroots⟩ := source.readChild
+  obtain ⟨child, htyping, hroots, _⟩ := source.readChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
@@ -2307,7 +2279,7 @@ theorem typedExprClaim_read {n : Nat} {cfg : Cfg} {results : List Ty} {place : P
   refine SimG.mono (leaf_def P hload hextAfterLoad (by simp) RVal.val ?_) ?_
   · simp only [execPure, getVal_of hx, Goose.Core.expectRef, pure_bind]
   · intro result pt' fr' post
-    exact postAfterReadValueRootRecipe post hrecord
+    exact Post.recordReadValueRootRecipe post hrecord
 
 theorem typedExprClaim_ref {n : Nat} {cfg : Cfg} {results : List Ty} {place : Place}
     (hp : TypedPlaceClaim n cfg results place) (mutability : Mutability) :
@@ -2807,7 +2779,7 @@ theorem read_var_sim (n : Nat) (cfg : Cfg) (results : List Ty) (env : Env) (id :
     refine SimG.mono (leaf_def P hload hextAfterLoad (by simp) RVal.val ?_) ?_
     · simp only [execPure, getVal_of hx, Goose.Core.expectRef, pure_bind]
     · intro value pt' fr' post
-      exact postAfterReadValueRootRecipe post hrecord
+      exact Post.recordReadValueRootRecipe post hrecord
 
 open Core.Sound in
 theorem typedPlaceClaim_deref {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}

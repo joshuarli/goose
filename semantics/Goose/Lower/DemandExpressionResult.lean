@@ -27,7 +27,7 @@ private theorem sourceRetention {m : Core.Module} {world : World} {env : Env}
   · intro mutability element capacity location start length typeEq realized typed
     exact SliceTy.mono growth typed
 
-private theorem canonicalResultAlias {cfg : Cfg} {env : Env} {expression : Expr} {state after : St}
+theorem ExprResult.generated_value {cfg : Cfg} {env : Env} {expression : Expr} {state after : St}
     {source : ExprSource cfg env expression state} {value : Val} (result : ExprResult source value after)
     {cx : FnCtx} {before built : LS} {initial frame : GIR.Frame} {point : Pt} {id : ValueId}
     (post : Post cfg env cx before initial built frame point [(id, .val value)])
@@ -72,6 +72,6 @@ theorem ExpressionDemandBoundary.of_result {cfg : Cfg} {env : Env} {expression :
   have carried := realized.retained post.same bounded.1 bounded.2 retained
   exact ⟨post, ⟨⟨built, post.pp, post.rel⟩, result.frame, carried⟩, bounded.mono post.mono,
     ValueAliasAt.of_post post (v := value) (by simp) ⟨result.typed, result.rooted⟩,
-    fun aliases query alias member => canonicalResultAlias result post query member⟩
+    fun aliases query alias member => result.generated_value post query member⟩
 
 end Goose.Lower
