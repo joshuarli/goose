@@ -102,6 +102,24 @@ structure CheckedView (frame : ConstructionSourceFrame) (view : View) (element :
   provenance : (rpView frame.source view).run frame.rootCursor = .ok (roots, rootsAfter)
   available : GlobalEffectsAvailable frame.interpretation frame.initialized rootsAfter.eff
 
+def implementationBodyFrame (config : EvalConfig) (frame : ConstructionSourceFrame) : ConstructionSourceFrame :=
+  { frame with
+    typing := {
+      module := config.module
+      implementation := some frame.source.impl
+      variables := frame.source.impl.vars
+      visible := List.range frame.source.impl.params.size
+      scope := frame.source.impl.body.scope
+      loops := 0
+      use := if frame.source.impl.results.isEmpty then .ordinary else .result
+      request := .value
+      resultRequests := frame.source.impl.results.toList.map (·.request)
+      globalLimit := config.module.globals.size }
+    source := { frame.source with scopes := [], valueBlock := none, initializing := [] }
+    typingFuel := 4096
+    typingCounter := frame.source.impl.params.size
+    rootCursor := ⟨frame.source.impl.params.size, {}, []⟩ }
+
 #print axioms acceptedModule
 #print axioms AcceptedModule.aliases_size
 

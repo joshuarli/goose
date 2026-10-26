@@ -9,6 +9,13 @@ open Goose.Proofs.ConstructionRootCorrespondence
 
 inductive SourceAction
   | expression (value : Expr)
+  | bound (value : Bound)
+  | place (value : Place)
+  | view (value : View)
+  | arguments (implementation : Impl) (parameters : List Param) (values : List Arg)
+  | printArgument (value : PrintArg)
+  | operands (requests : List Goose.Core.Request) (values : List Expr)
+  | preBlock (pre : List Nat) (value : Block)
   | statement (value : Stmt)
   | statements (values : List Stmt)
   | block (value : Block)
@@ -17,6 +24,27 @@ def SourceActionChecks (frame : ConstructionSourceFrame) : SourceAction → Prop
   | .expression expression => ∃ types typingAfter roots rootsAfter,
       typeExpr frame.typingFuel frame.typing expression frame.typingCounter = .ok (types, typingAfter) ∧
       rpExpr frame.source expression frame.rootCursor = .ok (roots, rootsAfter)
+  | .bound bound => ∃ typingAfter rootsAfter,
+      typeBound frame.typingFuel frame.typing bound frame.typingCounter = .ok ((), typingAfter) ∧
+      rpBound frame.source bound frame.rootCursor = .ok ((), rootsAfter)
+  | .place place => ∃ ty binding contents typingAfter roots rootsAfter,
+      typePlace frame.typingFuel frame.typing place frame.typingCounter = .ok ((ty, binding, contents), typingAfter) ∧
+      rpPlace frame.source place frame.rootCursor = .ok (roots, rootsAfter)
+  | .view view => ∃ element writable typingAfter roots rootsAfter,
+      typeView frame.typingFuel frame.typing view frame.typingCounter = .ok ((element, writable), typingAfter) ∧
+      rpView frame.source view frame.rootCursor = .ok (roots, rootsAfter)
+  | .arguments implementation parameters arguments => ∃ typingAfter roots rootsAfter,
+      typeArguments frame.typingFuel frame.typing implementation parameters arguments frame.typingCounter = .ok ((), typingAfter) ∧
+      rpArgs frame.source arguments frame.rootCursor = .ok (roots, rootsAfter)
+  | .printArgument argument => ∃ typingAfter rootsAfter,
+      typePrint frame.typingFuel frame.typing [argument] frame.typingCounter = .ok ((), typingAfter) ∧
+      rpPrintArgs frame.source [argument] frame.rootCursor = .ok ((), rootsAfter)
+  | .operands requests expressions => ∃ types typingAfter roots rootsAfter,
+      typeValueOperands frame.typingFuel frame.typing requests expressions frame.typingCounter = .ok (types, typingAfter) ∧
+      rpExprs frame.source expressions frame.rootCursor = .ok (roots, rootsAfter)
+  | .preBlock pre block => ∃ types typingAfter roots rootsAfter,
+      typeBlock frame.typingFuel frame.typing block frame.typingCounter = .ok (types, typingAfter) ∧
+      rpBlockValue frame.source pre block frame.rootCursor = .ok (roots, rootsAfter)
   | .statement statement => ∃ next typingAfter rootsAfter,
       typeStatement frame.typingFuel frame.typing statement frame.typingCounter = .ok (next, typingAfter) ∧
       rpStmt frame.source statement frame.rootCursor = .ok ((), rootsAfter)
@@ -27,23 +55,52 @@ def SourceActionChecks (frame : ConstructionSourceFrame) : SourceAction → Prop
       typeBlock frame.typingFuel frame.typing block frame.typingCounter = .ok (types, typingAfter) ∧
       rpBlockValue frame.source [] block frame.rootCursor = .ok (roots, rootsAfter)
 
-def implementationBodyFrame (config : EvalConfig) (frame : ConstructionSourceFrame) : ConstructionSourceFrame :=
-  { frame with
-    typing := {
-      module := config.module
-      implementation := some frame.source.impl
-      variables := frame.source.impl.vars
-      visible := List.range frame.source.impl.params.size
-      scope := frame.source.impl.body.scope
-      loops := 0
-      use := if frame.source.impl.results.isEmpty then .ordinary else .result
-      request := .value
-      resultRequests := frame.source.impl.results.toList.map (·.request)
-      globalLimit := config.module.globals.size }
-    source := { frame.source with scopes := [], valueBlock := none, initializing := [] }
-    typingFuel := 4096
-    typingCounter := frame.source.impl.params.size
-    rootCursor := ⟨frame.source.impl.params.size, {}, []⟩ }
+def SourceActionAdvances (frame : ConstructionSourceFrame) (after : ConstructionSourceFrame) : SourceAction → Prop
+  | .expression expression => ∃ types typingAfter roots rootsAfter,
+      typeExpr frame.typingFuel frame.typing expression frame.typingCounter = .ok (types, typingAfter) ∧
+      rpExpr frame.source expression frame.rootCursor = .ok (roots, rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .bound bound => ∃ typingAfter rootsAfter,
+      typeBound frame.typingFuel frame.typing bound frame.typingCounter = .ok ((), typingAfter) ∧
+      rpBound frame.source bound frame.rootCursor = .ok ((), rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .place place => ∃ ty binding contents typingAfter roots rootsAfter,
+      typePlace frame.typingFuel frame.typing place frame.typingCounter = .ok ((ty, binding, contents), typingAfter) ∧
+      rpPlace frame.source place frame.rootCursor = .ok (roots, rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .view view => ∃ element writable typingAfter roots rootsAfter,
+      typeView frame.typingFuel frame.typing view frame.typingCounter = .ok ((element, writable), typingAfter) ∧
+      rpView frame.source view frame.rootCursor = .ok (roots, rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .arguments implementation parameters arguments => ∃ typingAfter roots rootsAfter,
+      typeArguments frame.typingFuel frame.typing implementation parameters arguments frame.typingCounter = .ok ((), typingAfter) ∧
+      rpArgs frame.source arguments frame.rootCursor = .ok (roots, rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .printArgument argument => ∃ typingAfter rootsAfter,
+      typePrint frame.typingFuel frame.typing [argument] frame.typingCounter = .ok ((), typingAfter) ∧
+      rpPrintArgs frame.source [argument] frame.rootCursor = .ok ((), rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .operands requests expressions => ∃ types typingAfter roots rootsAfter,
+      typeValueOperands frame.typingFuel frame.typing requests expressions frame.typingCounter = .ok (types, typingAfter) ∧
+      rpExprs frame.source expressions frame.rootCursor = .ok (roots, rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .preBlock pre block => ∃ types typingAfter roots rootsAfter,
+      typeBlock frame.typingFuel frame.typing block frame.typingCounter = .ok (types, typingAfter) ∧
+      rpBlockValue frame.source pre block frame.rootCursor = .ok (roots, rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .statement statement => ∃ next typingAfter rootsAfter,
+      typeStatement frame.typingFuel frame.typing statement frame.typingCounter = .ok (next, typingAfter) ∧
+      rpStmt frame.source statement frame.rootCursor = .ok ((), rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .statements statements => ∃ next typingAfter rootsAfter,
+      typeStatements frame.typingFuel frame.typing statements frame.typingCounter = .ok (next, typingAfter) ∧
+      rpStmts frame.source statements frame.rootCursor = .ok ((), rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+  | .block block => ∃ types typingAfter roots rootsAfter,
+      typeBlock frame.typingFuel frame.typing block frame.typingCounter = .ok (types, typingAfter) ∧
+      rpBlockValue frame.source [] block frame.rootCursor = .ok (roots, rootsAfter) ∧
+      after = { frame with typingCounter := typingAfter, rootCursor := rootsAfter }
+
 
 theorem implementationBodyFrame_checks (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (context : Nat) (phase : frame.phase = .implementation context)
