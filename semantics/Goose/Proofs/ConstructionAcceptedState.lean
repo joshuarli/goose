@@ -1,6 +1,7 @@
 import Goose.Proofs.ConstructionAcceptedSource
 import Goose.Proofs.ConstructionRootedBackingPrefixes
 import Goose.Proofs.ExitExecutionLiveCarriers
+import Goose.Proofs.ConstructionRootCorrespondenceLayout
 
 set_option Elab.async false
 
@@ -75,6 +76,7 @@ structure AcceptedWorld (config : EvalConfig) (initialized : Nat) (state : Execu
   globalLive : ∀ id, id < initialized → liveRoots (.global id)
   globalTypes : ∀ id descriptor, config.module.globals[id]? = some descriptor →
     types (.global id) = some descriptor.ty
+  layouts : ∀ root ty, types root = some ty → LayoutConforms config.layout ty
   typeFrontier : ∀ act scope id ty, types (.local act scope id) = some ty →
     act < state.nextAct ∧ scope < state.nextScope
   heap : ∀ root ty value, types root = some ty → state.objects.lookup root = some value →
@@ -108,9 +110,9 @@ def declaredRootTypes (module : Module) : RootTypes
   | .global id => (module.globals[id]?).map (·.ty)
   | .local _ _ _ => none
 
-theorem initial_acceptedWorld (config : EvalConfig) :
+theorem initial_acceptedWorld (config : EvalConfig) (accepted : validate config.module = .ok ()) :
     AcceptedWorld config 0 .initial [] (declaredRootTypes config.module) (fun _ => False) [] [] := by
-  refine ⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_, ?_,
+  refine ⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_, ?_, ?_,
     initial_rootedBackingState config.layout _, ?_, ?_⟩
   · intro id bound
     exact (Nat.not_lt_zero id bound).elim
@@ -118,6 +120,17 @@ theorem initial_acceptedWorld (config : EvalConfig) :
     exact (Nat.not_lt_zero id bound).elim
   · intro id descriptor present
     simp only [declaredRootTypes, present, Option.map_some]
+  · intro root ty present
+    cases root with
+    | global id =>
+      cases declared : config.module.globals[id]? with
+      | none => simp only [declaredRootTypes, declared, Option.map_none, reduceCtorEq] at present
+      | some descriptor =>
+        have same : descriptor.ty = ty := by
+          simpa only [declaredRootTypes, declared, Option.map_some, Option.some.injEq] using present
+        subst ty
+        exact validated_global_layoutConforms config.module id descriptor accepted declared
+    | «local» act scope id => cases present
   · intro act scope id ty present
     cases present
   · intro root ty value typed present

@@ -146,9 +146,56 @@ theorem bindRoot_freshStored_registered (layout : LayoutEnv) (types : RootTypes)
   cases same
   exact ⟨after, evaluated, context, validBacking, extended, validHeap, construction⟩
 
+theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (liveRoots : RootInst → Prop) (root : RootInst) (ty : Ty) (stored : StoredValue)
+    (world : AcceptedWorld config initialized before ambient types liveRoots [] [])
+    (compatible : RootTypeCompatible types root ty) (conforms : LayoutConforms config.layout ty)
+    (represented : ValueRepresentation ty (.stored stored)) (backed : StoredValueBacking config.layout before stored)
+    (fresh : before.objectOrdinals.lookup root = none)
+    (freshType : ∀ act scope id, root = .local act scope id → act < before.nextAct ∧ scope < before.nextScope) :
+    ∃ after, bindRoot root (.stored stored) before = .ok () after ∧
+      RootTypesExtend types (registerRootType types root ty) ∧
+      AcceptedWorld config initialized after ambient (registerRootType types root ty)
+        (fun other => other = root ∨ liveRoots other) [] [] := by
+  let after := { before with
+    objects := (root, .stored stored) :: before.objects.filter (fun entry => entry.1 != root)
+    objectOrdinals := (root, stored.object.getD stored.storage) :: before.objectOrdinals.filter (fun entry => entry.1 != root) }
+  have actual : bindRoot root (.stored stored) before = .ok () after := by
+    simp [bindRoot, fresh, setObjectOrdinal, bindStaticRoot, EvalM.get, EvalM.set, bind, after]
+  obtain ⟨middle, evaluated, context, backing, extended, heap, construction⟩ :=
+    bindRoot_freshStored_registered config.layout types before ambient liveRoots root ty stored world.ownership
+      world.backing world.heap compatible represented backed fresh
+  have same := (ExecutionStep.ok.inj (evaluated.symm.trans actual)).2
+  subst middle
+  refine ⟨after, actual, extended, context, ?_, ?_, ?_, ?_, ?_, heap, backing, ?_, ?_⟩
+  · refine ⟨world.globals.1, ?_⟩
+    intro id available
+    obtain ⟨descriptor, old, declared, found, represented⟩ := world.globals.2 id available
+    by_cases same : RootInst.global id = root
+    · have present : after.objects.lookup (.global id) = some (.stored stored) := by
+        simp only [after, same, List.lookup, beq_self_eq_true]
+      exact ⟨descriptor, .stored stored, declared, present,
+        (heap _ _ _ (extended _ _ (world.globalTypes id descriptor declared)) present).1⟩
+    · have present : after.objects.lookup (.global id) = some old := by
+        rw [bindRoot_lookup_other root (.global id) (.stored stored) before after actual same]
+        exact found
+      exact ⟨descriptor, old, declared, present, represented⟩
+  · intro id available
+    exact Or.inr (world.globalLive id available)
+  · intro id descriptor declared
+    exact extended _ _ (world.globalTypes id descriptor declared)
+  · exact registerRootType_layouts config.layout types root ty world.layouts conforms
+  · exact registerRootType_frontier types before root ty world.typeFrontier freshType
+  · intro region present
+    cases present
+  · intro frame present
+    cases present
+
 #print axioms bindRoot_registeredHeap
 #print axioms registerRootType_frontier
 #print axioms bindRoot_freshStored_registered
 #print axioms registerRootType_layouts
+#print axioms bindRoot_freshStored_world
 
 end Goose.Proofs.ConstructionAcceptedExecution
