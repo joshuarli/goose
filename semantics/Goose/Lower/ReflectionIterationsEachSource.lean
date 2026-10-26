@@ -81,7 +81,7 @@ theorem EachPlan.sourceReflection {fuel : Nat} {cfg : Cfg} {env : Env} {initial 
       exact ReflectAtFuel.ret residual (by simpa [EachSourceCells] using post)
     exact composition.of_source (fun n => ⟨n + 1,by simp only [evalView,bind_assoc]⟩)
   | val expr =>
-    obtain ⟨child,typing,roots,mutability,type⟩ := plan.viewSource.valChild
+    obtain ⟨child,typing,roots,mutability,type, _⟩ := plan.viewSource.valChild
     have childMetadata : SourceResults child.typingEnv child.rootsEnv results := by
       rw [typing,roots]; exact viewMetadata
     simp only [lowerEachSource,bind_eq] at lowering

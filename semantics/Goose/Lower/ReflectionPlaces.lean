@@ -256,7 +256,7 @@ theorem typedViewReflection_val {fuel : Nat} {cfg : Cfg} {results : List Ty} {ex
     (child : TypedExprReflection fuel cfg results expr) :
     TypedViewReflection fuel cfg results (.val expr) := by
   intro env state source metadata ls after id pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨childSource, typing, roots, mutability, type⟩ := source.valChild
+  obtain ⟨childSource, typing, roots, mutability, type, _⟩ := source.valChild
   have childMetadata : SourceResults childSource.typingEnv childSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata
@@ -291,7 +291,7 @@ theorem typedBoundReflection_expr {fuel : Nat} {cfg : Cfg} {results : List Ty} {
     (child : TypedExprReflection fuel cfg results expr) :
     TypedBoundReflection fuel cfg results (.expr expr) := by
   intro env state source metadata ls after bnd pt cx fr length default lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨childSource, typing, roots, intTy, type⟩ := source.expressionChild false
+  obtain ⟨childSource, typing, roots, intTy, type, _⟩ := source.expressionChild false
   have childMetadata : SourceResults childSource.typingEnv childSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata
@@ -324,7 +324,7 @@ theorem typedBoundReflection_fromEnd {fuel : Nat} {cfg : Cfg} {results : List Ty
     (child : TypedExprReflection fuel cfg results expr) :
     TypedBoundReflection fuel cfg results (.fromEnd expr) := by
   intro env state source metadata ls after bnd pt cx fr length default lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨childSource, typing, roots, intTy, type⟩ := source.expressionChild true
+  obtain ⟨childSource, typing, roots, intTy, type, _⟩ := source.expressionChild true
   have childMetadata : SourceResults childSource.typingEnv childSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata

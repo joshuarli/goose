@@ -120,6 +120,17 @@ inductive GeneratedDemandOccurrence (m : Core.Module) :
       {view : View} {index : Expr} {origin : OriginId}
       (occurrence : GeneratedDemandOccurrence m function le root path (.place (.elem view index origin)) before) :
       GeneratedDemandOccurrence m function le root (path ++ [1]) (.expression index) (lowerView view le before).2
+  | sliceLower {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {mutability : Mutability} {view : View} {low high : Bound} {origin : OriginId}
+      (occurrence : GeneratedDemandOccurrence m function le root path
+        (.expression (.slice mutability view low high origin)) before) :
+      GeneratedDemandOccurrence m function le root (path ++ [1]) (.bound low) (lowerView view le before).2
+  | sliceUpper {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {mutability : Mutability} {view : View} {low high : Bound} {origin : OriginId}
+      (occurrence : GeneratedDemandOccurrence m function le root path
+        (.expression (.slice mutability view low high origin)) before) :
+      GeneratedDemandOccurrence m function le root (path ++ [2]) (.bound high)
+        (lowerBound low le (lowerView view le before).2).2
   | pushValue {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {owner : Place} {value : Expr} {origin : Option OriginId}
       (occurrence : GeneratedDemandOccurrence m function le root path (.expression (.push owner value origin)) before) :
@@ -172,6 +183,8 @@ theorem GeneratedDemandOccurrence.source {m : Core.Module} {function : Func} {le
   | @shortCircuitRight function le root path before isAnd left right occurrence live induction =>
     cases isAnd <;> exact induction.snoc 1 rfl
   | index occurrence induction => exact induction.snoc 1 rfl
+  | sliceLower occurrence induction => exact induction.snoc 1 rfl
+  | sliceUpper occurrence induction => exact induction.snoc 2 rfl
   | pushValue occurrence induction => exact induction.snoc 1 rfl
   | @argument function le root path before context arguments origin index argument occurrence argumentAt induction =>
     apply induction.snoc index

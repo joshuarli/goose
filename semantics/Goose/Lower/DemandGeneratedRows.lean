@@ -59,6 +59,24 @@ inductive GeneratedDemandRows (m : Core.Module) (access : AccessEnv) :
       (query : access.aliasView (path ++ [0]) view = .ok aliases) :
       GeneratedDemandRows m access (.index occurrence)
         (required.addRuns (lowerView view le before).1 aliases)
+  | sliceLower {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {mutability : Mutability} {view : View} {low high : Bound} {origin : OriginId}
+      {occurrence : GeneratedDemandOccurrence m function le root path
+        (.expression (.slice mutability view low high origin)) before}
+      {required : RetainedSsaMap} {aliases : List RetainedAlias}
+      (rows : GeneratedDemandRows m access occurrence required)
+      (query : access.aliasView (path ++ [0]) view = .ok aliases) :
+      GeneratedDemandRows m access (.sliceLower occurrence)
+        (required.addRuns (lowerView view le before).1 aliases)
+  | sliceUpper {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {mutability : Mutability} {view : View} {low high : Bound} {origin : OriginId}
+      {occurrence : GeneratedDemandOccurrence m function le root path
+        (.expression (.slice mutability view low high origin)) before}
+      {required : RetainedSsaMap} {aliases : List RetainedAlias}
+      (rows : GeneratedDemandRows m access occurrence required)
+      (query : access.aliasView (path ++ [0]) view = .ok aliases) :
+      GeneratedDemandRows m access (.sliceUpper occurrence)
+        (required.addRuns (lowerView view le before).1 aliases)
   | pushValue {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {owner : Place} {value : Expr} {origin : Option OriginId}
       {occurrence : GeneratedDemandOccurrence m function le root path (.expression (.push owner value origin)) before}

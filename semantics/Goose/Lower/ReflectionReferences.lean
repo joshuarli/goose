@@ -151,7 +151,7 @@ theorem typedExprReflection_slice {fuel : Nat} {cfg : Cfg} {results : List Ty}
     (highChild : ∀ residual, residual ≤ fuel → TypedBoundReflection residual cfg results high) :
     TypedExprReflection fuel cfg results (.slice mutability view low high origin) := by
   intro env state source metadata ls after resultId pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨viewSource, viewTyping, viewRoots, next⟩ := source.sliceChildren mutability origin
+  obtain ⟨viewSource, viewTyping, viewRoots, _, next⟩ := source.sliceChildren mutability origin
   have viewMetadata : SourceResults viewSource.typingEnv viewSource.rootsEnv results := by
     rw [viewTyping, viewRoots]
     exact metadata
@@ -182,7 +182,7 @@ theorem typedExprReflection_slice {fuel : Nat} {cfg : Cfg} {results : List Ty}
     refine viewReflection.bind ?_ (fun n k bound => (monoAll n k bound).view cfg env view)
       sliceBoundsMonotone
     intro n sampled nextState pt' fr' viewDone viewPost residual residualBound
-    obtain ⟨lowerSource, lowerTyping, lowerRoots, upperSources⟩ :=
+    obtain ⟨lowerSource, lowerTyping, lowerRoots, _, upperSources⟩ :=
       next n sampled nextState viewDone
     have lowerMetadata : SourceResults lowerSource.typingEnv lowerSource.rootsEnv results := by
       rw [lowerTyping, lowerRoots]
@@ -199,7 +199,7 @@ theorem typedExprReflection_slice {fuel : Nat} {cfg : Cfg} {results : List Ty}
       refine firstBounds.bind ?_ (fun k j bound =>
         (monoAll k j bound).bound cfg env sampled.len 0 low) ?_
       · intro k lower lowerAfter pt'' fr'' lowerDone lowerPost remaining remainingBound
-        obtain ⟨upperSource, upperTyping, upperRoots⟩ :=
+        obtain ⟨upperSource, upperTyping, upperRoots, _⟩ :=
           upperSources k lower lowerAfter lowerDone
         obtain ⟨lowCells, lowSpec, lowPostState⟩ := lowerPost
         have upperMetadata : SourceResults upperSource.typingEnv upperSource.rootsEnv results := by

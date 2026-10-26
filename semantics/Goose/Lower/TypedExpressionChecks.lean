@@ -501,7 +501,7 @@ theorem view_val_child_source (artifact : ArtifactProfile) (profile : NumProfile
       (.slice .readOnly (.of (.global 0)) .omitted .omitted 0)
       { viewOwnerState with nextAct := 2 }) := by
   obtain ⟨source⟩ := view_val_source artifact profile accepted
-  obtain ⟨child, htyping, hroots, mutability, htype⟩ := source.valChild
+  obtain ⟨child, htyping, hroots, mutability, htype, _⟩ := source.valChild
   exact ⟨child⟩
 
 theorem view_val_result (artifact : ArtifactProfile) (profile : NumProfile)
@@ -619,11 +619,11 @@ theorem bounded_slice_sources (artifact : ArtifactProfile) (profile : NumProfile
     (global := ⟨"length", .int .i64, .mutable, .len (.val (boundedSlice low)), 0⟩)
     accepted rfl (bounded_slice_prefix artifact profile low accepted).invariant
   obtain ⟨view, hviewTyping, hviewRoots⟩ := source.lenChild
-  obtain ⟨slice, hsliceTyping, hsliceRoots, mutable, hsliceType⟩ := view.valChild
-  obtain ⟨sampled, hsampledTyping, hsampledRoots, next⟩ := slice.sliceChildren .readOnly 0
-  obtain ⟨lower, hltyping, hlroots, nextLow⟩ := next 4 ⟨⟨.global 0, []⟩, 0, 3, false⟩
+  obtain ⟨slice, hsliceTyping, hsliceRoots, mutable, hsliceType, _⟩ := view.valChild
+  obtain ⟨sampled, hsampledTyping, hsampledRoots, _, next⟩ := slice.sliceChildren .readOnly 0
+  obtain ⟨lower, hltyping, hlroots, _, nextLow⟩ := next 4 ⟨⟨.global 0, []⟩, 0, 3, false⟩
     { viewOwnerState with nextAct := 2 } (by cbv)
-  obtain ⟨upper, hhtyping, hhroots⟩ := nextLow 4 low { viewOwnerState with nextAct := 2 }
+  obtain ⟨upper, hhtyping, hhroots, _⟩ := nextLow 4 low { viewOwnerState with nextAct := 2 }
     (by simp [evalBound, evalExpr, Core.expectInt, bind_apply, pure_apply])
   exact ⟨lower, upper, hltyping.trans hhtyping.symm⟩
 

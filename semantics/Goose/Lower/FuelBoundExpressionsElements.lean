@@ -75,7 +75,7 @@ theorem typedExprFuelBound_slice {sourceFuel fuel : Nat} {cfg : Cfg} {results : 
     (highChild : ∀ residual, residual ≤ fuel → TypedBoundFuelBound sourceFuel residual cfg results high) :
     TypedExprFuelBound (sourceFuel + 1) fuel cfg results (.slice mutability view low high origin) := by
   intro env state source metadata ls after resultId pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨viewSource, viewTyping, viewRoots, next⟩ := source.sliceChildren mutability origin
+  obtain ⟨viewSource, viewTyping, viewRoots, _, next⟩ := source.sliceChildren mutability origin
   have viewMetadata : SourceResults viewSource.typingEnv viewSource.rootsEnv results := by
     rw [viewTyping, viewRoots]
     exact metadata
@@ -100,7 +100,7 @@ theorem typedExprFuelBound_slice {sourceFuel fuel : Nat} {cfg : Cfg} {results : 
       (fun value _ pt' fr' => Post cfg env cx ls fr after fr' pt' [(resultId,.val value)]) state := by
     refine viewReflection.bind ?_
     intro sampled nextState pt' fr' viewDone viewPost residual residualBound
-    obtain ⟨lowerSource, lowerTyping, lowerRoots, upperSources⟩ :=
+    obtain ⟨lowerSource, lowerTyping, lowerRoots, _, upperSources⟩ :=
       next sourceFuel sampled nextState viewDone
     have lowerMetadata : SourceResults lowerSource.typingEnv lowerSource.rootsEnv results := by
       rw [lowerTyping, lowerRoots]
@@ -116,7 +116,7 @@ theorem typedExprFuelBound_slice {sourceFuel fuel : Nat} {cfg : Cfg} {results : 
           Post cfg env cx ls fr after fr'' pt'' [(resultId,.val value)]) nextState := by
       refine firstBounds.bind ?_
       intro lower lowerAfter pt'' fr'' lowerDone lowerPost remaining remainingBound
-      obtain ⟨upperSource, upperTyping, upperRoots⟩ :=
+      obtain ⟨upperSource, upperTyping, upperRoots, _⟩ :=
         upperSources sourceFuel lower lowerAfter lowerDone
       obtain ⟨lowCells, lowSpec, lowPostState⟩ := lowerPost
       have upperMetadata : SourceResults upperSource.typingEnv upperSource.rootsEnv results := by

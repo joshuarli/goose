@@ -211,6 +211,28 @@ structure ViewSource.PlaceChildAt {cfg : Cfg} {env : Env} {place : Place} {state
   inputFuture : child.context.inputFuture = source.context.inputFuture
   outputFuture : child.context.outputFuture = source.context.outputFuture
 
+structure ViewSource.ExpressionChildAt {cfg : Cfg} {env : Env} {expression : Expr} {state : St}
+    (source : ViewSource cfg env (.val expression) state) (child : ExprSource cfg env expression state) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [0]
+  plans : child.plans = source.plans
+  context : HEq child.context
+    (source.context.child rfl 0 (.expression expression) .expression rfl (by trivial))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+  inputFuture : child.context.inputFuture = source.context.inputFuture
+  outputFuture : child.context.outputFuture = source.context.outputFuture
+
+structure ExprSource.ViewChildAt {cfg : Cfg} {env : Env} {expression : Expr} {view : View}
+    {state childState : St} (source : ExprSource cfg env expression state)
+    (child : ViewSource cfg env view childState) (index : Nat)
+    (found : DemandNode.child? (.expression expression) index = some (.view view)) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [index]
+  plans : child.plans = source.plans
+  context : HEq child.context
+    (source.context.child rfl index (.view view) .view found (by trivial))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+
 structure PlaceSource.ViewChildAt {cfg : Cfg} {env : Env} {place : Place} {view : View}
     {state childState : St} (source : PlaceSource cfg env place state)
     (child : ViewSource cfg env view childState) (index : Nat)
@@ -483,10 +505,34 @@ theorem ExprSource.unChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (o
   · intro alias member
     exact ec.child_retained_subset rfl 0 (.expression expr) .expression rfl (by trivial) member
 
+structure BoundSource.ExpressionChildAt {cfg : Cfg} {env : Env} {bound : Bound} {expression : Expr} {state : St}
+    (source : BoundSource cfg env bound state) (child : ExprSource cfg env expression state)
+    (found : DemandNode.child? (.bound bound) 0 = some (.expression expression)) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [0]
+  plans : child.plans = source.plans
+  context : HEq child.context
+    (source.context.child rfl 0 (.expression expression) .expression found (by trivial))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+  inputFuture : child.context.inputFuture = source.context.inputFuture
+  outputFuture : child.context.outputFuture = source.context.outputFuture
+
+structure ExprSource.BoundChildAt {cfg : Cfg} {env : Env} {expression : Expr} {bound : Bound}
+    {state childState : St} (source : ExprSource cfg env expression state)
+    (child : BoundSource cfg env bound childState) (index : Nat)
+    (found : DemandNode.child? (.expression expression) index = some (.bound bound)) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [index]
+  plans : child.plans = source.plans
+  context : HEq child.context
+    (source.context.child rfl index (.bound bound) .bound found (by trivial))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+
 theorem BoundSource.expressionChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (fromEnd : Bool)
     (source : BoundSource cfg env (if fromEnd then .fromEnd expr else .expr expr) state) :
     ∃ child : ExprSource cfg env expr state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv ∧ ∃ intTy, child.ty = .int intTy := by
+      child.rootsEnv = source.rootsEnv ∧ ∃ intTy, child.ty = .int intTy ∧
+      source.ExpressionChildAt child (by cases fromEnd <;> rfl) := by
   cases fromEnd
   all_goals (
     have ht := source.typed
@@ -528,7 +574,9 @@ theorem BoundSource.expressionChild {cfg : Cfg} {env : Env} {expr : Expr} {state
       typingEnd := finish, ty := .int intTy, rootsStart := source.rootsStart, rootsEnd := source.rootsEnd,
       roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
       classified := source.classified, permission := source.permission, frame := ?_,
-      typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, rfl⟩
+      typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, rfl,
+      ⟨rfl, rfl, rfl, HEq.rfl, fun alias member => ec.child_retained_subset rfl 0
+        (.expression expr) .expression rfl (by trivial) member, hinput, hfuture⟩⟩
     · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
         source.typingEnv source.typingEnv source.active (by intro x; rfl)
     · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -1006,7 +1054,7 @@ theorem ViewSource.ofChild {cfg : Cfg} {env : Env} {place : Place} {state : St}
 
 theorem ViewSource.valChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (source : ViewSource cfg env (.val expr) state) :
     ∃ child : ExprSource cfg env expr state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv ∧ ∃ mutability, child.ty = .slice mutability source.element := by
+      child.rootsEnv = source.rootsEnv ∧ ∃ mutability, child.ty = .slice mutability source.element ∧ source.ExpressionChildAt child := by
   have ht := source.typed
   simp only [tyView] at ht
   inv at ht
@@ -1047,7 +1095,9 @@ theorem ViewSource.valChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (
     typingEnd := finish, ty := .slice mutability element, rootsStart := source.rootsStart, rootsEnd := source.rootsEnd,
     roots := source.roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, mutability, by rw [helement]⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, mutability, by rw [helement],
+    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member => ec.child_retained_subset rfl 0
+      (.expression expr) .expression rfl (by trivial) member, hinput, hfuture⟩⟩
   · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -1864,13 +1914,16 @@ theorem ExprSource.sliceChildren {cfg : Cfg} {env : Env} {view : View} {low high
     (source : ExprSource cfg env (.slice mutability view low high origin) state) :
     ∃ sampled : ViewSource cfg env view state,
       sampled.typingEnv = source.typingEnv ∧ sampled.rootsEnv = source.rootsEnv ∧
+      source.ViewChildAt sampled 0 rfl ∧
       ∀ n value after, evalView n cfg env view state = .ok value after →
         ∃ lower : BoundSource cfg env low after,
           lower.typingEnv = source.typingEnv ∧ lower.rootsEnv = source.rootsEnv ∧
+          source.BoundChildAt lower 1 rfl ∧
           ∀ k lowerValue lowerAfter,
             evalBound k cfg env value.len 0 low after = .ok lowerValue lowerAfter →
             ∃ upper : BoundSource cfg env high lowerAfter,
-              upper.typingEnv = source.typingEnv ∧ upper.rootsEnv = source.rootsEnv := by
+              upper.typingEnv = source.typingEnv ∧ upper.rootsEnv = source.rootsEnv ∧
+              source.BoundChildAt upper 2 rfl := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyExpr] at ht
@@ -1976,7 +2029,8 @@ theorem ExprSource.sliceChildren {cfg : Cfg} {env : Env} {view : View} {low high
     observed := by simpa [hVShrink] using source.observed,
     classified := source.classified, permission := source.permission, frame := hViewFrame,
     typed := hview, rooted := hrview, effects := hE1 }
-  refine ⟨sampled, rfl, rfl, ?_⟩
+  refine ⟨sampled, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+    ec.child_retained_subset rfl 0 (.view view) .view rfl (by trivial) member⟩, ?_⟩
   intro n value after hdone
   have viewResult := sampled.result n value hdone
   have hVF : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env after
@@ -2007,7 +2061,8 @@ theorem ExprSource.sliceChildren {cfg : Cfg} {env : Env} {view : View} {low high
     observed := by simpa only [sampled, hVShrink, hLShrink] using viewResult.observed,
     classified := viewResult.classified, permission := source.permission, frame := hLowFrame,
     typed := hlow, rooted := hrlow, effects := hE2 }
-  refine ⟨lower, rfl, rfl, ?_⟩
+  refine ⟨lower, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+    ec.child_retained_subset rfl 1 (.bound low) .bound rfl (by trivial) member⟩, ?_⟩
   intro k lowerValue lowerAfter hlowDone
   have lowResult := lower.result k value.len 0 lowerValue hlowDone
   have hLF : Core.Sound.Frame cfg.mod source.world source.typingEnv source.rootsEnv env lowerAfter
@@ -2037,7 +2092,9 @@ theorem ExprSource.sliceChildren {cfg : Cfg} {env : Env} {view : View} {low high
     protection := by simpa [hHShrink] using source.protection,
     observed := by simpa only [lower, hLShrink, hHShrink] using lowResult.observed,
     classified := lowResult.classified, permission := source.permission, frame := hHighFrame,
-    typed := hhigh, rooted := hrhigh, effects := hE3 }, rfl, rfl⟩
+    typed := hhigh, rooted := hrhigh, effects := hE3 }, rfl, rfl,
+    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+      ec.child_retained_subset rfl 2 (.bound high) .bound rfl (by trivial) member⟩⟩
 
 theorem typedExprClaim_zero (cfg : Cfg) (results : List Ty) (expr : Expr) :
     TypedExprClaim 0 cfg results expr := by
@@ -2074,7 +2131,7 @@ private theorem typedBoundClaim_expression {n : Nat} {cfg : Cfg} {results : List
   cases fromEnd
   all_goals (
     intro env state source hmetadata ls ls' bnd pt cx fr length default hlow hpp hext hrel hgir hresults hgenerated
-    obtain ⟨child, htyping, hroots, intTy, htype⟩ := source.expressionChild _
+    obtain ⟨child, htyping, hroots, intTy, htype, _⟩ := source.expressionChild _
     have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
       rw [htyping, hroots]
       exact hmetadata
@@ -2128,7 +2185,7 @@ theorem typedViewClaim_of {n : Nat} {cfg : Cfg} {results : List Ty} {place : Pla
 theorem typedViewClaim_val {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Expr}
     (he : TypedExprClaim n cfg results expr) : TypedViewClaim (n + 1) cfg results (.val expr) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨child, htyping, hroots, mutability, htype⟩ := source.valChild
+  obtain ⟨child, htyping, hroots, mutability, htype, _⟩ := source.valChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
@@ -2170,7 +2227,7 @@ theorem typedExprClaim_slice {n : Nat} {cfg : Cfg} {results : List Ty} {view : V
     (hh : TypedBoundClaim n cfg results high) (mutability : Mutability) (origin : OriginId) :
     TypedExprClaim (n + 1) cfg results (.slice mutability view low high origin) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨sampled, htyping, hroots, next⟩ := source.sliceChildren mutability origin
+  obtain ⟨sampled, htyping, hroots, _, next⟩ := source.sliceChildren mutability origin
   have hviewMetadata : SourceResults sampled.typingEnv sampled.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata
@@ -2182,13 +2239,13 @@ theorem typedExprClaim_slice {n : Nat} {cfg : Cfg} {results : List Ty} {view : V
   simp only [evalExpr]
   refine SimEAt.bind (hv env state sampled hviewMetadata ls first rv pt cx fr hview hpp hextFirst
     hrel hgir hresults hgenerated) fun value after pt1 fr1 hdone P1 => ?_
-  obtain ⟨lower, hltyping, hlroots, nextLow⟩ := next n value after hdone
+  obtain ⟨lower, hltyping, hlroots, _, nextLow⟩ := next n value after hdone
   have hlmetadata : SourceResults lower.typingEnv lower.rootsEnv results := by
     rw [hltyping, hlroots]
     exact hmetadata
   refine SimEAt.bind (hl env after lower hlmetadata first second bl pt1 cx fr1 value.len 0
     hlower P1.pp hextSecond P1.rel hgir hresults (hgenerated.lowerView view hview)) fun lo after2 pt2 fr2 hdone2 ⟨cl, hsl, P2⟩ => ?_
-  obtain ⟨upper, hhtyping, hhroots⟩ := nextLow n lo after2 hdone2
+  obtain ⟨upper, hhtyping, hhroots, _⟩ := nextLow n lo after2 hdone2
   have hhmetadata : SourceResults upper.typingEnv upper.rootsEnv results := by
     rw [hhtyping, hhroots]
     exact hmetadata

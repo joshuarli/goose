@@ -90,7 +90,7 @@ theorem EachPlan.sourceSimulation {n : Nat} {cfg : Cfg} {env : Env} {initial : S
     · exact returned
     · exact childGenerated
   | val expr =>
-    obtain ⟨child, typing, roots, mutability, childType⟩ := plan.viewSource.valChild
+    obtain ⟨child, typing, roots, mutability, childType, _⟩ := plan.viewSource.valChild
     apply lowerEachSource_val_sim_at n cfg env cx _ input output frame point initial expr owner irView
       lowered generated extension
     intro value middle hexpr hext childGenerated
