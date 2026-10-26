@@ -128,6 +128,14 @@ The new source regression passes fresh interpreted Core/GIR validation, executio
 plus native GIR O0/O2 output `2\n0\n1\n`; fresh Core debug execution matches too.
 These checks reuse current Main runtime commands without its Audit import; no new native semantic executable or global qualification is claimed.
 
+The typed-writer work also exposed a raw-module validation defect: a fill targeting an array of grow owners
+passed validation but evaluated to nested fixed values that did not represent its declared type.
+Fill now checks constructibility, as array literals already do.
+Construction GIR inline literals require constructible types, and inline fills also reject nonfixed layouts that need receiving destinations.
+The failing Core and GIR rejection guards now pass; ordinary fixed fills and valid receiving-based nested fills remain accepted.
+The 39-module check includes the existing construction GIR and typing/runtime controls.
+Compiler acceptance and evaluation code are unchanged.
+
 [`accepted_callee_parameter_prologue`](../../semantics/Goose/Lower/DemandParameterPrologue.lean)
 connects every parameter prefix to actual GIR execution, including the empty and complete prefixes.
 It derives the prefix cursor and preserves realized suspended caller value and run maps.

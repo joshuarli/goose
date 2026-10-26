@@ -289,6 +289,7 @@ def typeExpr : Nat → TypingEnv → Expr → TypingM (List Ty)
         require ((← one (← typeExpr fuel (ordinary env) expression)).adaptsTo element) .type "array initializer type mismatch"
       pure [ty]
   | fuel + 1, env, .fill ty expression _ => do
+      require ty.constructible .type "fill type is not constructible"
       match ty with
       | .arr element _ =>
           require ((← one (← typeExpr fuel (ordinary env) expression)).adaptsTo element) .type "fill element type mismatch"

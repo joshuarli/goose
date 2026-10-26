@@ -391,6 +391,7 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     unless results.any (fun r => r.request != .register) do tyErr "call_construct requires nonfixed result"
     pure (resultPack results)
   | .arrLit t vs => do
+    unless t.constructible do tyErr "array literal type is not constructible"
     if t.nonfixed then tyErr "nonfixed literals require receiving destination"
     match t with
     | .arr e k =>
@@ -424,6 +425,8 @@ def Op.resultTy (env : TyEnv) : Op → TyR VTy
     let some f := d.fields[i]? | tyErr "field index outside descriptor"
     pure (.data (.ref (Mutability.ofKind f.binding) f.ty))
   | .arrFill t v => do
+    unless t.constructible do tyErr "fill type is not constructible"
+    if t.nonfixed then tyErr "nonfixed fills require receiving destination"
     match t with
     | .arr e _ =>
       unless (← env.dataTy v) = e do tyErr "fill value of another type than the elements"
