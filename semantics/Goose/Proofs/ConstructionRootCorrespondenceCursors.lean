@@ -75,7 +75,8 @@ theorem rpStmt_letS_initializer {env : PEnv} {id : VarId} {expression : Expr} {o
     (checked : rpStmt env (.letS id expression origin) before = .ok ((), after)) :
     id = before.nextVar ∧ ∃ roots middle,
       rpExpr { env with initializing := id :: env.initializing } expression
-        { before with nextVar := before.nextVar + 1 } = .ok (roots, middle) := by
+        { before with nextVar := before.nextVar + 1 } = .ok (roots, middle) ∧
+      middle.eff.calls ⊆ after.eff.calls := by
   have ordered : id = before.nextVar := by
     by_cases ordered : id = before.nextVar
     · exact ordered
@@ -85,7 +86,7 @@ theorem rpStmt_letS_initializer {env : PEnv} {id : VarId} {expression : Expr} {o
   refine ⟨ordered, ?_⟩
   cases expressionChecked : rpExpr { env with initializing := id :: env.initializing } expression
       { before with nextVar := before.nextVar + 1 } with
-  | ok pair => exact ⟨pair.1, pair.2, rfl⟩
+  | ok pair => exact ⟨pair.1, pair.2, rfl, rpStmt_letS_callsIncluded checked ordered expressionChecked⟩
   | error error =>
     simp only [rpStmt, bind, StateT.bind, get_state, Except.bind, ite_eq_left ordered, modify_state, expressionChecked, reduceCtorEq] at checked
 

@@ -2487,4 +2487,115 @@ theorem contextRootFactsAt_bodyRoots (module : Module) (context : Context)
       exact ⟨implementation, bodyContext, actualEscapes, value, state, rfl, closed, rfl, replay,
         by simpa only [callsSame] using included⟩
 
+private def RecordsCall (called : Nat × List (List RootRef)) (action : P α) : Prop :=
+  ∀ before result after, action before = .ok (result, after) → called ∈ after.eff.calls
+
+private theorem records_bind_right (called : Nat × List (List RootRef)) (action : P α) (next : α → P β)
+    (recorded : ∀ value, RecordsCall called (next value)) : RecordsCall called (action >>= next) := by
+  intro before result after checked
+  cases initial : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, initial] at checked
+  | ok pair =>
+    apply recorded pair.1 pair.2 result after
+    simpa [bind, StateT.bind, Except.bind, initial] using checked
+
+private theorem records_bind_left (called : Nat × List (List RootRef)) (action : P α) (next : α → P β)
+    (recorded : RecordsCall called action)
+    (retained : ∀ value, RetainsEffects (next value)) : RecordsCall called (action >>= next) := by
+  intro before result after checked
+  cases initial : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, initial] at checked
+  | ok pair =>
+    have remaining : next pair.1 pair.2 = .ok (result, after) := by
+      simpa [bind, StateT.bind, Except.bind, initial] using checked
+    exact (retained pair.1 pair.2 result after remaining).2 (recorded before pair.1 pair.2 initial)
+
+private theorem records_modify (called : Nat × List (List RootRef)) (update : RState → RState)
+    (recorded : ∀ before, called ∈ (update before).eff.calls) : RecordsCall called (modify update) := by
+  intro before result after checked
+  change Except.ok (PUnit.unit, update before) = Except.ok (result, after) at checked
+  cases checked
+  exact recorded _
+
+private theorem records_reject (called : Nat × List (List RootRef)) (rule : Goose.Core.Rule) (message : String) :
+    RecordsCall called (rejP (α := α) rule message) := by
+  intro before result after checked
+  cases checked
+private theorem records_apply {called : Nat × List (List RootRef)} {action : P α}
+    {before after : RState} {result : α} (recorded : RecordsCall called action)
+    (checked : action before = .ok (result, after)) : called ∈ after.eff.calls :=
+  recorded before result after checked
+
+private theorem retained_calls {action : P α} {before after : RState} {result : α}
+    (retained : RetainsEffects action) (checked : action before = .ok (result, after)) :
+    before.eff.calls ⊆ after.eff.calls := (retained before result after checked).2
+
+private theorem state_bind_success {action : P α} {next : α → P β} {before after : RState} {value : β}
+    (checked : (action >>= next) before = .ok (value, after)) :
+    ∃ result middle, action before = .ok (result, middle) ∧ next result middle = .ok (value, after) := by
+  cases success : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, success] at checked
+  | ok pair =>
+    obtain ⟨result, middle⟩ := pair
+    exact ⟨result, middle, rfl, by simpa [bind, StateT.bind, Except.bind, success] using checked⟩
+
+local macro "record_checked_call" "[" extra:tacticSeq "]" : tactic => `(tactic|
+  repeat' first
+  | $extra
+  | exact records_reject _ _ _
+  | refine records_bind_left _ _ _ (records_modify _ _ (by
+      intro before
+      exact List.mem_eraseDups.mpr (List.mem_append_right _ (List.mem_singleton_self _)))) (fun _ => ?_)
+  | refine records_bind_right _ _ _ (fun _ => ?_)
+  | split)
+
+theorem rpCall_recorded {env : PEnv} {context : ContextId} {arguments : List (List RootRef)}
+    {before after : RState} {roots : List RootRef}
+    (checked : rpCall env context arguments before = .ok (roots, after)) :
+    (context, arguments) ∈ after.eff.calls := by
+  have recorded : RecordsCall (context, arguments) (rpCall env context arguments) := by
+    unfold rpCall
+    record_checked_call [fail]
+    all_goals try dsimp only
+    all_goals record_checked_call [fail]
+    all_goals retain_effect_targets [exact retains_escapeRoots _ _ _]
+  exact recorded before roots after checked
+
+theorem rpExpr_call_recorded {env : PEnv} {context : ContextId} {arguments : List Arg} {origin : Nat}
+    {before after : RState} {roots : List RootRef}
+    (checked : rpExpr env (.call context arguments origin) before = .ok (roots, after)) :
+    ∃ argumentRoots middle, rpArgs env arguments before = .ok (argumentRoots, middle) ∧
+      (context, argumentRoots) ∈ after.eff.calls := by
+  unfold rpExpr at checked
+  obtain ⟨argumentRoots, middle, argumentsChecked, remaining⟩ := state_bind_success checked
+  refine ⟨argumentRoots, middle, argumentsChecked, ?_⟩
+  apply records_apply (checked := remaining)
+  record_checked_call [exact fun before roots after success => rpCall_recorded success]
+  all_goals try dsimp only
+  all_goals record_checked_call [exact fun before roots after success => rpCall_recorded success]
+  all_goals retain_effect_targets [exact retains_escapeRoots _ _ _]
+
+theorem rpStmt_letS_callsIncluded {env : PEnv} {id : VarId} {expression : Expr} {origin : Nat}
+    {before middle after : RState} {roots : List RootRef}
+    (checked : rpStmt env (.letS id expression origin) before = .ok ((), after))
+    (ordered : id = before.nextVar)
+    (expressionChecked : rpExpr { env with initializing := id :: env.initializing } expression
+      { before with nextVar := before.nextVar + 1 } = .ok (roots, middle)) :
+    middle.eff.calls ⊆ after.eff.calls := by
+  simp only [ordered] at expressionChecked
+  unfold rpStmt at checked
+  obtain ⟨initial, state0, initialChecked, checked⟩ := state_bind_success checked
+  change Except.ok (before, before) = _ at initialChecked
+  cases initialChecked
+  cases descriptorAt : env.impl.vars[id]? <;> simp only [ordered, ↓reduceIte] at checked
+  all_goals
+    obtain ⟨ignored, state1, advanced, checked⟩ := state_bind_success checked
+    change Except.ok ((), { before with nextVar := before.nextVar + 1 }) = _ at advanced
+    cases advanced
+    obtain ⟨actual, state2, initializerChecked, checked⟩ := state_bind_success checked
+    have same := Except.ok.inj (expressionChecked.symm.trans initializerChecked)
+    obtain ⟨rfl, rfl⟩ := Prod.mk.inj same
+    apply retained_calls (checked := checked)
+    retain_effect_targets [fail]
+
 end Goose.Construct
