@@ -23,7 +23,7 @@ severity for denial; CLI `--deny` forces denial.
 
 ```json
 {"kind":"header","schema_version":1,"tool":"goose-lint","compiler_revision":"<runtime-id>","entries":["src/app.goose"],"profile":"O1"}
-{"kind":"diagnostic","schema_version":1,"code":"discarded_failure","group":"correctness","severity":"warning","confidence":"high","message":"stdlib::parse_int status result is discarded","primary":{"path":"src/app.goose","start_byte":120,"end_byte":141,"start_line":8,"start_column":9,"end_line":8,"end_column":30,"precision":"exact"},"related":[],"evidence":{"callee":"stdlib::parse_int","status_result":1,"use":"discarded"},"specializations":["app::run (args() roots() views() bindings() escaped=false funval=false)"],"suppression":null,"baseline":null,"suggestion":null,"fixable":false}
+{"kind":"diagnostic","schema_version":1,"code":"discarded_failure","group":"correctness","severity":"warning","confidence":"high","message":"stdlib::parse_int status result is discarded","primary":{"path":"src/app.goose","start_byte":120,"end_byte":141,"start_line":8,"start_column":9,"end_line":8,"end_column":30,"precision":"exact"},"related":[],"evidence":{"callee":"stdlib::parse_int","status_result":1,"use":"discarded"},"specializations":["app::run (args() roots() views() bindings() funval=false)"],"suppression":null,"baseline":null,"suggestion":null,"fixable":false}
 {"kind":"coverage","schema_version":1,"path":"src/app.goose","parse":"complete","check":"partial","checked_specializations":2,"unchecked_generic_bodies":1,"unsupported":[{"analysis":"post_overflow_guard","reason":"required semantic facts are not available"}]}
 {"kind":"summary","schema_version":1,"findings":1,"suppressed":0,"baselined":0,"stale_baseline_entries":0,"errors":0,"exit_status":0}
 ```
@@ -102,3 +102,6 @@ The compiler caps private facts at 512 MiB; the Goose companion caps its output
 at 256 MiB. The parent reads only the owner-only output path created for that
 invocation. Facts and result temporary files are removed on normal return and
 failure.
+
+Specialization contexts omit the obsolete escaped-scope distinction.
+Baselines containing the previous context strings require explicit refresh.

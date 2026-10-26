@@ -52,10 +52,10 @@ omitted.
 ```json
 {"kind":"header","facts_version":1,"compiler":"goose","compiler_revision":"<runtime-id>","entries":["src/app.goose"],"profile":"O1","frontend_options":{"debug":false,"unsafe_no_rf_check":false,"allow_fetch":false}}
 {"kind":"source","file_id":0,"path":"src/app.goose","content_hash":"fnv1a64:<16 hex>","byte_length":1200,"line_endings":"lf"}
-{"kind":"warning","id":0,"code":"redundant_cast","message":"existing compiler text","source":{"file_id":0,"line":12,"start_line":12,"start_column":8,"end_line":12,"end_column":19,"start_byte":80,"end_byte":91,"precision":"exact"},"specializations":["app::run (args() roots() views() bindings() escaped=false funval=false)"]}
+{"kind":"warning","id":0,"code":"redundant_cast","message":"existing compiler text","source":{"file_id":0,"line":12,"start_line":12,"start_column":8,"end_line":12,"end_column":19,"start_byte":80,"end_byte":91,"precision":"exact"},"specializations":["app::run (args() roots() views() bindings() funval=false)"]}
 {"kind":"statement","file_id":0,"path":"src/app.goose","start_byte":80,"end_byte":100,"start_line":12,"end_line":13,"source_order":7}
 {"kind":"comment","id":0,"file_id":0,"path":"src/app.goose","start_byte":101,"end_byte":133,"line":14,"form":"line","text":"// goose-lint: allow[rule_id] -- reason"}
-{"kind":"specialization","id":0,"file_id":0,"path":"src/app.goose","start_byte":50,"end_byte":100,"start_line":4,"end_line":6,"start_column":1,"end_column":2,"precision":"exact","name":"app::run","context":"args() roots() views() bindings() escaped=false funval=false","entry_reachable":true}
+{"kind":"specialization","id":0,"file_id":0,"path":"src/app.goose","start_byte":50,"end_byte":100,"start_line":4,"end_line":6,"start_column":1,"end_column":2,"precision":"exact","name":"app::run","context":"args() roots() views() bindings() funval=false","entry_reachable":true}
 {"kind":"call","id":0,"specialization_id":0,"file_id":0,"path":"src/app.goose","start_byte":150,"end_byte":170,"start_line":20,"end_line":20,"start_column":12,"end_column":32,"precision":"exact","callee_id":"stdlib::parse_int","builtin_id":null,"result_arity":2,"arg_count":1,"use_shape":"tuple_binding"}
 {"kind":"result_use","call_id":0,"result_index":1,"state":"bound","binding_name":"ok","referenced":false}
 {"kind":"call_argument","call_id":0,"index":0,"shape":"identifier","variable_id":"v0:140:0","nested_call_id":null}
