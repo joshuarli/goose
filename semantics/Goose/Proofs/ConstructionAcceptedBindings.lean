@@ -74,6 +74,19 @@ theorem registerRootType_layouts (layout : LayoutEnv) (types : RootTypes) (root 
     simpa only [← typeSame] using conforms
   · exact previous other registeredTy (by simpa only [registerRootType, same, ↓reduceIte] using present)
 
+theorem registerRootType_synthetic_frontier (config : EvalConfig) (types : RootTypes) (state : ExecutionState)
+    (root : RootInst) (ty : Ty)
+    (previous : ∀ id previousTy, types (.global id) = some previousTy → config.module.globals.size ≤ id →
+      id < config.module.globals.size + state.nextScope)
+    (fresh : ∀ id, root = .global id → config.module.globals.size ≤ id →
+      id < config.module.globals.size + state.nextScope) :
+    ∀ id registeredTy, registerRootType types root ty (.global id) = some registeredTy →
+      config.module.globals.size ≤ id → id < config.module.globals.size + state.nextScope := by
+  intro id registeredTy present outside
+  by_cases same : RootInst.global id = root
+  · exact fresh id same.symm outside
+  · exact previous id registeredTy (by simpa only [registerRootType, same, ↓reduceIte] using present) outside
+
 theorem bindRoot_registeredHeap (types : RootTypes) (before : ExecutionState) (root : RootInst)
     (ty : Ty) (value : Value) (compatible : RootTypeCompatible types root ty)
     (previous : ∀ other otherTy item, types other = some otherTy → before.objects.lookup other = some item →
@@ -153,7 +166,9 @@ theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
     (compatible : RootTypeCompatible types root ty) (conforms : LayoutConforms config.layout ty)
     (represented : ValueRepresentation ty (.stored stored)) (backed : StoredValueBacking config.layout before stored)
     (fresh : before.objectOrdinals.lookup root = none)
-    (freshType : ∀ act scope id, root = .local act scope id → act < before.nextAct ∧ scope < before.nextScope) :
+    (freshType : ∀ act scope id, root = .local act scope id → act < before.nextAct ∧ scope < before.nextScope)
+    (freshSynthetic : ∀ id, root = .global id → config.module.globals.size ≤ id →
+      id < config.module.globals.size + before.nextScope) :
     ∃ after, bindRoot root (.stored stored) before = .ok () after ∧
       RootTypesExtend types (registerRootType types root ty) ∧
       AcceptedWorld config initialized after ambient (registerRootType types root ty)
@@ -168,7 +183,7 @@ theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
       world.backing world.heap compatible represented backed fresh
   have same := (ExecutionStep.ok.inj (evaluated.symm.trans actual)).2
   subst middle
-  refine ⟨after, actual, extended, context, ?_, ?_, ?_, ?_, ?_, heap, backing, ?_, ?_⟩
+  refine ⟨after, actual, extended, context, ?_, ?_, ?_, ?_, ?_, ?_, heap, backing, ?_, ?_⟩
   · refine ⟨world.globals.1, ?_⟩
     intro id available
     obtain ⟨descriptor, old, declared, found, represented⟩ := world.globals.2 id available
@@ -187,6 +202,7 @@ theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
     exact extended _ _ (world.globalTypes id descriptor declared)
   · exact registerRootType_layouts config.layout types root ty world.layouts conforms
   · exact registerRootType_frontier types before root ty world.typeFrontier freshType
+  · exact registerRootType_synthetic_frontier config types before root ty world.syntheticFrontier freshSynthetic
   · intro region present
     cases present
   · intro frame present
@@ -216,13 +232,18 @@ theorem bindRoot_freshGlobalStored_world (config : EvalConfig) (initialized : Na
   obtain ⟨after, evaluated, _, post⟩ := bindRoot_freshStored_world config initialized before ambient types liveRoots
     (.global initialized) descriptor.ty stored world compatible
     (world.layouts _ _ registered) represented backed fresh (by intro act scope id impossible; cases impossible)
+    (by
+      intro id same outside
+      cases same
+      have bound := (Array.getElem?_eq_some_iff.mp declared).1
+      omega)
   rw [sameTypes] at post
   obtain ⟨result, bound, objects⟩ := bindRoot_objects (.global initialized) (.stored stored) before
   have same := (ExecutionStep.ok.inj (bound.symm.trans evaluated)).2
   subst result
   have present : after.objects.lookup (.global initialized) = some (.stored stored) := by
     simp only [objects, List.lookup, beq_self_eq_true]
-  refine ⟨after, evaluated, post.ownership, ?_, ?_, post.globalTypes, post.layouts, post.typeFrontier,
+  refine ⟨after, evaluated, post.ownership, ?_, ?_, post.globalTypes, post.layouts, post.typeFrontier, post.syntheticFrontier,
     post.heap, post.backing, post.protections, post.carriers⟩
   · refine ⟨(Array.getElem?_eq_some_iff.mp declared).1, ?_⟩
     intro id available

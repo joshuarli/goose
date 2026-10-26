@@ -79,6 +79,8 @@ structure AcceptedWorld (config : EvalConfig) (initialized : Nat) (state : Execu
   layouts : ∀ root ty, types root = some ty → LayoutConforms config.layout ty
   typeFrontier : ∀ act scope id ty, types (.local act scope id) = some ty →
     act < state.nextAct ∧ scope < state.nextScope
+  syntheticFrontier : ∀ id ty, types (.global id) = some ty → config.module.globals.size ≤ id →
+    id < config.module.globals.size + state.nextScope
   heap : ∀ root ty value, types root = some ty → state.objects.lookup root = some value →
     ValueRepresentation ty value ∧ PointerTypedValue types ty value
   backing : RootedBackingState config.layout state liveRoots
@@ -112,7 +114,7 @@ def declaredRootTypes (module : Module) : RootTypes
 
 theorem initial_acceptedWorld (config : EvalConfig) (accepted : validate config.module = .ok ()) :
     AcceptedWorld config 0 .initial [] (declaredRootTypes config.module) (fun _ => False) [] [] := by
-  refine ⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_, ?_, ?_,
+  refine ⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_, ?_, ?_, ?_,
     initial_rootedBackingState config.layout _, ?_, ?_⟩
   · intro id bound
     exact (Nat.not_lt_zero id bound).elim
@@ -133,6 +135,9 @@ theorem initial_acceptedWorld (config : EvalConfig) (accepted : validate config.
     | «local» act scope id => cases present
   · intro act scope id ty present
     cases present
+  · intro id ty typed outside
+    have absent : config.module.globals[id]? = none := Array.getElem?_eq_none_iff.mpr outside
+    simp only [declaredRootTypes, absent, Option.map_none, reduceCtorEq] at typed
   · intro root ty value typed present
     cases present
   · intro region present
