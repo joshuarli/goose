@@ -1,6 +1,6 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** feature completion is active. Focused correctness checks accompany changes. Performance qualification remains deferred and does not block implementation. Pushes remain unauthorized.
+**Status:** winding down at the owner's request (2026-10-26). Finish and integrate in-flight work; start no new campaign items. Performance qualification and the three universal proof obligations remain open. Pushes remain unauthorized.
 **Branch:** `goose-ir`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
