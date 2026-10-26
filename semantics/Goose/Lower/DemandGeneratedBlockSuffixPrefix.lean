@@ -17,6 +17,16 @@ structure GeneratedBlockPrefixEnd {cfg : Cfg} {env : Env} {block : Core.Block} {
   demanded : DemandFrameAt cfg env cx source.world source.typingEnv source.rootsEnv source.context.outputFuture
     map.values map.runs runtime
 
+structure GeneratedBlockPrefixDecomposition {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (map required : RetainedSsaMap) (before : LS) (loop : Option LoopCtx) (initial : GIR.Frame) (start : Pt)
+    (cursor : DemandRuntimePoint → Prop) (taken : Nat) (reached : DemandRuntimePoint) : Prop where
+  sourceOwner : GeneratedSourceOwner selected source.context
+  coverage : map.Covers required
+  progress : DemandPrefixDecomposition cx (fun fuel => execBlock fuel cfg env [] block) cursor
+    (GeneratedBlockPrefixEnd source map required cx results before loop initial) taken ⟨start, initial, state⟩ reached
+
 theorem accepted_generated_block_unit_suffix_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state)
     (body : StmtsSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }

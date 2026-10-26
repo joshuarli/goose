@@ -28,6 +28,28 @@ private theorem global_clear_source {cfg : Cfg} {env : Env} {fuel : Nat} {global
         rcases done with ⟨rfl, rfl⟩
         exact ⟨rfl, rfl⟩
 
+theorem GlobalClearStatements.normal {statements : List Stmt} (fragment : GlobalClearStatements statements)
+    {cfg : Cfg} {env : Env} {fuel : Nat} {state after : St} {flow : Flow}
+    (done : execStmts fuel cfg env statements state = .ok flow after) : flow = .normal .unit := by
+  induction fragment generalizing fuel state after with
+  | nil =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, pure_apply, Res.ok.injEq] at done
+      exact done.1.symm
+  | cons global origin remaining ih =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, bind_apply] at done
+      cases head : execStmt fuel cfg env (.clear (.global global) origin) state with
+      | stop stop final => simp only [head] at done; cases done
+      | ok headFlow middle =>
+        obtain ⟨rfl, _⟩ := global_clear_source head
+        simp only [head] at done
+        exact ih done
+
 private theorem global_clear_prefix {cfg : Cfg} {env : Env} {fuel : Nat} {global : GlobalId}
     {origin : OriginId} {rest : List Stmt} {state after : St}
     (done : execStmts (fuel + 1) cfg env (.clear (.global global) origin :: rest) state = .ok (.normal .unit) after) :
