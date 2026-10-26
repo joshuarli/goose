@@ -11,10 +11,11 @@ Local checkpoint `1197e996` contains limited-array capture support and its focus
 Its 310-module Lean closure now passes under pinned 4.35.0 after detecting an earlier 4.34.1 PATH mismatch.
 All current lanes use the pinned 4.35.0 explicitly.
 
-Five isolated lanes own source-demand correspondence (`campaign/afk-demand`),
+Isolated lanes own source-demand correspondence (`campaign/afk-demand`),
 construction backing and ownership (`campaign/afk-construction`), exit storage observations (`campaign/afk-exit`), and accepted runtime root correspondence (`campaign/afk-construct-roots`).
-The fifth lane, `campaign/afk-short-circuit`, owns short-circuit demand traversal against the shared generated-occurrence interfaces.
-Their worktrees are `.work/wt/afk-demand`, `.work/wt/afk-construction`, `.work/wt/afk-exit`, and `.work/wt/afk-construct-roots`.
+The expression lane, `campaign/afk-short-circuit`, owns compositional expression-prefix traversal.
+The construction evaluator family has one implementation owner on `campaign/afk-family`; the construction lane supplies its source-position and physical-owner prerequisites.
+Their worktrees live under `.work/wt/`.
 The integrator owns verification and profile completeness.
 The next proof milestone is an accepted-execution invariant, not another endpoint-only wrapper.
 The current runtime protocol theorem preserves protocol metadata but does not establish object backing or byte separation.
@@ -88,13 +89,30 @@ The central invariant will cover every present physical object in ordinary state
 An extension must preserve the existing encoded prefix; exclusive replacement instead excludes receiver access until repair.
 The ordinary and receiving worlds share structural facts, while retaining distinct global-backing requirements.
 The joint evaluator family and its preservation proof remain unfinished.
-Action-local checker replay is still needed for native effect and exclusion extraction: accumulated reads contain history, while subtracting deduplicated sets loses repeated reads.
+Action-local checker replay now preserves metadata and the exact source cursors while clearing accumulated effects.
+The accepted invocation proof still needs to extract and use those local effects: accumulated reads contain history, while subtracting deduplicated sets loses repeated reads.
 Unused references to future globals remain allowed; no blanket pointee-liveness or path-totality assumption is justified.
+
+The shared world, source-owner factories and their selected consumers pass a coherent 441-module Lean 4.35.0 check.
+A complementary 248-module check covers conditional content-root correspondence, parameter values, successful reference reads and accepted world consumers.
+Actual parameter binding now derives content correspondence from the final caller heap and checked argument roots.
+Unused reference parameters need no content row; actual reads and stores still require their native checker evidence.
+Fresh call roots are older than the callee activation, without an assumed disjointness between parameter aliases.
 
 Full demand closure needs one prefix-decomposition family joining actual context/global ownership, generated occurrences and required rows with source frames and locally extended maps.
 Completed source simulations do not cover arbitrary prefixes of diverging loops.
 Statement sequencing must pass the residual prefix after a completed child; call entry must use the actual callee selection.
 Canonical frame-only predicates remain internal projections, not substitutes for that joined witness.
+The prefix family now fixes the actual source owner and preserves real consumed and residual instruction prefixes.
+Statement sequencing passes only a completed normal child's residual prefix to the next statement.
+Literal and boolean expressions derive source completion from one actual constant instruction; a zero-step prefix retains the exact entry frame and generated site.
+Unit and value blocks share one body-prefix assembly and consume scope exit only after their actual body and value prefixes complete.
+The retained-index clear-and-literal initializer now instantiates that whole-block assembly for arbitrary runtime prefixes.
+Its source-validation equality remains an explicit premise, confirmed by runtime validation rather than a claimed closed kernel proof.
+Independent source review found no defect in the leaf, clear-body and shared-leave composition.
+The integrated expression-prefix and construction-content group passes 169 modules; the whole-block pilot and abort group passes 155 modules.
+The seven selected integrated axiom checks use only the standard three allowed axioms.
+Composite expressions, general statements, abnormal block exits, loops and calls remain open.
 
 An isolated report experiment replaces per-node hash allocations in report walks with a pointer set.
 Five interleaved samples per condition on Aincrad3 checking, using Clang Release with libtcc and native layers disabled,
