@@ -19,10 +19,11 @@ theorem newDestination_acceptedWorld (config : EvalConfig) (owner : Goose.Core.A
   obtain ⟨frame⟩ := newDestination_fresh_frame config.layout owner ty request origin knownCount before after id
     valid.ownership.source.structural.1.1.1 executed
   have objects := congrArg ExecutionState.objects frame.outer
+  have ordinals := congrArg ExecutionState.objectOrdinals frame.outer
   have acts := congrArg ExecutionState.nextAct frame.outer
   have scopes := congrArg ExecutionState.nextScope frame.outer
   refine ⟨newDestination_ownershipContext config.layout owner ty request origin knownCount before after id ambient valid.ownership executed,
-    ?_, valid.globalLive, valid.globalTypes, valid.layouts, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    ?_, valid.globalLive, valid.globalTypes, valid.layouts, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · refine ⟨valid.globals.1, ?_⟩
     intro global bound
     obtain ⟨descriptor, value, present, found, represented⟩ := valid.globals.2 global bound
@@ -34,6 +35,12 @@ theorem newDestination_acceptedWorld (config : EvalConfig) (owner : Goose.Core.A
   · intro root ty value declared found
     rw [objects] at found
     exact valid.heap root ty value declared found
+  · intro root value found
+    rw [objects] at found
+    exact valid.objectsRegistered root value found
+  · intro root ordinal found
+    rw [ordinals] at found
+    exact valid.ordinalsRegistered root ordinal found
   · simpa only [executed, Goose.Proofs.Exit.stepState] using
       valid.backing.newDestination_frame config.layout owner ty request origin knownCount before liveRoots
   · intro region member
