@@ -1748,9 +1748,13 @@ def ContextRootFacts (module : Module) (context : Context) (aliases : List (Root
     (calls : List (ContextId × List (List RootRef))) : Prop :=
   ∃ escaping names, ContextRootFactsAt module context aliases calls escaping names
 
+def InitializerRootFactsAt (module : Module) (global : GlobalId)
+    (calls : List (ContextId × List (List RootRef))) (names : Array (List RootRef)) : Prop :=
+  ∃ facts, checkInitFacts module global names = .ok facts ∧ facts.calls = calls
+
 def InitializerRootFacts (module : Module) (global : GlobalId)
     (calls : List (ContextId × List (List RootRef))) : Prop :=
-  ∃ names facts, checkInitFacts module global names = .ok facts ∧ facts.calls = calls
+  ∃ names, InitializerRootFactsAt module global calls names
 
 def ModuleRootFacts (module : Module) : Prop :=
   ∃ aliases : Array (List (RootRef × RootRef)), aliases.size = module.contexts.size ∧

@@ -42,7 +42,9 @@ def SourceOrigin {config : EvalConfig} (accepted : AcceptedModule config)
         frame.typing.implementation = none ∧ frame.typing.globalLimit = global ∧ frame.initialized = global ∧
         frame.source.impl = initImpl ∧ frame.source.ctx = initContext ∧ frame.source.aliases = [] ∧
         frame.source.escaping = #[] ∧ frame.source.targetEscapes = #[] ∧
-        ∃ calls, InitializerRootFacts config.module global calls
+        ∃ calls, InitializerRootFactsAt config.module global calls frame.source.calleeNames ∧
+          ∀ called ∈ calls, called.1 < config.module.contexts.size →
+            AliasClosure [] accepted.aliases[called.1]! called.2 config.module.globals.size
   | .implementation contextId =>
       ∃ original calls, config.module.contexts[contextId]? = some original ∧
         config.module.impls[original.impl]? = some frame.source.impl ∧
