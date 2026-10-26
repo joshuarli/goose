@@ -68,12 +68,11 @@ structure PendingCarrierFrame where
   channels : List Channel
   carriers : List Carrier
 
-structure AcceptedWorld (config : EvalConfig) (initialized : Nat) (state : ExecutionState)
+structure AcceptedWorldCore (config : EvalConfig) (initialized : Nat) (state : ExecutionState)
     (ambient : OwnershipAmbient) (types : RootTypes) (liveRoots : RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) : Prop where
   ownership : OwnershipExecutionContext state ambient
   globals : GlobalRepresentations config.module initialized state
-  globalLive : ∀ id, id < initialized → liveRoots (.global id)
   globalTypes : ∀ id descriptor, config.module.globals[id]? = some descriptor →
     types (.global id) = some descriptor.ty
   layouts : ∀ root ty, types root = some ty → LayoutConforms config.layout ty
@@ -89,6 +88,19 @@ structure AcceptedWorld (config : EvalConfig) (initialized : Nat) (state : Execu
   protections : ∀ region ∈ regions, ReceivingProtection config.layout state liveRoots region
   carriers : ∀ frame ∈ pending, CarriersLandingReady state frame.channels frame.carriers ∧
     ∀ carrier ∈ frame.carriers, CarrierResultBacking config.layout state carrier
+
+structure AcceptedWorld (config : EvalConfig) (initialized : Nat) (state : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (liveRoots : RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) : Prop extends
+    AcceptedWorldCore config initialized state ambient types liveRoots regions pending where
+  globalLive : ∀ id, id < initialized → liveRoots (.global id)
+
+structure ReceivingWorld (config : EvalConfig) (initialized : Nat) (state : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (liveRoots : RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (surrendered : List RootInst) : Prop extends
+    AcceptedWorldCore config initialized state ambient types liveRoots regions pending where
+  globalLive : ∀ id, id < initialized → RootInst.global id ∉ surrendered → liveRoots (.global id)
 
 structure AcceptedFrame (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (state : ExecutionState) (types : RootTypes) : Prop where
@@ -121,10 +133,8 @@ def declaredRootTypes (module : Module) : RootTypes
 
 theorem initial_acceptedWorld (config : EvalConfig) (accepted : validate config.module = .ok ()) :
     AcceptedWorld config 0 .initial [] (declaredRootTypes config.module) (fun _ => False) [] [] := by
-  refine ⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
-    initial_rootedBackingState config.layout _, ?_, ?_⟩
-  · intro id bound
-    exact (Nat.not_lt_zero id bound).elim
+  refine ⟨⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+    initial_rootedBackingState config.layout _, ?_, ?_⟩, ?_⟩
   · intro id bound
     exact (Nat.not_lt_zero id bound).elim
   · intro id descriptor present
@@ -155,6 +165,8 @@ theorem initial_acceptedWorld (config : EvalConfig) (accepted : validate config.
     cases present
   · intro frame present
     cases present
+  · intro id bound
+    exact (Nat.not_lt_zero id bound).elim
 
 theorem AcceptedWorld.synthetic_keys_fresh {config : EvalConfig} {initialized : Nat} {state : ExecutionState}
     {ambient : OwnershipAmbient} {types : RootTypes} {liveRoots : RootInst → Prop}
