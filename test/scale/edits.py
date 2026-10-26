@@ -386,6 +386,7 @@ DEPENDENCY_EDITS = {e.id: e for e in (
                    "handler is replaced, its key naming the handler's whole context"),
     DepEdit("D28", "the call that sets a global slice is no longer made before the function "
                    "that reads it: the reader finds it unset"),
+    DepEdit("D31", "a receiver namespace adds a UFCS method that replaces a global overload"),
     DepEdit("D30", "a nested callee gains a writable captured-owner effect"),
     DepEdit("D25", "an overload added in the namespace of a caller, with the same parameter "
                    "types as the one it called"),
@@ -590,7 +591,12 @@ class DepTargets(Member):
                 "    return dt_apply(3) { it + base };",
                 "}"]
 
-        # D25: the same name in the caller's own namespace.
+        out += ["struct dtmethods::Value { n: i64 }",
+                "fn dt_method(v: dtmethods::Value) -> i64 { return v.n + 1; }",
+                "fn dt_method_user(n: i64) -> i64 { return dtmethods::Value { n: n }.dt_method(); }"]
+        if e("D31"):
+            out += ["fn dtmethods::dt_method(v: Value) -> i64 { return v.n + 2; }"]
+
         out += ["fn dt_twin(x: i64) -> i64 { return x + 11; }"]
         if e("D25"):
             out += ["fn dtns2::dt_twin(x: i64) -> i64 { return x + 22; }"]
@@ -636,7 +642,7 @@ class DepTargets(Member):
              "dt_enum_user", "dt_order_a", "dt_order_b", "dt_late_user", "dt_noret_user",
              "dt_comment_user", "dt_embed_direct", "dt_fv_user", "dt_inferred_user",
              "dt_shown_user", "dt_env_user", "dtns2::dt_twin_user", "dt_twin_other",
-             "dt_nested_user", "dt_write_capture_user")
+             "dt_nested_user", "dt_write_capture_user", "dt_method_user")
 
     def body(self):
         calls = [n for n in self.CALLS if not (n == "dt_over" and self.is_("D28"))]

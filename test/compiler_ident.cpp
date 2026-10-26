@@ -299,7 +299,6 @@ static void TestContextKey() {
         { SpecDim::RootHeldExact, [](FnSpec *s) { s->roots[0].heldexact = true; } },
         { SpecDim::RootDepthKey, [](FnSpec *s) { s->roots[0].depthkey = -2; } },
         { SpecDim::SlotViews, [](FnSpec *s) { s->views[0].cls = 1; } },
-        { SpecDim::Escaped, [](FnSpec *s) { s->escaped = true; } },
         { SpecDim::LiteralParams, [](FnSpec *s) { s->litparams = { 0 }; } },
     };
     for (auto &c : changes) {

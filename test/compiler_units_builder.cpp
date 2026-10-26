@@ -238,9 +238,10 @@ static string RuntimeVersionOf(const string &goose) {
     assert(result.started && result.code == 0);
     auto end = result.output.find_first_of("\r\n");
     auto line = result.output.substr(0, end);
-    const string prefix = "goose runtime ";
-    assert(line.compare(0, prefix.size(), prefix) == 0);
-    return line.substr(prefix.size());
+    const string prefix = " (runtime ";
+    auto start = line.rfind(prefix);
+    assert(line.starts_with("goose ") && start != string::npos && line.ends_with(")"));
+    return line.substr(start + prefix.size(), line.size() - start - prefix.size() - 1);
 }
 
 static UnitContractValues SourceContractValues(const string &goose, const Toolchain &tc,

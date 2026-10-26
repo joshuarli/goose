@@ -2228,11 +2228,6 @@ struct FnSpec {
     // view (VarDef::heldslice/heldholder), including stores made while the
     // body runs. cls is -1 for every other parameter. Part of the key.
     vector<RootArg> views;
-    // A nested function reached after the scope declaring it ended, its
-    // value having left that block or function value body: part of
-    // the key, since its body may name nothing the scope declared, and one
-    // checked inside the scope may.
-    bool escaped = false;
     // Optional facts in the lexical environment at specialization entry.
     vector<VarDef *> narrowedenv;
     // What the body read of the variables outside its activation that it, or
@@ -2475,7 +2470,7 @@ struct Ast {
 
     void Emit(const Diagnostic &d) {
         if (sink) sink(d);
-        else fprintf(stderr, "%s\n", d.text.c_str());
+        else PrintDiagnosticText(d.text);
     }
 
     // A warning about a place, as the checker and the driver give them.
@@ -2843,6 +2838,17 @@ struct Ast {
         static const vector<SFunction *> none;
         auto p = Lookup(&Namespace::functionmap, name, usens);
         return p ? *p : none;
+    }
+    // A UFCS call's overload set past the scopes around it: that of the
+    // namespace the receiver's nominal type is declared in, where that is a
+    // named namespace declaring the name, else the call's own. A type's
+    // functions are its methods wherever it is used (§11.1).
+    const vector<SFunction *> &LookupMethods(string_view name, string_view usens,
+                                             const TypeExpr *recv) {
+        auto tns = NominalNs(recv);
+        if (auto n = tns.empty() ? nullptr : FindNS(tns))
+            if (auto it = n->functionmap.find(name); it != n->functionmap.end()) return it->second;
+        return LookupFunctions(name, usens);
     }
 
     // The entry point: the root file's global `main` (an imported file's is

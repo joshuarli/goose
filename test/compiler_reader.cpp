@@ -137,6 +137,15 @@ static vector<Allowed> allowed = {
     { "progress.cpp", "getenv(\"TERM\")", "terminal display only; does not shape emitted code" },
     { "progress.cpp", "getenv(\"COLUMNS\")", "terminal display width only; does not shape emitted code" },
     { "progress.cpp", "getenv(\"GOOSE_PROGRESS\")", "progress display mode only; does not shape emitted code" },
+    { "format.h", "filesystem::canonical(filesystem::path(path), ec)", "formatter path resolution, outside compilation" },
+    { "format.h", "filesystem::status(target, ec)", "formatter preserves permissions, outside compilation" },
+    { "format.h", "fopen(tmp.c_str(), \"wb\")", "formatter writes, outside compilation" },
+    { "format.h", "filesystem::recursive_directory_iterator", "formatter directory traversal, outside compilation" },
+    { "format.h", "filesystem::exists(e.path() / \"CMakeCache.txt\", ec2)", "formatter skips build directories, outside compilation" },
+    { "format.h", "fread(buf, 1, sizeof buf, stdin)", "formatter stdin, outside compilation" },
+    { "format.h", "filesystem::is_directory(filesystem::path(p), ec)", "formatter argument classification, outside compilation" },
+    { "format.h", "filesystem::exists(filesystem::path(p), ec)", "formatter argument existence, outside compilation" },
+    { "progress.cpp", "auto v = getenv(name);", "terminal color controls only; does not shape emitted code" },
     { "typecheck_calls.h", "getenv(\"GOOSE_ROUNDS\")", "a trace to stderr" },
 };
 

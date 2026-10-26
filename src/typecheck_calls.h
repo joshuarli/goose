@@ -199,8 +199,9 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
                 Error(c, cat("field ", d->name, " is not callable"));
     }
     // Past the variables, which a member call passes over, the name resolves
-    // as a call's does: a type parameter of the name hides the
-    // functions of the name.
+    // as a call's does, with the receiver type's namespace ahead of the
+    // call's own (§11.1). A type parameter of the name hides the functions
+    // of the name.
     const FnValBind *fb;
     if (auto t = LookupTypeParam(d->name, fb))
         Error(c, cat("type parameter ", d->name, " is bound to the type ", TypeStr(t),
@@ -212,7 +213,11 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
     auto cands = LookupLocalFns(d->name, env);
     if (cands.empty()) {
         DefaultScopeName(d->name, c, true);
-        cands = DepLookupFunctions(ast, d->name, d->ns);
+        DepNoteLookup(DepLookup::Function, d->name, d->ns);
+        auto receiverNamespace = NominalNs(rt);
+        if (!receiverNamespace.empty())
+            DepNoteLookup(DepLookup::Function, d->name, receiverNamespace);
+        cands = ast.LookupMethods(d->name, d->ns, rt);
     }
     if (!cands.empty())
         return ResolveCall(c, cands, env, d->name, &ov, d->obj, entryreach, nullptr, expected);
@@ -1388,15 +1393,10 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
     // A nested function is specialized where it is declared (§7.5). A call
     // that reaches the declaration ahead of the declaring body (a nested
     // function declared earlier calling it) would have it name variables
-    // not bound yet; one after its declaring scope ended is keyed apart.
-    auto escaped = false;
-    if (sf->isnested && LexFrame(mi.env, sf) >= 0) {
-        auto it = declsiteof.find({ mi.env, sf });
-        if (it == declsiteof.end())
-            Error(callnode, cat(sf->name, " (declared at ", Where(sf->line),
-                                ") is called before its declaration is reached (§7.5)"));
-        escaped = ScopeEnded(*it->second);
-    }
+    // not bound yet.
+    if (sf->isnested && LexFrame(mi.env, sf) >= 0 && !declsiteof.count({ mi.env, sf }))
+        Error(callnode, cat(sf->name, " (declared at ", Where(sf->line),
+                            ") is called before its declaration is reached (§7.5)"));
     vector<VarDef *> narrowedenv;
     for (auto v : ExternalOptionals(mi))
         if (v->narrowed) narrowedenv.push_back(v);
@@ -1616,7 +1616,7 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
         // A reuse would merge an exemplar's call into what the real calls
         // agreed on (CheckExemplars).
         if (spec->id < exemplarbase) continue;
-        if (spec->lexparent != mi.env || spec->escaped != escaped) continue;
+        if (spec->lexparent != mi.env) continue;
         if (!spec->inprogress && spec->narrowedenv != narrowedenv) continue;
         // A cycle's member due for its next round is checked again below
         // with what it reads then. A failed one read what it read before
@@ -1737,7 +1737,6 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
     auto spec = ast.NewFnSpec();
     spec->sf = sf;
     spec->lexparent = mi.env;
-    spec->escaped = escaped;
     spec->narrowedenv = narrowedenv;
     spec->argtypes = mi.paramtypes;
     spec->roots = roots;

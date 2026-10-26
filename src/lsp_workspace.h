@@ -290,7 +290,9 @@ struct Workspace {
                 TypeCheckProgram(ast, false, nullptr, true);
                 an->Build();
                 if (!ast.errors.empty()) return 0;
-                Optimizer opt(ast, 1);
+                // At the level a run or build defaults to, so that the
+                // checkfree verdicts here are theirs.
+                Optimizer opt(ast, 2);
                 BCE bce(ast);
                 bce.RunAll();
                 if (!bce.checkfreefails.empty()) throw bce.CheckfreeError();

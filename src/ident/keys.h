@@ -65,7 +65,6 @@ struct TypeKey {
 // Order is the order the digests are mixed into the context key.
 enum class SpecDim {
     LexicalParent,
-    Escaped,
     NarrowedEnv,
     EnvReads,
     ArgTypes,
@@ -86,7 +85,7 @@ enum class SpecDim {
 constexpr int kSpecDims = (int)SpecDim::Count;
 
 inline const char *SpecDimName(SpecDim d) {
-    static const char *names[] = { "lexical_parent", "escaped", "narrowed_env", "env_reads",
+    static const char *names[] = { "lexical_parent", "narrowed_env", "env_reads",
                                    "arg_types", "type_bindings", "literal_params",
                                    "function_values", "root_class", "root_provenance",
                                    "root_pool", "root_held_exact", "root_grow_shrink_elems",
@@ -329,7 +328,6 @@ class KeyMaker {
             else c.Tag('_');
             d[(int)SpecDim::LexicalParent] = Memo(c);
         }
-        d[(int)SpecDim::Escaped] = Memo(Canon().B(s->escaped));
         { Canon c; TypeList(c, s->argtypes); d[(int)SpecDim::ArgTypes] = Memo(c); }
         {
             vector<pair<string_view, const TypeExpr *>> b(s->bindings.begin(), s->bindings.end());

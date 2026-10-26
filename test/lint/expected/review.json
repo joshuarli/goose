@@ -38,7 +38,7 @@
       }
     },
     "specializations": [
-      "review::add_guard (args(i8) roots(0:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) views(-1:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) bindings() escaped=false funval=false)"
+      "review::add_guard (args(i8) roots(0:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) views(-1:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) bindings() funval=false)"
     ],
     "suppression": null,
     "baseline": null,
@@ -84,7 +84,7 @@
       }
     },
     "specializations": [
-      "review::subtract_guard (args(i8) roots(0:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) views(-1:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) bindings() escaped=false funval=false)"
+      "review::subtract_guard (args(i8) roots(0:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) views(-1:wtrue:r0:gsfalse:viafalse:slotfalse:unknownfalse:byteviewfalse:exacttrue:concretefalse:heldexactfalse) bindings() funval=false)"
     ],
     "suppression": null,
     "baseline": null,
@@ -143,7 +143,7 @@
       }
     },
     "specializations": [
-      "review::stale_view (args() roots() views() bindings() escaped=false funval=false)"
+      "review::stale_view (args() roots() views() bindings() funval=false)"
     ],
     "suppression": null,
     "baseline": null,

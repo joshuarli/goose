@@ -178,7 +178,7 @@ inline string LintSpecializationContext(const FnSpec &spec) {
         context += "=";
         context += LintTypeContext(spec.bindings[i].second);
     }
-    return cat(context, ") escaped=", spec.escaped, " funval=", spec.isfunval);
+    return cat(context, ") funval=", spec.isfunval);
 }
 
 inline bool LintConstantInt(const Node *node, int64_t &value, bool &uns, int depth = 0) {
