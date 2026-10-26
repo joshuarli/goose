@@ -1,5 +1,6 @@
 import Goose.Proofs.ConstructionAcceptedState
 import Goose.Proofs.ConstructionRootCorrespondenceWrites
+import Goose.Proofs.ConstructionReadTypingLayout
 
 set_option Elab.async false
 
@@ -61,6 +62,17 @@ theorem registerRootType_frontier (types : RootTypes) (state : ExecutionState)
   by_cases same : RootInst.local act scope id = root
   · exact fresh act scope id same.symm
   · exact previous act scope id registered (by simpa only [registerRootType, same, ↓reduceIte] using present)
+
+theorem registerRootType_layouts (layout : LayoutEnv) (types : RootTypes) (root : RootInst) (ty : Ty)
+    (previous : ∀ other previousTy, types other = some previousTy → LayoutConforms layout previousTy)
+    (conforms : LayoutConforms layout ty) :
+    ∀ other registeredTy, registerRootType types root ty other = some registeredTy → LayoutConforms layout registeredTy := by
+  intro other registeredTy present
+  by_cases same : other = root
+  · subst other
+    have typeSame : ty = registeredTy := by simpa only [registerRootType, ↓reduceIte, Option.some.injEq] using present
+    simpa only [← typeSame] using conforms
+  · exact previous other registeredTy (by simpa only [registerRootType, same, ↓reduceIte] using present)
 
 theorem bindRoot_registeredHeap (types : RootTypes) (before : ExecutionState) (root : RootInst)
     (ty : Ty) (value : Value) (compatible : RootTypeCompatible types root ty)
@@ -137,5 +149,6 @@ theorem bindRoot_freshStored_registered (layout : LayoutEnv) (types : RootTypes)
 #print axioms bindRoot_registeredHeap
 #print axioms registerRootType_frontier
 #print axioms bindRoot_freshStored_registered
+#print axioms registerRootType_layouts
 
 end Goose.Proofs.ConstructionAcceptedExecution
