@@ -30,9 +30,11 @@ theorem acceptedEntryFrame (config : EvalConfig) (accepted : AcceptedModule conf
     simp only [List.getElem?_zipIdx, Array.getElem?_toList, originalAt, Option.map_some, Nat.zero_add]
   obtain ⟨calls, contextFacts, _⟩ := (Classical.choose_spec accepted.roots).2.1
     (original, config.module.entry) member
-  obtain ⟨bodyImplementation, bodyContext, escaping, targetEscapes, names, roots, rootAfter,
+  obtain ⟨escaping, names, contextFactsAt⟩ := contextFacts
+  obtain ⟨bodyImplementation, bodyContext, targetEscapes, roots, rootAfter,
       bodyImplementationAt, closed, targetsChecked, rootsChecked⟩ :=
-    contextRootFacts_bodyRoots config.module original accepted.aliases[config.module.entry]! calls contextFacts
+    contextRootFactsAt_bodyRoots config.module original accepted.aliases[config.module.entry]! calls
+      escaping names contextFactsAt
   have same : bodyImplementation = implementation := by
     simpa only [implementationAt, Option.some.injEq] using bodyImplementationAt.symm
   subst bodyImplementation
@@ -84,7 +86,7 @@ theorem acceptedEntryFrame (config : EvalConfig) (accepted : AcceptedModule conf
     initializing := by intro id absent; cases absent
     currentScope := by intro scope rest absent; cases absent
     origin := by
-      refine ⟨original, calls, originalAt, implementationAt, rfl, rfl, closed, rfl, contextFacts,
+      refine ⟨original, calls, originalAt, implementationAt, rfl, rfl, closed, rfl, contextFactsAt,
         targetsChecked, roots, rootAfter, ?_⟩
       simpa only [frame, source] using rootsChecked }
   have aliases : AliasComplete interpretation source.aliases :=
