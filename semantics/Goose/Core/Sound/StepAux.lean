@@ -307,9 +307,9 @@ theorem sat_read_var {future : List VarId} (hF : Frame m W tenv penv env s futur
       exact sat_readRoot h4 (hq lv si v h1 h2 h4 h5)
 
 /-- Opening a block changes no root a static root denotes. -/
-theorem gam_push (hF : Frame m W tenv penv env s) {sc : Nat} (hsc : sc ∉ tenv.scopes) (k : ScopeInst)
-    {rho : List RootRef} {r : RootInst} (h : Gam env W.P rho r) :
-    Gam { env with scopes := (sc, k) :: env.scopes } W.P rho r := by
+theorem gam_push {future : List VarId} (hF : Frame m W tenv penv env s future) {sc : Nat} (hsc : sc ∉ tenv.scopes) (k : ScopeInst)
+    {P : Nat → RootInst → Prop} {rho : List RootRef} {r : RootInst} (h : Gam env P rho r) :
+    Gam { env with scopes := (sc, k) :: env.scopes } P rho r := by
   have hsc' : sc ∉ env.scopes.map Prod.fst := hF.scopes_t ▸ hsc
   obtain ⟨q, hq, hr⟩ := h
   refine ⟨q, hq, ?_⟩

@@ -11,25 +11,6 @@ open Goose.Core Goose.Proofs.Memory
 variable {m : Module} {prof : NumProfile} {plans : Array (Array DemandPoint)} {n : Nat}
 variable {W : World} {tenv : TEnv} {penv : PEnv} {env : Env} {s : St}
 
-private theorem gam_push_future {future : List VarId}
-    (hF : Frame m W tenv penv env s future) {sc : Nat} (hsc : sc ∉ tenv.scopes)
-    (k : ScopeInst) {P : Nat → RootInst → Prop} {rho : List RootRef} {r : RootInst}
-    (h : Gam env P rho r) :
-    Gam { env with scopes := (sc, k) :: env.scopes } P rho r := by
-  have hsc' : sc ∉ env.scopes.map Prod.fst := hF.scopes_t ▸ hsc
-  obtain ⟨q, hq, hr⟩ := h
-  refine ⟨q, hq, ?_⟩
-  cases q with
-  | «local» y =>
-    obtain ⟨lv, si, h1, h2, h3⟩ := hr
-    refine ⟨lv, si, h1, ?_, h3⟩
-    show ((sc, k) :: env.scopes).lookup lv.scope = some si
-    rw [lookup_cons]
-    have : lv.scope ≠ sc := fun e => hsc' (e ▸ lookup_key h2)
-    simp [this, h2]
-  | global g => exact hr
-  | param _ => exact hr
-
 private theorem EvaluationContext.activeMatches_congr
     {path : List Nat} {node : DemandNode} {phase : DemandPhase}
     (ec : EvaluationContext m plans path node phase) {a b : TEnv}
@@ -117,8 +98,8 @@ theorem block_of_checks (hB : BlockSpec m prof plans n) (hp : Perm m W)
       obtain ⟨k1, k2⟩ := hvals k x' v ty' hk hpk lv g1' g4
       refine ⟨h1, h2, lv, g1', g2, paramOk_of_storable g3, k1, fun r hr' => ?_⟩
       obtain ⟨ann, ha, hgam, howner⟩ := k2 r hr'
-      exact ⟨ann, ha, gam_push_future hF hsc _ hgam,
-        fun hty => gam_push_future hF hsc _ (howner hty)⟩
+      exact ⟨ann, ha, gam_push hF hsc _ hgam,
+        fun hty => gam_push hF hsc _ (howner hty)⟩
   have hres := hB path sc stmts value ec observation W tenv env1 env2 penv env s pre tn1 tn2 tn' ty
     { rst with nextVar := rst.nextVar + (preT.map Prod.fst).length } st2 rst' rho rst.nextVar
     (hactive env1 tn1 hd) haccess hprotected hobserved hclassified hp hF hsc hsame hvis' hpreOk
@@ -194,8 +175,8 @@ theorem block_of_reserved (hB : BlockSpec m prof plans n) (hp : Perm m W)
     obtain ⟨h1, h2, lv, g1, g2, g3, k1, k2⟩ := hvals x v hxv
     refine ⟨h1, h2, lv, g1, g2, g3, k1, fun r hr' => ?_⟩
     obtain ⟨ann, ha, hgam, howner⟩ := k2 r hr'
-    exact ⟨ann, ha, gam_push_future hF hsc _ hgam,
-      fun hty => gam_push_future hF hsc _ (howner hty)⟩
+    exact ⟨ann, ha, gam_push hF hsc _ hgam,
+      fun hty => gam_push hF hsc _ (howner hty)⟩
   have hres := hB path sc stmts value ec observation W tenv env1 env2 penv env s pre tn1 tn2 tn' ty
     { rst with nextVar := rst.nextVar + ([] : List VarId).length } st2 rst' rho lo0
     (hactive env1 tn1 hd) haccess hprotected hobserved hclassified hp hF hsc

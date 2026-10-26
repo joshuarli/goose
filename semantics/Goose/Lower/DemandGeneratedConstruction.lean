@@ -102,6 +102,15 @@ theorem generated_block_parameters_extended {le : LEnv} {before : LS} {loop : Op
     ExtT (demandBlockStatementsBefore le before parameters block) blocks :=
   (generated_block_statements_extended extended).of_adv (advB_lowerStmts loop block.stmts _ _ _ _ rfl)
 
+theorem generated_block_enter_extended {le : LEnv} {before : LS} {loop : Option LoopCtx}
+    {parameters : List (SlotId × ValueId × OriginId)} {want : Bool} {block : Core.Block} {blocks : Array GIR.Block}
+    (extended : ExtT (lowerBlock loop parameters want block le before).2 blocks) :
+    ExtT (emitEffect (.enter block.scope) le before).2 blocks := by
+  have parametersExtended := generated_block_parameters_extended extended
+  unfold demandBlockStatementsBefore at parametersExtended
+  have enteredExtended := parametersExtended.of_adv (advB_initSlots parameters _ _ _ _ rfl)
+  simpa only [ExtT] using enteredExtended
+
 theorem lowerStmts_append_run (loop : Option LoopCtx) (first rest : List Stmt) (le : LEnv) (before : LS) :
     lowerStmts loop (first ++ rest) le before = lowerStmts loop rest le (lowerStmts loop first le before).2 := by
   induction first generalizing before with
@@ -251,11 +260,7 @@ theorem GeneratedDemandInstruction.blockEnter_auto {module : Core.Module} {acces
     (extended : ExtT (lowerBlock loop parameters want block le before).2 function.blocks) :
     GeneratedDemandInstruction module access function required ⟨path, .block, .entry⟩ point (.eff (.enter block.scope)) := by
   apply GeneratedDemandInstruction.blockEnter occurrence rows atPoint
-  have parametersExtended := generated_block_parameters_extended extended
-  unfold demandBlockStatementsBefore at parametersExtended
-  have enteredExtended := parametersExtended.of_adv (advB_initSlots parameters _ _ _ _ rfl)
-  have extension : ExtT (emitEffect (.enter block.scope) le before).2 function.blocks := by
-    simpa only [ExtT] using enteredExtended
+  have extension := generated_block_enter_extended extended
   simpa only [instAt_eq] using (emitEffect_facts (rfl : emitEffect (.enter block.scope) le before = _)
     atPoint extension).2.2.2
 
