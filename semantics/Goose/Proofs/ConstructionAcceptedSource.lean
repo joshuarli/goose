@@ -50,7 +50,8 @@ def SourceOrigin {config : EvalConfig} (accepted : AcceptedModule config)
         frame.typing.implementation = some frame.source.impl ∧
         parameterBodyRootContext config.module frame.source.impl original = .ok frame.source.ctx ∧
         frame.source.aliases = accepted.aliases[contextId]! ∧
-        ContextRootFacts config.module original frame.source.aliases calls ∧
+        ContextRootFactsAt config.module original frame.source.aliases calls
+          frame.source.escaping frame.source.calleeNames ∧
         bodyTargets config.module = .ok frame.source.targetEscapes ∧
         ∃ roots next,
           (rpBlockValue { frame.source with scopes := [], valueBlock := none, initializing := [] }
