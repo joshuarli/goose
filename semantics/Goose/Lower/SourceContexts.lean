@@ -726,7 +726,7 @@ theorem acceptedGlobalSource {cfg : Cfg} {state : St} {g : GlobalId} {global : G
   · exact initialFrame invariant context.inputFuture (initEnv cfg.mod g)
       ⟨cfg.mod, initImpl, initContext, []⟩ rfl rfl rfl rfl rfl rfl rfl (by intro x; rfl) activation
 
-private theorem blockValueChild? {sc : Nat} {ss : List Stmt} {e : Expr} :
+theorem blockValueChild {sc : Nat} {ss : List Stmt} {e : Expr} :
     (DemandNode.block (.mk sc ss (some e))).child? ss.length = some (.expression e) := by
   change ((ss.map (some ∘ DemandNode.statement) ++ [some (.expression e)])[ss.length]?).join = _
   rw [List.getElem?_append_right (by simp)]
@@ -737,9 +737,9 @@ private theorem blockValue_shrinkFuture {path sc ss e} {pc : PlanContext m plans
     (context : NodeContext pc path (.block (.mk sc ss (some e))) .block) :
     ((EvaluationContext.shrink profile context : EvaluationContext m plans path
       (.block (.mk sc ss (some e))) .block).child rfl ss.length (.expression e) .expression
-      blockValueChild? (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture =
+      blockValueChild (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture =
       context.outputFuture := by
-  let transition := context.child rfl ss.length (.expression e) .expression blockValueChild?
+  let transition := context.child rfl ss.length (.expression e) .expression blockValueChild
     (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
   have hexpectation : (DemandNode.block (.mk sc ss (some e))).childExpectation?
       pc.approvals.access
@@ -747,7 +747,7 @@ private theorem blockValue_shrinkFuture {path sc ss e} {pc : PlanContext m plans
         context.expected.frame.retained⟩ ss.length =
       some ⟨(DemandNode.block (.mk sc ss (some e))).visibleForChild context.expected.frame.active ss.length,
         context.expected.frame.future⟩ := by
-    simp [DemandNode.childExpectation?, DemandNode.childFuture, blockValueChild?]
+    simp [DemandNode.childExpectation?, DemandNode.childFuture, blockValueChild]
   have hfuture := DemandNode.childFrame_future transition.childFrameEq hexpectation
   change transition.context.expected.frame.future = context.expected.frame.future
   rw [transition.expectedFrameEq, DemandNode.phaseFrame_future transition.phaseFrameEq, hfuture]
@@ -1085,7 +1085,7 @@ structure StmtsSource.ValueChildAt {cfg : Cfg} {env : Env} {stmts : List Stmt} {
   path : child.path = source.path ++ [source.all.length]
   plans : child.plans = source.plans
   context : HEq child.context (source.context.child rfl source.all.length (.expression expression) .expression
-    (by rw [hasValue]; exact blockValueChild?) (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]))
+    (by rw [hasValue]; exact blockValueChild) (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]))
   retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
 
 theorem StmtsSource.valueChild {cfg : Cfg} {env : Env} {stmts : List Stmt} {state after : St}
@@ -1123,13 +1123,13 @@ theorem StmtsSource.valueChild {cfg : Cfg} {env : Env} {stmts : List Stmt} {stat
       stmts.length hActive x
     rw [hfold] at initial
     exact initial.trans (stmts_visible ht x).symm
-  let ec := bc.child rfl all.length (.expression expr) .expression blockValueChild?
+  let ec := bc.child rfl all.length (.expression expr) .expression blockValueChild
     (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
   have hAct : ec.ActiveMatches tenv' := by
     cases bc with
     | pilot profile active => exact hfinalActive
     | shrink profile context =>
-      let transition := context.child rfl all.length (.expression expr) .expression blockValueChild?
+      let transition := context.child rfl all.length (.expression expr) .expression blockValueChild
         (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])
       change ∀ x, x ∈ transition.context.expected.frame.active ↔ x ∈ tenv'.visible
       rw [transition.expectedFrameEq, DemandNode.phaseFrame_active transition.phaseFrameEq,
@@ -1137,13 +1137,13 @@ theorem StmtsSource.valueChild {cfg : Cfg} {env : Env} {stmts : List Stmt} {stat
       exact hfinalActive
   have hAcc : ec.AccessMatches tenv' penv := by
     apply (bc.child_accessMatches_iff rfl all.length (.expression expr) .expression
-      blockValueChild? (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) _ _).2
+      blockValueChild (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) _ _).2
     cases bc <;> simpa [EvaluationContext.AccessMatches, NodeContext.AccessMatches,
       (show tenv'.mod = tenv.mod from same.mod), (show tenv'.vars = tenv.vars from same.vars)] using hAccess
   have hMay : ec.mayShrink W.ownerP observation = bc.mayShrink W.ownerP observation := by
     funext r
     exact propext (bc.child_mayShrink_iff rfl all.length (.expression expr) .expression
-      blockValueChild? (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.ownerP observation r)
+      blockValueChild (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) W.ownerP observation r)
   have hInput : Core.Sound.Frame m W tenv' penv env after ec.inputFuture := by
     apply frame.changeFuture
     intro x hx hf
@@ -1163,7 +1163,7 @@ theorem StmtsSource.valueChild {cfg : Cfg} {env : Env} {stmts : List Stmt} {stat
     protection := hMay ▸ hProtected, observed := ?_, classified := result.classified,
     permission := hp, frame := hInput, typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl,
     ⟨rfl, rfl, rfl, HEq.rfl, fun alias member => bc.child_retained_subset rfl all.length
-      (.expression expr) .expression blockValueChild?
+      (.expression expr) .expression blockValueChild
       (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) member⟩⟩
   rw [hMay]
   exact result.observed
