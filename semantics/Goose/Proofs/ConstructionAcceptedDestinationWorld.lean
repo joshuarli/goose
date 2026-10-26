@@ -22,13 +22,15 @@ theorem newDestination_acceptedWorld (config : EvalConfig) (owner : Goose.Core.A
   have acts := congrArg ExecutionState.nextAct frame.outer
   have scopes := congrArg ExecutionState.nextScope frame.outer
   refine ⟨newDestination_ownershipContext config.layout owner ty request origin knownCount before after id ambient valid.ownership executed,
-    ?_, valid.globalLive, valid.globalTypes, valid.layouts, ?_, ?_, ?_, ?_, ?_⟩
+    ?_, valid.globalLive, valid.globalTypes, valid.layouts, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · refine ⟨valid.globals.1, ?_⟩
     intro global bound
     obtain ⟨descriptor, value, present, found, represented⟩ := valid.globals.2 global bound
     exact ⟨descriptor, value, present, by rw [objects]; exact found, represented⟩
   · intro act scope varId ty declared
     simpa only [acts, scopes] using valid.typeFrontier act scope varId ty declared
+  · intro global ty declared outside
+    simpa only [scopes] using valid.syntheticFrontier global ty declared outside
   · intro root ty value declared found
     rw [objects] at found
     exact valid.heap root ty value declared found
