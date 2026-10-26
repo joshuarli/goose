@@ -658,4 +658,88 @@ theorem validated_global_storageType (module : Module) (id : GlobalId) (descript
   | true => rfl
   | false => simp [storage, reject, bind, Except.bind] at checked
 
+private theorem validation_array_action {α : Type} (rows : Array α) (action : α → V Unit)
+    (checked : forIn rows PUnit.unit (fun row _ => do action row; pure (.yield PUnit.unit)) = .ok PUnit.unit) :
+    ∀ row ∈ rows.toList, action row = .ok () := by
+  rw [← Array.forIn_toList] at checked
+  have each := validation_forIn_yields _ _ checked (by
+    intro row token step success
+    obtain ⟨value, _, remaining⟩ := (validation_bind_ok _ _ _).mp success
+    cases value
+    exact (Except.ok.inj remaining).symm)
+  intro row member
+  have success := each row member
+  obtain ⟨value, result, _⟩ := (validation_bind_ok _ _ _).mp success
+  cases value
+  exact result
+
+private theorem checkModuleType_type_or_reference (module : Module) (ty : Ty)
+    (checked : checkModuleType module ty = .ok ()) :
+    checkType module ty = .ok () ∨
+      ∃ mutability target, ty = .ref mutability target ∧ checkType module target = .ok () := by
+  unfold checkModuleType at checked
+  split at checked
+  · cases ty <;> try exact Or.inl checked
+    exact Or.inr ⟨_, _, rfl, checked⟩
+  · exact Or.inl checked
+
+theorem validated_global_type_or_reference (module : Module) (id : GlobalId) (descriptor : Global)
+    (accepted : validate module = .ok ()) (present : module.globals[id]? = some descriptor) :
+    checkType module descriptor.ty = .ok () ∨
+      ∃ mutability target, descriptor.ty = .ref mutability target ∧ checkType module target = .ok () := by
+  unfold validate at accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨token, globals, _⟩ := (validation_bind_ok _ _ _).mp accepted
+  cases token
+  exact checkModuleType_type_or_reference module descriptor.ty
+    (validation_array_action module.globals (fun (row : Global) => checkModuleType module row.ty) globals descriptor (List.mem_of_getElem? (i := id) (by simpa only [Array.getElem?_toList] using present)))
+
+private theorem validated_implementation_types (module : Module) (id : ImplId) (implementation : Impl)
+    (accepted : validate module = .ok ()) (present : module.impls[id]? = some implementation) :
+    forIn implementation.vars PUnit.unit (fun (localVar : LocalVar) _ => do
+      checkModuleType module localVar.ty; pure (.yield PUnit.unit)) = .ok PUnit.unit ∧
+    forIn implementation.results PUnit.unit (fun (result : ResultDescriptor) _ => do
+      checkModuleType module result.ty; pure (.yield PUnit.unit)) = .ok PUnit.unit := by
+  unfold validate at accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
+  obtain ⟨token, implementations, _⟩ := (validation_bind_ok _ _ _).mp accepted
+  cases token
+  rw [← Array.forIn_toList] at implementations
+  have each := validation_forIn_yields _ _ implementations (by
+    intro row token step success
+    obtain ⟨value, _, success⟩ := (validation_bind_ok _ _ _).mp success
+    cases value
+    obtain ⟨value, _, success⟩ := (validation_bind_ok _ _ _).mp success
+    cases value
+    exact (Except.ok.inj success).symm)
+  have checked := each implementation (List.mem_of_getElem? (i := id) (by simpa only [Array.getElem?_toList] using present))
+  obtain ⟨token, variables, remaining⟩ := (validation_bind_ok _ _ _).mp checked
+  cases token
+  obtain ⟨token, results, _⟩ := (validation_bind_ok _ _ _).mp remaining
+  cases token
+  exact ⟨variables, results⟩
+
+theorem validated_local_type_or_reference (module : Module) (implementationId : ImplId)
+    (implementation : Impl) (id : VarId) (descriptor : LocalVar)
+    (accepted : validate module = .ok ()) (implementationAt : module.impls[implementationId]? = some implementation)
+    (present : implementation.vars[id]? = some descriptor) :
+    checkType module descriptor.ty = .ok () ∨
+      ∃ mutability target, descriptor.ty = .ref mutability target ∧ checkType module target = .ok () := by
+  have checked := (validated_implementation_types module implementationId implementation accepted implementationAt).1
+  exact checkModuleType_type_or_reference module descriptor.ty
+    (validation_array_action implementation.vars (fun (row : LocalVar) => checkModuleType module row.ty) checked descriptor (List.mem_of_getElem? (i := id) (by simpa only [Array.getElem?_toList] using present)))
+
+theorem validated_result_type_or_reference (module : Module) (implementationId : ImplId)
+    (implementation : Impl) (id : Nat) (descriptor : ResultDescriptor)
+    (accepted : validate module = .ok ()) (implementationAt : module.impls[implementationId]? = some implementation)
+    (present : implementation.results[id]? = some descriptor) :
+    checkType module descriptor.ty = .ok () ∨
+      ∃ mutability target, descriptor.ty = .ref mutability target ∧ checkType module target = .ok () := by
+  have checked := (validated_implementation_types module implementationId implementation accepted implementationAt).2
+  exact checkModuleType_type_or_reference module descriptor.ty
+    (validation_array_action implementation.results (fun (row : ResultDescriptor) => checkModuleType module row.ty) checked descriptor (List.mem_of_getElem? (i := id) (by simpa only [Array.getElem?_toList] using present)))
+
 end Goose.Construct
