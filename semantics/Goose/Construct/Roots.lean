@@ -2016,4 +2016,380 @@ theorem contextRootFacts_annotationShape (module : Module) (context : Context)
   cases value
   exact accepted
 
+def Eff.accessTargets (effects : Eff) : List Target :=
+  effects.reads ++ effects.writes ++ effects.grows ++ effects.shrinks
+
+def EffectTargetsIncluded (before after : Eff) : Prop := before.accessTargets ⊆ after.accessTargets
+
+theorem EffectTargetsIncluded.refl (effects : Eff) : EffectTargetsIncluded effects effects := fun _ member => member
+theorem EffectTargetsIncluded.trans {before middle after : Eff}
+    (first : EffectTargetsIncluded before middle) (second : EffectTargetsIncluded middle after) :
+    EffectTargetsIncluded before after := fun _ member => second (first member)
+
+private theorem addTargets_left_subset (before added : List Target) : before ⊆ addTargets before added := by
+  induction added generalizing before with
+  | nil => exact fun _ member => member
+  | cons target rest ih =>
+    simp only [addTargets, List.foldl_cons]
+    intro selected member
+    apply ih
+    split
+    · exact member
+    · exact List.mem_append_left _ member
+
+private def RetainsEffectTargets (action : P α) : Prop :=
+  ∀ before result after, action before = .ok (result, after) → EffectTargetsIncluded before.eff after.eff
+
+private theorem retains_pure (value : α) : RetainsEffectTargets (pure value) := by
+  intro before result after checked
+  change Except.ok (value, before) = Except.ok (result, after) at checked
+  cases checked
+  exact EffectTargetsIncluded.refl _
+
+private theorem retains_bind (action : P α) (next : α → P β)
+    (first : RetainsEffectTargets action) (remaining : ∀ value, RetainsEffectTargets (next value)) :
+    RetainsEffectTargets (action >>= next) := by
+  intro before result after checked
+  cases initial : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, initial] at checked
+  | ok pair =>
+    have rest : next pair.1 pair.2 = .ok (result, after) := by
+      simpa [bind, StateT.bind, Except.bind, initial] using checked
+    exact EffectTargetsIncluded.trans (first before pair.1 pair.2 initial) (remaining pair.1 pair.2 result after rest)
+
+private theorem retains_get : RetainsEffectTargets (get : P RState) := by
+  intro before result after checked
+  change Except.ok (before, before) = Except.ok (result, after) at checked
+  cases checked
+  exact EffectTargetsIncluded.refl _
+
+private theorem retains_modify (update : RState → RState)
+    (retains : ∀ before, EffectTargetsIncluded before.eff (update before).eff) :
+    RetainsEffectTargets (modify update) := by
+  intro before result after checked
+  change Except.ok (PUnit.unit, update before) = Except.ok (result, after) at checked
+  cases checked
+  exact retains _
+
+private theorem retains_lift (action : V α) : RetainsEffectTargets (liftV action) := by
+  intro before result after checked
+  cases action with
+  | error error => cases checked
+  | ok value =>
+    change Except.ok (value, before) = Except.ok (result, after) at checked
+    cases checked
+    exact EffectTargetsIncluded.refl _
+private theorem effectTargets_fields {before after : Eff}
+    (reads : before.reads ⊆ after.reads) (writes : before.writes ⊆ after.writes)
+    (grows : before.grows ⊆ after.grows) (shrinks : before.shrinks ⊆ after.shrinks) :
+    EffectTargetsIncluded before after := by
+  intro target member
+  simp only [Eff.accessTargets, List.mem_append] at member ⊢
+  rcases member with ((member | member) | member) | member
+  · exact Or.inl (Or.inl (Or.inl (reads member)))
+  · exact Or.inl (Or.inl (Or.inr (writes member)))
+  · exact Or.inl (Or.inr (grows member))
+  · exact Or.inr (shrinks member)
+
+private theorem retains_reject (rule : Goose.Core.Rule) (message : String) :
+    RetainsEffectTargets (rejP (α := α) rule message) := by
+  intro before result after checked
+  cases checked
+
+private theorem retains_forIn_list (rows : List α) (initial : β)
+    (body : α → β → P (ForInStep β))
+    (each : ∀ row token, RetainsEffectTargets (body row token)) :
+    RetainsEffectTargets (forIn rows initial body) := by
+  induction rows generalizing initial with
+  | nil => exact retains_pure initial
+  | cons row rows ih =>
+    rw [List.forIn_cons]
+    apply retains_bind _ _ (each row initial)
+    intro step
+    cases step with
+    | done token => exact retains_pure token
+    | yield token => exact ih token
+
+private theorem retains_forIn'_list (rows : List α) (initial : β)
+    (body : (row : α) → row ∈ rows → β → P (ForInStep β))
+    (each : ∀ row member token, RetainsEffectTargets (body row member token)) :
+    RetainsEffectTargets (forIn' rows initial body) := by
+  induction rows generalizing initial with
+  | nil => exact retains_pure initial
+  | cons row rows ih =>
+    rw [List.forIn'_cons]
+    apply retains_bind _ _ (each row (by simp) initial)
+    intro step
+    cases step with
+    | done token => exact retains_pure token
+    | yield token => exact ih token _ (fun selected member token => each selected (by simp [member]) token)
+
+private theorem retains_forIn'_range (rows : Std.Legacy.Range) (initial : β)
+    (body : (row : Nat) → row ∈ rows → β → P (ForInStep β))
+    (each : ∀ row member token, RetainsEffectTargets (body row member token)) :
+    RetainsEffectTargets (forIn' rows initial body) := by
+  rw [Std.Legacy.Range.forIn'_eq_forIn'_range']
+  exact retains_forIn'_list _ _ _ (fun row member token => each row _ token)
+
+private theorem effectTargets_merge_left (before added : Eff) :
+    EffectTargetsIncluded before (mergeEffects before added) :=
+  effectTargets_fields (addTargets_left_subset _ _) (addTargets_left_subset _ _)
+    (addTargets_left_subset _ _) (addTargets_left_subset _ _)
+
+private theorem retains_capture (action : P α) : RetainsEffectTargets (captureEffects action) := by
+  intro before result after checked
+  unfold captureEffects at checked
+  cases initial : action { before with eff := {} } with
+  | error error => simp [initial, bind, Except.bind] at checked
+  | ok pair =>
+    simp only [initial, bind, Except.bind, pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at checked
+    obtain ⟨resultEq, stateEq⟩ := checked
+    subst after
+    exact effectTargets_merge_left _ _
+
+
+private theorem retains_reads (roots : List RootRef) : RetainsEffectTargets (addReads roots) := by
+  apply retains_modify
+  intro before
+  apply effectTargets_fields
+  all_goals first | exact addTargets_left_subset _ _ | exact fun _ member => member
+
+private theorem retains_writes (roots : List RootRef) : RetainsEffectTargets (addWrites roots) := by
+  apply retains_modify
+  intro before
+  apply effectTargets_fields
+  all_goals first | exact addTargets_left_subset _ _ | exact fun _ member => member
+
+private theorem retains_grows (roots : List RootRef) : RetainsEffectTargets (addGrows roots) := by
+  apply retains_modify
+  intro before
+  apply effectTargets_fields
+  all_goals first | exact addTargets_left_subset _ _ | exact fun _ member => member
+
+private theorem retains_shrinks (roots : List RootRef) : RetainsEffectTargets (addShrinks roots) := by
+  apply retains_modify
+  intro before
+  apply effectTargets_fields
+  all_goals first | exact addTargets_left_subset _ _ | exact fun _ member => member
+
+private theorem retains_aborts : RetainsEffectTargets noteAborts :=
+  retains_modify _ (fun _ => EffectTargetsIncluded.refl _)
+
+private theorem retains_outputs : RetainsEffectTargets noteOutputs :=
+  retains_modify _ (fun _ => EffectTargetsIncluded.refl _)
+
+private theorem retains_named (roots : List RootRef) : RetainsEffectTargets (noteNamed roots) :=
+  retains_modify _ (fun _ => EffectTargetsIncluded.refl _)
+
+private theorem retains_resultConstruction (env : PEnv) : RetainsEffectTargets (noteResultConstruction env) :=
+  retains_modify _ (fun _ => EffectTargetsIncluded.refl _)
+
+private theorem retains_receivingCapacity (env : PEnv) (ty : Ty) (request : Request) (expression : Expr) :
+    RetainsEffectTargets (noteReceivingCapacity env ty request expression) := by
+  unfold noteReceivingCapacity
+  repeat' first | exact retains_aborts | exact retains_pure _ | split
+
+private theorem retains_readRoots (env : PEnv) (place : Place) : RetainsEffectTargets (readRoots env place) := by
+  unfold readRoots
+  repeat' first | exact retains_pure _ | exact retains_reject _ _ | split
+
+private theorem retains_retainedShrinks (env : PEnv) (retained : List RootRef) (effects : Eff) :
+    RetainsEffectTargets (checkRetainedShrinks env retained effects) := by
+  unfold checkRetainedShrinks
+  split
+  · exact retains_reject _ _
+  · exact retains_pure _
+
+private theorem retains_noGrowth (env : PEnv) (roots : List RootRef) (effects : Eff) :
+    RetainsEffectTargets (checkNoGrowth env roots effects) := by
+  unfold checkNoGrowth
+  split
+  · exact retains_reject _ _
+  · exact retains_pure _
+
+private theorem retains_wholeAccess (env : PEnv) (roots : List RootRef) (effects : Eff) :
+    RetainsEffectTargets (checkWholeAccess env roots effects) := by
+  unfold checkWholeAccess
+  repeat' first | exact retains_reject _ _ | exact retains_pure _ | split
+
+local macro "retain_effect_targets" "[" extra:tacticSeq "]" : tactic => `(tactic|
+  repeat' first
+  | $extra
+  | assumption
+  | exact retains_pure _
+  | exact retains_lift _
+  | exact retains_reject _ _
+  | exact retains_get
+  | exact retains_capture _
+  | exact retains_reads _
+  | exact retains_writes _
+  | exact retains_grows _
+  | exact retains_shrinks _
+  | exact retains_aborts
+  | exact retains_outputs
+  | exact retains_named _
+  | exact retains_resultConstruction _
+  | exact retains_receivingCapacity _ _ _ _
+  | exact retains_readRoots _ _
+  | exact retains_retainedShrinks _ _ _
+  | exact retains_noGrowth _ _ _
+  | exact retains_wholeAccess _ _ _
+  | exact retains_modify _ (fun _ => EffectTargetsIncluded.refl _)
+  | refine retains_forIn_list _ _ _ (fun _ _ => ?_)
+  | refine retains_forIn'_range _ _ _ (fun _ _ _ => ?_)
+  | refine retains_bind _ _ ?_ (fun _ => ?_)
+  | split)
+
+private theorem retains_operandCapacities (env : PEnv) (descriptors : List ResultDescriptor)
+    (operands : List Expr) : RetainsEffectTargets (noteOperandCapacities env descriptors operands) := by
+  unfold noteOperandCapacities
+  retain_effect_targets [fail]
+
+private theorem retains_producerCapacities (env : PEnv) (descriptors : List ResultDescriptor)
+    (producer : Expr) : RetainsEffectTargets (noteProducerCapacities env descriptors producer) := by
+  unfold noteProducerCapacities
+  retain_effect_targets [fail]
+
+private theorem retains_scopedShrinkAliases (env : PEnv) (effects : Eff) :
+    RetainsEffectTargets (checkScopedShrinkAliases env effects) := by
+  unfold checkScopedShrinkAliases
+  retain_effect_targets [fail]
+  all_goals try dsimp only
+  all_goals retain_effect_targets [fail]
+
+private theorem retains_escapeRoots (env : PEnv) (target : Nat) (channels : List (List RootRef)) :
+    RetainsEffectTargets (receiveEscapeRoots env target channels) := by
+  unfold receiveEscapeRoots
+  retain_effect_targets [fail]
+
+private theorem retains_call (env : PEnv) (context : ContextId) (arguments : List (List RootRef)) :
+    RetainsEffectTargets (rpCall env context arguments) := by
+  unfold rpCall
+  retain_effect_targets [first
+    | exact retains_scopedShrinkAliases _ _
+    | exact retains_escapeRoots _ _ _]
+  all_goals try dsimp only
+  all_goals retain_effect_targets [first
+    | exact retains_scopedShrinkAliases _ _
+    | exact retains_escapeRoots _ _ _]
+  all_goals
+    apply retains_modify
+    intro before
+    apply effectTargets_fields
+    all_goals
+      unfold callEffects
+      split <;> first | exact addTargets_left_subset _ _ | exact fun _ member => member
+
+
+set_option maxHeartbeats 1000000 in
+private theorem rp_effectTargets_retained :
+    (∀ env place, RetainsEffectTargets (rpPlace env place)) ∧
+    (∀ env view, RetainsEffectTargets (rpView env view)) ∧
+    (∀ env expression, RetainsEffectTargets (rpExpr env expression)) ∧
+    (∀ env arguments, RetainsEffectTargets (rpPrintArgs env arguments)) ∧
+    (∀ env expressions, RetainsEffectTargets (rpExprs env expressions)) ∧
+    (∀ env pre block, RetainsEffectTargets (rpBlockValue env pre block)) ∧
+    (∀ env statements, RetainsEffectTargets (rpStmts env statements)) ∧
+    (∀ env statement, RetainsEffectTargets (rpStmt env statement)) ∧
+    (∀ env expressions, RetainsEffectTargets (rpNoLocalOperands env expressions)) ∧
+    (∀ env channels expressions, RetainsEffectTargets (rpReturnOperands env channels expressions)) ∧
+    (∀ env arguments, RetainsEffectTargets (rpArgs env arguments)) ∧
+    (∀ env bound, RetainsEffectTargets (rpBound env bound)) := by
+  apply rpPlace.mutual_induct
+    (motive_1 := fun env place => RetainsEffectTargets (rpPlace env place))
+    (motive_2 := fun env view => RetainsEffectTargets (rpView env view))
+    (motive_3 := fun env expression => RetainsEffectTargets (rpExpr env expression))
+    (motive_4 := fun env arguments => RetainsEffectTargets (rpPrintArgs env arguments))
+    (motive_5 := fun env expressions => RetainsEffectTargets (rpExprs env expressions))
+    (motive_6 := fun env pre block => RetainsEffectTargets (rpBlockValue env pre block))
+    (motive_7 := fun env statements => RetainsEffectTargets (rpStmts env statements))
+    (motive_8 := fun env statement => RetainsEffectTargets (rpStmt env statement))
+    (motive_9 := fun env expressions => RetainsEffectTargets (rpNoLocalOperands env expressions))
+    (motive_10 := fun env channels expressions => RetainsEffectTargets (rpReturnOperands env channels expressions))
+    (motive_11 := fun env arguments => RetainsEffectTargets (rpArgs env arguments))
+    (motive_12 := fun env bound => RetainsEffectTargets (rpBound env bound))
+  case case28 =>
+    intro env block origin ih
+    cases block with
+    | mk scope statements tail =>
+      unfold rpExpr
+      retain_effect_targets [exact ih _]
+  all_goals (intros; (try cases ‹Option Expr›) <;> (try cases ‹Option Block›))
+  all_goals simp only [rpPlace, rpView, rpExpr, rpPrintArgs, rpExprs, rpBlockValue, rpStmts,
+    rpStmt, rpNoLocalOperands, rpReturnOperands, rpArgs, rpBound]
+  all_goals retain_effect_targets [first
+    | exact retains_operandCapacities _ _ _
+    | exact retains_producerCapacities _ _ _
+    | exact retains_scopedShrinkAliases _ _
+    | exact retains_escapeRoots _ _ _
+    | exact retains_call _ _ _]
+  all_goals try dsimp only
+  all_goals retain_effect_targets [first
+    | exact retains_operandCapacities _ _ _
+    | exact retains_producerCapacities _ _ _
+    | exact retains_scopedShrinkAliases _ _
+    | exact retains_escapeRoots _ _ _
+    | exact retains_call _ _ _]
+  all_goals simp_all
+
+theorem rpPlace_effectTargetsIncluded {env : PEnv} {place : Place} {before after : RState}
+    {roots : List RootRef} (checked : rpPlace env place before = .ok (roots, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.1 env place before roots after checked
+
+theorem rpView_effectTargetsIncluded {env : PEnv} {view : View} {before after : RState}
+    {roots : List RootRef} (checked : rpView env view before = .ok (roots, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.1 env view before roots after checked
+
+theorem rpExpr_effectTargetsIncluded {env : PEnv} {expression : Expr} {before after : RState}
+    {roots : List RootRef} (checked : rpExpr env expression before = .ok (roots, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.1 env expression before roots after checked
+
+theorem rpPrintArgs_effectTargetsIncluded {env : PEnv} {arguments : List PrintArg} {before after : RState}
+    {result : Unit} (checked : rpPrintArgs env arguments before = .ok (result, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.2.1 env arguments before result after checked
+
+theorem rpExprs_effectTargetsIncluded {env : PEnv} {expressions : List Expr} {before after : RState}
+    {result : Unit} (checked : rpExprs env expressions before = .ok (result, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.2.2.1 env expressions before result after checked
+
+theorem rpBlockValue_effectTargetsIncluded {env : PEnv} {pre : List VarId} {block : Block} {before after : RState}
+    {result : List RootRef × (Nat × Nat)} (checked : rpBlockValue env pre block before = .ok (result, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.2.2.2.1 env pre block before result after checked
+
+theorem rpStmts_effectTargetsIncluded {env : PEnv} {statements : List Stmt} {before after : RState}
+    {result : Unit} (checked : rpStmts env statements before = .ok (result, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.2.2.2.2.1 env statements before result after checked
+
+theorem rpStmt_effectTargetsIncluded {env : PEnv} {statement : Stmt} {before after : RState}
+    {result : Unit} (checked : rpStmt env statement before = .ok (result, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.2.2.2.2.2.1 env statement before result after checked
+
+theorem rpNoLocalOperands_effectTargetsIncluded {env : PEnv} {expressions : List Expr} {before after : RState}
+    {result : Unit} (checked : rpNoLocalOperands env expressions before = .ok (result, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.2.2.2.2.2.2.1 env expressions before result after checked
+
+theorem rpReturnOperands_effectTargetsIncluded {env : PEnv} {channels : List (List RootRef)} {expressions : List Expr} {before after : RState}
+    {result : Unit} (checked : rpReturnOperands env channels expressions before = .ok (result, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.2.2.2.2.2.2.2.1 env channels expressions before result after checked
+
+theorem rpArgs_effectTargetsIncluded {env : PEnv} {arguments : List Arg} {before after : RState}
+    {result : List (List RootRef)} (checked : rpArgs env arguments before = .ok (result, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.2.2.2.2.2.2.2.2.1 env arguments before result after checked
+
+theorem rpBound_effectTargetsIncluded {env : PEnv} {bound : Bound} {before after : RState}
+    {result : Unit} (checked : rpBound env bound before = .ok (result, after)) :
+    EffectTargetsIncluded before.eff after.eff :=
+  rp_effectTargets_retained.2.2.2.2.2.2.2.2.2.2.2 env bound before result after checked
+
 end Goose.Construct
