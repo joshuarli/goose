@@ -27,6 +27,9 @@ theorem accepted_generated_block_enter_runtime_step {cfg : Cfg} {env : Env}
     ∃ cursor : ParameterPrefixCursor source 0, map.Covers required ∧ next = (point.1, point.2 + 1) ∧
       nextFrame = { frame with scopes := (block.scope, state.nextScope) :: frame.scopes } ∧
       after = { state with nextScope := state.nextScope + 1 } ∧
+      (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before [] block).pp = some next ∧
+      Rel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx nextFrame
+        (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before [] block) ∧
       map.Bounded (emitEffect (.enter block.scope) (lowerEnv cfg.mod env.vars results) before).2.vals.size ∧
       DemandFrameAt cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx source.world
         cursor.typing { source.rootsEnv with scopes := block.scope :: source.rootsEnv.scopes }
@@ -64,7 +67,15 @@ theorem accepted_generated_block_enter_runtime_step {cfg : Cfg} {env : Env}
         enteredState source.context.inputFuture := by
       simpa only [List.take_zero, List.map_nil, List.nil_append, preStore, enteredState] using cursor.frame
     have carried := RetainedSsaMap.enter_scope source.frame source.fresh realized
-    refine ⟨cursor, coverage, rfl, rfl, rfl, ?_, ⟨⟨scopedBuilder, scopedPoint, scopedRelated⟩, framed, ?_⟩⟩
+    have parameterBefore : demandBlockStatementsBefore le before [] block = scopedBuilder := by
+      simp only [demandBlockStatementsBefore, initSlots, pure_run, scopedBuilder, entered]
+    refine ⟨cursor, coverage, rfl, rfl, rfl, ?_, ?_, ?_, ⟨⟨scopedBuilder, scopedPoint, scopedRelated⟩, framed, ?_⟩⟩
+    · change (demandBlockStatementsBefore le before [] block).pp = some _
+      rw [parameterBefore]
+      exact scopedPoint
+    · change Rel _ _ _ _ (demandBlockStatementsBefore le before [] block)
+      rw [parameterBefore]
+      exact scopedRelated
     · change map.Bounded entered.2.vals.size
       rw [sameValues]
       exact bounded
