@@ -51,7 +51,7 @@ theorem accepted_generated_clear_unit_block_prefix {cfg : Cfg} {env : Env} {bloc
   rcases progress with ⟨_, _, entry⟩ | progressed
   · exact .interior (.emitted entry)
   · cases progressed with
-    | intro body canonical bodyOccurrence bodyRows remaining count enterStep bodyProgress =>
+    | intro body canonical bodyOccurrence bodyRows remaining count enterStep _bodyInput bodyProgress =>
       cases bodyProgress.progress with
       | interior demanded => exact .interior (.body canonical demanded)
       | @complete sourceFuel consumed residualLength boundary flow bodyCount bodySteps residual evaluated finished =>

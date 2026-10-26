@@ -24,6 +24,11 @@ inductive GeneratedBlockStatementsPrefix {cfg : Cfg} {env : Env} {block : Core.B
       (entry : Evidence.RuntimeStep cx.cfg cx.fn start initial state
         (start.1, start.2 + 1) { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
         { state with nextScope := state.nextScope + 1 })
+      (input : GeneratedPrefixInput cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
+        cx results loop body.typingEnv body.rootsEnv
+        (lowerStmts loop (block.stmts.take body.offset) (lowerEnv cfg.mod env.vars results)
+          (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before [] block)).2
+        { initial with scopes := (block.scope, state.nextScope) :: initial.scopes } (start.1, start.2 + 1))
       (progress : GeneratedSequencePrefixDecomposition (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
         body selected occurrence rows map
         { initial with scopes := (block.scope, state.nextScope) :: initial.scopes } (start.1, start.2 + 1)
@@ -114,6 +119,6 @@ theorem accepted_generated_block_statements_prefix {cfg : Cfg} {env : Env} {bloc
     have bodyProgress := bodyFamily body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted
       (by rw [currentEq, enteredValues]; exact bounded) bodyDemand.operands bodyInput
       (by rw [currentEq]; exact generated_block_statements_extended extended) residual
-    exact Or.inr ⟨body, canonical, bodyOccurrence, bodyRows, remaining, count.symm, enterStep, bodyProgress⟩
+    exact Or.inr ⟨body, canonical, bodyOccurrence, bodyRows, remaining, count.symm, enterStep, bodyInput, bodyProgress⟩
 
 end Goose.Lower
