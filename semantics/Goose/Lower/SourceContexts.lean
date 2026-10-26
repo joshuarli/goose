@@ -516,7 +516,7 @@ theorem BlockSource.enter {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
       statements.rootsStart = source.rootsStart ∧ statements.rootsEnd = source.rootsValue ∧
       statements.plans = source.plans ∧ statements.path = source.path ∧
       HEq statements.context source.context ∧ statements.all = block.stmts ∧
-      statements.value = block.value ∧ statements.offset = 0 := by
+      statements.value = block.value ∧ statements.offset = 0 ∧ statements.scope = block.scope := by
   rcases cfg with ⟨prof, m⟩
   rcases block with ⟨sc, stmts, value⟩
   rcases source with ⟨accepted, plans, path, bc, observation, W, tenv, tenv1, tenv2,
@@ -625,7 +625,7 @@ theorem BlockSource.enter {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
     offsetBounded := Nat.zero_le _, suffix := rfl, active := ?_, access := ?_,
     protection := hProtected, observed := hSafeB, classified := hClassBound, permission := hp,
     frame := hStart, scopeHead := ?_, top := hTop, bounded := hlo,
-    typed := hts, rooted := hrs, effects := hE2 }, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl, rfl, rfl, rfl⟩
+    typed := hts, rooted := hrs, effects := hE2 }, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl, rfl, rfl, rfl, rfl⟩
   · cases bc <;> simpa [blockSuffixActive, DemandNode.visibleForChild,
       EvaluationContext.ActiveMatches, NodeContext.ActiveMatches, DemandExpectedPoint.toPoint,
       DemandPoint.ActiveMatches] using hActive

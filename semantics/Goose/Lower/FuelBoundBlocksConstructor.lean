@@ -74,7 +74,7 @@ theorem typedBlockFuelBound_mk {sourceFuel fuel : Nat} {cfg : Cfg} {results : Li
         rw [Core.Sound.bindAll_eq] at hbind
         obtain ⟨_,rfl⟩ := Res.ok.inj hbind
         obtain ⟨sourceS,typing,finalTyping,roots,world,observation,typingStart,typingEnd,
-          rootsStart,rootsEnd,plans,path,context,all,blockValue,offset⟩ := source.enter
+          rootsStart,rootsEnd,plans,path,context,all,blockValue,offset,_⟩ := source.enter
         have metadataS : SourceResults sourceS.typingEnv sourceS.rootsEnv results := by
           apply metadata.transport
           · rw [typing]; exact source.same.impl

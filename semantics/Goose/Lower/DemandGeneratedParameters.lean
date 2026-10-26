@@ -52,6 +52,14 @@ theorem demandBlockParameterBefore_succ {le : LEnv} {before : LS}
   rw [List.take_succ_eq_append_getElem bound, selected, initSlots_append_run]
   simp only [initSlots, bind_run, pure_run]
 
+theorem demandBlockParameterBefore_complete (le : LEnv) (before : LS)
+    (bindings : List (SlotId × ValueId × OriginId)) (block : Core.Block) :
+    demandBlockParameterBefore le before bindings block bindings.length =
+      demandBlockStatementsBefore le before bindings block := by
+  unfold demandBlockParameterBefore
+  rw [List.take_length]
+  exact (all_parameters_run le before bindings block).symm
+
 inductive GeneratedBlockParameterInstruction (module : Core.Module) (access : AccessEnv) :
     Func → RetainedSsaMap → DemandSourceLabel → Pt → Inst → Prop
   | slotInit {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
@@ -83,6 +91,14 @@ theorem GeneratedBlockParameterInstruction.source {module : Core.Module} {access
         label.phase = .block ∧ label.boundary = .entry := by
   cases site with
   | slotInit occurrence rows bindingAt atPoint extended => exact ⟨_, _, _, _, _, _, _, occurrence, rfl, rfl⟩
+
+theorem PreRel.length {frame : GIR.Frame} :
+    ∀ {bindings : List (SlotId × ValueId × OriginId)} {pre : List (VarId × Val)},
+      PreRel frame bindings pre → bindings.length = pre.length
+  | [], [], _ => rfl
+  | _ :: _, _ :: _, ⟨_, _, rest⟩ => congrArg Nat.succ (PreRel.length rest)
+  | [], _ :: _, impossible => impossible.elim
+  | _ :: _, [], impossible => impossible.elim
 
 theorem PreRel.binding_at {frame : GIR.Frame} :
     ∀ {bindings : List (SlotId × ValueId × OriginId)} {pre : List (VarId × Val)}, PreRel frame bindings pre →

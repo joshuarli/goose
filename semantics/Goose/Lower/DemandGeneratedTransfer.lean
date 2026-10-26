@@ -5,15 +5,16 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound
 
-private theorem retained_context_heq {module : Core.Module}
+theorem demandContextRetainedEq {module : Core.Module}
     {firstPlans secondPlans : Array (Array DemandPoint)} {firstPath secondPath : List Nat}
-    {node : DemandNode} {phase : DemandPhase}
-    {first : EvaluationContext module firstPlans firstPath node phase}
-    {second : EvaluationContext module secondPlans secondPath node phase}
-    (plans : firstPlans = secondPlans) (path : firstPath = secondPath)
+    {firstNode secondNode : DemandNode} {phase : DemandPhase}
+    {first : EvaluationContext module firstPlans firstPath firstNode phase}
+    {second : EvaluationContext module secondPlans secondPath secondNode phase}
+    (plans : firstPlans = secondPlans) (path : firstPath = secondPath) (node : firstNode = secondNode)
     (same : HEq first second) : first.retained = second.retained := by
   subst secondPlans
   subst secondPath
+  subst secondNode
   exact congrArg EvaluationContext.retained (eq_of_heq same)
 
 theorem RetainedSsaMap.addRuns_realizes {map : RetainedSsaMap}
@@ -126,7 +127,7 @@ theorem PlaceSource.ExpressionChildAt.index_retains_generated {cfg : Cfg} {env :
     {aliases : List RetainedAlias}
     (query : source.rootsEnv.access.aliasView (source.path ++ [0]) view = .ok aliases)
     (shrink : cfg.mod.profile = .shrink) : ∀ alias ∈ aliases, alias ∈ child.context.retained := by
-  have retainedEq := retained_context_heq canonical.plans canonical.path canonical.context
+  have retainedEq := demandContextRetainedEq canonical.plans canonical.path rfl canonical.context
   rw [retainedEq]
   have access := source.access
   cases contextEq : source.context with

@@ -216,7 +216,7 @@ theorem typedBlockLoopSimulation_succ (n : Nat) (cfg : Cfg) (results : List Ty)
     rw [Core.Sound.bindAll_eq] at hbind
     obtain ⟨_, rfl⟩ := Res.ok.inj hbind
     obtain ⟨statements, htyping, hfinal, hroots, hworld, hobservation, htypingStart,
-      htypingEnd, hrootsStart, hrootsEnd, hplans, hpath, hcontext, hall, hblockValue, hoffset⟩ :=
+      htypingEnd, hrootsStart, hrootsEnd, hplans, hpath, hcontext, hall, hblockValue, hoffset, _⟩ :=
       source.enter
     have hraw := preparedLoopFlow_normal_success hactual
     cases value with
