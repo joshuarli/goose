@@ -113,7 +113,7 @@ theorem typedStatementReflection_clear {fuel : Nat} {cfg : Cfg} {results : List 
     TypedStatementReflection fuel cfg results loop (.clear place origin) := by
   intro env state source metadata loops ls after pt cx fr lowering point extension rel moduleEq resultsEq depth
     targets counter generated frames
-  obtain ⟨child, _, typing, roots, _, _, _, _⟩ := source.clearChild
+  obtain ⟨child, _, typing, roots, _, _, _, _, _⟩ := source.clearChild
   have childMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [typing, roots]
     exact metadata

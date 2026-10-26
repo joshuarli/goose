@@ -23,7 +23,7 @@ theorem RetainedSsaMap.Bounded.mono {map : RetainedSsaMap} {before after : Value
   ⟨fun cell member => Nat.lt_of_lt_of_le (bounded.1 cell member) larger,
     fun cell member => Nat.lt_of_lt_of_le (bounded.2 cell member) larger⟩
 
-private theorem retainedAliases_of_storeLe {m : Core.Module} {world : World} {env : Env}
+theorem retainedAliases_of_storeLe {m : Core.Module} {world : World} {env : Env}
     {before after : Store} (growth : Goose.Proofs.Memory.StoreLe before after)
     (aliases : List RetainedAlias) : RetainsAliases m world env before after aliases := by
   intro alias member

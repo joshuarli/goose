@@ -89,7 +89,7 @@ theorem typedStatementLoopSimulation_clear {n : Nat} {cfg : Cfg} {results : List
     TypedStatementLoopSimulation (n + 1) cfg results loop (.clear owner org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
     hgir hresults hdepth htargets hcounter hgenerated hframes
-  obtain ⟨child, element, typingEq, rootsEq, _⟩ := source.clearChild
+  obtain ⟨child, element, typingEq, rootsEq, _, _, _, _, _⟩ := source.clearChild
   have metadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [typingEq, rootsEq]
     exact hmetadata

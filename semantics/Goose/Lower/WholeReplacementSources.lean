@@ -81,7 +81,7 @@ theorem StmtSource.assignWholeChildren {cfg : Cfg} {env : Env} {state : St}
   have placeAt : (DemandNode.statement (.assignWhole owner replacement origin)).child? 0 =
       some (.place owner) := by simp [DemandNode.child?, DemandNode.children]
   obtain ⟨destination, typingEq, rootsEq, typeEq, worldEq, observationEq, outputEq, mayEq,
-    _, _, ownerRootsEq⟩ := source.placeChildSource owner placeAt
+    _, _, ownerRootsEq, _⟩ := source.placeChildSource owner placeAt
       (by simp [DemandNode.visibleForChild])
       (by intro x member; simp [Stmt.variables, member])
       (fun parent => replacement.variables ++ parent.future)

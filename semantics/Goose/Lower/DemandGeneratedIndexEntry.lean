@@ -25,16 +25,6 @@ def GeneratedIndexEntry {cfg : Cfg} {env : Env} {view : View} {index : Expr} {or
     (map.addRuns (lowerView view (lowerEnv cfg.mod env.vars results) before).1 aliases).values
     (map.addRuns (lowerView view (lowerEnv cfg.mod env.vars results) before).1 aliases).runs runtime
 
-private theorem retained_by_growth {module : Core.Module} {world : World} {env : Env}
-    {before after : Store} (growth : Goose.Proofs.Memory.StoreLe before after)
-    (aliases : List RetainedAlias) : RetainsAliases module world env before after aliases := by
-  intro alias member
-  constructor
-  · intro value realized
-    exact ⟨HasTy.mono growth realized.1, realized.2⟩
-  · intro mutability element capacity location start length typeEq realized typed
-    exact SliceTy.mono growth typed
-
 theorem accepted_generated_index_entry {cfg : Cfg} {env : Env} {view : View} {index : Expr}
     {origin : OriginId} {state after : St} (source : PlaceSource cfg env (.elem view index origin) state)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS}
@@ -59,7 +49,7 @@ theorem accepted_generated_index_entry {cfg : Cfg} {env : Env} {view : View} {in
     cases profile : cfg.mod.profile with
     | pilot =>
       have growth := result.pilotStore profile
-      exact retained_by_growth growth _
+      exact retainedAliases_of_storeLe growth _
     | shrink =>
       have oldIncluded : ∀ alias ∈ map.values.map Prod.snd ++ map.runs.map Prod.snd,
           alias ∈ left.context.retained := fun alias member => leftCanonical.retained alias (admitted profile alias member)

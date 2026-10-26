@@ -446,7 +446,7 @@ theorem typedStatementFuelBound_clear {sourceFuel fuel : Nat} {cfg : Cfg} {resul
     TypedStatementFuelBound (sourceFuel + 1) fuel cfg results loop (.clear place origin) := by
   intro env state source metadata loops ls after point cx fr lowering entry extension related moduleEq
     resultsEq depth targets counter generated frames
-  obtain ⟨child, _, typing, roots, _, _, _, _⟩ := source.clearChild
+  obtain ⟨child, _, typing, roots, _, _, _, _, _⟩ := source.clearChild
   have childMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [typing, roots]
     exact metadata

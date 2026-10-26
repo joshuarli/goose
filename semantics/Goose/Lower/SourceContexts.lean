@@ -2455,6 +2455,16 @@ theorem StmtSource.exitChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr} 
     ((PMono.noteAborts _ _ _ aborts).2.trans source.effects)
   exact ⟨child, integer, typingEq, rootsEq, typeEq⟩
 
+structure StmtSource.PlaceChildAt {cfg : Cfg} {env : Env} {stmt : Stmt} {place : Place} {state : St}
+    (source : StmtSource cfg env stmt state) (child : PlaceSource cfg env place state)
+    (found : (DemandNode.statement stmt).child? 0 = some (.place place)) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [0]
+  plans : child.plans = source.plans
+  context : HEq child.context (source.context.child rfl 0 (.place place) .place found
+    (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
+
 theorem StmtSource.placeChildSource {cfg : Cfg} {env : Env} {stmt : Stmt} {state : St}
     (source : StmtSource cfg env stmt state) (place : Place)
     (childAt : (DemandNode.statement stmt).child? 0 = some (.place place))
@@ -2477,7 +2487,7 @@ theorem StmtSource.placeChildSource {cfg : Cfg} {env : Env} {stmt : Stmt} {state
           (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture ∧
       child.context.mayShrink source.world.ownerP source.observation =
         source.context.mayShrink source.world.ownerP source.observation ∧
-      child.mutable = mutable ∧ child.contents = contents ∧ child.roots = roots := by
+      child.mutable = mutable ∧ child.contents = contents ∧ child.roots = roots ∧ source.PlaceChildAt child childAt := by
   let ec := source.context
   have phase : DemandNodeHasPhase (.place place) .place := by
     simp [DemandNodeHasPhase, DemandNode.phaseMatches]
@@ -2521,7 +2531,8 @@ theorem StmtSource.placeChildSource {cfg : Cfg} {env : Env} {stmt : Stmt} {state
     access := (ec.child_accessMatches_iff rfl 0 (.place place) .place childAt phase _ _).mpr source.access,
     protection := may ▸ source.protection, observed := may ▸ source.observed,
     classified := source.classified, permission := source.permission, frame := input,
-    typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl, rfl, rfl, rfl, may, rfl, rfl, rfl⟩
+    typed := typed, rooted := rooted, effects := effects }, rfl, rfl, rfl, rfl, rfl, rfl, may, rfl, rfl, rfl,
+      ⟨rfl, rfl, rfl, HEq.rfl, fun alias member => ec.child_retained_subset rfl 0 (.place place) .place childAt phase member⟩⟩
 
 private theorem afterPlaceExpression {cfg : Cfg} {env : Env} {state after : St}
     {place : Place} {expr : Expr} {stmt : Stmt}
@@ -2640,7 +2651,7 @@ theorem StmtSource.assignChildren {cfg : Cfg} {env : Env} {state : St}
     exact writeEffects.trans (finalEffects.trans source.effects)
   have placeAt : (DemandNode.statement (.assign place expr origin)).child? 0 = some (.place place) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _⟩ :=
+  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _, _, _, _⟩ :=
     source.placeChildSource place placeAt (by simp [DemandNode.visibleForChild])
       (by intro x member; simp [Stmt.variables, member])
       (fun parent => expr.variables ++ parent.future)
@@ -2663,7 +2674,7 @@ theorem StmtSource.clearChild {cfg : Cfg} {env : Env} {state : St} {place : Plac
     ∃ child : PlaceSource cfg env place state, ∃ element : Ty,
       child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧
       child.world = source.world ∧ child.observation = source.observation ∧
-      child.ty.ownerElem? = some element ∧ child.contents = true := by
+      child.ty.ownerElem? = some element ∧ child.contents = true ∧ source.PlaceChildAt child rfl := by
   have typed := source.typed
   simp only [tyStmt] at typed
   inv at typed
@@ -2677,13 +2688,13 @@ theorem StmtSource.clearChild {cfg : Cfg} {env : Env} {state : St} {place : Plac
   have effects := (PMono.addReads _ _ _ _ reads).2.trans ((PMono.addShrinks _ _ _ _ shrinks).2.trans source.effects)
   have placeAt : (DemandNode.statement (.clear place origin)).child? 0 = some (.place place) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨child, typingEq, rootsEq, typeEq, worldEq, observationEq, _, _, _, contentsEqChild, _⟩ :=
+  obtain ⟨child, typingEq, rootsEq, typeEq, worldEq, observationEq, _, _, _, contentsEqChild, _, canonical⟩ :=
     source.placeChildSource place placeAt (by simp [DemandNode.visibleForChild])
       (by simp [Stmt.variables]) (fun parent => parent.future)
       (by intro parent x member; exact List.mem_append_right _ member)
       (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, placeAt])
       start placeEnd ty mutable contents source.rootsStart placeFinish roots placeTyped placeRooted effects
-  exact ⟨child, element, typingEq, rootsEq, worldEq, observationEq, by rw [typeEq]; exact elementEq, contentsEqChild.trans contentsEq⟩
+  exact ⟨child, element, typingEq, rootsEq, worldEq, observationEq, by rw [typeEq]; exact elementEq, contentsEqChild.trans contentsEq, canonical⟩
 
 theorem StmtSource.popNChildren {cfg : Cfg} {env : Env} {state : St}
     {place : Place} {expr : Expr} {origin : OriginId}
@@ -2712,7 +2723,7 @@ theorem StmtSource.popNChildren {cfg : Cfg} {env : Env} {state : St}
     ((PMono.addShrinks _ _ _ _ shrinks).2.trans ((PMono.noteAborts _ _ _ aborts).2.trans source.effects))
   have placeAt : (DemandNode.statement (.popN place expr origin)).child? 0 = some (.place place) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _, destinationContents, _⟩ :=
+  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _, destinationContents, _, _⟩ :=
     source.placeChildSource place placeAt (by simp [DemandNode.visibleForChild])
       (by intro x member; simp [Stmt.variables, member])
       (fun parent => expr.variables ++ parent.future)
@@ -2756,7 +2767,7 @@ private theorem resizeSizeAt {cfg : Cfg} {env : Env} {state : St}
             (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture ∧
           child.context.mayShrink source.world.ownerP source.observation = source.context.mayShrink source.world.ownerP source.observation := by
   have placeAt : (DemandNode.statement (.resize place expr fill origin)).child? 0 = some (.place place) := by simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _, destinationContents, _⟩ :=
+  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _, destinationContents, _, _⟩ :=
     source.placeChildSource place placeAt (by simp [DemandNode.visibleForChild])
       (by intro x member; cases fill <;> simp [Stmt.variables, member])
       (fun parent => expr.variables ++ fill.toList.flatMap Expr.variables ++ parent.future)
@@ -3007,7 +3018,7 @@ theorem StmtSource.assignOpChildren {cfg : Cfg} {env : Env} {state : St}
   have effects := (PMono.addReads _ _ _ _ reads).2.trans ((PMono.addWrites _ _ _ _ writes).2.trans finalEffects)
   have placeAt : (DemandNode.statement (.assignOp op place expr origin)).child? 0 = some (.place place) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _⟩ :=
+  obtain ⟨destination, typingEq, rootsEq, destinationTy, worldEq, observationEq, outputEq, mayEq, _, _, _, _⟩ :=
     source.placeChildSource place placeAt (by simp [DemandNode.visibleForChild])
       (by intro x member; simp [Stmt.variables, member])
       (fun parent => expr.variables ++ parent.future)
@@ -3138,7 +3149,7 @@ theorem StmtSource.appendChildren {cfg : Cfg} {env : Env} {state : St}
   have effects := (suffix viewFinish () source.rootsEnd rest).2.trans source.effects
   have placeAt : (DemandNode.statement (.append place view origin)).child? 0 = some (.place place) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨destination, typingEq, rootsEq, _, worldEq, observationEq, outputEq, mayEq, _⟩ :=
+  obtain ⟨destination, typingEq, rootsEq, _, worldEq, observationEq, outputEq, mayEq, _, _, _, _⟩ :=
     source.placeChildSource place placeAt (by simp [DemandNode.visibleForChild])
       (by intro x member; simp [Stmt.variables, member])
       (fun parent => view.variables ++ parent.future)

@@ -17,16 +17,6 @@ structure ExpressionDemandBoundary {cfg : Cfg} {env : Env} {expression : Expr} {
   canonical : ∀ aliases, source.rootsEnv.access.aliasExpr source.path expression = .ok aliases →
     ∀ alias ∈ aliases, ValueAliasAt cfg.mod source.world env after.store frame id alias
 
-private theorem sourceRetention {m : Core.Module} {world : World} {env : Env}
-    {before after : Store} (growth : Goose.Proofs.Memory.StoreLe before after)
-    (aliases : List RetainedAlias) : RetainsAliases m world env before after aliases := by
-  intro alias member
-  constructor
-  · intro value realized
-    exact ⟨HasTy.mono growth realized.1, realized.2⟩
-  · intro mutability element capacity location start length typeEq realized typed
-    exact SliceTy.mono growth typed
-
 theorem ExprResult.generated_value {cfg : Cfg} {env : Env} {expression : Expr} {state after : St}
     {source : ExprSource cfg env expression state} {value : Val} (result : ExprResult source value after)
     {cx : FnCtx} {before built : LS} {initial frame : GIR.Frame} {point : Pt} {id : ValueId}
@@ -67,7 +57,7 @@ theorem ExpressionDemandBoundary.of_result {cfg : Cfg} {env : Env} {expression :
   have retained : RetainsAliases cfg.mod source.world env state.store after.store
       (map.values.map Prod.snd ++ map.runs.map Prod.snd) := by
     cases profile : cfg.mod.profile with
-    | pilot => exact sourceRetention (result.pilotStore profile) _
+    | pilot => exact retainedAliases_of_storeLe (result.pilotStore profile) _
     | shrink => exact result.aliases.subset (admitted profile)
   have carried := realized.retained post.same bounded.1 bounded.2 retained
   exact ⟨post, ⟨⟨built, post.pp, post.rel⟩, result.frame, carried⟩, bounded.mono post.mono,

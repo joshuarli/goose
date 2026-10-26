@@ -440,7 +440,7 @@ example (profile : NumProfile)
     ∃ child : PlaceSource ⟨profile, ownerModule (.clear (.global 0) 0)⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.global 0)
       { afterOwnerGlobals with nextAct := 2, nextScope := 1 }, child.contents = true := by
   obtain ⟨source, _⟩ := ownerStatement profile (.clear (.global 0) 0) accepted
-  obtain ⟨child, element, _, _, _, _, _, contents⟩ := source.clearChild
+  obtain ⟨child, element, _, _, _, _, _, contents, _⟩ := source.clearChild
   exact ⟨child, contents⟩
 
 example (profile : NumProfile)

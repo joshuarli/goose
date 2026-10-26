@@ -74,13 +74,7 @@ theorem ParameterPrefixCursor.retained {cfg : Cfg} {env : Env} {pre : List (VarI
       { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope (pre.take count) state.store }⟩ := by
   have retention : RetainsAliases cfg.mod world caller state.store
       (preStore env.act state.nextScope (pre.take count) state.store)
-      (map.values.map Prod.snd ++ map.runs.map Prod.snd) := by
-    intro alias member
-    constructor
-    · intro value holds
-      exact ⟨holds.1.mono cursor.growth, holds.2⟩
-    · intro mutability element capacity location start length typeEq holds typed
-      exact typed.mono cursor.growth
+      (map.values.map Prod.snd ++ map.runs.map Prod.snd) := retainedAliases_of_storeLe cursor.growth _
   constructor
   · intro cell member
     apply (realized.1 cell member).retained (frontier := cell.1 + 1)
