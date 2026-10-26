@@ -27,8 +27,8 @@ theorem bindRootsV_rooted (interpretation : RootInterpretation) (environment : P
           simpa [subsetRoots] using tested
         exact fun {_} member => members _ member
 
-private theorem lookup_rebound (entries : List (RootInst × Value))
-    (root other : RootInst) (value : Value) (different : other ≠ root) :
+private theorem lookup_rebound {α : Type} (entries : List (RootInst × α))
+    (root other : RootInst) (value : α) (different : other ≠ root) :
     ((root, value) :: entries.filter (fun entry => entry.1 != root)).lookup other = entries.lookup other := by
   have mismatched : (other == root) = false := beq_eq_false_iff_ne.mpr different
   simp only [List.lookup, mismatched]
@@ -108,6 +108,16 @@ theorem bindRoot_lookup_other (root other : RootInst) (value : Value) (before af
   cases evaluated
   rw [objects]
   exact lookup_rebound before.objects root other value different
+
+theorem bindRoot_ordinals_other (root other : RootInst) (value : Value) (before after : ExecutionState)
+    (checked : bindRoot root value before = .ok () after) (different : other ≠ root) :
+    after.objectOrdinals.lookup other = before.objectOrdinals.lookup other := by
+  cases ordinal : before.objectOrdinals.lookup root <;> cases value <;>
+    simp only [bindRoot, bind, EvalM.get, ordinal, Option.isNone, Bool.false_eq_true, ite_false,
+      ite_true, setObjectOrdinal, EvalM.set, pure, reserveRootObject,
+      liftConstruction, reserveStorage, ConstructionM.get, ConstructionM.set, bindStaticRoot] at checked <;>
+    cases checked
+  all_goals first | rfl | exact lookup_rebound _ _ _ _ different
 
 theorem bindRoot_localValueCorrespondence (interpretation : RootInterpretation) (context : Context)
     (visible : List VarId) (before : ExecutionState) (id : VarId) (root : RootInst)
