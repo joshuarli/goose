@@ -26,8 +26,11 @@ theorem accepted_generated_global_clear_value_block_traversal {cfg : Cfg} {env :
       Post cfg env cx before frame (lowerBlock loop [] true block (lowerEnv cfg.mod env.vars results) before).2
         finalFrame finalPoint [((lowerBlock loop [] true block (lowerEnv cfg.mod env.vars results) before).1, .val (.int type number))] ∧
       map.Realizes cfg.mod source.world env ⟨finalPoint, finalFrame, after⟩ ∧
-      ∀ taken actualFuel reached, taken ≤ block.stmts.length * 2 + 3 →
+      (∀ taken actualFuel reached, taken ≤ block.stmts.length * 2 + 3 →
         DemandPrefix cx taken actualFuel ⟨point, frame, state⟩ reached →
+        GeneratedClearBlockDemand source map required cx results before loop frame reached) ∧
+      ∀ taken reached, taken ≤ block.stmts.length * 2 + 3 →
+        DemandRuntimePrefix cx taken ⟨point, frame, state⟩ reached →
         GeneratedClearBlockDemand source map required cx results before loop frame reached := by
   let le := lowerEnv cfg.mod env.vars results
   let innerEnv : Env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }
@@ -116,7 +119,8 @@ theorem accepted_generated_global_clear_value_block_traversal {cfg : Cfg} {env :
       ⟨point, frame, state⟩ ⟨finalPoint, finalFrame, finalState⟩ := by
     simpa only [Nat.add_assoc] using prefixTrace.append ending
   refine ⟨finalState, finalPoint, finalFrame, traversal, evaluatedBlock, ?_, finalDemand.operands,
-    fun taken actualFuel reached bound tracePrefix => traversal.prefix_invariant bound tracePrefix⟩
+    fun taken actualFuel reached bound tracePrefix => traversal.prefix_invariant bound tracePrefix,
+    fun taken reached bound steps => traversal.runtimePrefix_invariant bound steps⟩
   change Post cfg env cx before frame (lowerBlock loop [] true block le before).2 _ _
     [((lowerBlock loop [] true block le before).1, .val (.int type number))]
   rw [generated_block_value_result]

@@ -25,17 +25,43 @@ private theorem initialized (accepted : Core.validate retainedIndexSource = .ok 
     (g := 0) (value := .limited (.int .i64) 1 #[.int .i64 9] 1)
     accepted (by rfl) (InitializedGlobals.initial _) 3 (by cbv)
 
+private theorem sampled_reachable : Evidence.RuntimePoint context.cfg context.fn (0, 2) sampledFrame initialState := by
+  have initial : Evidence.RuntimePoint context.cfg context.fn (0, 0) initialFrame initialState := by
+    apply Evidence.RuntimePoint.initializer (fuel := 12) (index := 1) (before := ownerState)
+      (global := lowerGlobal retainedIndexSource retainedIndexedGlobal)
+    · decide
+    · change 1 < (retainedIndexSource.globals.map (lowerGlobal retainedIndexSource)).size
+      simp [retainedIndexSource, retainedIndexModule]
+    · cbv
+      simp only [execOp, execPure, bind_apply, pure_apply]
+      cbv
+    · change (retainedIndexSource.globals.map (lowerGlobal retainedIndexSource))[1]? = some _
+      simp [retainedIndexSource, retainedIndexModule]
+    · refine ⟨rfl, 1, initialState, rfl, ?_⟩
+      cbv
+  have addressStep : Evidence.RuntimeStep context.cfg context.fn (0, 0) initialFrame initialState (0, 1) addressFrame initialState := by
+    apply Evidence.RuntimeStep.define (fuel := 0) generated_address.instruction
+    simp only [execOp, execPure, pure_apply]
+  have snapshotStep : Evidence.RuntimeStep context.cfg context.fn (0, 1) addressFrame initialState (0, 2) sampledFrame initialState := by
+    apply Evidence.RuntimeStep.define (fuel := 0) generated_snapshot.instruction
+    simp [execOp, execPure, addressFrame, initialFrame, initialState, ownerState, sample, Frame.set,
+      getVal, getCell, Store.introduce, Store.empty, Store.read, Val.get?, readLoc, expectRef, expectArray,
+      bind_apply, pure_apply]
+  exact .step (.step initial addressStep) snapshotStep
+
 theorem accepted_retained_index_body_all_runtime_points
     (accepted : Core.validate retainedIndexSource = .ok ()) :
     ∃ source : BlockSource configuration environment [] retainedIndexBlock initialState,
       source.path = [0, 1, 0] ∧
     ∃ after finalFrame,
+      Evidence.RuntimePoint context.cfg context.fn (0, 2) sampledFrame initialState ∧
       DemandUniformTraversal context
         (GeneratedClearBlockDemand source retainedSampleRows retainedSampleRows context [.int .i64]
           retainedIndexBefore none sampledFrame) 5
         ⟨(0, 2), sampledFrame, initialState⟩ ⟨(0, 7), finalFrame, after⟩ ∧
       execBlock 5 configuration environment [] retainedIndexBlock initialState = .ok (.normal (.int .i64 0)) after ∧
-      ∀ taken fuel reached, taken ≤ 5 → DemandPrefix context taken fuel ⟨(0, 2), sampledFrame, initialState⟩ reached →
+      ∀ taken reached, taken ≤ 5 → DemandRuntimePrefix context taken ⟨(0, 2), sampledFrame, initialState⟩ reached →
+        Evidence.RuntimePoint context.cfg context.fn reached.point reached.frame reached.state ∧
         (∃ typing roots future,
           DemandFrameAt configuration environment context source.world typing roots future
             retainedSampleRows.values retainedSampleRows.runs reached ∨
@@ -103,16 +129,16 @@ theorem accepted_retained_index_body_all_runtime_points
     ((initialRelated.set 0 (.val (.ref ⟨.global 0, []⟩))).set 1 (.view sample)).stack_eq (by rfl)
   have statements : execStmts 4 configuration { environment with scopes := [(0, 0)] }
       retainedIndexBlock.stmts { initialState with nextScope := 1 } = .ok (.normal .unit) clearedState := by cbv
-  obtain ⟨after, finalPoint, finalFrame, traversal, evaluatedBlock, post, _, invariant⟩ :=
+  obtain ⟨after, finalPoint, finalFrame, traversal, evaluatedBlock, post, _, _, invariant⟩ :=
     accepted_generated_global_clear_value_block_traversal (cx := context) (results := [.int .i64]) source (.cons 0 0 .nil) (by rfl) occurrence rows coverage
       sourceAdmitted bounded sourceRealized atPoint related retainedBlockExtended statements
   have finalPointEq : finalPoint = (0, 7) := Option.some.inj (post.pp.symm.trans (by rfl))
   subst finalPoint
-  refine ⟨source, sourcePath, after, finalFrame, traversal, evaluatedBlock, ?_⟩
-  intro taken fuel reached bound tracePrefix
-  have valid := invariant taken fuel reached bound tracePrefix
+  refine ⟨source, sourcePath, after, finalFrame, sampled_reachable, traversal, evaluatedBlock, ?_⟩
+  intro taken reached bound steps
+  have valid := invariant taken reached bound steps
   have framed := valid.frame
-  refine ⟨framed, ?_⟩
+  refine ⟨steps.reachable sampled_reachable, framed, ?_⟩
   obtain ⟨typing, roots, future, outer | inner⟩ := framed
   · exact (outer.operands.2 (1, retainedSampleAlias) (by simp only [retainedSampleRows, List.mem_singleton])).read_safe
   · exact (inner.operands.2 (1, retainedSampleAlias) (by simp only [retainedSampleRows, List.mem_singleton])).read_safe
