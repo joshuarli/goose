@@ -192,10 +192,58 @@ theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
   · intro frame present
     cases present
 
+theorem bindRoot_freshGlobalStored_world (config : EvalConfig) (initialized : Nat)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (liveRoots : RootInst → Prop)
+    (descriptor : Global) (stored : StoredValue)
+    (world : AcceptedWorld config initialized before ambient types liveRoots [] [])
+    (declared : config.module.globals[initialized]? = some descriptor)
+    (represented : ValueRepresentation descriptor.ty (.stored stored))
+    (backed : StoredValueBacking config.layout before stored)
+    (fresh : before.objectOrdinals.lookup (.global initialized) = none) :
+    ∃ after, bindRoot (.global initialized) (.stored stored) before = .ok () after ∧
+      AcceptedWorld config (initialized + 1) after ambient types
+        (fun root => root = .global initialized ∨ liveRoots root) [] [] := by
+  have registered := world.globalTypes initialized descriptor declared
+  have compatible : RootTypeCompatible types (.global initialized) descriptor.ty := by
+    intro previous present
+    exact Option.some.inj (present.symm.trans registered)
+  have sameTypes : registerRootType types (.global initialized) descriptor.ty = types := by
+    funext root
+    by_cases same : root = .global initialized
+    · subst root
+      simp only [registerRootType, ↓reduceIte, registered]
+    · simp only [registerRootType, same, ↓reduceIte]
+  obtain ⟨after, evaluated, _, post⟩ := bindRoot_freshStored_world config initialized before ambient types liveRoots
+    (.global initialized) descriptor.ty stored world compatible
+    (world.layouts _ _ registered) represented backed fresh (by intro act scope id impossible; cases impossible)
+  rw [sameTypes] at post
+  obtain ⟨result, bound, objects⟩ := bindRoot_objects (.global initialized) (.stored stored) before
+  have same := (ExecutionStep.ok.inj (bound.symm.trans evaluated)).2
+  subst result
+  have present : after.objects.lookup (.global initialized) = some (.stored stored) := by
+    simp only [objects, List.lookup, beq_self_eq_true]
+  refine ⟨after, evaluated, post.ownership, ?_, ?_, post.globalTypes, post.layouts, post.typeFrontier,
+    post.heap, post.backing, post.protections, post.carriers⟩
+  · refine ⟨(Array.getElem?_eq_some_iff.mp declared).1, ?_⟩
+    intro id available
+    have cases : id < initialized ∨ id = initialized := Nat.lt_succ_iff_lt_or_eq.mp available
+    rcases cases with prior | same
+    · exact post.globals.2 id prior
+    · subst id
+      exact ⟨descriptor, .stored stored, declared, present,
+        (post.heap _ _ _ registered present).1⟩
+  · intro id available
+    have cases : id < initialized ∨ id = initialized := Nat.lt_succ_iff_lt_or_eq.mp available
+    rcases cases with prior | same
+    · exact post.globalLive id prior
+    · subst id
+      exact Or.inl rfl
+
 #print axioms bindRoot_registeredHeap
 #print axioms registerRootType_frontier
 #print axioms bindRoot_freshStored_registered
 #print axioms registerRootType_layouts
 #print axioms bindRoot_freshStored_world
+#print axioms bindRoot_freshGlobalStored_world
 
 end Goose.Proofs.ConstructionAcceptedExecution
