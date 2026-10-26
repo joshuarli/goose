@@ -106,13 +106,13 @@ theorem contentRootCorrespondence_enterScope (interpretation : RootInterpretatio
     (active : ∀ id ∈ visible, ∃ root, rootOf interpretation.environment id state = .ok root state)
     (valid : ContentRootCorrespondence interpretation context visible fuel layout state) :
     ContentRootCorrespondence (interpretation.enterScope scope scopeInstance) context visible fuel layout state := by
-  intro id member root location value resolved found read interior reference
+  intro id member roots annotation root location value resolved found read interior reference
   obtain ⟨oldRoot, oldResolved⟩ := active id member
   have stillResolved := rootOf_enterScope_existing interpretation scope scopeInstance fresh id oldRoot state oldResolved
   rw [resolved] at stillResolved
   cases stillResolved
-  obtain ⟨roots, annotated, rooted⟩ := valid id member root location value oldResolved found read interior reference
-  exact ⟨roots, annotated, rootIn_enterScope interpretation scope scopeInstance fresh roots interior.root rooted⟩
+  have rooted := valid id member roots annotation root location value oldResolved found read interior reference
+  exact rootIn_enterScope interpretation scope scopeInstance fresh roots interior.root rooted
 
 theorem rootFrontier_enterScope (interpretation : RootInterpretation) (scope : Nat) (scopeInstance : ScopeInst)
     (nextAct : Nat) (frontier : RootFrontier interpretation nextAct) :

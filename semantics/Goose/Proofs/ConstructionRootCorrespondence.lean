@@ -56,13 +56,13 @@ theorem localValueRooted_empty (interpretation : RootInterpretation) (context : 
 
 def ContentRootCorrespondence (interpretation : RootInterpretation) (context : Context)
     (visible : List VarId) (fuel : Nat) (layout : LayoutEnv) (state : ExecutionState) : Prop :=
-  ∀ id ∈ visible, ∀ root location value,
+  ∀ id ∈ visible, ∀ roots,
+    (context.contentRoots.find? (·.1 == id)).map Prod.snd = some roots →
+    ∀ root location value,
     rootOf interpretation.environment id state = .ok root state →
     state.objects.lookup root = some (.ref location) →
     readLoc fuel layout location state = .ok value state →
-    ∀ interior, DirectReference value interior →
-      ∃ roots, (context.contentRoots.find? (·.1 == id)).map Prod.snd = some roots ∧
-        RootIn interpretation roots interior.root
+    ∀ interior, DirectReference value interior → RootIn interpretation roots interior.root
 
 theorem rootIn_mono {interpretation : RootInterpretation} {lower upper : List RootRef}
     {root : RootInst} (included : lower ⊆ upper) (actual : RootIn interpretation lower root) :
@@ -170,24 +170,85 @@ theorem evalValue_localReference_rooted (fuel : Nat) (config : EvalConfig)
   refine ⟨?_, RootRef.local id, by simp, rootOf_instantiates interpretation id state root resolved⟩
   simp only [evalValue, evalPlace, bind, resolved, pure]
 
+private theorem roots_bind_success {α β : Type} (action : P α) (next : α → P β)
+    (before after : RState) (result : β) :
+    (action >>= next) before = .ok (result, after) ↔
+      ∃ value middle, action before = .ok (value, middle) ∧ next value middle = .ok (result, after) := by
+  cases evaluated : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, evaluated]
+  | ok pair =>
+    cases pair with
+    | mk value middle =>
+      constructor
+      · intro checked
+        exact ⟨value, middle, rfl, by simpa [bind, StateT.bind, Except.bind, evaluated] using checked⟩
+      · rintro ⟨actual, current, first, rest⟩
+        cases first
+        simpa [bind, StateT.bind, Except.bind, evaluated] using rest
+
+theorem readRoots_referenceSlice_annotation (source : PEnv) (id : VarId)
+    (before after : RState) (roots : List RootRef) (refSlice : source.isRefSliceVar id = true)
+    (checked : readRoots source (.deref (.read (.var id))) before = .ok (roots, after)) :
+    source.cont id = some roots := by
+  cases annotated : source.cont id with
+  | none =>
+    simp only [readRoots, refSlice, ↓reduceIte, annotated] at checked
+    change Except.error _ = Except.ok (roots, after) at checked
+    cases checked
+  | some annotation =>
+    simp only [readRoots, refSlice, ↓reduceIte, annotated] at checked
+    change Except.ok (annotation, before) = Except.ok (roots, after) at checked
+    cases checked
+    rfl
+
+theorem rpExpr_referenceSlice_annotation (source : PEnv) (id : VarId)
+    (before after : RState) (roots : List RootRef) (refSlice : source.isRefSliceVar id = true)
+    (checked : rpExpr source (.read (.deref (.read (.var id)))) before = .ok (roots, after)) :
+    source.cont id = some roots := by
+  unfold rpExpr at checked
+  obtain ⟨physical, state1, _, checked⟩ := (roots_bind_success _ _ _ _ _).mp checked
+  obtain ⟨ignored, state2, _, checked⟩ := (roots_bind_success _ _ _ _ _).mp checked
+  obtain ⟨contents, state3, readChecked, checked⟩ := (roots_bind_success _ _ _ _ _).mp checked
+  obtain ⟨ignored, final, _, returned⟩ := (roots_bind_success _ _ _ _ _).mp checked
+  have annotation := readRoots_referenceSlice_annotation source id state2 state3 contents refSlice readChecked
+  change Except.ok (contents, final) = Except.ok (roots, after) at returned
+  cases returned
+  exact annotation
+
+theorem checkStore_referenceSlice_annotation (source : PEnv) (id : VarId) (actual : List RootRef)
+    (refSlice : source.isRefSliceVar id = true)
+    (checked : checkStore source (.deref (.read (.var id))) actual = .ok ()) :
+    ∃ roots, source.cont id = some roots ∧ actual ⊆ roots := by
+  cases annotated : source.cont id with
+  | none => simp [checkStore, Place.derefVar?, refSlice, annotated, Goose.Core.reject] at checked
+  | some roots =>
+    refine ⟨roots, rfl, ?_⟩
+    cases included : subsetRoots actual roots with
+    | false => simp [checkStore, Place.derefVar?, refSlice, annotated, included, Goose.Core.reject] at checked
+    | true =>
+      have members : ∀ root, root ∈ actual → root ∈ roots := by simpa [subsetRoots] using included
+      exact fun {_} member => members _ member
+
 theorem evalValue_referenceSlice_rooted (fuel : Nat) (config : EvalConfig)
-    (interpretation : RootInterpretation) (context : Context) (visible : List VarId) (state : ExecutionState)
-    (valid : ContentRootCorrespondence interpretation context visible (fuel + 3) config.layout state)
+    (interpretation : RootInterpretation) (source : PEnv) (visible : List VarId) (state : ExecutionState)
+    (valid : ContentRootCorrespondence interpretation source.ctx visible (fuel + 3) config.layout state)
     (id : VarId) (member : id ∈ visible) (root : RootInst) (location : Loc) (value : Value)
+    (before after : RState) (roots : List RootRef) (refSlice : source.isRefSliceVar id = true)
+    (checked : rpExpr source (.read (.deref (.read (.var id)))) before = .ok (roots, after))
     (resolved : rootOf interpretation.environment id state = .ok root state)
     (found : state.objects.lookup root = some (.ref location))
     (read : readLoc (fuel + 3) config.layout location state = .ok value state)
     (interior : Loc) (reference : DirectReference value interior) :
     evalValue (fuel + 4) config interpretation.environment (.read (.deref (.read (.var id)))) state = .ok value state ∧
-      ∃ roots, (context.contentRoots.find? (·.1 == id)).map Prod.snd = some roots ∧
-        RootIn interpretation roots interior.root := by
+      RootIn interpretation roots interior.root := by
   have holder : evalValue (fuel + 2) config interpretation.environment (.read (.var id)) state =
       .ok (.ref location) state := by
     simp only [evalValue, evalPlace, bind, resolved, pure, readLoc, EvalM.get, found, readValuePath]
   have address : evalPlace (fuel + 3) config interpretation.environment (.deref (.read (.var id))) state =
       .ok location state := by
     simp only [evalPlace, bind, holder, expectRef, pure]
-  refine ⟨?_, valid id member root location value resolved found read interior reference⟩
+  have annotation := rpExpr_referenceSlice_annotation source id before after roots refSlice checked
+  refine ⟨?_, valid id member roots annotation root location value resolved found read interior reference⟩
   simp only [evalValue, bind, address, read]
 
 def AliasComplete (interpretation : RootInterpretation) (aliases : List (RootRef × RootRef)) : Prop :=

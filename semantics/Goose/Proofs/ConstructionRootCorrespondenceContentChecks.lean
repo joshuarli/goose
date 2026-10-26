@@ -65,4 +65,45 @@ theorem forwarded_owner_content_reads_pointee : stdout (forwarded [.param 1]) = 
 
 theorem forwarded_self_content_rejected : rejection (forwarded [.param 0]) = some (.call,
     "argument 0: the callee context's content roots {param 0} differ from the content roots {param 1} of the reference passed") := by cbv
+
+private def unusedHolder : Module :=
+  let original := program [.param 1] true
+  { original with
+    impls := #[entry true, { helper with
+      name := "unused-holder"
+      body := .mk 0 [] (some (.slice .readOnly (.of (.deref (.read (.var 1)))) .omitted .omitted 0)) }]
+    contexts := #[original.contexts[0]'(by decide),
+      ⟨1, "unused-holder", [(0, [.param 0]), (1, [.param 1])], [[.param 1]], []⟩] }
+
+theorem invoked_unused_holder_without_contents_validated : validate unusedHolder = .ok () := by cbv
+
+theorem invoked_unused_holder_without_contents_reads_owner : stdout unusedHolder = some [55, 10] := by cbv
+
+theorem invoked_unused_holder_has_no_content_annotation : (unusedHolder.contexts[1]'(by decide)).contentRoots = [] := by cbv
+
+theorem reading_holder_without_contents_rejected :
+    validate { unusedHolder with impls := #[entry true, helper] } ≠ .ok () := by
+  cbv
+  intro impossible
+  cases impossible
+
+private def writingHolderWithoutContents : Module :=
+  { unusedHolder with impls := #[entry true, { helper with
+      body := .mk 0 [.assign (.deref (.read (.var 0)))
+        (.slice .readOnly (.of (.deref (.read (.var 1)))) .omitted .omitted 0) 0]
+        (some (.slice .readOnly (.of (.deref (.read (.var 1)))) .omitted .omitted 0)) }] }
+
+theorem writing_holder_without_contents_rejected : validate writingHolderWithoutContents ≠ .ok () := by
+  cbv
+  intro impossible
+  cases impossible
+
+private def unusedHolderEnvironment : PEnv :=
+  { mod := unusedHolder, impl := unusedHolder.impls[1]'(by decide),
+    ctx := unusedHolder.contexts[1]'(by decide), scopes := [0] }
+
+theorem store_guard_without_contents_rejected :
+    checkStore unusedHolderEnvironment (.deref (.read (.var 0))) [.param 1] =
+      .error ⟨.root, "variable 0 has no content roots"⟩ := by cbv
+
 end Goose.Proofs.ConstructionRootCorrespondence.ContentBoundary
