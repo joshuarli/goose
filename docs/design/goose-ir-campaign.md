@@ -47,17 +47,35 @@ Exact retained operand rows now reject missing rows, wrong SSA identities and re
 canonical instruction ownership and full source-demand coverage remain open.
 
 The shared construction source frame now carries exact typing and root-checker cursors.
+Its root facts are indexed by the actual escaping and callee-name tables.
 Its accepted entry factory derives the actual implementation, checker witnesses, fresh activation and alias completeness;
 it does not assert storage backing for an arbitrary input state.
-The live-carrier singleton theorem derives native landing success and preserves backing and its own receiving readiness.
-Producer-side readiness, protected outside-root geometry and sequential carrier exclusions still need the joint execution induction.
+The owned world now includes ghost root types and nominal layout conformance.
+Its initial factory requires successful validation and derives conformance for every declared global.
+Actual fresh owner binding preserves the world without receiving or pending frames;
+binding the next global advances the initialized prefix.
+Fresh destination allocation derives byte-cut protection and excludes its new row from existing named values.
+The live-carrier singleton theorem derives native landing success, backing, receiving readiness,
+and outside-root observations from exact row permissions and receiving geometry.
+Sequential carrier exclusions and those permissions still need the joint execution induction.
+Successful native fixed decoding, stored-element decoding, path reads and location reads preserve result typing and backing.
+These success theorems do not establish path validity or fault freedom.
 Generic demand factories derive instruction lookup from real builder extension and emission equations.
 One accepted limited-array initializer has static source ownership at every runtime point;
-dynamic retained-row realization and coverage through all source actions remain open.
+address, snapshot, load and checked-index components now derive dynamic transfer from actual runtime steps.
+Short-circuit controls retain a live sample through an actual limited-owner clear from length one to zero for AND and OR.
+Independent review found no scoped proof defect and prompted that stronger control.
+Full source-action coverage, body/loop continuations and call/return assembly remain open.
+
+Accepted initialization controls prevent two overstrong assumptions:
+an unused reference to a later global can be created before that global exists,
+and a static slice parameter can read synthetic roots beyond the module's declared-global table.
+Typing limits, actual read-effect availability and synthetic-root identity remain separate.
 
 The integrated dependency check passes all 304 modules selected by construction backing, root correspondence,
 completed exit observations, live commit and retained-row checks under pinned Lean 4.35.0.
 Later proof-only source-frame, parameter-scope and singleton-carrier components retain their focused lane checks.
+A later integrated world/entry/readiness wave passes 217 modules; decoding and path-reading roots pass their focused 212- and 213-module closures.
 Stable-key C++ unit tests pass after sharing the visitation helper.
 
 An isolated report experiment replaces per-node hash allocations in report walks with a pointer set.
