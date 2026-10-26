@@ -82,6 +82,27 @@ inductive DemandRuntimePrefix (cx : FnCtx) : Nat → DemandRuntimePoint → Dema
       (rest : DemandRuntimePrefix cx length middle after) :
       DemandRuntimePrefix cx (length + 1) before after
 
+theorem DemandRuntimePrefix.uncons {cx : FnCtx} {length : Nat} {before after : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx length before after) :
+    (length = 0 ∧ after = before) ∨
+      ∃ rest middle, length = rest + 1 ∧
+        RuntimeStep cx.cfg cx.fn before.point before.frame before.state middle.point middle.frame middle.state ∧
+        DemandRuntimePrefix cx rest middle after := by
+  cases steps with
+  | zero => exact Or.inl ⟨rfl, rfl⟩
+  | next step rest => exact Or.inr ⟨_, _, rfl, step, rest⟩
+
+theorem DemandRuntimePrefix.append {cx : FnCtx} {firstLength restLength : Nat}
+    {before middle after : DemandRuntimePoint}
+    (first : DemandRuntimePrefix cx firstLength before middle)
+    (rest : DemandRuntimePrefix cx restLength middle after) :
+    DemandRuntimePrefix cx (firstLength + restLength) before after := by
+  induction first with
+  | zero => simpa only [Nat.zero_add] using rest
+  | next step steps induction =>
+    have combined := DemandRuntimePrefix.next step (induction rest)
+    simpa only [Nat.add_right_comm] using combined
+
 theorem DemandRuntimePrefix.reachable {cx : FnCtx} {length : Nat} {before after : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx length before after)
     (reached : RuntimePoint cx.cfg cx.fn before.point before.frame before.state) :
