@@ -42,6 +42,17 @@ theorem acceptedEntryWorldFrame (config : EvalConfig) (accepted : AcceptedModule
       intro id member
       rw [visible] at member
       cases member
+    uninitializedLocals := by
+      intro id _ root resolved
+      have actual := rootOf_instantiates frame.interpretation id _ root resolved
+      cases actual with
+      | «local» id descriptor scope declared active =>
+        rw [scopes] at active
+        cases active
+    futureGlobals := by
+      intro id future bound
+      rw [initialized] at future
+      exact (Nat.not_lt_of_ge future bound).elim
     direct := direct
     contents := contents }
   have frameWorld : AcceptedWorld config frame.initialized { state with nextAct := state.nextAct + 1 }
