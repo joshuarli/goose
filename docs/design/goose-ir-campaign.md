@@ -1,8 +1,64 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** winding down at the owner's request (2026-10-26). Finish and integrate in-flight work; start no new campaign items. Performance qualification and the three universal proof obligations remain open. Pushes remain unauthorized.
+**Status:** paused 2026-10-26 at the owner's request after winddown and cleanup. All campaign workers stopped. Performance qualification and the three universal proof obligations remain open. Pushes remain unauthorized.
 **Branch:** `goose-ir`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
+
+## Resume handoff (2026-10-26)
+
+**Resume:** “Resume the paused Goose IR campaign from this handoff; reread current instructions and finish the remaining accepted-execution proofs.” First run `git status --short --branch`. On an authorized resume, cancel campaign closeout if still active, reread the applicable skills, and perform the parent steering checkpoint before selecting work. Recreate selected worktrees under `.work/wt/` from their preserved branches. Do not automatically replay historical lane commits or repeat unchanged qualification.
+
+**State:** the last accepted source revision is `0df2c602`. Later commits record cleanup and this handoff. No integrated code is awaiting a known failing check. There are no in-flight lanes. Local commits remain authorized by the requested workflow; pushes remain unauthorized. Other owner workflows may update remote refs independently.
+
+Winddown integrated all ready coherent lane changes: canonical checker cursors and successors, literal/Boolean and negation prefix decomposition, shared unit/value block assembly, discarded-expression prefix transfer, actual reservation ticket append, initializer witness alignment, and the canonical callee source-frame factory. The proof APIs retain actual child metadata and initializer callee tables. These changes do not alter compiler or evaluator behavior. The earlier limited-array capture fixes and raw-module validation repair remain integrated.
+
+**Direction:** whole-block prefix composition now consumes actual child prefixes and retains the real execution remainder. It covers clear-only bodies with literal/Boolean values, plus abstract expression-family composition for negation and discarded expressions. The retained-index initializer pilot preserves its nonempty run map through every prefix, conditional on source validation. Its validation is confirmed at runtime; no closed kernel validation proof is claimed.
+
+The limiting work is the accepted mutual induction. Construction receipts must link actual current objects, allocation rows, receiving ancestry and lifetime before they can support separation. The qualified conditional family draft is not a sufficient accepted-world invariant. Callee source frames are canonical, but actual argument execution, final-heap content provenance, parameter binding and the runtime world/frame still need one assembled proof. General expression/statement recursion, abnormal block exits, loops, calls, returns and all-runtime demand-root assembly remain unfinished. `TH-CON-01`, `TH-EXIT-01`, `TH-LOWER-03` and their campaign gates remain open.
+
+The next substantive delivery is a source-derived construction invariant with one complete accepted evaluator case, then preservation through the remaining native families. Strengthen or replace the parked receipts before extending their family. On the lowering side, extend the existing prefix engine rather than adding a second one or assuming successful whole-source evaluation. Reassess after a real accepted case or a demonstrated contradiction. Comprehensive corpora, full Lean/native qualification, five-kernel replay and final performance qualification remain manual-only named workloads under the owner's existing instruction; scoped checks do not select them. No performance budget or release gate was waived.
+
+**Parked proof designs:**
+
+| Branch | Checkpoint | Finding and retry condition |
+| --- | --- | --- |
+| `campaign/afk-family` | `81ffccd6` | Qualified conditional Native23 family declaration and Boolean case. Current-row, storage and lifetime links in its receipt prerequisite are underconstrained. Repair those links and derive initial/preserved validity before claiming accepted execution. |
+| `campaign/afk-construction` | `881f7635` | Draft owning receipts. Its useful source-position prerequisite `71003ffb` is integrated as `1c163465`; the receipts are deliberately excluded. |
+| `campaign/afk-construction-receipts-draft` | `21a33526` | Obsolete earlier family snapshot, preserved for design comparison only. |
+
+Accepted work from `campaign/afk-demand`, `campaign/afk-short-circuit`, `campaign/afk-construct-roots`, `campaign/afk-exit`, and `campaign/afk-allocation` is integrated. Their checkouts were retired. Other retained unmerged refs are frozen historical or owner-managed snapshots, listed in [the cleanup record](goose-ir-winddown-cleanup.md#retained-unmerged-refs); branch history alone does not identify missing patches. No historical source is implicitly selected for resumption.
+
+**Cleanup:** 23 completed campaign checkouts were removed with Git, preserving every branch. `.work/` shrank from 80.6 GB to 11.6 GB. About 9.2 GB is compressed evidence: qualified exports, native artifacts, logs, repro inputs and performance results under `.work/archive/`. Each new archive passed integrity and tar-list checks before the originals were removed. Current scratch uses about 401 MB. The cleanup record names the archives and four small unregistered source snapshots retained pending ownership/source review. Durable campaign state is committed; archived scratch is optional evidence rather than the only copy of any campaign source.
+
+**Retained registered worktrees:** all four are clean and allowed by the closeout guard. The Aincrad trees belong to separate owner work; none is an active IR proof lane.
+
+| Path under `.work/wt/` | Branch or HEAD | Current consumer |
+| --- | --- | --- |
+| `accelerate-perf-baseline` | `campaign/accelerate-perf-baseline`, `24ba0840` | Frozen compiler baseline for deferred performance comparison. |
+| `aincrad3-goose-storage-whole-region` | `fix/linux-whole-region-advice`, `b7b9e0e3` | Owner-managed Aincrad storage experiment. |
+| `aincrad3-goose-whole-region-master` | `fix/linux-whole-region-master`, `ed85e2e5` | Owner-managed Aincrad upstream comparison. |
+| `goose-master-2ad09c99` | detached `2ad09c99` | Immutable Aincrad upstream baseline, relocated with owner approval. |
+
+The other approved external relocation was followed by concurrent owner cleanup: the runtime edits are preserved at `85fd984f` on `fix/linux-current-whole-region-advice-20261023`, and its checkout is retired. No registered external worktree remains.
+
+**Verified:** the final lowering group passes 201 modules and the final construction/callee/reservation group passes 245 modules under pinned Lean 4.35.0. The earlier 346-module source-position/negation group also passed; the changed construction dependencies were rechecked in the final group. Seven final selected axiom checks use only `propext`, `Classical.choice` and `Quot.sound`. `git diff --check` passes. No formatter, new corpus run, native semantic rebuild, independent-kernel replay or performance measurement was run for winddown. The known full-proof and performance gaps remain unmet.
+
+Reboot checks cover clean registered worktrees, preserved branch refs, ignored disk-backed `.work/`, no campaign worker/build process, and the configured trusted Stop command. The API cannot invoke interactive `/hooks`; its configuration and actual closeout command were checked directly. The campaign goal is paused. The current user has no crontab; system-wide schedules were not audited.
+
+Rehearse inspection from the repository root without starting work:
+
+```sh
+env -i HOME="$HOME" PATH="$PATH" sh -c '
+git status --short --branch
+git log -1 --oneline 0df2c602
+git show campaign/afk-family:semantics/Goose/Proofs/ConstructionAcceptedExecutionFamily.lean >/dev/null
+git show campaign/afk-construction:semantics/Goose/Proofs/ConstructionAcceptedOwningOrigins.lean >/dev/null
+git show campaign/afk-construction-receipts-draft:semantics/Goose/Proofs/ConstructionAcceptedExecutionFamily.lean >/dev/null
+git worktree list --porcelain
+test -f docs/design/goose-ir-winddown-cleanup.md
+test -x /home/josh/.local/lib/lean4/v4.35.0/bin/lean
+'
+```
 
 ## Unattended completion (2026-10-25)
 
@@ -1160,6 +1216,8 @@ The most common exact multi-feature sets are `string-value + struct` (7 programs
 - The checker already groups roots into classes: one helper called with many distinct globals and many locals at different depths gets two specializations, not one per call site. The synthetic family therefore has to vary the dimensions that do multiply specializations; `B1`'s dimension attribution on Aincrad3 says which those are, and `B5` builds its members from that.
 
 ## 13. Campaign log
+
+- **Paused 2026-10-26 after requested winddown and cleanup.** Integrated every ready coherent lane checkpoint through `0df2c602`; final 201-module lowering and 245-module construction checks passed on pinned Lean 4.35.0 with allowed axioms only. Parked the underconstrained owning receipts and conditional family on committed branches, stopped all lanes, retired 23 checkouts, and reduced `.work/` from 80.6 GB to 11.6 GB while preserving verified compressed evidence. Clean-environment resume inspection and the closeout guard passed. Full accepted-execution proofs and performance qualification remain open; no push by this workflow.
 
 - **Resumed 2026-10-17 at the owner's request.** Integration starts from `8eb50c00`, which includes upstream updates after the pause. Campaign closeout is inactive. Five lanes resume accepted-state lowering, construction GIR, native handlers, whole-execution proofs, and independent Core audit registration. Retained per-lane Lean caches are empty. Seed focused builds from a copy of the main checkout's `.lake/build`, then let Lake revalidate inputs. The external Aincrad3-owned worktree is preserved. No new gate result or performance claim is made.
 
