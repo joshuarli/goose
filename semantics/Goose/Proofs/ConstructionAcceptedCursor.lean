@@ -29,7 +29,8 @@ theorem ordinaryOperandFrame_accepted {config : EvalConfig} (accepted : Accepted
     (valid : AcceptedFrame config accepted frame state types) :
     AcceptedFrame config accepted (ordinaryOperandFrame frame fuel) state types :=
   ⟨ordinaryOperandFrame_compatible accepted frame fuel valid.compatible,
-    valid.frontier, valid.aliases, valid.locals, valid.localTypes, valid.direct, valid.contents⟩
+    valid.frontier, valid.aliases, valid.locals, valid.localTypes, valid.uninitializedLocals, valid.futureGlobals,
+    valid.direct, valid.contents⟩
 
 theorem rpExpr_not_operand (environment : PEnv) (expression : Expr) (before after : RState)
     (roots : List RootRef) (checked : (rpExpr environment (.not expression)).run before = .ok (roots, after)) :

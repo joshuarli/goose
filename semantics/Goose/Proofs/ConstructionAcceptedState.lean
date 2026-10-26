@@ -83,6 +83,8 @@ structure AcceptedWorld (config : EvalConfig) (initialized : Nat) (state : Execu
     id < config.module.globals.size + state.nextScope
   heap : ∀ root ty value, types root = some ty → state.objects.lookup root = some value →
     ValueRepresentation ty value ∧ PointerTypedValue types ty value
+  objectsRegistered : ∀ root value, state.objects.lookup root = some value → ∃ ty, types root = some ty
+  ordinalsRegistered : ∀ root ordinal, state.objectOrdinals.lookup root = some ordinal → ∃ ty, types root = some ty
   backing : RootedBackingState config.layout state liveRoots
   protections : ∀ region ∈ regions, ReceivingProtection config.layout state liveRoots region
   carriers : ∀ frame ∈ pending, CarriersLandingReady state frame.channels frame.carriers ∧
@@ -97,6 +99,11 @@ structure AcceptedFrame (config : EvalConfig) (accepted : AcceptedModule config)
   localTypes : ∀ id ∈ frame.typing.visible, ∀ descriptor root,
     frame.typing.variables[id]? = some descriptor →
     rootOf frame.interpretation.environment id state = .ok root state → types root = some descriptor.ty
+  uninitializedLocals : ∀ id, frame.rootCursor.nextVar ≤ id ∨ id ∈ frame.source.initializing → ∀ root,
+    rootOf frame.interpretation.environment id state = .ok root state →
+    state.objects.lookup root = none ∧ state.objectOrdinals.lookup root = none
+  futureGlobals : ∀ id, frame.initialized ≤ id → id < config.module.globals.size →
+    state.objects.lookup (.global id) = none ∧ state.objectOrdinals.lookup (.global id) = none
   direct : LocalRootCorrespondence frame.interpretation frame.source.ctx frame.typing.visible state
   contents : ∀ fuel, ContentRootCorrespondence frame.interpretation frame.source.ctx
     frame.typing.visible fuel config.layout state
@@ -114,7 +121,7 @@ def declaredRootTypes (module : Module) : RootTypes
 
 theorem initial_acceptedWorld (config : EvalConfig) (accepted : validate config.module = .ok ()) :
     AcceptedWorld config 0 .initial [] (declaredRootTypes config.module) (fun _ => False) [] [] := by
-  refine ⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_, ?_, ?_, ?_,
+  refine ⟨initial_ownershipExecutionContext, ⟨Nat.zero_le _, ?_⟩, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
     initial_rootedBackingState config.layout _, ?_, ?_⟩
   · intro id bound
     exact (Nat.not_lt_zero id bound).elim
@@ -140,11 +147,61 @@ theorem initial_acceptedWorld (config : EvalConfig) (accepted : validate config.
     simp only [declaredRootTypes, absent, Option.map_none, reduceCtorEq] at typed
   · intro root ty value typed present
     cases present
+  · intro root value present
+    cases present
+  · intro root ordinal present
+    cases present
   · intro region present
     cases present
   · intro frame present
     cases present
 
+theorem AcceptedWorld.synthetic_keys_fresh {config : EvalConfig} {initialized : Nat} {state : ExecutionState}
+    {ambient : OwnershipAmbient} {types : RootTypes} {liveRoots : RootInst → Prop}
+    {regions : List ReceivingRegion} {pending : List PendingCarrierFrame}
+    (world : AcceptedWorld config initialized state ambient types liveRoots regions pending) (id : Nat)
+    (future : config.module.globals.size + state.nextScope ≤ id) :
+    state.objects.lookup (.global id) = none ∧ state.objectOrdinals.lookup (.global id) = none := by
+  constructor
+  · cases found : state.objects.lookup (.global id) with
+    | none => rfl
+    | some value =>
+      obtain ⟨ty, registered⟩ := world.objectsRegistered (.global id) value found
+      have bound := world.syntheticFrontier id ty registered (by omega)
+      exact (Nat.not_lt_of_ge future bound).elim
+  · cases found : state.objectOrdinals.lookup (.global id) with
+    | none => rfl
+    | some ordinal =>
+      obtain ⟨ty, registered⟩ := world.ordinalsRegistered (.global id) ordinal found
+      have bound := world.syntheticFrontier id ty registered (by omega)
+      exact (Nat.not_lt_of_ge future bound).elim
+
+theorem AcceptedWorld.local_keys_fresh {config : EvalConfig} {initialized : Nat} {state : ExecutionState}
+    {ambient : OwnershipAmbient} {types : RootTypes} {liveRoots : RootInst → Prop}
+    {regions : List ReceivingRegion} {pending : List PendingCarrierFrame}
+    (world : AcceptedWorld config initialized state ambient types liveRoots regions pending) (act scope id : Nat)
+    (future : state.nextAct ≤ act ∨ state.nextScope ≤ scope) :
+    state.objects.lookup (.local act scope id) = none ∧ state.objectOrdinals.lookup (.local act scope id) = none := by
+  constructor
+  · cases found : state.objects.lookup (.local act scope id) with
+    | none => rfl
+    | some value =>
+      obtain ⟨ty, registered⟩ := world.objectsRegistered (.local act scope id) value found
+      have bound := world.typeFrontier act scope id ty registered
+      rcases future with acts | scopes
+      · exact (Nat.not_lt_of_ge acts bound.1).elim
+      · exact (Nat.not_lt_of_ge scopes bound.2).elim
+  · cases found : state.objectOrdinals.lookup (.local act scope id) with
+    | none => rfl
+    | some ordinal =>
+      obtain ⟨ty, registered⟩ := world.ordinalsRegistered (.local act scope id) ordinal found
+      have bound := world.typeFrontier act scope id ty registered
+      rcases future with acts | scopes
+      · exact (Nat.not_lt_of_ge acts bound.1).elim
+      · exact (Nat.not_lt_of_ge scopes bound.2).elim
+
 #print axioms initial_acceptedWorld
+#print axioms AcceptedWorld.synthetic_keys_fresh
+#print axioms AcceptedWorld.local_keys_fresh
 
 end Goose.Proofs.ConstructionAcceptedExecution
