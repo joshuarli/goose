@@ -40,22 +40,22 @@ theorem accepted_literal_assignments_carried_traversal {cfg : Cfg} {env : Env} {
     have resultEq : result = () := Subsingleton.elim _ _
     subst result
     have middleExtended := extended.of_adv (advB_lowerStmts loop rest _ _ _ _ tailLowered)
-    obtain ⟨head, _, _, headWorld, headRetained, next⟩ := source.splitDemand
+    obtain ⟨head, _, _, headCanonical, next⟩ := source.splitDemand
     have headAdmitted : map.Admitted cfg.mod.profile head.context.retained :=
-      fun shrink alias member => headRetained alias (admitted shrink alias member)
+      fun shrink alias member => headCanonical.retained alias (admitted shrink alias member)
     have headRealized : map.Realizes cfg.mod head.world env ⟨pt, frame, state⟩ := by
-      simpa only [headWorld] using realized
+      simpa only [headCanonical.world] using realized
     obtain ⟨afterHead, address, value, alias, middlePoint, middleFrame,
       headDone, headTraversal, _, middlePointAt, middleRelated⟩ :=
       accepted_literal_assignment_carried_traversal head map headAdmitted bounded headRealized
         headLowered point middleExtended related
-    obtain ⟨tail, _, _, _, tailWorld, tailRetained⟩ := next 2 .unit afterHead headDone
+    obtain ⟨tail, _, _, _, tailCanonical⟩ := next 2 .unit afterHead headDone
     have tailAdmitted : map.Admitted cfg.mod.profile tail.context.retained := by
-      simpa only [tailRetained] using admitted
+      simpa only [tailCanonical.retained] using admitted
     have tailBounded : map.Bounded middle.vals.size :=
       bounded.mono (advB_lowerStmt loop _ _ _ _ _ headLowered).vals
     have tailRealized : map.Realizes cfg.mod tail.world env ⟨middlePoint, middleFrame, afterHead⟩ := by
-      simpa only [tailWorld, headWorld] using headTraversal.last_valid.2
+      simpa only [tailCanonical.world, headCanonical.world] using headTraversal.last_valid.2
     obtain ⟨after, finalPoint, finalFrame, tailTraversal, finalPointAt, finalRelated⟩ :=
       induction tail tailAdmitted tailBounded tailRealized tailLowered middlePointAt extended middleRelated
     have first : DemandUniformTraversal cx
@@ -69,12 +69,12 @@ theorem accepted_literal_assignments_carried_traversal {cfg : Cfg} {env : Env} {
         exact ⟨Or.inl ⟨state, varId, type, number, origin, head, pt, address, alias, valid.1,
           literalAssignmentRhsContext.inputFuture head,
           fun shrink => literalAssignmentRhsContext.retains head shrink query⟩,
-          by simpa only [headWorld] using valid.2⟩)
+          by simpa only [headCanonical.world] using valid.2⟩)
     have remaining : DemandUniformTraversal cx
         (fun runtime => LiteralAssignmentSequenceDemand cfg env cx runtime ∧
           map.Realizes cfg.mod source.world env runtime) (rest.length * 3)
         ⟨middlePoint, middleFrame, afterHead⟩ ⟨finalPoint, finalFrame, after⟩ := tailTraversal.mono (fun runtime valid =>
-      ⟨valid.1, by simpa only [tailWorld] using valid.2⟩)
+      ⟨valid.1, by simpa only [tailCanonical.world] using valid.2⟩)
     refine ⟨after, finalPoint, finalFrame, ?_, finalPointAt, finalRelated⟩
     simpa only [List.length_cons, Nat.add_mul, Nat.one_mul, Nat.add_comm] using
       first.append remaining

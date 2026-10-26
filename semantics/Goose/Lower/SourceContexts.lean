@@ -308,17 +308,42 @@ private theorem blockStmt_shrinkFuture {path sc all value offset st rest}
   cases st <;> rfl
 
 
+structure StmtsSource.CanonicalHead {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : List Stmt} {state : St}
+    (source : StmtsSource cfg env (stmt :: rest) state) (head : StmtSource cfg env stmt state) : Prop where
+  world : head.world = source.world
+  path : head.path = source.path ++ [source.offset]
+  plans : head.plans = source.plans
+  scope : head.scope = source.scope
+  found : DemandNode.child? (.block (.mk source.scope source.all source.value)) source.offset = some (.statement stmt)
+  context : HEq head.context (source.context.child rfl source.offset (.statement stmt) .statement found
+    (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]))
+  retained : ∀ alias ∈ source.context.retained, alias ∈ head.context.retained
+  inputFuture : ∀ variableId, variableId ∈ source.typingEnv.visible →
+    variableId ∈ head.context.inputFuture → variableId ∈ blockSuffixFuture source.context source.offset
+  outputFuture : head.context.outputFuture = blockSuffixFuture source.context (source.offset + 1)
+
+structure StmtsSource.CanonicalTail {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : List Stmt} {state after : St}
+    (source : StmtsSource cfg env (stmt :: rest) state) (tail : StmtsSource cfg env rest after) : Prop where
+  world : tail.world = source.world
+  path : tail.path = source.path
+  plans : tail.plans = source.plans
+  scope : tail.scope = source.scope
+  all : tail.all = source.all
+  value : tail.value = source.value
+  offset : tail.offset = source.offset + 1
+  context : HEq tail.context source.context
+  retained : tail.context.retained = source.context.retained
+  future : blockSuffixFuture tail.context tail.offset = blockSuffixFuture source.context (source.offset + 1)
+
 theorem StmtsSource.splitDemand {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : List Stmt}
     {state : St} (source : StmtsSource cfg env (stmt :: rest) state) :
     ∃ head : StmtSource cfg env stmt state,
       head.typingEnv = source.typingEnv ∧ head.rootsEnv = source.rootsEnv ∧
-      head.world = source.world ∧
-      (∀ alias ∈ source.context.retained, alias ∈ head.context.retained) ∧
+      source.CanonicalHead head ∧
       ∀ fuel value after, execStmt fuel cfg env stmt state = .ok (.normal value) after →
         ∃ tail : StmtsSource cfg env rest after,
           tail.typingEnv = head.typingAfter ∧ tail.rootsEnv = source.rootsEnv ∧
-          tail.typingAfter = source.typingAfter ∧ tail.world = source.world ∧
-          tail.context.retained = source.context.retained := by
+          tail.typingAfter = source.typingAfter ∧ source.CanonicalTail tail := by
   rcases cfg with ⟨prof, m⟩
   rcases source with ⟨accepted, plans, path, observation, W, tenv, tenv', penv,
     tn, tn', rst, rst', lo, sc, all, value, bc, offset, hOffset, hDrop, hActive, hAccess,
@@ -354,8 +379,8 @@ theorem StmtsSource.splitDemand {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : Li
       rw [transition.expectedFrameEq, DemandNode.phaseFrame_active transition.phaseFrameEq,
         DemandNode.childFrame_active transition.childFrameEq]
       exact hActive
-  have hinput : Frame m W tenv penv env state statementContext.inputFuture := by
-    apply hF.changeFuture
+  have hinputFuture : ∀ x, x ∈ tenv.visible → x ∈ statementContext.inputFuture →
+      x ∈ blockSuffixFuture bc offset := by
     intro x hx hf
     cases bc with
     | pilot profile active => exact (hActive x).2 hx
@@ -365,6 +390,7 @@ theorem StmtsSource.splitDemand {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : Li
       rw [hin, hout] at hf
       simpa [blockSuffixFuture, EvaluationContext.outputFuture, ← hDrop,
         List.flatMap_cons, List.append_assoc] using hf
+  have hinput : Frame m W tenv penv env state statementContext.inputFuture := hF.changeFuture hinputFuture
   have hout : statementContext.outputFuture = blockSuffixFuture bc (offset + 1) := by
     cases bc with
     | pilot profile active =>
@@ -383,7 +409,7 @@ theorem StmtsSource.splitDemand {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : Li
     access := haccess, protection := hmay ▸ hProtected, observed := hmay ▸ hObserved,
     classified := hClass, permission := hp, frame := hinput, scopeHead := hsc,
     top := hT, bounded := hlo, typed := hts, rooted := hrs, effects := hm2.2.trans hE }
-  refine ⟨head, rfl, rfl, rfl, ?_, ?_⟩
+  refine ⟨head, rfl, rfl, ⟨rfl, rfl, rfl, rfl, hchild, HEq.rfl, ?_, hinputFuture, hout⟩, ?_⟩
   · intro alias member
     exact bc.child_retained_subset rfl offset (.statement stmt) .statement hchild
       (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]) member
@@ -413,7 +439,7 @@ theorem StmtsSource.splitDemand {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : Li
     offsetBounded := hnextBound, suffix := hrest, active := hActive1,
     access := ?_, protection := hProtected, observed := hSafe1, classified := result.classified,
     permission := hp, frame := hF1, scopeHead := ?_, top := hT1,
-    bounded := Nat.le_trans hlo hm1.1, typed := htr, rooted := hrr, effects := hE }, rfl, rfl, rfl, rfl, rfl⟩
+    bounded := Nat.le_trans hlo hm1.1, typed := htr, rooted := hrr, effects := hE }, rfl, rfl, rfl, ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl, rfl, rfl⟩⟩
   · cases bc <;> simpa [EvaluationContext.AccessMatches, NodeContext.AccessMatches,
       hS1.mod, hS1.vars] using hAccess
   · rw [hS1.scopes]
@@ -428,10 +454,10 @@ theorem StmtsSource.split {cfg : Cfg} {env : Env} {stmt : Stmt} {rest : List Stm
         ∃ tail : StmtsSource cfg env rest after,
           tail.typingEnv = head.typingAfter ∧ tail.rootsEnv = source.rootsEnv ∧
           tail.typingAfter = source.typingAfter := by
-  obtain ⟨head, typing, roots, _, _, next⟩ := source.splitDemand
+  obtain ⟨head, typing, roots, _, next⟩ := source.splitDemand
   refine ⟨head, typing, roots, ?_⟩
   intro fuel value after done
-  obtain ⟨tail, tailTyping, tailRoots, tailFinal, _, _⟩ := next fuel value after done
+  obtain ⟨tail, tailTyping, tailRoots, tailFinal, _⟩ := next fuel value after done
   exact ⟨tail, tailTyping, tailRoots, tailFinal⟩
 
 structure BlockSource (cfg : Cfg) (env : Env) (pre : List (VarId × Val)) (block : Block) (state : St) where
