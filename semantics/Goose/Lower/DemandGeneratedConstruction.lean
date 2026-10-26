@@ -74,6 +74,14 @@ theorem generated_clear_place_extended {le : LEnv} {before : LS} {loop : Option 
     simpa only [lowerStmt, bind_run] using extended
   exact cleared.of_adv (adv_emitEffect rfl)
 
+theorem generated_block_value_result (le : LEnv) (before : LS) (loop : Option LoopCtx)
+    (bindings : List (SlotId × ValueId × OriginId)) (want : Bool) (block : Core.Block) :
+    (lowerBlock loop bindings want block le before).1 =
+      (lowerBlockValue want block.value le (demandBlockValueBefore le before loop bindings block)).1 := by
+  cases block
+  simp only [lowerBlock, inScope, bind_run, pushScope_run, popScope_run, pure_run,
+    demandBlockValueBefore, demandBlockStatementsBefore, Core.Block.scope, Core.Block.stmts, Core.Block.value]
+
 theorem generated_block_leave_extended {le : LEnv} {before : LS} {loop : Option LoopCtx}
     {parameters : List (SlotId × ValueId × OriginId)} {want : Bool} {block : Core.Block} {blocks : Array GIR.Block}
     (extended : ExtT (lowerBlock loop parameters want block le before).2 blocks) :

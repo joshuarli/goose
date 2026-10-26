@@ -31,7 +31,7 @@ theorem typedGlobal_simulation {cfg : Cfg} {globalId : GlobalId} {global : Core.
     (hexpr : TypedExprClaim n cfg [global.ty] global.init) :
     EventualM (freshAct >>= fun act => evalExpr n cfg ⟨#[], act, [], 0⟩ global.init)
       (fun fuel => enterFn fuel ⟨cfg.profile, lower cfg.mod⟩ 0 (lowerGlobal cfg.mod global).init []) state := by
-  obtain ⟨source, typingEq, rootsEq, _, _⟩ := acceptedGlobalActivation accepted globalAt invariant
+  obtain ⟨source, typingEq, rootsEq, _, _, _⟩ := acceptedGlobalActivation accepted globalAt invariant
   have metadata : SourceResults source.typingEnv source.rootsEnv [global.ty] := by
     intro impl selected
     rw [typingEq] at selected

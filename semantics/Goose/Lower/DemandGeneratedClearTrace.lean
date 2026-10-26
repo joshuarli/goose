@@ -35,6 +35,19 @@ inductive GeneratedClearDemand {cfg : Cfg} {env : Env} {global : GlobalId} {orig
         map.values map.runs ⟨point, frame, after⟩) :
       GeneratedClearDemand source map required cx before addressed built initial start address ⟨point, frame, after⟩
 
+theorem GeneratedClearDemand.frame {cfg : Cfg} {env : Env} {global : GlobalId} {origin : OriginId} {state : St}
+    {source : StmtSource cfg env (.clear (.global global) origin) state}
+    {map required : RetainedSsaMap} {cx : FnCtx} {before addressed built : LS} {initial : GIR.Frame}
+    {start : Pt} {address : ValueId} {runtime : DemandRuntimePoint}
+    (valid : GeneratedClearDemand source map required cx before addressed built initial start address runtime) :
+    ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
+  cases valid with
+  | address canonical site coverage demanded =>
+    exact ⟨_, _, _, by simpa only [canonical.world] using demanded⟩
+  | clear canonical site coverage post result demanded =>
+    exact ⟨_, _, _, by simpa only [canonical.world] using demanded⟩
+  | exit post result coverage demanded => exact ⟨_, _, _, demanded⟩
+
 theorem GeneratedClearDemand.realizes {cfg : Cfg} {env : Env} {global : GlobalId} {origin : OriginId} {state : St}
     {source : StmtSource cfg env (.clear (.global global) origin) state}
     {map required : RetainedSsaMap} {cx : FnCtx} {before addressed built : LS} {initial : GIR.Frame}

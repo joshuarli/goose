@@ -11,7 +11,7 @@ def GeneratedIndexEntry {cfg : Cfg} {env : Env} {view : View} {index : Expr} {or
       root source.path (.place (.elem view index origin)) before)
     (required map : RetainedSsaMap) (aliases : List RetainedAlias) (runtime : DemandRuntimePoint) : Prop :=
   ∃ child : ExprSource cfg env index runtime.state,
-  source.ExpressionChildAt child 1 rfl ∧
+  source.ExpressionChildAt child 1 rfl ∧ child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧
   (∃ type, child.ty = .int type) ∧ GeneratedDemandRows cfg.mod source.rootsEnv.access (.index occurrence)
     (required.addRuns (lowerView view (lowerEnv cfg.mod env.vars results) before).1 aliases) ∧
   (map.addRuns (lowerView view (lowerEnv cfg.mod env.vars results) before).1 aliases).Covers
@@ -63,7 +63,7 @@ theorem accepted_generated_index_entry {cfg : Cfg} {env : Env} {view : View} {in
   have childAdmission : map.Admitted cfg.mod.profile child.context.retained := by
     intro shrink alias member
     exact childCanonical.retained alias (admitted shrink alias member)
-  refine ⟨child, childCanonical, ⟨type, childType⟩, .index rows query, coverage.addRuns _ aliases,
+  refine ⟨child, childCanonical, childTyping, childRoots, ⟨type, childType⟩, .index rows query, coverage.addRuns _ aliases,
     RetainedSsaMap.addRuns_admitted childAdmission (childCanonical.index_retains_generated query),
     RetainedSsaMap.addRuns_bounded (bounded.mono post.mono) (post.lt ((lowerView view (lowerEnv cfg.mod env.vars results) before).1, .view sample) (by simp)) aliases, post.pp,
     ⟨⟨_, post.pp, post.rel⟩, child.frame, ?_⟩⟩

@@ -693,7 +693,7 @@ theorem acceptedGlobalSource {cfg : Cfg} {state : St} {g : GlobalId} {global : G
     (invariant : StoreInv cfg.mod g state) (activation : ActId) :
     ∃ source : ExprSource cfg ⟨#[], activation, [], 0⟩ global.init state,
       source.typingEnv = initEnv cfg.mod g ∧
-      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g := by
+      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g ∧ source.path = [] := by
   have moduleOk := validate_modOk cfg.mod accepted
   obtain ⟨plans, derived, wellFormed⟩ := moduleOk.demandPlans
   have globalOk := moduleOk.glob g global globalAt
@@ -717,7 +717,7 @@ theorem acceptedGlobalSource {cfg : Cfg} {state : St} {g : GlobalId} {global : G
     access := EvaluationContext.forGlobal_accessMatches derived wellFormed globalAt _ rfl rfl,
     protection := ?_, observed := ObservedSafe.empty _ _ _ _, classified := ?_,
     permission := permission, frame := ?_, typed := typed, rooted := rooted,
-    effects := EffLe.refl _ }, rfl, rfl, rfl, rfl⟩
+    effects := EffLe.refl _ }, rfl, rfl, rfl, rfl, rfl⟩
   · intro holder element target impossible
     exact impossible.elim
   · intro profile i r impossible
@@ -1464,7 +1464,7 @@ theorem acceptedGlobalActivation {cfg : Cfg} {state : St} {g : GlobalId} {global
     ∃ source : ExprSource cfg ⟨#[], state.nextAct, [], 0⟩ global.init
         { state with nextAct := state.nextAct + 1 },
       source.typingEnv = initEnv cfg.mod g ∧
-      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g :=
+      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g ∧ source.path = [] :=
   acceptedGlobalSource accepted globalAt (nextActivationInvariant invariant) state.nextAct
 
 structure InitializedGlobals (module : Module) (count : Nat) (state : St) : Prop where
@@ -1481,7 +1481,7 @@ theorem InitializedGlobals.afterInitializer {cfg : Cfg} {before after : St} {g :
     (fuel : Nat) (done : evalExpr fuel cfg ⟨#[], before.nextAct, [], 0⟩ global.init
       { before with nextAct := before.nextAct + 1 } = .ok value after) :
     InitializedGlobals cfg.mod (g + 1) { after with store := after.store.introduce (.global g) value } := by
-  obtain ⟨source, _, _, typeEq, countEq⟩ := acceptedGlobalActivation accepted globalAt initialized.invariant
+  obtain ⟨source, _, _, typeEq, countEq, _⟩ := acceptedGlobalActivation accepted globalAt initialized.invariant
   have result := source.result fuel value done
   have domain : ∀ (root : RootInst) (value : Val), after.store.roots[root]? = some value →
       ∃ global : GlobalId, root = RootInst.global global ∧ global < g := by

@@ -134,7 +134,7 @@ example (profile : NumProfile) :
 example (profile : NumProfile) :
     ∃ source : ExprSource ⟨profile, module⟩ noEnv (.bool true) St.initial,
       source.ty = .bool := by
-  obtain ⟨source, _, _, typeEq, _⟩ := acceptedGlobalSource (cfg := ⟨profile, module⟩)
+  obtain ⟨source, _, _, typeEq, _, _⟩ := acceptedGlobalSource (cfg := ⟨profile, module⟩)
     (g := 0) (global := ⟨"flag", .bool, .mutable, .bool true, 0⟩)
     (state := St.initial) (by cbv) rfl (initialStoreInvariant module) 0
   exact ⟨source, typeEq⟩
@@ -162,7 +162,7 @@ theorem calleeFromInitializer (artifact : ArtifactProfile) (profile : NumProfile
         { St.initial with nextAct := 1 },
       body.typingEnv = { implEnv (callModule artifact) callee with visible := [] } ∧
       body.rootsEnv = ⟨callModule artifact, callee, calleeContext, []⟩ := by
-  obtain ⟨source, typingEq, rootsEq, typeEq, _⟩ := acceptedGlobalSource
+  obtain ⟨source, typingEq, rootsEq, typeEq, _, _⟩ := acceptedGlobalSource
     (cfg := ⟨profile, callModule artifact⟩) (state := St.initial) (g := 0)
     (global := ⟨"flag", .bool, .mutable, .call 1 [] 0, 0⟩) accepted rfl
     (initialStoreInvariant (callModule artifact)) 0
@@ -245,7 +245,7 @@ example (profile : NumProfile) :
     ∃ child : ExprSource ⟨profile, returnModule⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.bool true)
         { St.initial with nextAct := 2, nextScope := 1 },
       child.typingEnv.impl = some returnImplementation ∧ child.ty.passableTo .bool = true := by
-  obtain ⟨caller, _, _, _, _⟩ := acceptedGlobalActivation (cfg := ⟨profile, returnModule⟩)
+  obtain ⟨caller, _, _, _, _, _⟩ := acceptedGlobalActivation (cfg := ⟨profile, returnModule⟩)
     (state := St.initial) (g := 0) (global := ⟨"flag", .bool, .mutable, .call 1 [] 0, 0⟩)
     (by cbv) rfl (initialStoreInvariant returnModule)
   obtain ⟨ctx, impl, contextAt, implementationAt, body, bodyTyping, bodyRoots⟩ := caller.calleeAfterArgs 1 [] rfl

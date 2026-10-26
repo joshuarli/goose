@@ -79,6 +79,22 @@ inductive GeneratedClearSequenceDemand {cfg : Cfg} {env : Env}
       (demanded : GeneratedClearSequenceDemand map required cx results before loop bindings block next runtime) :
       GeneratedClearSequenceDemand map required cx results before loop bindings block source runtime
 
+theorem GeneratedClearSequenceDemand.frame {cfg : Cfg} {env : Env}
+    {map required : RetainedSsaMap} {cx : FnCtx} {results : List Ty} {before : LS}
+    {loop : Option LoopCtx} {bindings : List (SlotId × ValueId × OriginId)} {block : Core.Block}
+    {stmts : List Stmt} {state : St} {source : StmtsSource cfg env stmts state} {runtime : DemandRuntimePoint}
+    (valid : GeneratedClearSequenceDemand map required cx results before loop bindings block source runtime) :
+    ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
+  induction valid with
+  | done source atPoint related coverage realized =>
+    exact ⟨_, _, _, ⟨⟨_, atPoint, related⟩, source.frame, realized⟩⟩
+  | head canonical demanded =>
+    obtain ⟨typing, roots, future, frame⟩ := demanded.frame
+    exact ⟨typing, roots, future, by simpa only [canonical.world] using frame⟩
+  | tail canonical evaluated demanded induction =>
+    obtain ⟨typing, roots, future, frame⟩ := induction
+    exact ⟨typing, roots, future, by simpa only [canonical.world] using frame⟩
+
 theorem GeneratedClearSequenceDemand.realizes {cfg : Cfg} {env : Env}
     {map required : RetainedSsaMap} {cx : FnCtx} {results : List Ty} {before : LS}
     {loop : Option LoopCtx} {bindings : List (SlotId × ValueId × OriginId)} {block : Core.Block}

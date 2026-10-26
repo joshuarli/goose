@@ -48,7 +48,7 @@ theorem typedExprReflection_blockE {fuel : Nat} {cfg : Cfg} {results : List Ty} 
     TypedExprReflection fuel cfg results (.blockE block) := by
   intro env state source metadata ls after result pt cx fr lowering point extension rel moduleEq
     resultsEq generated
-  obtain ⟨child,typing,roots⟩ := source.blockEChild
+  obtain ⟨child,typing,roots, _⟩ := source.blockEChild
   have childMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [typing,roots]
     simpa [SourceResults,exprEnv] using metadata

@@ -221,7 +221,7 @@ theorem binary_children_source (artifact : ArtifactProfile) (profile : NumProfil
       ∃ right : ExprSource ⟨profile, binaryModule artifact⟩ ⟨#[], 0, [], 0⟩
         (.lit .i64 1) { St.initial with nextAct := 1 },
         left.typingEnv = right.typingEnv ∧ left.rootsEnv = right.rootsEnv := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, binaryModule artifact⟩) (state := St.initial) (g := 0)
     (global := ⟨"sum", .int .i64, .mutable, binaryExpression, 0⟩)
     accepted rfl (InitializedGlobals.initial _).invariant
@@ -268,7 +268,7 @@ theorem comparison_children_source (artifact : ArtifactProfile) (profile : NumPr
       ∃ right : ExprSource ⟨profile, comparisonModule artifact booleans⟩ ⟨#[], 0, [], 0⟩
         (comparisonArguments booleans).2 { St.initial with nextAct := 1 },
         left.typingEnv = right.typingEnv ∧ left.rootsEnv = right.rootsEnv := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, comparisonModule artifact booleans⟩) (state := St.initial) (g := 0)
     (global := ⟨"equal", .bool, .mutable,
       .cmp .eq (comparisonArguments booleans).1 (comparisonArguments booleans).2, 0⟩)
@@ -324,7 +324,7 @@ theorem shortCircuit_children_source (artifact : ArtifactProfile) (profile : Num
       ∃ right : ExprSource ⟨profile, shortCircuitModule artifact isAnd boolean⟩ ⟨#[], 0, [], 0⟩
         shortCircuitRight { St.initial with nextAct := 1 },
         left.ty = .bool ∧ right.ty = .bool := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, shortCircuitModule artifact isAnd boolean⟩) (state := St.initial) (g := 0)
     (global := ⟨"result", .bool, .mutable, shortCircuitExpression isAnd boolean, 0⟩)
     accepted rfl (InitializedGlobals.initial _).invariant
@@ -370,7 +370,7 @@ theorem fill_child_source (artifact : ArtifactProfile) (profile : NumProfile)
     (accepted : Core.validate (fillModule artifact) = .ok ()) :
     ∃ child : ExprSource ⟨profile, fillModule artifact⟩ ⟨#[], 0, [], 0⟩ (.bool true)
       { St.initial with nextAct := 1 }, child.ty = .bool := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, fillModule artifact⟩) (state := St.initial) (g := 0)
     (global := ⟨"filled", .arr .bool 3, .mutable, .fill (.arr .bool 3) (.bool true), 0⟩)
     accepted rfl (InitializedGlobals.initial _).invariant
@@ -405,7 +405,7 @@ theorem field_owner_source (artifact : ArtifactProfile) (profile : NumProfile)
     (accepted : Core.validate (fieldModule artifact) = .ok ()) :
     ∃ child : PlaceSource ⟨profile, fieldModule artifact⟩ ⟨#[], 1, [], 0⟩ (.global 0)
       { fieldPrefixState with nextAct := 2 }, child.ty = fieldType := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, fieldModule artifact⟩) (state := fieldPrefixState) (g := 1)
     (global := ⟨"field", .bool, .mutable, .read (.field (.global 0) 0), 0⟩)
     accepted rfl (field_prefix artifact profile accepted).invariant
@@ -483,7 +483,7 @@ theorem view_val_source (artifact : ArtifactProfile) (profile : NumProfile)
     Nonempty (ViewSource ⟨profile, viewLengthModule artifact⟩ ⟨#[], 1, [], 0⟩
       (.val (.slice .readOnly (.of (.global 0)) .omitted .omitted 0))
       { viewOwnerState with nextAct := 2 }) := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, viewLengthModule artifact⟩) (state := viewOwnerState) (g := 1)
     (global := ⟨"sliceLength", .int .i64, .mutable,
       .len (.val (.slice .readOnly (.of (.global 0)) .omitted .omitted 0)), 0⟩)
@@ -549,7 +549,7 @@ theorem indexed_children_source (artifact : ArtifactProfile) (profile : NumProfi
       { viewOwnerState with nextAct := 2 },
       ∃ operand : ExprSource ⟨profile, indexedModule artifact index⟩ ⟨#[], 1, [], 0⟩ (.lit .i64 index)
         { viewOwnerState with nextAct := 2 }, view.typingEnv = operand.typingEnv := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, indexedModule artifact index⟩) (state := viewOwnerState) (g := 1)
     (global := ⟨"selected", .bool, .mutable, .read (.elem (.of (.global 0)) (.lit .i64 index) 0), 0⟩)
     accepted rfl (indexed_prefix artifact profile index accepted).invariant
@@ -614,7 +614,7 @@ theorem bounded_slice_sources (artifact : ArtifactProfile) (profile : NumProfile
       ∃ upper : BoundSource ⟨profile, boundedSliceModule artifact low⟩ ⟨#[], 1, [], 0⟩
         (.fromEnd (.lit .i64 1)) { viewOwnerState with nextAct := 2 },
         lower.typingEnv = upper.typingEnv := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, boundedSliceModule artifact low⟩) (state := viewOwnerState) (g := 1)
     (global := ⟨"length", .int .i64, .mutable, .len (.val (boundedSlice low)), 0⟩)
     accepted rfl (bounded_slice_prefix artifact profile low accepted).invariant
@@ -678,7 +678,7 @@ theorem pop_owner_source (artifact : ArtifactProfile) (profile : NumProfile) (no
     (accepted : Core.validate (popModule artifact nonempty) = .ok ()) :
     Nonempty (PlaceSource ⟨profile, popModule artifact nonempty⟩ ⟨#[], 1, [], 0⟩ (.global 0)
       { popPrefixState nonempty with nextAct := 2 }) := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, popModule artifact nonempty⟩) (state := popPrefixState nonempty) (g := 1)
     (global := ⟨"popped", .bool, .mutable, .pop (.global 0) 0, 0⟩)
     accepted rfl (pop_prefix artifact profile nonempty accepted).invariant
@@ -751,7 +751,7 @@ theorem push_children_source (artifact : ArtifactProfile) (profile : NumProfile)
         { pushPrefixState artifact capacity with nextAct := 2 },
       ∃ value : ExprSource ⟨profile, pushModule artifact capacity⟩ ⟨#[], 1, [], 0⟩ (.bool true)
         { pushPrefixState artifact capacity with nextAct := 2 }, owner.typingEnv = value.typingEnv := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, pushModule artifact capacity⟩) (state := pushPrefixState artifact capacity) (g := 1)
     (global := ⟨"pushed", .bool, .mutable,
       .read (.deref (.push (.global 0) (.bool true) (pushOrigin artifact))), 0⟩)
@@ -790,7 +790,7 @@ theorem full_push_prefix (profile : NumProfile) (accepted : Core.validate fullPu
 theorem full_push_source (profile : NumProfile) (accepted : Core.validate fullPushModule = .ok ()) :
     Nonempty (ExprSource ⟨profile, fullPushModule⟩ ⟨#[], 1, [], 0⟩
       (.push (.global 0) (.bool true) (some 0)) { fullPushPrefixState with nextAct := 2 }) := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, fullPushModule⟩) (state := fullPushPrefixState) (g := 1)
     (global := ⟨"pushed", .bool, .mutable, .read (.deref (.push (.global 0) (.bool true) (some 0))), 0⟩)
     accepted rfl (full_push_prefix profile accepted).invariant
@@ -843,7 +843,7 @@ theorem aggregate_sources (artifact : ArtifactProfile) (profile : NumProfile)
     ∃ children : ExprsSource 2 ⟨profile, aggregateModule artifact⟩ ⟨#[], 0, [], 0⟩
       [.bool true, .bool false] { St.initial with nextAct := 1 },
       children.resultsMatch [.arr .bool 2] := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, aggregateModule artifact⟩) (state := St.initial) (g := 0)
     (global := ⟨"owner", .arr .bool 2, .mutable,
       .arrLit (.arr .bool 2) [.bool true, .bool false], 0⟩)
@@ -884,7 +884,7 @@ theorem struct_aggregate_source (profile : NumProfile)
     (accepted : Core.validate (fieldModule .shrink) = .ok ()) :
     ∃ children : ExprsSource 2 ⟨profile, fieldModule .shrink⟩ ⟨#[], 0, [], 0⟩
       [.bool true] { St.initial with nextAct := 1 }, children.resultsMatch [fieldType] := by
-  obtain ⟨source, htyping, hroots, htype, hcount⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, fieldModule .shrink⟩) (state := St.initial) (g := 0)
     (global := ⟨"owner", fieldType, .mutable, .structLit fieldType [.bool true], 0⟩)
     accepted rfl (InitializedGlobals.initial _).invariant

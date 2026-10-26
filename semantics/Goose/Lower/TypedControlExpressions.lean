@@ -21,7 +21,10 @@ private theorem expressionBlockSource {cfg : Cfg} {env : Env} {expr : Expr} {ini
     (rooted : rpBlockValue root.rootsEnv [] block rst = .ok ((roots, range), rst'))
     (effects : EffLe rst'.eff root.world.E) :
     ∃ source : BlockSource cfg env [] block state,
-      source.typingEnv = exprEnv root.typingEnv ∧ source.rootsEnv = root.rootsEnv := by
+      source.typingEnv = exprEnv root.typingEnv ∧ source.rootsEnv = root.rootsEnv ∧
+      source.world = root.world ∧ source.path = path ∧ source.plans = root.plans ∧ HEq source.context context ∧
+      source.context.retained = context.retained ∧ source.context.inputFuture = context.inputFuture ∧
+      source.context.outputFuture = context.outputFuture := by
   cases block with
   | mk scope stmts value =>
     obtain ⟨fresh, inner, tn1, after, tn2, declare, hstmts, hvalue⟩ :=
@@ -60,12 +63,22 @@ private theorem expressionBlockSource {cfg : Cfg} {env : Env} {expr : Expr} {ini
         | none => exact hvalue.1
         | some expr => exact hvalue,
       rooted := by simpa [Core.Block.scope, Core.Block.stmts] using rstmts, rootedValue := by cases value <;> exact rvalue,
-      effects := effects, rootsEscape := escape }, rfl, rfl⟩
+      effects := effects, rootsEscape := escape }, rfl, rfl, rfl, rfl, rfl, HEq.rfl, rfl, rfl, rfl⟩
+
+structure ExprSource.BlockChildAt {cfg : Cfg} {env : Env} {state : St} {block : Core.Block}
+    (root : ExprSource cfg env (.blockE block) state) (source : BlockSource cfg env [] block state) : Prop where
+  world : source.world = root.world
+  path : source.path = root.path ++ [0]
+  plans : source.plans = root.plans
+  context : HEq source.context (root.context.child rfl 0 (.block block) .block rfl (by trivial))
+  retained : ∀ alias ∈ root.context.retained, alias ∈ source.context.retained
+  inputFuture : source.context.inputFuture = root.context.inputFuture
+  outputFuture : source.context.outputFuture = root.context.outputFuture
 
 theorem ExprSource.blockEChild {cfg : Cfg} {env : Env} {state : St} {block : Core.Block}
     (root : ExprSource cfg env (.blockE block) state) :
     ∃ source : BlockSource cfg env [] block state,
-      source.typingEnv = exprEnv root.typingEnv ∧ source.rootsEnv = root.rootsEnv := by
+      source.typingEnv = exprEnv root.typingEnv ∧ source.rootsEnv = root.rootsEnv ∧ root.BlockChildAt source := by
   have typed := root.typed
   simp only [tyExpr] at typed
   have rooted := root.rooted
@@ -102,10 +115,15 @@ theorem ExprSource.blockEChild {cfg : Cfg} {env : Env} {state : St} {block : Cor
     cases ec <;> simp [EvaluationContext.inputFuture, EvaluationContext.outputFuture,
       NodeContext.inputFuture, NodeContext.outputFuture, DemandNode.variables,
       Block.variables, Expr.variables, DemandNode.visibleAfter, List.append_assoc]
-  exact expressionBlockSource root child root.typingStart root.typingEnd root.ty root.rootsStart
+  obtain ⟨source, typing, roots, world, path, plans, context, retained, input, output⟩ := expressionBlockSource root child root.typingStart root.typingEnd root.ty root.rootsStart
     root.rootsEnd root.roots (low, high) active access (by simpa [shrinkEq] using root.protection)
     (by simpa [shrinkEq] using root.observed) root.classified
     (by simpa [childInput] using root.frame) typed hblock root.effects
+
+  exact ⟨source, typing, roots, ⟨world, path, plans, context, fun alias member => by
+    rw [retained]
+    exact ec.child_retained_subset rfl 0 (.block block) .block rfl (by trivial) member,
+    input.trans childInput, output.trans childOutput⟩⟩
 
 theorem ExprSource.ifEChildren {cfg : Cfg} {env : Env} {state : St}
     {cond : Expr} {thenBlock elseBlock : Core.Block}
@@ -251,13 +269,14 @@ theorem ExprSource.ifEChildren {cfg : Cfg} {env : Env} {state : St}
     cases branch <;> simp only [block, Bool.false_eq_true, ↓reduceIte]
     · exact hrf
     · exact hrt
-  exact expressionBlockSource root bc _ _ _ _ _ _ _ active access
+  obtain ⟨source, typing, roots, _⟩ := expressionBlockSource root bc _ _ _ _ _ _ _ active access
     (by simpa [bodyShrink] using root.protection)
     (by simpa [condition, bodyShrink, condShrink] using result.observed)
     result.classified bodyFrame bodyTyped bodyRooted (by
       cases branch <;> simp only [Bool.false_eq_true, ↓reduceIte]
       · exact root.effects
       · exact (rpBlockValue_mono hrf).2.trans root.effects)
+  exact ⟨source, typing, roots⟩
 
 theorem BlockSource.expressionFlow {cfg : Cfg} {env : Env} {state after : St} {block : Core.Block}
     (source : BlockSource cfg env [] block state) (n : Nat) (flow : Flow)
@@ -319,7 +338,7 @@ theorem typedExprClaim_blockE {n : Nat} {cfg : Cfg} {results : List Ty} {block :
     (body : TypedBlockValueClaim n cfg results block) :
     TypedExprClaim (n + 1) cfg results (.blockE block) := by
   intro env state source metadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨child, htyping, hroots⟩ := source.blockEChild
+  obtain ⟨child, htyping, hroots, _⟩ := source.blockEChild
   have hmetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     simpa [SourceResults, exprEnv] using metadata

@@ -126,7 +126,7 @@ theorem readonly_argument_source (artifact : ArtifactProfile) (profile : NumProf
     (accepted : Core.validate (readonlyModule artifact) = .ok ()) :
     ∃ source : ArgsSource 3 ⟨profile, readonlyModule artifact⟩ ⟨#[], 1, [], 0⟩
       readonlyArguments { readonlyPrefixState with nextAct := 2 }, source.resultsMatch [.bool] := by
-  obtain ⟨source, typingEq, rootsEq, typeEq, countEq⟩ := acceptedGlobalActivation
+  obtain ⟨source, typingEq, rootsEq, typeEq, countEq, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, readonlyModule artifact⟩) (state := readonlyPrefixState) (g := 1)
     (global := ⟨"selected", .bool, .mutable, .call 1 readonlyArguments 0, 0⟩)
     accepted rfl (readonly_initialized_prefix artifact profile accepted).invariant

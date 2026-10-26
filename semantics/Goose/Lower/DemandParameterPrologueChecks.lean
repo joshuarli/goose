@@ -132,7 +132,7 @@ theorem readonly_all_prefixes (count : Nat) (bound : count ≤ 2) :
         (0, 1 + count) { referenceFrame with scopes := [(0, 0)] }
         { referenceState with nextScope := 1, store := preStore 2 0 ([(0, .ref ⟨.global 0, []⟩), (1, .bool true)].take count) referenceState.store } := by
   have accepted : Core.validate (readonlyModule .pilot) = .ok () := by cbv
-  obtain ⟨call, _, _, _, _⟩ := acceptedGlobalActivation
+  obtain ⟨call, _, _, _, _, _⟩ := acceptedGlobalActivation
     (cfg := ⟨.release, readonlyModule .pilot⟩) (state := readonlyPrefixState) (g := 1)
     (global := globalOne) accepted rfl (readonly_initialized_prefix .pilot .release accepted).invariant
   obtain ⟨context, implementation, contextAt, implementationAt, source, _, _⟩ :=

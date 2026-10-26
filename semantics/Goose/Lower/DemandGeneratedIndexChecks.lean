@@ -6,165 +6,165 @@ namespace Goose.Lower.DemandGeneratedIndexChecks
 
 open Goose.Core Goose.GIR Goose.Proofs.Lower
 
-private def indexBlock : Core.Block := .mk 0 [.clear (.global 0) 0] (some (.lit .i64 0))
-private def indexExpression : Expr := .blockE indexBlock
-private def ownerView : View := .of (.global 0)
-private def elementPlace : Place := .elem ownerView indexExpression 0
-private def indexedExpression : Expr := .read elementPlace
-private def indexedGlobal : Core.Global := ⟨"indexed", .int .i64, .mutable, indexedExpression, 0⟩
+def retainedIndexBlock : Core.Block := .mk 0 [.clear (.global 0) 0] (some (.lit .i64 0))
+def retainedIndexExpression : Expr := .blockE retainedIndexBlock
+def retainedOwnerView : View := .of (.global 0)
+def retainedElementPlace : Place := .elem retainedOwnerView retainedIndexExpression 0
+def retainedIndexedExpression : Expr := .read retainedElementPlace
+def retainedIndexedGlobal : Core.Global := ⟨"indexed", .int .i64, .mutable, retainedIndexedExpression, 0⟩
 private def implementation : Impl :=
   { name := "main", params := #[], results := #[], vars := #[], body := .mk 0 [] none, summary := .unknown }
 
-private def sourceModule (limited : Bool) : Core.Module :=
+def retainedIndexModule (limited : Bool) : Core.Module :=
   let owner := if limited then Ty.limited (.int .i64) 1 else Ty.growshrink (.int .i64)
   { files := #["retained.goose"], types := #[],
-    globals := #[⟨"owner", owner, .mutable, .arrLit owner [.lit .i64 9], 0⟩, indexedGlobal],
+    globals := #[⟨"owner", owner, .mutable, .arrLit owner [.lit .i64 9], 0⟩, retainedIndexedGlobal],
     impls := #[implementation], contexts := #[⟨0, "main", [], [], []⟩], entry := 0,
     origins := #[⟨0, 1, "expr"⟩], profile := .shrink }
 
-private def source : Core.Module := sourceModule true
-private def function : Func := (lowerGlobal source indexedGlobal).init
-private def environment : LEnv := lowerEnv source #[] [.int .i64]
-private def root : DemandNode := .expression indexedExpression
-private def indexBefore : LS := (lowerView ownerView environment startLS).2
+def retainedIndexSource : Core.Module := retainedIndexModule true
+def retainedIndexFunction : Func := (lowerGlobal retainedIndexSource retainedIndexedGlobal).init
+def retainedIndexEnvironment : LEnv := lowerEnv retainedIndexSource #[] [.int .i64]
+def retainedIndexRoot : DemandNode := .expression retainedIndexedExpression
+def retainedIndexBefore : LS := (lowerView retainedOwnerView retainedIndexEnvironment startLS).2
 private def clearBefore : LS :=
-  (lowerStmts none (indexBlock.stmts.take 0) environment
-    (demandBlockStatementsBefore environment indexBefore [] indexBlock)).2
-private def valueBefore : LS := demandBlockValueBefore environment indexBefore none [] indexBlock
+  (lowerStmts none (retainedIndexBlock.stmts.take 0) retainedIndexEnvironment
+    (demandBlockStatementsBefore retainedIndexEnvironment retainedIndexBefore [] retainedIndexBlock)).2
+private def valueBefore : LS := demandBlockValueBefore retainedIndexEnvironment retainedIndexBefore none [] retainedIndexBlock
 
-#guard match Core.validate source with
+#guard match Core.validate retainedIndexSource with
   | .ok () => true
   | .error _ => false
 
-#guard match Core.validate (sourceModule false) with
+#guard match Core.validate (retainedIndexModule false) with
   | .error rejection => rejection.rule == .shrink
   | .ok () => false
 
 private theorem rootOccurrence :
-    GeneratedDemandOccurrence source function environment root [] (.expression indexedExpression) startLS :=
+    GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot [] (.expression retainedIndexedExpression) startLS :=
   .globalRoot (globalId := 1) (by rfl)
 
-private theorem placeOccurrence :
-    GeneratedDemandOccurrence source function environment root [0] (.place elementPlace) startLS :=
+theorem retainedPlaceOccurrence :
+    GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot [0] (.place retainedElementPlace) startLS :=
   .first rootOccurrence (.expressionPlace rfl)
 
 private theorem viewOccurrence :
-    GeneratedDemandOccurrence source function environment root [0, 0] (.view ownerView) startLS :=
-  .first placeOccurrence (.placeView rfl)
+    GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot [0, 0] (.view retainedOwnerView) startLS :=
+  .first retainedPlaceOccurrence (.placeView rfl)
 
 private theorem addressOccurrence :
-    GeneratedDemandOccurrence source function environment root [0, 0, 0] (.place (.global 0)) startLS :=
+    GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot [0, 0, 0] (.place (.global 0)) startLS :=
   .first viewOccurrence (.viewPlace rfl)
 
 private theorem indexOccurrence :
-    GeneratedDemandOccurrence source function environment root [0, 1] (.expression indexExpression) indexBefore :=
-  .index placeOccurrence
+    GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot [0, 1] (.expression retainedIndexExpression) retainedIndexBefore :=
+  .index retainedPlaceOccurrence
 
-private theorem blockOccurrence :
-    GeneratedDemandOccurrence source function environment root [0, 1, 0] (.block none [] true indexBlock) indexBefore :=
-  .first indexOccurrence (.expressionBlock indexBlock)
+theorem retainedBlockOccurrence :
+    GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot [0, 1, 0] (.block none [] true retainedIndexBlock) retainedIndexBefore :=
+  .first indexOccurrence (.expressionBlock retainedIndexBlock)
 
 private theorem clearOccurrence :
-    GeneratedDemandOccurrence source function environment root [0, 1, 0, 0]
+    GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot [0, 1, 0, 0]
       (.statement none (.clear (.global 0) 0)) clearBefore :=
-  .blockStatement blockOccurrence (index := 0) (by rfl)
+  .blockStatement retainedBlockOccurrence (index := 0) (by rfl)
 
 private theorem clearAddressOccurrence :
-    GeneratedDemandOccurrence source function environment root [0, 1, 0, 0, 0]
+    GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot [0, 1, 0, 0, 0]
       (.place (.global 0)) clearBefore :=
   .clearPlace clearOccurrence
 
 private theorem valueOccurrence :
-    GeneratedDemandOccurrence source function environment root [0, 1, 0, 1]
+    GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot [0, 1, 0, 1]
       (.expression (.lit .i64 0)) valueBefore :=
-  .blockValue blockOccurrence (by rfl)
+  .blockValue retainedBlockOccurrence (by rfl)
 
-private def access : AccessEnv := (⟨source, initImpl, initContext, []⟩ : PEnv).access
-private def empty : RetainedSsaMap := ⟨[], []⟩
-private def sampledAlias : RetainedAlias := ⟨.slice .readOnly (.int .i64), [.global 0], .operand [0, 0]⟩
-private def sampledRows : RetainedSsaMap := ⟨[], [(1, sampledAlias)]⟩
+def retainedIndexAccess : AccessEnv := (⟨retainedIndexSource, initImpl, initContext, []⟩ : PEnv).access
+def retainedEmptyRows : RetainedSsaMap := ⟨[], []⟩
+def retainedSampleAlias : RetainedAlias := ⟨.slice .readOnly (.int .i64), [.global 0], .operand [0, 0]⟩
+def retainedSampleRows : RetainedSsaMap := ⟨[], [(1, retainedSampleAlias)]⟩
 
-private theorem rootRows : GeneratedDemandRows source access rootOccurrence empty := .globalRoot (globalId := 1) (globalAt := by rfl) rfl
-private theorem placeRows : GeneratedDemandRows source access placeOccurrence empty := .first (first := .expressionPlace rfl) rootRows
-private theorem viewRows : GeneratedDemandRows source access viewOccurrence empty := .first (first := .placeView rfl) placeRows
-private theorem addressRows : GeneratedDemandRows source access addressOccurrence empty := .first (first := .viewPlace rfl) viewRows
+private theorem rootRows : GeneratedDemandRows retainedIndexSource retainedIndexAccess rootOccurrence retainedEmptyRows := .globalRoot (globalId := 1) (globalAt := by rfl) rfl
+theorem retainedPlaceRows : GeneratedDemandRows retainedIndexSource retainedIndexAccess retainedPlaceOccurrence retainedEmptyRows := .first (first := .expressionPlace rfl) rootRows
+private theorem viewRows : GeneratedDemandRows retainedIndexSource retainedIndexAccess viewOccurrence retainedEmptyRows := .first (first := .placeView rfl) retainedPlaceRows
+private theorem addressRows : GeneratedDemandRows retainedIndexSource retainedIndexAccess addressOccurrence retainedEmptyRows := .first (first := .viewPlace rfl) viewRows
 
-private theorem indexRows : GeneratedDemandRows source access indexOccurrence sampledRows := by
-  exact .index (aliases := [sampledAlias]) placeRows (by cbv)
+private theorem indexRows : GeneratedDemandRows retainedIndexSource retainedIndexAccess indexOccurrence retainedSampleRows := by
+  exact .index (aliases := [retainedSampleAlias]) retainedPlaceRows (by cbv)
 
-private theorem blockRows : GeneratedDemandRows source access blockOccurrence sampledRows := .first (first := .expressionBlock indexBlock) indexRows
-private theorem clearRows : GeneratedDemandRows source access clearOccurrence sampledRows := .blockStatement (statementAt := by rfl) blockRows
-private theorem clearAddressRows : GeneratedDemandRows source access clearAddressOccurrence sampledRows := .clearPlace clearRows
-private theorem valueRows : GeneratedDemandRows source access valueOccurrence sampledRows := .blockValue (valueAt := by rfl) blockRows
+theorem retainedBlockRows : GeneratedDemandRows retainedIndexSource retainedIndexAccess retainedBlockOccurrence retainedSampleRows := .first (first := .expressionBlock retainedIndexBlock) indexRows
+private theorem clearRows : GeneratedDemandRows retainedIndexSource retainedIndexAccess clearOccurrence retainedSampleRows := .blockStatement (statementAt := by rfl) retainedBlockRows
+private theorem clearAddressRows : GeneratedDemandRows retainedIndexSource retainedIndexAccess clearAddressOccurrence retainedSampleRows := .clearPlace clearRows
+private theorem valueRows : GeneratedDemandRows retainedIndexSource retainedIndexAccess valueOccurrence retainedSampleRows := .blockValue (valueAt := by rfl) retainedBlockRows
 
-private theorem rootExtended : ExtT (lowerExpr indexedExpression environment startLS).2 function.blocks :=
-  generated_global_expression_extended source indexedGlobal
+private theorem rootExtended : ExtT (lowerExpr retainedIndexedExpression retainedIndexEnvironment startLS).2 retainedIndexFunction.blocks :=
+  generated_global_expression_extended retainedIndexSource retainedIndexedGlobal
 
-private theorem placeExtended : ExtT (lowerPlace elementPlace environment startLS).2 function.blocks :=
+private theorem placeExtended : ExtT (lowerPlace retainedElementPlace retainedIndexEnvironment startLS).2 retainedIndexFunction.blocks :=
   generated_read_place_extended rootExtended
 
-private theorem viewExtended : ExtT (lowerView ownerView environment startLS).2 function.blocks :=
+theorem retainedViewExtended : ExtT (lowerView retainedOwnerView retainedIndexEnvironment startLS).2 retainedIndexFunction.blocks :=
   generated_index_view_extended placeExtended
 
-private theorem addressExtended : ExtT (lowerPlace (.global 0) environment startLS).2 function.blocks :=
-  generated_view_place_extended viewExtended
+private theorem addressExtended : ExtT (lowerPlace (.global 0) retainedIndexEnvironment startLS).2 retainedIndexFunction.blocks :=
+  generated_view_place_extended retainedViewExtended
 
-private theorem blockExtended : ExtT (lowerBlock none [] true indexBlock environment indexBefore).2 function.blocks :=
+theorem retainedBlockExtended : ExtT (lowerBlock none [] true retainedIndexBlock retainedIndexEnvironment retainedIndexBefore).2 retainedIndexFunction.blocks :=
   generated_index_expression_extended placeExtended
 
-private theorem clearExtended : ExtT (lowerStmt none (.clear (.global 0) 0) environment clearBefore).2 function.blocks :=
-  generated_block_statement_extended (index := 0) (by rfl) (point := (0, 3)) (by cbv) blockExtended
+private theorem clearExtended : ExtT (lowerStmt none (.clear (.global 0) 0) retainedIndexEnvironment clearBefore).2 retainedIndexFunction.blocks :=
+  generated_block_statement_extended (index := 0) (by rfl) (point := (0, 3)) (by cbv) retainedBlockExtended
 
-private theorem clearAddressExtended : ExtT (lowerPlace (.global 0) environment clearBefore).2 function.blocks :=
+private theorem clearAddressExtended : ExtT (lowerPlace (.global 0) retainedIndexEnvironment clearBefore).2 retainedIndexFunction.blocks :=
   generated_clear_place_extended clearExtended
 
-private theorem valueExtended : ExtT (lowerExpr (.lit .i64 0) environment valueBefore).2 function.blocks := by
-  simpa only [valueBefore, indexBlock, Core.Block.value, lowerBlockValue, ite_true] using generated_block_value_extended blockExtended
+private theorem valueExtended : ExtT (lowerExpr (.lit .i64 0) retainedIndexEnvironment valueBefore).2 retainedIndexFunction.blocks := by
+  simpa only [valueBefore, retainedIndexBlock, Core.Block.value, lowerBlockValue, ite_true] using generated_block_value_extended retainedBlockExtended
 
 theorem generated_address :
-    GeneratedDemandInstruction source access function empty ⟨[0, 0, 0], .place, .entry⟩ (0, 0) (.def 0 (.globalAddr 0)) := by
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedEmptyRows ⟨[0, 0, 0], .place, .entry⟩ (0, 0) (.def 0 (.globalAddr 0)) := by
   exact .globalAddress_auto addressOccurrence addressRows (by cbv) addressExtended
 
 theorem generated_snapshot :
-    GeneratedDemandInstruction source access function empty ⟨[0, 0], .view, .exit⟩ (0, 1) (.def 1 (.snapshot .owner 0)) := by
-  exact .snapshot_auto viewOccurrence viewRows (by cbv) viewExtended
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedEmptyRows ⟨[0, 0], .view, .exit⟩ (0, 1) (.def 1 (.snapshot .owner 0)) := by
+  exact .snapshot_auto viewOccurrence viewRows (by cbv) retainedViewExtended
 
 theorem generated_index_entry :
-    GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0], .block, .entry⟩ (0, 2) (.eff (.enter 0)) := by
-  exact .blockEnter_auto blockOccurrence blockRows (by cbv) blockExtended
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedSampleRows ⟨[0, 1, 0], .block, .entry⟩ (0, 2) (.eff (.enter 0)) := by
+  exact .blockEnter_auto retainedBlockOccurrence retainedBlockRows (by cbv) retainedBlockExtended
 
 theorem generated_clear_address :
-    GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0, 0, 0], .place, .entry⟩ (0, 3) (.def 2 (.globalAddr 0)) := by
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedSampleRows ⟨[0, 1, 0, 0, 0], .place, .entry⟩ (0, 3) (.def 2 (.globalAddr 0)) := by
   exact .globalAddress_auto clearAddressOccurrence clearAddressRows (by cbv) clearAddressExtended
 
 theorem generated_clear :
-    GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0, 0, 0], .place, .exit⟩ (0, 4) (.eff (.clear 2 (some 0))) := by
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedSampleRows ⟨[0, 1, 0, 0, 0], .place, .exit⟩ (0, 4) (.eff (.clear 2 (some 0))) := by
   exact .clear_auto clearOccurrence clearRows (by cbv) clearExtended
 
 theorem generated_index_value :
-    GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0, 1], .expression, .entry⟩ (0, 5) (.def 3 (.constInt .i64 0)) := by
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedSampleRows ⟨[0, 1, 0, 1], .expression, .entry⟩ (0, 5) (.def 3 (.constInt .i64 0)) := by
   exact .literal_auto valueOccurrence valueRows (by cbv) valueExtended
 
 theorem generated_index_leave :
-    GeneratedDemandInstruction source access function sampledRows ⟨[0, 1, 0, 1], .expression, .exit⟩ (0, 6) (.eff (.leave 0)) := by
-  exact .blockLeave_auto blockOccurrence blockRows (by cbv) blockExtended
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedSampleRows ⟨[0, 1, 0, 1], .expression, .exit⟩ (0, 6) (.eff (.leave 0)) := by
+  exact .blockLeave_auto retainedBlockOccurrence retainedBlockRows (by cbv) retainedBlockExtended
 
 theorem generated_index_check :
-    GeneratedDemandInstruction source access function sampledRows ⟨[0, 1], .expression, .exit⟩ (0, 7)
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedSampleRows ⟨[0, 1], .expression, .exit⟩ (0, 7)
       (.def 4 (.indexChecked 1 3 (some 0))) := by
-  exact .indexChecked_auto placeOccurrence indexRows (by cbv) placeExtended
+  exact .indexChecked_auto retainedPlaceOccurrence indexRows (by cbv) placeExtended
 
 theorem generated_load :
-    GeneratedDemandInstruction source access function empty ⟨[0], .place, .exit⟩ (0, 8) (.def 5 (.load 4)) := by
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedEmptyRows ⟨[0], .place, .exit⟩ (0, 8) (.def 5 (.load 4)) := by
   exact .load_auto rootOccurrence rootRows (by cbv) rootExtended
 
 theorem generated_return :
-    GeneratedDemandInstruction source access function empty ⟨[], .expression, .exit⟩ (0, 9) (.term (.ret [5] (some 0))) := by
+    GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction retainedEmptyRows ⟨[], .expression, .exit⟩ (0, 9) (.term (.ret [5] (some 0))) := by
   exact .globalReturn_auto (globalId := 1) (by rfl) rootRows (by cbv)
 
-theorem empty_map_cannot_cover_index_rhs : ¬ empty.Covers sampledRows := by
+theorem empty_map_cannot_cover_index_rhs : ¬ retainedEmptyRows.Covers retainedSampleRows := by
   intro coverage
-  have missing := coverage.2 (1, sampledAlias) (by simp [sampledRows])
+  have missing := coverage.2 (1, retainedSampleAlias) (by simp [retainedSampleRows])
   cases missing
 
 private def instructions : List Inst :=
@@ -172,10 +172,10 @@ private def instructions : List Inst :=
     .def 2 (.globalAddr 0), .eff (.clear 2 (some 0)), .def 3 (.constInt .i64 0),
     .eff (.leave 0), .def 4 (.indexChecked 1 3 (some 0)), .def 5 (.load 4), .term (.ret [5] (some 0))]
 
-private theorem functionCode : function.blocks = #[⟨[], instructions⟩] := by cbv
+private theorem functionCode : retainedIndexFunction.blocks = #[⟨[], instructions⟩] := by cbv
 
 private theorem step_inside {point next : Pt} (inside : point.1 = 0 ∧ point.2 ≤ 9)
-    (step : Evidence.ControlStep function point next) : next.1 = 0 ∧ next.2 ≤ 9 := by
+    (step : Evidence.ControlStep retainedIndexFunction point next) : next.1 = 0 ∧ next.2 ≤ 9 := by
   rcases point with ⟨block, position⟩
   obtain ⟨rfl, bounded⟩ := inside
   cases step with
@@ -198,7 +198,7 @@ private theorem step_inside {point next : Pt} (inside : point.1 = 0 ∧ point.2 
         cases instruction
     exact ⟨rfl, by omega⟩
   | @branch term target instruction successor =>
-    have blockAt : function.blocks[0]? = some ⟨[], instructions⟩ := by rw [functionCode]; rfl
+    have blockAt : retainedIndexFunction.blocks[0]? = some ⟨[], instructions⟩ := by rw [functionCode]; rfl
     have lookup : instructions[position]? = some (.term term) := by
       simpa only [instAt, blockAt, Option.bind_some] using instruction
     have member := List.mem_of_getElem? lookup
@@ -206,16 +206,16 @@ private theorem step_inside {point next : Pt} (inside : point.1 = 0 ∧ point.2 
     subst term
     simp only [Term.successors, List.not_mem_nil] at successor
 
-private theorem path_inside {first last : Pt} (path : Evidence.ControlPath function [] first last)
+private theorem path_inside {first last : Pt} (path : Evidence.ControlPath retainedIndexFunction [] first last)
     (inside : first.1 = 0 ∧ first.2 ≤ 9) : last.1 = 0 ∧ last.2 ≤ 9 := by
   induction path with
   | refl => exact inside
   | next step unwritten rest induction => exact induction (step_inside inside step)
 
 theorem runtime_point_has_generated_instruction {configuration : GCfg} {point : Pt} {frame : Frame} {state : St}
-    (reached : Evidence.RuntimePoint configuration function point frame state) :
+    (reached : Evidence.RuntimePoint configuration retainedIndexFunction point frame state) :
     ∃ (required : RetainedSsaMap) (label : DemandSourceLabel) (inst : Inst),
-      GeneratedDemandInstruction source access function required label point inst := by
+      GeneratedDemandInstruction retainedIndexSource retainedIndexAccess retainedIndexFunction required label point inst := by
   obtain ⟨block, bounded⟩ := path_inside reached.control_path ⟨rfl, by decide⟩
   rcases point with ⟨blockId, position⟩
   have zero : blockId = 0 := block

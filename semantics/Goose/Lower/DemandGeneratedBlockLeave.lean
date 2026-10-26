@@ -4,6 +4,19 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound
 
+theorem block_leave_exec {cfg : Cfg} {env : Env} {cx : FnCtx} {frame : GIR.Frame} {current : LS}
+    {scope : ScopeId} {instanceId : ScopeInst}
+    (related : Rel cfg { env with scopes := (scope, instanceId) :: env.scopes } cx frame current) (state : St) :
+    execEff cx.fn frame (.leave scope) state = .ok { frame with scopes := env.scopes }
+      { state with store := releaseVars env.vars env.act scope instanceId env.vars.size state.store } := by
+  have effect : execEff cx.fn frame (.leave scope) = Core.releaseScope env scope instanceId >>= fun _ =>
+      pure ({ frame with scopes := env.scopes } : GIR.Frame) := by
+    simp only [execEff, related.scopes, ↓reduceIte]
+    rw [releaseScope_eq related]
+    rfl
+  rw [effect]
+  rfl
+
 private theorem block_leave_run {le : LEnv} {before : LS} {loop : Option LoopCtx}
     {bindings : List (SlotId × ValueId × OriginId)} {want : Bool} {block : Core.Block} :
     (lowerBlock loop bindings want block le before).2 =
@@ -87,17 +100,10 @@ theorem accepted_generated_block_leave_runtime_step {cfg : Cfg} {env : Env}
   | define instruction execution => cases site.instruction.symm.trans instruction
   | effect instruction execution =>
     cases site.instruction.symm.trans instruction
-    have effect : execEff cx.fn frame (.leave block.scope) =
-        Core.releaseScope env block.scope state.nextScope >>= fun _ =>
-          pure ({ frame with scopes := env.scopes } : GIR.Frame) := by
-      simp only [execEff, post.rel.scopes, ↓reduceIte]
-      rw [releaseScope_eq post.rel]
-      rfl
-    rw [effect] at execution
     have releasedRun : Core.releaseScope env block.scope state.nextScope valueState = .ok ()
         { valueState with store := releaseVars env.vars env.act block.scope state.nextScope env.vars.size valueState.store } := rfl
-    simp only [bind_apply, releasedRun, pure_apply, Res.ok.injEq] at execution
-    rcases execution with ⟨rfl, rfl⟩
+    have executed := block_leave_exec (env := env) (scope := block.scope) (instanceId := state.nextScope) post.rel valueState
+    rcases Res.ok.inj (execution.symm.trans executed) with ⟨rfl, rfl⟩
     have evaluatedBlock := block_normal_prefix statements evaluated releasedRun
     have emitted : emitEffect (.leave block.scope) le current = ((), released) := by
       have : (emitEffect (.leave block.scope) le current).1 = () := rfl
