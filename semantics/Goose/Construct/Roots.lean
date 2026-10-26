@@ -2598,67 +2598,210 @@ theorem rpStmt_letS_callsIncluded {env : PEnv} {id : VarId} {expression : Expr} 
     apply retained_calls (checked := checked)
     retain_effect_targets [fail]
 
+private theorem addTargets_members (before added : List Target) (target : Target) :
+    target ∈ addTargets before added ↔ target ∈ before ∨ target ∈ added := by
+  induction added generalizing before with
+  | nil => simp [addTargets]
+  | cons selected rest ih =>
+    simp only [addTargets, List.foldl_cons]
+    split
+    · rename_i retained
+      change target ∈ addTargets before rest ↔ _
+      rw [ih]
+      have present : selected ∈ before := by simpa using retained
+      simp only [List.mem_cons]
+      constructor
+      · intro member
+        rcases member with member | member
+        · exact Or.inl member
+        · exact Or.inr (Or.inr member)
+      · intro member
+        rcases member with member | equal | member
+        · exact Or.inl member
+        · exact Or.inl (equal ▸ present)
+        · exact Or.inr member
+    · change target ∈ addTargets (before ++ [selected]) rest ↔ _
+      rw [ih]
+      simp only [List.mem_append, List.mem_cons, List.not_mem_nil, or_false, or_assoc]
+
+private theorem addTargets_mono (before after added : List Target) (included : before ⊆ after) :
+    addTargets before added ⊆ addTargets after added := by
+  intro target member
+  rw [addTargets_members] at member ⊢
+  exact member.imp (fun member => included member) id
+structure EffectMetadataIncluded (before after : Eff) : Prop where
+  reads : before.reads ⊆ after.reads
+  writes : before.writes ⊆ after.writes
+  grows : before.grows ⊆ after.grows
+  shrinks : before.shrinks ⊆ after.shrinks
+  storageReads : before.storageReads ⊆ after.storageReads
+  storageWrites : before.storageWrites ⊆ after.storageWrites
+  storageGrows : before.storageGrows ⊆ after.storageGrows
+  storageShrinks : before.storageShrinks ⊆ after.storageShrinks
+  namedRoots : before.namedRoots ⊆ after.namedRoots
+  calls : before.calls ⊆ after.calls
+  unknown : before.unknown = true → after.unknown = true
+
+private theorem append_eraseDups_mono {α : Type} [BEq α] [LawfulBEq α]
+    (before after added : List α) (included : before ⊆ after) :
+    (before ++ added).eraseDups ⊆ (after ++ added).eraseDups := by
+  intro value member
+  simp only [List.mem_eraseDups, List.mem_append] at member ⊢
+  exact member.imp (fun member => included member) id
+
+private theorem metadata_recorded (before after : Eff) (called : ContextId × List (List RootRef))
+    (named : List RootRef) (included : EffectMetadataIncluded before after) :
+    EffectMetadataIncluded
+      { before with
+        calls := (before.calls ++ [called]).eraseDups
+        namedRoots := (before.namedRoots ++ named).eraseDups }
+      { after with
+        calls := (after.calls ++ [called]).eraseDups
+        namedRoots := (after.namedRoots ++ named).eraseDups } := by
+  constructor
+  · exact included.reads
+  · exact included.writes
+  · exact included.grows
+  · exact included.shrinks
+  · exact included.storageReads
+  · exact included.storageWrites
+  · exact included.storageGrows
+  · exact included.storageShrinks
+  · exact append_eraseDups_mono _ _ _ included.namedRoots
+  · exact append_eraseDups_mono _ _ _ included.calls
+  · exact included.unknown
+
+private theorem metadata_callEffects (callee : Impl) (context : Context) (arguments : List (List RootRef))
+    (before after : Eff) (included : EffectMetadataIncluded before after) :
+    EffectMetadataIncluded (callEffects callee context arguments before) (callEffects callee context arguments after) := by
+  unfold callEffects
+  split <;> constructor
+  all_goals first
+    | exact included.reads
+    | exact included.writes
+    | exact included.grows
+    | exact included.shrinks
+    | exact included.storageReads
+    | exact included.storageWrites
+    | exact included.storageGrows
+    | exact included.storageShrinks
+    | exact included.namedRoots
+    | exact included.calls
+    | exact included.unknown
+    | exact fun _ => rfl
+    | exact addTargets_mono _ _ _ included.reads
+    | exact addTargets_mono _ _ _ included.writes
+    | exact addTargets_mono _ _ _ included.grows
+    | exact addTargets_mono _ _ _ included.shrinks
+    | exact append_eraseDups_mono _ _ _ included.storageReads
+    | exact append_eraseDups_mono _ _ _ included.storageWrites
+    | exact append_eraseDups_mono _ _ _ included.storageGrows
+    | exact append_eraseDups_mono _ _ _ included.storageShrinks
+
+theorem EffectMetadataIncluded.accessTargets {before after : Eff}
+    (included : EffectMetadataIncluded before after) : EffectTargetsIncluded before after :=
+  effectTargets_fields included.reads included.writes included.grows included.shrinks
+
+private theorem metadata_empty (after : Eff) : EffectMetadataIncluded {} after := by
+  constructor <;> simp
+
+private theorem metadata_merge (before after added : Eff) (included : EffectMetadataIncluded before after) :
+    EffectMetadataIncluded (mergeEffects before added) (mergeEffects after added) := by
+  unfold mergeEffects
+  constructor
+  · exact addTargets_mono _ _ _ included.reads
+  · exact addTargets_mono _ _ _ included.writes
+  · exact addTargets_mono _ _ _ included.grows
+  · exact addTargets_mono _ _ _ included.shrinks
+  · exact append_eraseDups_mono _ _ _ included.storageReads
+  · exact append_eraseDups_mono _ _ _ included.storageWrites
+  · exact append_eraseDups_mono _ _ _ included.storageGrows
+  · exact append_eraseDups_mono _ _ _ included.storageShrinks
+  · exact append_eraseDups_mono _ _ _ included.namedRoots
+  · exact append_eraseDups_mono _ _ _ included.calls
+  · intro active
+    simp only [Bool.or_eq_true] at active ⊢
+    exact active.imp included.unknown id
+
+private theorem metadata_call (env : PEnv) (callee : Impl) (context : Context)
+    (arguments : List (List RootRef)) (called : ContextId) (before after : Eff)
+    (included : EffectMetadataIncluded before after) :
+    EffectMetadataIncluded
+      (let effects := callEffects callee context arguments before
+       { effects with
+         calls := (effects.calls ++ [(called, arguments)]).eraseDups
+         namedRoots := (effects.namedRoots ++ mapNamedRoots callee context arguments (env.calleeNames[called]?.getD [])).eraseDups })
+      (let effects := callEffects callee context arguments after
+       { effects with
+         calls := (effects.calls ++ [(called, arguments)]).eraseDups
+         namedRoots := (effects.namedRoots ++ mapNamedRoots callee context arguments (env.calleeNames[called]?.getD [])).eraseDups }) :=
+  metadata_recorded _ _ _ _ (metadata_callEffects callee context arguments before after included)
+
 private def SameRootCursor (left right : RState) : Prop :=
   left.nextVar = right.nextVar ∧ left.valueBreakRoots = right.valueBreakRoots
 
 private def ReplaysEffects (action : P α) : Prop :=
   ∀ before value after, action before = .ok (value, after) →
-    ∀ replacement, SameRootCursor before replacement →
-      ∃ replayed, action replacement = .ok (value, replayed) ∧ SameRootCursor after replayed
+    ∀ replacement, SameRootCursor before replacement → EffectMetadataIncluded replacement.eff before.eff →
+      ∃ replayed, action replacement = .ok (value, replayed) ∧ SameRootCursor after replayed ∧
+        EffectMetadataIncluded replayed.eff after.eff
 
 private theorem replay_pure (value : α) : ReplaysEffects (pure value) := by
-  intro before result after checked replacement same
+  intro before result after checked replacement same included
   change Except.ok (value, before) = Except.ok (result, after) at checked
   cases checked
-  exact ⟨replacement, rfl, same⟩
+  exact ⟨replacement, rfl, same, included⟩
 
 private theorem replay_bind (action : P α) (next : α → P β)
     (first : ReplaysEffects action) (remaining : ∀ value, ReplaysEffects (next value)) :
     ReplaysEffects (action >>= next) := by
-  intro before result after checked replacement same
+  intro before result after checked replacement same included
   cases initial : action before with
   | error error => simp [bind, StateT.bind, Except.bind, initial] at checked
   | ok pair =>
     have rest : next pair.1 pair.2 = .ok (result, after) := by
       simpa [bind, StateT.bind, Except.bind, initial] using checked
-    obtain ⟨middle, replayed, shape⟩ := first before pair.1 pair.2 initial replacement same
-    obtain ⟨final, remaining, finalShape⟩ := remaining pair.1 pair.2 result after rest middle shape
-    exact ⟨final, by simpa [bind, StateT.bind, Except.bind, replayed] using remaining, finalShape⟩
+    obtain ⟨middle, replayed, shape, middleIncluded⟩ := first before pair.1 pair.2 initial replacement same included
+    obtain ⟨final, remaining, finalShape, finalPrefix⟩ := remaining pair.1 pair.2 result after rest middle shape middleIncluded
+    exact ⟨final, by simpa [bind, StateT.bind, Except.bind, replayed] using remaining, finalShape, finalPrefix⟩
 
 private theorem replay_get_bind (next : RState → P α)
     (independent : ∀ left right, SameRootCursor left right → next left = next right)
     (remaining : ∀ state, ReplaysEffects (next state)) : ReplaysEffects (get >>= next) := by
-  intro before result after checked replacement same
+  intro before result after checked replacement same included
   have checked : next before before = .ok (result, after) := checked
-  obtain ⟨final, replayed, shape⟩ := remaining before before result after checked replacement same
-  refine ⟨final, ?_, shape⟩
+  obtain ⟨final, replayed, shape, middleIncluded⟩ := remaining before before result after checked replacement same included
+  refine ⟨final, ?_, shape, middleIncluded⟩
   change next replacement replacement = .ok (result, final)
   rw [← independent before replacement same]
   exact replayed
 
 private theorem replay_modify (update : RState → RState)
-    (independent : ∀ left right, SameRootCursor left right → SameRootCursor (update left) (update right)) :
+    (independent : ∀ left right, SameRootCursor left right → SameRootCursor (update left) (update right))
+    (monotone : ∀ before replacement, SameRootCursor before replacement →
+      EffectMetadataIncluded replacement.eff before.eff →
+        EffectMetadataIncluded (update replacement).eff (update before).eff) :
     ReplaysEffects (modify update) := by
-  intro before result after checked replacement same
+  intro before result after checked replacement same included
   change Except.ok (PUnit.unit, update before) = Except.ok (result, after) at checked
   cases checked
-  exact ⟨update replacement, rfl, independent before replacement same⟩
+  exact ⟨update replacement, rfl, independent before replacement same, monotone before replacement same included⟩
 
 private theorem replay_lift (action : V α) : ReplaysEffects (liftV action) := by
-  intro before result after checked replacement same
+  intro before result after checked replacement same included
   cases action with
   | error error => cases checked
   | ok value =>
     change Except.ok (value, before) = Except.ok (result, after) at checked
     cases checked
-    exact ⟨replacement, rfl, same⟩
+    exact ⟨replacement, rfl, same, included⟩
 
 private theorem replay_reject (rule : Rule) (message : String) : ReplaysEffects (rejP (α := α) rule message) := by
   intro before result after checked
   cases checked
 
 private theorem replay_capture (action : P α) : ReplaysEffects (captureEffects action) := by
-  intro before result after checked replacement same
+  intro before result after checked replacement same included
   obtain ⟨nextVar, effects, roots⟩ := before
   obtain ⟨replacementNextVar, replacementEffects, replacementRoots⟩ := replacement
   obtain ⟨rfl, rfl⟩ := same
@@ -2669,7 +2812,7 @@ private theorem replay_capture (action : P α) : ReplaysEffects (captureEffects 
     simp only [initial, bind, Except.bind, pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at checked
     obtain ⟨rfl, rfl⟩ := checked
     exact ⟨{ pair.2 with eff := mergeEffects replacementEffects pair.2.eff },
-      by simp only [bind, Except.bind, pure, Except.pure], rfl, rfl⟩
+      by simp only [bind, Except.bind, pure, Except.pure], ⟨rfl, rfl⟩, metadata_merge _ _ _ included⟩
 
 private theorem replay_forIn_list (rows : List α) (initial : β)
     (body : α → β → P (ForInStep β))
@@ -2706,6 +2849,33 @@ private theorem replay_forIn'_range (rows : Std.Legacy.Range) (initial : β)
   rw [Std.Legacy.Range.forIn'_eq_forIn'_range']
   exact replay_forIn'_list _ _ _ (fun row member token => each row _ token)
 
+local macro "inherit_root_metadata" : tactic => `(tactic|
+  (intro before replacement same included
+   constructor
+   all_goals first
+     | exact included.reads
+     | exact included.writes
+     | exact included.grows
+     | exact included.shrinks
+     | exact included.storageReads
+     | exact included.storageWrites
+     | exact included.storageGrows
+     | exact included.storageShrinks
+     | exact included.namedRoots
+     | exact included.calls
+     | exact included.unknown
+     | exact fun _ => rfl
+     | exact addTargets_mono _ _ _ included.reads
+     | exact addTargets_mono _ _ _ included.writes
+     | exact addTargets_mono _ _ _ included.grows
+     | exact addTargets_mono _ _ _ included.shrinks
+     | exact append_eraseDups_mono _ _ _ included.storageReads
+     | exact append_eraseDups_mono _ _ _ included.storageWrites
+     | exact append_eraseDups_mono _ _ _ included.storageGrows
+     | exact append_eraseDups_mono _ _ _ included.storageShrinks
+     | exact append_eraseDups_mono _ _ _ included.namedRoots
+     | exact append_eraseDups_mono _ _ _ included.calls))
+
 local macro "replay_effect_prefix" "[" extra:tacticSeq "]" : tactic => `(tactic|
   repeat' first
   | $extra
@@ -2714,7 +2884,7 @@ local macro "replay_effect_prefix" "[" extra:tacticSeq "]" : tactic => `(tactic|
   | exact replay_lift _
   | exact replay_reject _ _
   | exact replay_capture _
-  | exact replay_modify _ (fun _ _ same => same)
+  | exact replay_modify _ (fun _ _ same => same) (by inherit_root_metadata)
   | exact replay_modify _ (by
       intro left right same
       rcases left with ⟨next, effects, roots⟩
@@ -2723,7 +2893,7 @@ local macro "replay_effect_prefix" "[" extra:tacticSeq "]" : tactic => `(tactic|
       rcases same with ⟨nextEqual, rootsEqual⟩
       cases nextEqual
       cases rootsEqual
-      exact ⟨rfl, rfl⟩)
+      exact ⟨rfl, rfl⟩) (by inherit_root_metadata)
   | refine replay_forIn_list _ _ _ (fun _ _ => ?_)
   | refine replay_forIn'_range _ _ _ (fun _ _ _ => ?_)
   | refine replay_bind _ _ ?_ (fun _ => ?_)
@@ -2767,9 +2937,15 @@ private theorem replay_call (env : PEnv) (context : ContextId) (arguments : List
     ReplaysEffects (rpCall env context arguments) := by
   unfold rpCall receiveEscapeRoots
   simp only [checkRetainedShrinks]
-  replay_root_primitives [exact replay_scopedShrinks _ _]
+  replay_root_primitives [first
+    | exact replay_scopedShrinks _ _
+    | exact replay_modify _ (fun _ _ same => same) (fun before replacement _ included =>
+        metadata_call env _ _ _ context replacement.eff before.eff included)]
   all_goals try dsimp only
-  all_goals replay_root_primitives [exact replay_scopedShrinks _ _]
+  all_goals replay_root_primitives [first
+    | exact replay_scopedShrinks _ _
+    | exact replay_modify _ (fun _ _ same => same) (fun before replacement _ included =>
+        metadata_call env _ _ _ context replacement.eff before.eff included)]
 
 private theorem replay_block_end (env : PEnv) (scope initial : Nat) (roots : List RootRef) :
     ReplaysEffects (do
@@ -2879,91 +3055,106 @@ private theorem rp_effects_replayed :
 private theorem replay_cleared (action : P α) (replay : ReplaysEffects action)
     {before after : RState} {value : α} (checked : action before = .ok (value, after)) :
     ∃ replayed, action { before with eff := {} } = .ok (value, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
-  replay before value after checked _ ⟨rfl, rfl⟩
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
+  by
+  obtain ⟨replayed, success, shape, included⟩ := replay before value after checked { before with eff := {} } ⟨rfl, rfl⟩ (metadata_empty _)
+  exact ⟨replayed, success, shape.1, shape.2, included⟩
 
 theorem rpPlace_clearEffects {env : PEnv} {place : Place}
     {before after : RState} {roots : List RootRef}
     (checked : rpPlace env place before = .ok (roots, after)) :
     ∃ replayed, rpPlace env place { before with eff := {} } = .ok (roots, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.1 env place) checked
 
 theorem rpView_clearEffects {env : PEnv} {view : View}
     {before after : RState} {roots : List RootRef}
     (checked : rpView env view before = .ok (roots, after)) :
     ∃ replayed, rpView env view { before with eff := {} } = .ok (roots, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.1 env view) checked
 
 theorem rpExpr_clearEffects {env : PEnv} {expression : Expr}
     {before after : RState} {roots : List RootRef}
     (checked : rpExpr env expression before = .ok (roots, after)) :
     ∃ replayed, rpExpr env expression { before with eff := {} } = .ok (roots, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.1 env expression) checked
 
 theorem rpPrintArgs_clearEffects {env : PEnv} {arguments : List PrintArg}
     {before after : RState} {result : Unit}
     (checked : rpPrintArgs env arguments before = .ok (result, after)) :
     ∃ replayed, rpPrintArgs env arguments { before with eff := {} } = .ok (result, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.1 env arguments) checked
 
 theorem rpExprs_clearEffects {env : PEnv} {expressions : List Expr}
     {before after : RState} {result : Unit}
     (checked : rpExprs env expressions before = .ok (result, after)) :
     ∃ replayed, rpExprs env expressions { before with eff := {} } = .ok (result, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.2.1 env expressions) checked
 
 theorem rpBlockValue_clearEffects {env : PEnv} {block : Block} {pre : List VarId}
     {before after : RState} {result : List RootRef × (Nat × Nat)}
     (checked : rpBlockValue env pre block before = .ok (result, after)) :
     ∃ replayed, rpBlockValue env pre block { before with eff := {} } = .ok (result, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.2.2.1 env pre block) checked
 
 theorem rpStmts_clearEffects {env : PEnv} {statements : List Stmt}
     {before after : RState} {result : Unit}
     (checked : rpStmts env statements before = .ok (result, after)) :
     ∃ replayed, rpStmts env statements { before with eff := {} } = .ok (result, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.1 env statements) checked
 
 theorem rpStmt_clearEffects {env : PEnv} {statement : Stmt}
     {before after : RState} {result : Unit}
     (checked : rpStmt env statement before = .ok (result, after)) :
     ∃ replayed, rpStmt env statement { before with eff := {} } = .ok (result, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.1 env statement) checked
 
 theorem rpNoLocalOperands_clearEffects {env : PEnv} {expressions : List Expr}
     {before after : RState} {result : Unit}
     (checked : rpNoLocalOperands env expressions before = .ok (result, after)) :
     ∃ replayed, rpNoLocalOperands env expressions { before with eff := {} } = .ok (result, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.2.1 env expressions) checked
 
 theorem rpReturnOperands_clearEffects {env : PEnv} {expressions : List Expr} {channels : List (List RootRef)}
     {before after : RState} {result : Unit}
     (checked : rpReturnOperands env channels expressions before = .ok (result, after)) :
     ∃ replayed, rpReturnOperands env channels expressions { before with eff := {} } = .ok (result, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.2.2.1 env channels expressions) checked
 
 theorem rpArgs_clearEffects {env : PEnv} {arguments : List Arg}
     {before after : RState} {roots : List (List RootRef)}
     (checked : rpArgs env arguments before = .ok (roots, after)) :
     ∃ replayed, rpArgs env arguments { before with eff := {} } = .ok (roots, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.2.2.2.1 env arguments) checked
 
 theorem rpBound_clearEffects {env : PEnv} {bound : Bound}
     {before after : RState} {result : Unit}
     (checked : rpBound env bound before = .ok (result, after)) :
     ∃ replayed, rpBound env bound { before with eff := {} } = .ok (result, replayed) ∧
-      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots ∧
+      EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.2.2.2.2 env bound) checked
 
 end Goose.Construct
