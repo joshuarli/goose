@@ -18,7 +18,7 @@ theorem writeElement_sourceFrame (id : DestinationId) (bytes : ByteArray)
   generalize evaluated : writeElement id bytes state = result at transition ⊢
   cases transition with
   | rejected reason => rfl
-  | written actual storage count present opened =>
+  | written actual storage count present stored opened =>
       have same := Option.some.inj (present.symm.trans found)
       subst actual
       simp [ConstructionResult.finalState, Array.set!_eq_setIfInBounds,

@@ -11,9 +11,12 @@ inductive ElementWriteTransition (id : DestinationId) (bytes : ByteArray) (state
   | rejected (reason : ConstructionFault) : ElementWriteTransition id bytes state (.fault reason state)
   | written (destination : PendingDestination) (storage : ReceivingStorage) (count : Nat)
       (present : state.destinations[id]? = some destination)
+      (stored : state.storage[destination.storage]? = some storage)
       (opened : destination.progress = .open count) :
       ElementWriteTransition id bytes state (.ok () { state with
-        storage := state.storage.set! destination.storage storage
+        storage := state.storage.set! destination.storage { storage with bytes := (
+          storage.bytes.extract 0 destination.writeEnd ++ bytes ++
+            storage.bytes.extract (destination.writeEnd + bytes.size) storage.bytes.size) }
         destinations := state.destinations.set! id { destination with
           progress := .open (count + 1), writeEnd := destination.writeEnd + bytes.size }
         events := state.events ++ [.write id count] })
@@ -39,16 +42,17 @@ theorem writeElement_transition (id : DestinationId) (bytes : ByteArray) (state 
           cases progress : destination.progress <;> (try simp only [progress]) <;>
             try exact .rejected .protocol
           case «open» count =>
-            have committed : ∀ storage : ReceivingStorage,
-                ElementWriteTransition id bytes state (.ok () { state with
-                  storage := state.storage.set! destination.storage storage
-                  destinations := state.destinations.set! id { destination with
-                    progress := .open (count + 1), writeEnd := destination.writeEnd + bytes.size }
-                  events := state.events ++ [.write id count] }) :=
-              fun storage => .written destination storage count present progress
             cases stored : state.storage[destination.storage]? with
             | none => simp only [lookupStorage_result, stored, bind]; exact .rejected .storage
             | some storage =>
+                have committed : ElementWriteTransition id bytes state (.ok () { state with
+                    storage := state.storage.set! destination.storage { storage with bytes := (
+                      storage.bytes.extract 0 destination.writeEnd ++ bytes ++
+                        storage.bytes.extract (destination.writeEnd + bytes.size) storage.bytes.size) }
+                    destinations := state.destinations.set! id { destination with
+                      progress := .open (count + 1), writeEnd := destination.writeEnd + bytes.size }
+                    events := state.events ++ [.write id count] }) :=
+                  .written destination storage count present stored progress
                 have bound := (Array.getElem?_eq_some_iff.mp stored).1
                 simp only [lookupStorage_result, stored, bind]
                 element_write_split_if
@@ -70,7 +74,7 @@ theorem writeElement_transition (id : DestinationId) (bytes : ByteArray) (state 
                                 ConstructionM.fail, emit_result]
                             | element_write_split_if
                             | exact .rejected _
-                            | exact committed _
+                            | exact committed
                       case child parentId =>
                         cases parentFound : state.destinations[parentId]? with
                         | none => simp [lookupDestination_result, parentFound, bind]; exact .rejected _
@@ -84,7 +88,7 @@ theorem writeElement_transition (id : DestinationId) (bytes : ByteArray) (state 
                                     ConstructionM.fail, emit_result]
                                 | element_write_split_if
                                 | exact .rejected _
-                                | exact committed _
+                                | exact committed
                           case limited capacity slotBytes =>
                             cases parentProgress : parent.progress <;> (try simp only [parentProgress])
                             all_goals
@@ -94,7 +98,7 @@ theorem writeElement_transition (id : DestinationId) (bytes : ByteArray) (state 
                                       ConstructionM.fail, emit_result]
                                   | element_write_split_if
                                   | exact .rejected _
-                                  | exact committed _
+                                  | exact committed
                             case suspended parentCount child =>
                               cases parentBacking : parent.backing <;> (try simp only [parentBacking])
                               all_goals
@@ -104,7 +108,7 @@ theorem writeElement_transition (id : DestinationId) (bytes : ByteArray) (state 
                                         ConstructionM.fail, emit_result]
                                     | element_write_split_if
                                     | exact .rejected _
-                                    | exact committed _
+                                    | exact committed
                               case direct parentStorage =>
                                 cases backing : destination.backing <;> (try simp only [backing])
                                 all_goals
@@ -114,7 +118,7 @@ theorem writeElement_transition (id : DestinationId) (bytes : ByteArray) (state 
                                         ConstructionM.fail, emit_result]
                                     | element_write_split_if
                                     | exact .rejected _
-                                    | exact committed _
+                                    | exact committed
 
 theorem writeElement_success_destination (id : DestinationId) (bytes : ByteArray)
     (before after : ConstructionState) (destination : PendingDestination) (count : Nat)
@@ -127,7 +131,7 @@ theorem writeElement_success_destination (id : DestinationId) (bytes : ByteArray
   have transition := writeElement_transition id bytes before
   rw [executed] at transition
   cases transition with
-  | written actual storage actualCount actualPresent actualOpened =>
+  | written actual storage actualCount actualPresent actualStored actualOpened =>
       have same := Option.some.inj (actualPresent.symm.trans present)
       subst actual
       have sameCount := DestinationProgress.open.inj (actualOpened.symm.trans opened)
