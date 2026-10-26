@@ -8,44 +8,17 @@ open Goose.Core (DestinationId)
 open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ConstructionExecutionOwnership
 
-open Lean Elab Term Meta in
-elab "fresh_destination_walk_fact" : term => do
-  let info ← getConstInfo ``OwnershipReplacementPath.descendant
-  let some value := info.value? (allowOpaque := true) | throwError "missing replacement ancestry proof"
-  let some head := value.find? (fun term => match term with
-    | .const name _ => name.toString.endsWith ".destinationDescendant_walk"
-    | _ => false) | throwError "missing ancestry walk equation"
-  pure head
-
-open Lean Elab Term Meta in
-elab "fresh_destination_walk" : term => do
-  let info ← getConstInfo ``OwnershipReplacementPath.descendant
-  let some value := info.value? (allowOpaque := true) | throwError "missing replacement ancestry proof"
-  let some (.const name _) := value.find? (fun term => match term with
-    | .const name _ => name.toString.endsWith ".destinationDescendant_walk"
-    | _ => false) | throwError "missing ancestry walk equation"
-  let equation ← getConstInfo name
-  let some walk := equation.type.find? (fun term => match term with
-    | .const name _ => name.toString.endsWith ".ancestryWalk"
-    | _ => false) | throwError "missing ancestry walk"
-  pure walk
-
-private abbrev ancestorWalk : Array PendingDestination → Nat → Nat → Nat → Bool := fresh_destination_walk
-
-private theorem descendant_walk (rows : Array PendingDestination) (ancestor id : Nat) :
-    destinationDescendant rows ancestor id = ancestorWalk rows ancestor rows.size id := fresh_destination_walk_fact rows ancestor id
-
 private theorem walk_succ (rows : Array PendingDestination) (ancestor fuel id : Nat) :
-    ancestorWalk rows ancestor (fuel + 1) id =
+    ancestryWalk rows ancestor (fuel + 1) id =
       if id == ancestor then true else match rows[id]? with
       | none => false
       | some row => match row.use with
         | .receiver => false
-        | .child parent | .replacement parent => ancestorWalk rows ancestor fuel parent := rfl
+        | .child parent | .replacement parent => ancestryWalk rows ancestor fuel parent := rfl
 
 private theorem walk_fuel (state : ConstructionState) (ordered : DestinationOwnersOrdered state)
     (ancestor first second id : Nat) (firstBound : id < first) (secondBound : id < second) :
-    ancestorWalk state.destinations ancestor first id = ancestorWalk state.destinations ancestor second id := by
+    ancestryWalk state.destinations ancestor first id = ancestryWalk state.destinations ancestor second id := by
   induction first generalizing second id with
   | zero => omega
   | succ first ih =>
@@ -69,7 +42,7 @@ private theorem walk_fuel (state : ConstructionState) (ordered : DestinationOwne
 
 private theorem walk_push_old (state : ConstructionState) (ordered : DestinationOwnersOrdered state)
     (added : PendingDestination) (ancestor fuel id : Nat) (inside : id < state.destinations.size) :
-    ancestorWalk (state.destinations.push added) ancestor fuel id = ancestorWalk state.destinations ancestor fuel id := by
+    ancestryWalk (state.destinations.push added) ancestor fuel id = ancestryWalk state.destinations ancestor fuel id := by
   induction fuel generalizing id with
   | zero => rfl
   | succ fuel ih =>
@@ -93,7 +66,7 @@ theorem FreshDestinationFrame.ancestry {before after : ExecutionState} (frame : 
     (inside : ancestor < before.construction.destinations.size) :
     destinationDescendant after.construction.destinations ancestor id =
       destinationDescendant before.construction.destinations ancestor id := by
-  rw [frame.destinations, descendant_walk, descendant_walk, Array.size_push]
+  rw [frame.destinations, destinationDescendant_walk, destinationDescendant_walk, Array.size_push]
   by_cases old : id < before.construction.destinations.size
   · rw [walk_push_old before.construction ordered frame.row ancestor _ id old]
     exact walk_fuel before.construction ordered ancestor _ _ id (by omega) old

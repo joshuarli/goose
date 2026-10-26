@@ -30,7 +30,7 @@ theorem replacementSupported_active_path (state : ConstructionState) (id : Desti
       exact ⟨leaf, activeRow, activePresent, live,
         OwnershipReplacementPath.trans (.step id parent parent row present use (.refl parent)) path⟩
 
-private def ancestryWalk (rows : Array PendingDestination) (ancestor : DestinationId) : Nat → DestinationId → Bool
+def ancestryWalk (rows : Array PendingDestination) (ancestor : DestinationId) : Nat → DestinationId → Bool
   | 0, _ => false
   | fuel + 1, id =>
       if id == ancestor then true else
@@ -68,7 +68,7 @@ private theorem ancestryLoop_walk (rows : Array PendingDestination) (ancestor st
             | child parent | replacement parent =>
                 simpa only [ancestryStep, use, bind, pure] using ih (start + 1) parent
 
-private theorem destinationDescendant_walk (rows : Array PendingDestination) (ancestor id : DestinationId) :
+theorem destinationDescendant_walk (rows : Array PendingDestination) (ancestor id : DestinationId) :
     destinationDescendant rows ancestor id = ancestryWalk rows ancestor rows.size id := by
   dsimp only [destinationDescendant]
   rw [descendantOf_result]
@@ -167,5 +167,7 @@ theorem OwnershipReplacementPath.before_sources {before after : ConstructionStat
       obtain ⟨original, originalPresent, originalUse⟩ := sources id row found
       exact .step id parent ancestor original originalPresent (originalUse.trans use) ih
 
+
+#print axioms destinationDescendant_walk
 
 end Goose.Proofs.ConstructionExecutionOwnership
