@@ -52,6 +52,8 @@ def SourceOrigin {config : EvalConfig} (accepted : AcceptedModule config)
         frame.source.aliases = accepted.aliases[contextId]! ∧
         ContextRootFactsAt config.module original frame.source.aliases calls
           frame.source.escaping frame.source.calleeNames ∧
+        (∀ called ∈ calls, called.1 < config.module.contexts.size →
+          AliasClosure accepted.aliases[contextId]! accepted.aliases[called.1]! called.2 config.module.globals.size) ∧
         bodyTargets config.module = .ok frame.source.targetEscapes ∧
         ∃ roots next,
           (rpBlockValue { frame.source with scopes := [], valueBlock := none, initializing := [] }
