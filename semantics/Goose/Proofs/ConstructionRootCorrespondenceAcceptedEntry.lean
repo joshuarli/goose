@@ -32,7 +32,7 @@ theorem acceptedEntryFrame (config : EvalConfig) (accepted : AcceptedModule conf
     (original, config.module.entry) member
   obtain ⟨escaping, names, contextFactsAt⟩ := contextFacts
   obtain ⟨bodyImplementation, bodyContext, targetEscapes, roots, rootAfter,
-      bodyImplementationAt, closed, targetsChecked, rootsChecked⟩ :=
+      bodyImplementationAt, closed, targetsChecked, rootsChecked, _bodyCallsIncluded⟩ :=
     contextRootFactsAt_bodyRoots config.module original accepted.aliases[config.module.entry]! calls
       escaping names contextFactsAt
   have same : bodyImplementation = implementation := by
