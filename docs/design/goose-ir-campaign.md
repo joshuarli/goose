@@ -76,18 +76,25 @@ The latest integrated construction check passes 231 selected modules under pinne
 covering physical-key registration, entry freshness, successful-read typing, fixed encoding widths and element-write geometry.
 A complementary 220-module check passes allocation-world preservation with the same strengthened registration contract.
 The fixed element-builder case consumes those encoding and write proofs; its 222 dependency sources match the qualified lane check exactly.
-The combined block-entry/value/unit/release and length-query check passes 132 modules;
-complete generated global-clear sequences pass their 128-module check on the integrated tree.
+The combined source-factory, block, slice and length-query check passes 203 modules on the integrated tree.
+A concrete clear-and-literal block starts at an actual reachable GIR initializer point and preserves its sampled run at every runtime prefix of its five-instruction span, including independently chosen instruction fuel.
+Its only input premise is acceptance of the source module; runtime validation confirms that fixture, while no closed kernel proof of its validation equality is claimed.
 All retained axiom checks use only `propext`, `Classical.choice` and `Quot.sound`.
 These scoped checks do not qualify the whole project or close the three universal obligations.
 Stable-key C++ unit tests pass after sharing the visitation helper.
 
 Review identified a missing link between the construction frame and the world's backed roots.
-The joint induction must derive current action and continuation demand from the actual checker,
-then maintain demanded backing and the active writer's encoded prefix through native evaluation.
-Accumulated checker reads include earlier actions, while subtracting two deduplicated read sets loses repeated reads.
-The next design decision is an action-local checker replay, retaining separate normal, escaping and terminal outcomes.
+The central invariant will cover every present physical object in ordinary states, with explicit receiving-phase exceptions tied to actual surrender, retirement and cleanup evidence.
+An extension must preserve the existing encoded prefix; exclusive replacement instead excludes receiver access until repair.
+The ordinary and receiving worlds share structural facts, while retaining distinct global-backing requirements.
+The joint evaluator family and its preservation proof remain unfinished.
+Action-local checker replay is still needed for native effect and exclusion extraction: accumulated reads contain history, while subtracting deduplicated sets loses repeated reads.
 Unused references to future globals remain allowed; no blanket pointee-liveness or path-totality assumption is justified.
+
+Full demand closure needs one prefix-decomposition family joining actual context/global ownership, generated occurrences and required rows with source frames and locally extended maps.
+Completed source simulations do not cover arbitrary prefixes of diverging loops.
+Statement sequencing must pass the residual prefix after a completed child; call entry must use the actual callee selection.
+Canonical frame-only predicates remain internal projections, not substitutes for that joined witness.
 
 An isolated report experiment replaces per-node hash allocations in report walks with a pointer set.
 Five interleaved samples per condition on Aincrad3 checking, using Clang Release with libtcc and native layers disabled,
