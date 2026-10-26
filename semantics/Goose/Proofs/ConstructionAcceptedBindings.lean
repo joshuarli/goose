@@ -183,7 +183,7 @@ theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
       world.backing world.heap compatible represented backed fresh
   have same := (ExecutionStep.ok.inj (evaluated.symm.trans actual)).2
   subst middle
-  refine ⟨after, actual, extended, context, ?_, ?_, ?_, ?_, ?_, ?_, heap, ?_, ?_, backing, ?_, ?_⟩
+  refine ⟨after, actual, extended, ⟨context, ?_, ?_, ?_, ?_, ?_, heap, ?_, ?_, backing, ?_, ?_⟩, ?_⟩
   · refine ⟨world.globals.1, ?_⟩
     intro id available
     obtain ⟨descriptor, old, declared, found, represented⟩ := world.globals.2 id available
@@ -196,8 +196,6 @@ theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
         rw [bindRoot_lookup_other root (.global id) (.stored stored) before after actual same]
         exact found
       exact ⟨descriptor, old, declared, present, represented⟩
-  · intro id available
-    exact Or.inr (world.globalLive id available)
   · intro id descriptor declared
     exact extended _ _ (world.globalTypes id descriptor declared)
   · exact registerRootType_layouts config.layout types root ty world.layouts conforms
@@ -221,6 +219,8 @@ theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
     cases present
   · intro frame present
     cases present
+  · intro id available
+    exact Or.inr (world.globalLive id available)
 
 theorem bindRoot_freshGlobalStored_world (config : EvalConfig) (initialized : Nat)
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (liveRoots : RootInst → Prop)
@@ -257,8 +257,8 @@ theorem bindRoot_freshGlobalStored_world (config : EvalConfig) (initialized : Na
   subst result
   have present : after.objects.lookup (.global initialized) = some (.stored stored) := by
     simp only [objects, List.lookup, beq_self_eq_true]
-  refine ⟨after, evaluated, post.ownership, ?_, ?_, post.globalTypes, post.layouts, post.typeFrontier, post.syntheticFrontier,
-    post.heap, post.objectsRegistered, post.ordinalsRegistered, post.backing, post.protections, post.carriers⟩
+  refine ⟨after, evaluated, ⟨post.ownership, ?_, post.globalTypes, post.layouts, post.typeFrontier, post.syntheticFrontier,
+    post.heap, post.objectsRegistered, post.ordinalsRegistered, post.backing, post.protections, post.carriers⟩, ?_⟩
   · refine ⟨(Array.getElem?_eq_some_iff.mp declared).1, ?_⟩
     intro id available
     have cases : id < initialized ∨ id = initialized := Nat.lt_succ_iff_lt_or_eq.mp available

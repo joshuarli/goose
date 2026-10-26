@@ -16,7 +16,7 @@ private theorem emptyWorld_clockFrame (config : EvalConfig) (initialized : Nat)
     (identities : after.objectOrdinals = before.objectOrdinals)
     (acts : before.nextAct ≤ after.nextAct) (scopes : before.nextScope ≤ after.nextScope) :
     AcceptedWorld config initialized after ambient types liveRoots [] [] := by
-  refine ⟨ownership, ?_, world.globalLive, world.globalTypes, world.layouts, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨⟨ownership, ?_, world.globalTypes, world.layouts, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, world.globalLive⟩
   · refine ⟨world.globals.1, ?_⟩
     intro id available
     obtain ⟨descriptor, value, declared, found, represented⟩ := world.globals.2 id available

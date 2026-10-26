@@ -16,7 +16,7 @@ def StorageDemandReady (interpretation : RootInterpretation) (liveRoots : RootIn
 theorem readLoc_demanded (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (liveRoots : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
-    (world : AcceptedWorld config initialized before ambient types liveRoots regions pending)
+    (world : AcceptedWorldCore config initialized before ambient types liveRoots regions pending)
     (interpretation : RootInterpretation) (roots : List RootRef)
     (ready : StorageDemandReady interpretation liveRoots roots)
     (location : Loc) (target : Ty) (value : Value)

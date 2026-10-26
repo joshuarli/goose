@@ -66,7 +66,7 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
   have typedObjects : typedAfter.objects = after.objects := objects
   refine ⟨after, registerRootType types root ownerTy, root, ?_, extended, ?_, ?_⟩
   · simp only [evalValue, freshScope, bindStaticRoot, EvalM.get, EvalM.set, bind, pure, root, after, scopeState, values]
-  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_⟩
     · exact ⟨scopeWorld.ownership.source, scopeWorld.ownership.retention,
         ⟨scopeWorld.ownership.runtime.activations, scopeWorld.ownership.runtime.breaks⟩,
         scopeWorld.ownership.reservations, scopeWorld.ownership.receiving, scopeWorld.ownership.bounds,
@@ -83,8 +83,6 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
       refine ⟨descriptor, value, declared, ?_, represented⟩
       rw [← typedObjects, bindRoot_lookup_other root (.global id) (.fixed values) scopeState typedAfter typedResult different]
       exact found
-    · intro id available
-      exact Or.inr (world.globalLive id available)
     · intro id descriptor declared
       exact extended _ _ (world.globalTypes id descriptor declared)
     · exact registerRootType_layouts config.layout types root ownerTy world.layouts (by trivial)
@@ -135,6 +133,8 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
       cases present
     · intro frame present
       cases present
+    · intro id available
+      exact Or.inr (world.globalLive id available)
   · refine ⟨.slice .readOnly (.int .u8) ⟨root, []⟩ 0 bytes.length,
       .slice .readOnly (.int .u8) ownerTy ⟨root, []⟩ 0 bytes.length ?_ rfl, .slice _ _ _, ?_⟩
     · exact ⟨ownerTy, by simp only [registerRootType, ↓reduceIte], .root ownerTy⟩
