@@ -3,6 +3,8 @@ import Goose.Lower.DemandGeneratedIndexEntry
 import Goose.Lower.DemandGeneratedIndexChecks
 import Goose.Lower.TypedControlExpressions
 import Goose.Lower.DemandGeneratedOwner
+import Goose.Lower.DemandGeneratedBlockPrefix
+import Goose.Lower.TypedGlobals
 
 namespace Goose.Lower.DemandGeneratedClearBlockChecks
 
@@ -63,6 +65,14 @@ theorem accepted_retained_index_body_all_runtime_points
           retainedIndexBefore none sampledFrame) 5
         ⟨(0, 2), sampledFrame, initialState⟩ ⟨(0, 7), finalFrame, after⟩ ∧
       execBlock 5 configuration environment [] retainedIndexBlock initialState = .ok (.normal (.int .i64 0)) after ∧
+      (∀ taken reached, DemandRuntimePrefix context taken ⟨(0, 2), sampledFrame, initialState⟩ reached →
+        (taken = 0 ∧ reached = ⟨(0, 2), sampledFrame, initialState⟩ ∧
+          GeneratedClearBlockDemand source retainedSampleRows retainedSampleRows context [.int .i64]
+            retainedIndexBefore none sampledFrame reached) ∨
+        GeneratedBlockStatementsPrefix (cx := context) (results := [.int .i64]) (before := retainedIndexBefore) (loop := none) source selected
+          retainedSampleRows retainedSampleRows sampledFrame (0, 2)
+          (@GeneratedGlobalClearPrefixCursor configuration { environment with scopes := [(0, 0)] } context [.int .i64])
+          taken reached) ∧
       ∀ taken reached, taken ≤ 5 → DemandRuntimePrefix context taken ⟨(0, 2), sampledFrame, initialState⟩ reached →
         Evidence.RuntimePoint context.cfg context.fn reached.point reached.frame reached.state ∧
         (∃ typing roots future,
@@ -71,7 +81,7 @@ theorem accepted_retained_index_body_all_runtime_points
           DemandFrameAt configuration { environment with scopes := [(0, 0)] } context source.world typing roots future
             retainedSampleRows.values retainedSampleRows.runs reached) ∧
         ∃ values, (getView reached.frame 1 >>= readRun) reached.state = .ok values reached.state := by
-  obtain ⟨rootSource, _, rootRoots, _, _, rootPath, rootPlanOwner⟩ := acceptedGlobalActivation (cfg := configuration)
+  obtain ⟨rootSource, rootTyping, rootRoots, _, _, rootPath, rootPlanOwner⟩ := acceptedGlobalActivation (cfg := configuration)
     (g := 1) (global := retainedIndexedGlobal) accepted (by rfl) (initialized accepted).invariant
   change ExprSource configuration environment
     (.read (.elem retainedOwnerView (.blockE retainedIndexBlock) 0)) initialState at rootSource
@@ -79,7 +89,7 @@ theorem accepted_retained_index_body_all_runtime_points
     .global (globalId := 1) (by rfl)
   have rootOwned : GeneratedSourceOwner selected rootSource.context :=
     ⟨rootPlanOwner, by rw [rootPath]; exact .here _⟩
-  obtain ⟨place, _, placeRoots, placeCanonical⟩ := rootSource.readChild
+  obtain ⟨place, placeTyping, placeRoots, placeCanonical⟩ := rootSource.readChild
   have placeOwned : GeneratedSourceOwner selected place.context :=
     (rootOwned.child rfl 0 (.place (.elem retainedOwnerView (.blockE retainedIndexBlock) 0)) .place rfl (by trivial)).transport
       placeCanonical.plans.symm placeCanonical.path.symm rfl placeCanonical.context.symm
@@ -110,7 +120,7 @@ theorem accepted_retained_index_body_all_runtime_points
     rw [placePath, placeAccess]
     rfl
   have viewDone : evalView 2 configuration environment retainedOwnerView initialState = .ok sample initialState := by cbv
-  obtain ⟨indexSource, indexCanonical, _, indexRoots, _, _, covered, admitted, bounded, atPoint, demanded⟩ :=
+  obtain ⟨indexSource, indexCanonical, indexTyping, indexRoots, _, _, covered, admitted, bounded, atPoint, demanded⟩ :=
     accepted_generated_index_entry (cx := context) (results := [.int .i64]) place placeOccurrence placeRows
       (show (⟨[], []⟩ : RetainedSsaMap).Covers ⟨[], []⟩ from ⟨fun _ h => h, fun _ h => h⟩)
       (by intro profile alias member; cases member)
@@ -121,7 +131,7 @@ theorem accepted_retained_index_body_all_runtime_points
   have indexOwned : GeneratedSourceOwner selected indexSource.context :=
     (placeOwned.child rfl 1 (.expression (.blockE retainedIndexBlock)) .expression rfl (by trivial)).transport
       indexCanonical.plans.symm indexCanonical.path.symm rfl indexCanonical.context.symm
-  obtain ⟨source, _, sourceRoots, canonical⟩ := indexSource.blockEChild
+  obtain ⟨source, sourceTyping, sourceRoots, canonical⟩ := indexSource.blockEChild
   have sourceOwned : GeneratedSourceOwner selected source.context :=
     (indexOwned.child rfl 0 (.block retainedIndexBlock) .block rfl (by trivial)).transport
       canonical.plans.symm canonical.path.symm rfl canonical.context.symm
@@ -143,6 +153,25 @@ theorem accepted_retained_index_body_all_runtime_points
     simpa only [RetainedSsaMap.Realizes, canonical.world] using indexRealized
   have related : Rel configuration environment context sampledFrame retainedIndexBefore :=
     ((initialRelated.set 0 (.val (.ref ⟨.global 0, []⟩))).set 1 (.view sample)).stack_eq (by rfl)
+  have sourceMetadata : SourceResults source.typingEnv source.rootsEnv [.int .i64] := by
+    intro implementation found
+    rw [sourceTyping, indexTyping, placeTyping, rootTyping] at found
+    cases found
+  have sourceLoops : LoopSourceMatches source.typingEnv none := by
+    unfold LoopSourceMatches
+    rw [sourceTyping, indexTyping, placeTyping, rootTyping]
+    exact ⟨fun _ => rfl, fun _ => rfl⟩
+  have generated : GeneratedBuilderState retainedIndexBefore :=
+    startLS_generated.lowerView retainedOwnerView rfl
+  have prefixInput : GeneratedPrefixInput configuration environment context [.int .i64] none
+      source.typingEnv source.rootsEnv retainedIndexBefore sampledFrame (0, 2) :=
+    ⟨sourceMetadata, sourceLoops, atPoint, related, rfl, rfl, trivial, trivial, trivial, generated, trivial⟩
+  have decomposition := fun {taken : Nat} {reached : DemandRuntimePoint}
+      (steps : DemandRuntimePrefix context taken ⟨(0, 2), sampledFrame, initialState⟩ reached) =>
+    accepted_generated_block_statements_prefix (cx := context) (results := [.int .i64]) source selected sourceOwned occurrence rows coverage
+    sourceAdmitted bounded sourceRealized prefixInput retainedBlockExtended
+    (@GeneratedGlobalClearPrefixCursor configuration { environment with scopes := [(0, 0)] } context [.int .i64])
+    (accepted_generated_global_clears_prefix (cfg := configuration) (env := { environment with scopes := [(0, 0)] }) (cx := context) (results := [.int .i64]) selected retainedIndexBefore none [] true retainedIndexBlock (.cons 0 0 .nil)) steps
   have statements : execStmts 4 configuration { environment with scopes := [(0, 0)] }
       retainedIndexBlock.stmts { initialState with nextScope := 1 } = .ok (.normal .unit) clearedState := by cbv
   obtain ⟨after, finalPoint, finalFrame, traversal, evaluatedBlock, post, _, _, invariant⟩ :=
@@ -150,7 +179,7 @@ theorem accepted_retained_index_body_all_runtime_points
       sourceAdmitted bounded sourceRealized atPoint related retainedBlockExtended statements
   have finalPointEq : finalPoint = (0, 7) := Option.some.inj (post.pp.symm.trans (by rfl))
   subst finalPoint
-  refine ⟨source, sourcePath, selected, sourceOwned, after, finalFrame, sampled_reachable, traversal, evaluatedBlock, ?_⟩
+  refine ⟨source, sourcePath, selected, sourceOwned, after, finalFrame, sampled_reachable, traversal, evaluatedBlock, (fun taken reached steps => decomposition steps), ?_⟩
   intro taken reached bound steps
   have valid := invariant taken reached bound steps
   have framed := valid.frame
