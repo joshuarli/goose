@@ -66,7 +66,7 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
   have typedObjects : typedAfter.objects = after.objects := objects
   refine ⟨after, registerRootType types root ownerTy, root, ?_, extended, ?_, ?_⟩
   · simp only [evalValue, freshScope, bindStaticRoot, EvalM.get, EvalM.set, bind, pure, root, after, scopeState, values]
-  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
     · exact ⟨scopeWorld.ownership.source, scopeWorld.ownership.retention,
         ⟨scopeWorld.ownership.runtime.activations, scopeWorld.ownership.runtime.breaks⟩,
         scopeWorld.ownership.reservations, scopeWorld.ownership.receiving, scopeWorld.ownership.bounds,
@@ -99,6 +99,16 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
     · intro other ty value declared present
       rw [← typedObjects] at present
       exact heap other ty value declared present
+    · intro other value present
+      by_cases same : other = root
+      · subst other
+        exact ⟨ownerTy, by simp only [registerRootType, ↓reduceIte]⟩
+      · rw [← typedObjects, bindRoot_lookup_other root other (.fixed values) scopeState typedAfter typedResult same] at present
+        obtain ⟨ty, declared⟩ := world.objectsRegistered other value present
+        exact ⟨ty, extended other ty declared⟩
+    · intro other ordinal present
+      obtain ⟨ty, declared⟩ := world.ordinalsRegistered other ordinal present
+      exact ⟨ty, extended other ty declared⟩
     · constructor
       · intro other retained value present
         by_cases same : other = root
