@@ -51,19 +51,38 @@ theorem sharedRoot_overlap (interpretation : RootInterpretation) (aliases : List
 
 def RootFrontier (interpretation : RootInterpretation) (nextAct : Nat) : Prop :=
   interpretation.environment.act < nextAct ∧
-    ∀ index act scope variableId, interpretation.parameters index (.local act scope variableId) → act < nextAct
+    ∀ index act scope variableId, interpretation.parameters index (.local act scope variableId) → act < interpretation.environment.act
 
 theorem instantiates_before {interpretation : RootInterpretation} {nextAct : Nat}
     (frontier : RootFrontier interpretation nextAct) (symbolic : RootRef) (act scope variableId : Nat)
     (instantiated : Instantiates interpretation symbolic (.local act scope variableId)) : act < nextAct := by
   cases instantiated with
   | «local» id descriptor scope declared active => exact frontier.1
-  | parameter id root actual => exact frontier.2 id _ _ _ actual
+  | parameter id root actual => exact Nat.lt_trans (frontier.2 id _ _ _ actual) frontier.1
+
+private theorem checkNoLocal_local_absent (roots : List RootRef) (checked : checkNoLocal roots = .ok ()) :
+    ∀ id, RootRef.local id ∉ roots := by
+  induction roots with
+  | nil => simp
+  | cons head rest ih =>
+    cases head <;> simp_all [checkNoLocal, Goose.Core.reject]
+
+theorem rootIn_outsideActivation (interpretation : RootInterpretation) (nextAct : Nat)
+    (roots : List RootRef) (root : RootInst) (frontier : RootFrontier interpretation nextAct)
+    (checked : checkNoLocal roots = .ok ()) (rooted : RootIn interpretation roots root) :
+    ∀ scope variableId, root ≠ .local interpretation.environment.act scope variableId := by
+  obtain ⟨symbolic, member, actual⟩ := rooted
+  intro scope variableId equal
+  rw [equal] at actual
+  cases actual with
+  | «local» id descriptor scope declared active => exact (checkNoLocal_local_absent roots checked variableId member).elim
+  | parameter index root supplied =>
+    exact (Nat.lt_irrefl interpretation.environment.act
+      (frontier.2 index interpretation.environment.act scope variableId supplied)).elim
 
 theorem rootFrontier_mono {interpretation : RootInterpretation} {before after : Nat}
     (frontier : RootFrontier interpretation before) (advanced : before ≤ after) : RootFrontier interpretation after :=
-  ⟨Nat.lt_of_lt_of_le frontier.1 advanced,
-    fun index act scope variableId supplied => Nat.lt_of_lt_of_le (frontier.2 index act scope variableId supplied) advanced⟩
+  ⟨Nat.lt_of_lt_of_le frontier.1 advanced, frontier.2⟩
 
 theorem call_rootFrontier (caller : RootInterpretation) (callee : RuntimeActivation)
     (arguments : List (List RootRef)) (nextAct : Nat)
@@ -72,7 +91,7 @@ theorem call_rootFrontier (caller : RootInterpretation) (callee : RuntimeActivat
   refine ⟨calleeFrontier, ?_⟩
   intro index act scope variableId supplied
   obtain ⟨roots, rootsAt, symbolic, member, actual⟩ := supplied
-  exact Nat.lt_trans (instantiates_before callerFrontier symbolic act scope variableId actual) calleeFrontier
+  exact instantiates_before callerFrontier symbolic act scope variableId actual
 
 theorem freshAct_callFrontier (caller : RootInterpretation) (callee : RuntimeActivation)
     (arguments : List (List RootRef)) (state : ExecutionState)

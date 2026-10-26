@@ -115,4 +115,44 @@ theorem rootFrontier_enterScope (interpretation : RootInterpretation) (scope : N
     (nextAct : Nat) (frontier : RootFrontier interpretation nextAct) :
     RootFrontier (interpretation.enterScope scope scopeInstance) nextAct := frontier
 
+theorem aliasComplete_enterScope (interpretation : RootInterpretation) (aliases : List (RootRef × RootRef))
+    (scope scopeInstance nextAct : Nat) (frontier : RootFrontier interpretation nextAct)
+    (complete : AliasComplete interpretation aliases) :
+    AliasComplete (interpretation.enterScope scope scopeInstance) aliases := by
+  intro left right root leftInst rightInst
+  cases leftInst with
+  | global id declared =>
+    cases rightInst with
+    | global id declared => exact complete _ _ _ (.global id declared) (.global id declared)
+    | static id synthetic => exact complete _ _ _ (.global id declared) (.static id synthetic)
+    | parameter index root supplied => exact complete _ _ _ (.global id declared) (.parameter index _ supplied)
+  | static id synthetic =>
+    cases rightInst with
+    | global id declared => exact complete _ _ _ (.static id synthetic) (.global id declared)
+    | static id synthetic => exact complete _ _ _ (.static id synthetic) (.static id synthetic)
+    | parameter index root supplied => exact complete _ _ _ (.static id synthetic) (.parameter index _ supplied)
+  | «local» id descriptor scope declared active =>
+    cases rightInst with
+    | «local» id descriptor scope declared active => exact Or.inl rfl
+    | parameter index root supplied =>
+      exact (Nat.lt_irrefl interpretation.environment.act
+        (frontier.2 index interpretation.environment.act scope id supplied)).elim
+  | parameter index root supplied =>
+    cases rightInst with
+    | global id declared => exact complete _ _ _ (.parameter index _ supplied) (.global id declared)
+    | static id synthetic => exact complete _ _ _ (.parameter index _ supplied) (.static id synthetic)
+    | «local» id descriptor scope declared active =>
+      exact (Nat.lt_irrefl interpretation.environment.act
+        (frontier.2 index interpretation.environment.act scope id supplied)).elim
+    | parameter other root actual => exact complete _ _ _ (.parameter index _ supplied) (.parameter other root actual)
+
+theorem freshScope_aliasComplete (interpretation : RootInterpretation)
+    (aliases : List (RootRef × RootRef)) (scope : Nat) (state : ExecutionState)
+    (frontier : RootFrontier interpretation state.nextAct) (complete : AliasComplete interpretation aliases) :
+    freshScope state = .ok state.nextScope { state with nextScope := state.nextScope + 1 } ∧
+      RootFrontier (interpretation.enterScope scope state.nextScope) state.nextAct ∧
+      AliasComplete (interpretation.enterScope scope state.nextScope) aliases := by
+  exact ⟨rfl, rootFrontier_enterScope interpretation scope state.nextScope _ frontier,
+    aliasComplete_enterScope interpretation aliases scope state.nextScope _ frontier complete⟩
+
 end Goose.Proofs.ConstructionRootCorrespondence
