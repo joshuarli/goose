@@ -124,7 +124,7 @@ theorem typedExprReflection_len {fuel : Nat} {cfg : Cfg} {results : List Ty} {vi
     (child : TypedViewReflection fuel cfg results view) :
     TypedExprReflection fuel cfg results (.len view) := by
   intro env state source metadata ls after resultId pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨viewSource, typing, roots⟩ := source.lenChild
+  obtain ⟨viewSource, typing, roots, _, _⟩ := source.lenChild
   have viewMetadata : SourceResults viewSource.typingEnv viewSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata

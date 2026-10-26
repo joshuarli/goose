@@ -488,7 +488,7 @@ theorem view_val_source (artifact : ArtifactProfile) (profile : NumProfile)
     (global := ⟨"sliceLength", .int .i64, .mutable,
       .len (.val (.slice .readOnly (.of (.global 0)) .omitted .omitted 0)), 0⟩)
     accepted rfl (view_owner_prefix artifact profile accepted).invariant
-  obtain ⟨view, hviewTyping, hviewRoots⟩ := source.lenChild
+  obtain ⟨view, hviewTyping, hviewRoots, _, _⟩ := source.lenChild
   exact ⟨view⟩
 
 theorem view_of_claim (artifact : ArtifactProfile) (profile : NumProfile) :
@@ -618,7 +618,7 @@ theorem bounded_slice_sources (artifact : ArtifactProfile) (profile : NumProfile
     (cfg := ⟨profile, boundedSliceModule artifact low⟩) (state := viewOwnerState) (g := 1)
     (global := ⟨"length", .int .i64, .mutable, .len (.val (boundedSlice low)), 0⟩)
     accepted rfl (bounded_slice_prefix artifact profile low accepted).invariant
-  obtain ⟨view, hviewTyping, hviewRoots⟩ := source.lenChild
+  obtain ⟨view, hviewTyping, hviewRoots, _, _⟩ := source.lenChild
   obtain ⟨slice, hsliceTyping, hsliceRoots, mutable, hsliceType, _⟩ := view.valChild
   obtain ⟨sampled, hsampledTyping, hsampledRoots, _, next⟩ := slice.sliceChildren .readOnly 0
   obtain ⟨lower, hltyping, hlroots, _, nextLow⟩ := next 4 ⟨⟨.global 0, []⟩, 0, 3, false⟩

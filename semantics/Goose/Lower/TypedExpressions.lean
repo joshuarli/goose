@@ -589,7 +589,8 @@ theorem BoundSource.expressionChild {cfg : Cfg} {env : Env} {expr : Expr} {state
 
 theorem ExprSource.lenChild {cfg : Cfg} {env : Env} {view : View} {state : St} (source : ExprSource cfg env (.len view) state) :
     ∃ child : ViewSource cfg env view state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv  := by
+      child.rootsEnv = source.rootsEnv ∧ source.ViewChildAt child 0 rfl ∧
+      child.context.outputFuture = source.context.outputFuture := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyExpr] at ht
@@ -632,7 +633,9 @@ theorem ExprSource.lenChild {cfg : Cfg} {env : Env} {view : View} {state : St} (
     typingEnd := finish, element := element, mutable := mutable, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl,
+      ⟨rfl, rfl, rfl, HEq.rfl, fun alias member => ec.child_retained_subset rfl 0
+        (.view view) .view rfl (by trivial) member⟩, hfuture⟩
   · exact ec.child_activeMatches rfl 0 (.view view) .view rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.view view) .view rfl
@@ -2207,7 +2210,7 @@ theorem typedViewClaim_val {n : Nat} {cfg : Cfg} {results : List Ty} {expr : Exp
 theorem typedExprClaim_len {n : Nat} {cfg : Cfg} {results : List Ty} {view : View}
     (hv : TypedViewClaim n cfg results view) : TypedExprClaim (n + 1) cfg results (.len view) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨child, htyping, hroots⟩ := source.lenChild
+  obtain ⟨child, htyping, hroots, _, _⟩ := source.lenChild
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata

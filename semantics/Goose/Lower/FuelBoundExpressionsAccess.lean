@@ -123,7 +123,7 @@ theorem typedExprFuelBound_len {sourceFuel fuel : Nat} {cfg : Cfg} {results : Li
     (child : TypedViewFuelBound sourceFuel fuel cfg results view) :
     TypedExprFuelBound (sourceFuel + 1) fuel cfg results (.len view) := by
   intro env state source metadata ls after resultId pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨viewSource, typing, roots⟩ := source.lenChild
+  obtain ⟨viewSource, typing, roots, _, _⟩ := source.lenChild
   have viewMetadata : SourceResults viewSource.typingEnv viewSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata
