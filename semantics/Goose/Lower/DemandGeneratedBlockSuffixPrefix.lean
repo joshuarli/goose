@@ -27,6 +27,36 @@ structure GeneratedBlockPrefixDecomposition {cfg : Cfg} {env : Env} {block : Cor
   progress : DemandPrefixDecomposition cx (fun fuel => execBlock fuel cfg env [] block) cursor
     (GeneratedBlockPrefixEnd source map required cx results before loop initial) taken ⟨start, initial, state⟩ reached
 
+def GeneratedBlockSuffixPrefixFamily {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (map required : RetainedSsaMap) (before : LS) (loop : Option LoopCtx) (initial : GIR.Frame) (start : Pt)
+    (cursor : DemandRuntimePoint → Prop) : Prop :=
+  ∀ (body : StmtsSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
+      block.stmts { state with nextScope := state.nextScope + 1 }),
+    GeneratedBlockBodyAt source body →
+    ∀ (bodyOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root body.path (.block loop [] true block) before),
+    GeneratedDemandRows cfg.mod body.rootsEnv.access bodyOccurrence required →
+    GeneratedPrefixInput cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
+      cx results loop body.typingEnv body.rootsEnv
+      (lowerStmts loop (block.stmts.take body.offset) (lowerEnv cfg.mod env.vars results)
+        (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before [] block)).2
+      { initial with scopes := (block.scope, state.nextScope) :: initial.scopes } (start.1, start.2 + 1) →
+    ∀ (fuel : Nat) (addressed : DemandRuntimePoint),
+    execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
+      block.stmts { state with nextScope := state.nextScope + 1 } = .ok (.normal .unit) addressed.state →
+    Post cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx before initial
+      (demandBlockValueBefore (lowerEnv cfg.mod env.vars results) before loop [] block) addressed.frame addressed.point [] →
+    map.Bounded (demandBlockValueBefore (lowerEnv cfg.mod env.vars results) before loop [] block).vals.size →
+    map.Realizes cfg.mod body.world { env with scopes := (block.scope, state.nextScope) :: env.scopes } addressed →
+    ∀ (consumed taken : Nat) (reached : DemandRuntimePoint),
+    DemandRuntimePrefix cx consumed ⟨start, initial, state⟩ addressed →
+    DemandRuntimePrefix cx taken addressed reached →
+    DemandPrefixDecomposition cx (fun fuel => execBlock fuel cfg env [] block) cursor
+      (GeneratedBlockPrefixEnd source map required cx results before loop initial)
+      (consumed + taken) ⟨start, initial, state⟩ reached
+
 theorem accepted_generated_block_leave_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
     {before : LS} {loop : Option LoopCtx}

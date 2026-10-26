@@ -4,6 +4,7 @@ import Goose.Lower.DemandGeneratedIndexChecks
 import Goose.Lower.TypedControlExpressions
 import Goose.Lower.DemandGeneratedOwner
 import Goose.Lower.DemandGeneratedBlockPrefix
+import Goose.Lower.DemandGeneratedClearValueBlockPrefix
 import Goose.Lower.TypedGlobals
 
 namespace Goose.Lower.DemandGeneratedClearBlockChecks
@@ -21,6 +22,16 @@ private def context : FnCtx := ⟨⟨.release, lower retainedIndexSource⟩, ret
 private def initialFrame : GIR.Frame := ⟨1, [], {}, 0⟩
 private def addressFrame : GIR.Frame := initialFrame.set 0 (.val (.ref ⟨.global 0, []⟩))
 private def sampledFrame : GIR.Frame := addressFrame.set 1 (.view sample)
+
+private abbrev retainedValuePrefixCursor
+    (source : BlockSource configuration environment [] retainedIndexBlock initialState)
+    (selected : GeneratedDemandRootSelection retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot 2) :
+    DemandRuntimePoint → Prop :=
+  GeneratedClearBlockPrefixDemand (cx := context) (results := [.int .i64]) source selected
+    retainedSampleRows retainedSampleRows retainedIndexBefore none sampledFrame
+    (GeneratedBlockValuePrefixDemand (cx := context) (results := [.int .i64]) source selected retainedSampleRows retainedSampleRows retainedIndexBefore none sampledFrame
+      (@GeneratedExpressionPrefixLeafCursor configuration { environment with scopes := [(0, 0)] }
+        context [.int .i64] retainedIndexRoot 2 selected))
 
 private theorem initialized (accepted : Core.validate retainedIndexSource = .ok ()) : InitializedGlobals retainedIndexSource 1 ownerState :=
   InitializedGlobals.afterInitializer (cfg := configuration)
@@ -66,13 +77,9 @@ theorem accepted_retained_index_body_all_runtime_points
         ⟨(0, 2), sampledFrame, initialState⟩ ⟨(0, 7), finalFrame, after⟩ ∧
       execBlock 5 configuration environment [] retainedIndexBlock initialState = .ok (.normal (.int .i64 0)) after ∧
       (∀ taken reached, DemandRuntimePrefix context taken ⟨(0, 2), sampledFrame, initialState⟩ reached →
-        (taken = 0 ∧ reached = ⟨(0, 2), sampledFrame, initialState⟩ ∧
-          GeneratedClearBlockDemand source retainedSampleRows retainedSampleRows context [.int .i64]
-            retainedIndexBefore none sampledFrame reached) ∨
-        GeneratedBlockStatementsPrefix (cx := context) (results := [.int .i64]) (before := retainedIndexBefore) (loop := none) source selected
-          retainedSampleRows retainedSampleRows sampledFrame (0, 2)
-          (@GeneratedGlobalClearPrefixCursor configuration { environment with scopes := [(0, 0)] } context [.int .i64])
-          taken reached) ∧
+        GeneratedBlockPrefixDecomposition (cx := context) (results := [.int .i64]) source selected
+          retainedSampleRows retainedSampleRows retainedIndexBefore none sampledFrame (0, 2)
+          (retainedValuePrefixCursor source selected) taken reached) ∧
       ∀ taken reached, taken ≤ 5 → DemandRuntimePrefix context taken ⟨(0, 2), sampledFrame, initialState⟩ reached →
         Evidence.RuntimePoint context.cfg context.fn reached.point reached.frame reached.state ∧
         (∃ typing roots future,
@@ -168,10 +175,12 @@ theorem accepted_retained_index_body_all_runtime_points
     ⟨sourceMetadata, sourceLoops, atPoint, related, rfl, rfl, trivial, trivial, trivial, generated, trivial⟩
   have decomposition := fun {taken : Nat} {reached : DemandRuntimePoint}
       (steps : DemandRuntimePrefix context taken ⟨(0, 2), sampledFrame, initialState⟩ reached) =>
-    accepted_generated_block_statements_prefix (cx := context) (results := [.int .i64]) source selected sourceOwned occurrence rows coverage
-    sourceAdmitted bounded sourceRealized prefixInput retainedBlockExtended
-    (@GeneratedGlobalClearPrefixCursor configuration { environment with scopes := [(0, 0)] } context [.int .i64])
-    (accepted_generated_global_clears_prefix (cfg := configuration) (env := { environment with scopes := [(0, 0)] }) (cx := context) (results := [.int .i64]) selected retainedIndexBefore none [] true retainedIndexBlock (.cons 0 0 .nil)) steps
+    accepted_generated_clear_value_block_prefix (cx := context) (results := [.int .i64]) source (.cons 0 0 .nil) (by rfl)
+      selected sourceOwned occurrence rows coverage sourceAdmitted bounded sourceRealized prefixInput retainedBlockExtended
+      (@GeneratedExpressionPrefixLeafCursor configuration { environment with scopes := [(0, 0)] }
+        context [.int .i64] retainedIndexRoot 2 selected)
+      (accepted_generated_literal_prefix_family selected none .i64 0) steps
+
   have statements : execStmts 4 configuration { environment with scopes := [(0, 0)] }
       retainedIndexBlock.stmts { initialState with nextScope := 1 } = .ok (.normal .unit) clearedState := by cbv
   obtain ⟨after, finalPoint, finalFrame, traversal, evaluatedBlock, post, _, _, invariant⟩ :=
