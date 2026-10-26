@@ -2598,4 +2598,372 @@ theorem rpStmt_letS_callsIncluded {env : PEnv} {id : VarId} {expression : Expr} 
     apply retained_calls (checked := checked)
     retain_effect_targets [fail]
 
+private def SameRootCursor (left right : RState) : Prop :=
+  left.nextVar = right.nextVar ∧ left.valueBreakRoots = right.valueBreakRoots
+
+private def ReplaysEffects (action : P α) : Prop :=
+  ∀ before value after, action before = .ok (value, after) →
+    ∀ replacement, SameRootCursor before replacement →
+      ∃ replayed, action replacement = .ok (value, replayed) ∧ SameRootCursor after replayed
+
+private theorem replay_pure (value : α) : ReplaysEffects (pure value) := by
+  intro before result after checked replacement same
+  change Except.ok (value, before) = Except.ok (result, after) at checked
+  cases checked
+  exact ⟨replacement, rfl, same⟩
+
+private theorem replay_bind (action : P α) (next : α → P β)
+    (first : ReplaysEffects action) (remaining : ∀ value, ReplaysEffects (next value)) :
+    ReplaysEffects (action >>= next) := by
+  intro before result after checked replacement same
+  cases initial : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, initial] at checked
+  | ok pair =>
+    have rest : next pair.1 pair.2 = .ok (result, after) := by
+      simpa [bind, StateT.bind, Except.bind, initial] using checked
+    obtain ⟨middle, replayed, shape⟩ := first before pair.1 pair.2 initial replacement same
+    obtain ⟨final, remaining, finalShape⟩ := remaining pair.1 pair.2 result after rest middle shape
+    exact ⟨final, by simpa [bind, StateT.bind, Except.bind, replayed] using remaining, finalShape⟩
+
+private theorem replay_get_bind (next : RState → P α)
+    (independent : ∀ left right, SameRootCursor left right → next left = next right)
+    (remaining : ∀ state, ReplaysEffects (next state)) : ReplaysEffects (get >>= next) := by
+  intro before result after checked replacement same
+  have checked : next before before = .ok (result, after) := checked
+  obtain ⟨final, replayed, shape⟩ := remaining before before result after checked replacement same
+  refine ⟨final, ?_, shape⟩
+  change next replacement replacement = .ok (result, final)
+  rw [← independent before replacement same]
+  exact replayed
+
+private theorem replay_modify (update : RState → RState)
+    (independent : ∀ left right, SameRootCursor left right → SameRootCursor (update left) (update right)) :
+    ReplaysEffects (modify update) := by
+  intro before result after checked replacement same
+  change Except.ok (PUnit.unit, update before) = Except.ok (result, after) at checked
+  cases checked
+  exact ⟨update replacement, rfl, independent before replacement same⟩
+
+private theorem replay_lift (action : V α) : ReplaysEffects (liftV action) := by
+  intro before result after checked replacement same
+  cases action with
+  | error error => cases checked
+  | ok value =>
+    change Except.ok (value, before) = Except.ok (result, after) at checked
+    cases checked
+    exact ⟨replacement, rfl, same⟩
+
+private theorem replay_reject (rule : Rule) (message : String) : ReplaysEffects (rejP (α := α) rule message) := by
+  intro before result after checked
+  cases checked
+
+private theorem replay_capture (action : P α) : ReplaysEffects (captureEffects action) := by
+  intro before result after checked replacement same
+  obtain ⟨nextVar, effects, roots⟩ := before
+  obtain ⟨replacementNextVar, replacementEffects, replacementRoots⟩ := replacement
+  obtain ⟨rfl, rfl⟩ := same
+  unfold captureEffects at checked ⊢
+  cases initial : action { nextVar := nextVar, eff := {}, valueBreakRoots := roots } with
+  | error error => simp [initial, bind, Except.bind] at checked
+  | ok pair =>
+    simp only [initial, bind, Except.bind, pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at checked
+    obtain ⟨rfl, rfl⟩ := checked
+    exact ⟨{ pair.2 with eff := mergeEffects replacementEffects pair.2.eff },
+      by simp only [bind, Except.bind, pure, Except.pure], rfl, rfl⟩
+
+private theorem replay_forIn_list (rows : List α) (initial : β)
+    (body : α → β → P (ForInStep β))
+    (each : ∀ row token, ReplaysEffects (body row token)) :
+    ReplaysEffects (forIn rows initial body) := by
+  induction rows generalizing initial with
+  | nil => exact replay_pure initial
+  | cons row rows ih =>
+    rw [List.forIn_cons]
+    apply replay_bind _ _ (each row initial)
+    intro step
+    cases step with
+    | done token => exact replay_pure token
+    | yield token => exact ih token
+
+private theorem replay_forIn'_list (rows : List α) (initial : β)
+    (body : (row : α) → row ∈ rows → β → P (ForInStep β))
+    (each : ∀ row member token, ReplaysEffects (body row member token)) :
+    ReplaysEffects (forIn' rows initial body) := by
+  induction rows generalizing initial with
+  | nil => exact replay_pure initial
+  | cons row rows ih =>
+    rw [List.forIn'_cons]
+    apply replay_bind _ _ (each row (by simp) initial)
+    intro step
+    cases step with
+    | done token => exact replay_pure token
+    | yield token => exact ih token _ (fun selected member token => each selected (by simp [member]) token)
+
+private theorem replay_forIn'_range (rows : Std.Legacy.Range) (initial : β)
+    (body : (row : Nat) → row ∈ rows → β → P (ForInStep β))
+    (each : ∀ row member token, ReplaysEffects (body row member token)) :
+    ReplaysEffects (forIn' rows initial body) := by
+  rw [Std.Legacy.Range.forIn'_eq_forIn'_range']
+  exact replay_forIn'_list _ _ _ (fun row member token => each row _ token)
+
+local macro "replay_effect_prefix" "[" extra:tacticSeq "]" : tactic => `(tactic|
+  repeat' first
+  | $extra
+  | assumption
+  | exact replay_pure _
+  | exact replay_lift _
+  | exact replay_reject _ _
+  | exact replay_capture _
+  | exact replay_modify _ (fun _ _ same => same)
+  | exact replay_modify _ (by
+      intro left right same
+      rcases left with ⟨next, effects, roots⟩
+      rcases right with ⟨replacementNext, replacementEffects, replacementRoots⟩
+      change next = replacementNext ∧ roots = replacementRoots at same
+      rcases same with ⟨nextEqual, rootsEqual⟩
+      cases nextEqual
+      cases rootsEqual
+      exact ⟨rfl, rfl⟩)
+  | refine replay_forIn_list _ _ _ (fun _ _ => ?_)
+  | refine replay_forIn'_range _ _ _ (fun _ _ _ => ?_)
+  | refine replay_bind _ _ ?_ (fun _ => ?_)
+  | split)
+
+private theorem replay_reads (roots : List RootRef) : ReplaysEffects (addReads roots) := by
+  unfold addReads addRoots
+  replay_effect_prefix [fail]
+private theorem replay_writes (roots : List RootRef) : ReplaysEffects (addWrites roots) := by
+  unfold addWrites addRoots
+  replay_effect_prefix [fail]
+private theorem replay_grows (roots : List RootRef) : ReplaysEffects (addGrows roots) := by
+  unfold addGrows addRoots
+  replay_effect_prefix [fail]
+private theorem replay_shrinks (roots : List RootRef) : ReplaysEffects (addShrinks roots) := by
+  unfold addShrinks addRoots
+  replay_effect_prefix [fail]
+
+local macro "replay_root_primitives" "[" extra:tacticSeq "]" : tactic => `(tactic|
+  replay_effect_prefix [first
+    | $extra
+    | exact replay_reads _
+    | exact replay_writes _
+    | exact replay_grows _
+    | exact replay_shrinks _])
+
+private theorem replay_scopedShrinks (env : PEnv) (effects : Eff) :
+    ReplaysEffects (checkScopedShrinkAliases env effects) := by
+  unfold checkScopedShrinkAliases
+  apply replay_get_bind
+  · intro left right same
+    try dsimp only
+    rw [same.1]
+  · intro state
+    simp only [checkRetainedShrinks]
+    replay_root_primitives [fail]
+    all_goals try dsimp only
+    all_goals replay_root_primitives [fail]
+
+private theorem replay_call (env : PEnv) (context : ContextId) (arguments : List (List RootRef)) :
+    ReplaysEffects (rpCall env context arguments) := by
+  unfold rpCall receiveEscapeRoots
+  simp only [checkRetainedShrinks]
+  replay_root_primitives [exact replay_scopedShrinks _ _]
+  all_goals try dsimp only
+  all_goals replay_root_primitives [exact replay_scopedShrinks _ _]
+
+private theorem replay_block_end (env : PEnv) (scope initial : Nat) (roots : List RootRef) :
+    ReplaysEffects (do
+      let final ← get
+      let roots := if env.valueBlock == some scope then unionRoots roots final.valueBreakRoots else roots
+      liftV (checkBlockValue initial final.nextVar roots)
+      pure (roots, (initial, final.nextVar))) := by
+  apply replay_get_bind
+  · intro left right same
+    try dsimp only
+    rw [same.1, same.2]
+  · intro state
+    replay_root_primitives [fail]
+
+set_option maxHeartbeats 1500000 in
+private theorem rp_effects_replayed :
+    (∀ env place, ReplaysEffects (rpPlace env place)) ∧
+    (∀ env view, ReplaysEffects (rpView env view)) ∧
+    (∀ env expression, ReplaysEffects (rpExpr env expression)) ∧
+    (∀ env arguments, ReplaysEffects (rpPrintArgs env arguments)) ∧
+    (∀ env expressions, ReplaysEffects (rpExprs env expressions)) ∧
+    (∀ env pre block, ReplaysEffects (rpBlockValue env pre block)) ∧
+    (∀ env statements, ReplaysEffects (rpStmts env statements)) ∧
+    (∀ env statement, ReplaysEffects (rpStmt env statement)) ∧
+    (∀ env expressions, ReplaysEffects (rpNoLocalOperands env expressions)) ∧
+    (∀ env channels expressions, ReplaysEffects (rpReturnOperands env channels expressions)) ∧
+    (∀ env arguments, ReplaysEffects (rpArgs env arguments)) ∧
+    (∀ env bound, ReplaysEffects (rpBound env bound)) := by
+  apply rpPlace.mutual_induct
+    (motive_1 := fun env place => ReplaysEffects (rpPlace env place))
+    (motive_2 := fun env view => ReplaysEffects (rpView env view))
+    (motive_3 := fun env expression => ReplaysEffects (rpExpr env expression))
+    (motive_4 := fun env arguments => ReplaysEffects (rpPrintArgs env arguments))
+    (motive_5 := fun env expressions => ReplaysEffects (rpExprs env expressions))
+    (motive_6 := fun env pre block => ReplaysEffects (rpBlockValue env pre block))
+    (motive_7 := fun env statements => ReplaysEffects (rpStmts env statements))
+    (motive_8 := fun env statement => ReplaysEffects (rpStmt env statement))
+    (motive_9 := fun env expressions => ReplaysEffects (rpNoLocalOperands env expressions))
+    (motive_10 := fun env channels expressions => ReplaysEffects (rpReturnOperands env channels expressions))
+    (motive_11 := fun env arguments => ReplaysEffects (rpArgs env arguments))
+    (motive_12 := fun env bound => ReplaysEffects (rpBound env bound))
+  case case28 =>
+    intro env block origin ih
+    cases block with
+    | mk scope statements tail =>
+      unfold rpExpr
+      apply replay_get_bind
+      · intro left right same
+        try dsimp only
+        rw [same.2]
+      · intro state
+        replay_root_primitives [exact ih _]
+  case case41 =>
+    intro env pre scope statements tail statementsIH tailIH
+    cases tail <;> unfold rpBlockValue
+    all_goals
+      apply replay_get_bind
+      · intro left right same
+        try dsimp only
+        rw [same.1]
+      · intro state
+        replay_root_primitives [exact replay_block_end env scope _ _]
+  case case42 =>
+    intro env id expression origin ih
+    unfold rpStmt
+    apply replay_get_bind
+    · intro left right same
+      try dsimp only
+      rw [same.1]
+    · intro state
+      simp only [noteReceivingCapacity, noteAborts]
+      replay_root_primitives [fail]
+  case case54 =>
+    intro env id lower upper body origin lowerIH upperIH bodyIH
+    unfold rpStmt
+    apply replay_get_bind
+    · intro left right same
+      try dsimp only
+      rw [same.1]
+    · intro state
+      replay_root_primitives [fail]
+  case case55 =>
+    intro env id index view byRef body origin viewIH bodyIH
+    unfold rpStmt
+    apply replay_get_bind
+    · intro left right same
+      try dsimp only
+      rw [same.1]
+    · intro state
+      simp only [checkRetainedShrinks]
+      replay_root_primitives [fail]
+  all_goals (intros; (try cases ‹Option Expr›) <;> (try cases ‹Option Block›))
+  all_goals simp only [rpPlace, rpView, rpExpr, rpPrintArgs, rpExprs, rpStmts,
+    rpStmt, rpNoLocalOperands, rpReturnOperands, rpArgs, rpBound]
+  all_goals try simp only [noteAborts, noteOutputs, noteNamed, noteResultConstruction, noteReceivingCapacity,
+    readRoots, checkRetainedShrinks, checkNoGrowth, checkWholeAccess, noteOperandCapacities,
+    noteProducerCapacities, receiveEscapeRoots, checkDirectShrinkAliases]
+  all_goals replay_root_primitives [first
+    | exact replay_scopedShrinks _ _
+    | exact replay_call _ _ _]
+  all_goals try dsimp only
+  all_goals replay_root_primitives [first
+    | exact replay_scopedShrinks _ _
+    | exact replay_call _ _ _]
+  all_goals simp_all
+
+private theorem replay_cleared (action : P α) (replay : ReplaysEffects action)
+    {before after : RState} {value : α} (checked : action before = .ok (value, after)) :
+    ∃ replayed, action { before with eff := {} } = .ok (value, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay before value after checked _ ⟨rfl, rfl⟩
+
+theorem rpPlace_clearEffects {env : PEnv} {place : Place}
+    {before after : RState} {roots : List RootRef}
+    (checked : rpPlace env place before = .ok (roots, after)) :
+    ∃ replayed, rpPlace env place { before with eff := {} } = .ok (roots, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.1 env place) checked
+
+theorem rpView_clearEffects {env : PEnv} {view : View}
+    {before after : RState} {roots : List RootRef}
+    (checked : rpView env view before = .ok (roots, after)) :
+    ∃ replayed, rpView env view { before with eff := {} } = .ok (roots, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.1 env view) checked
+
+theorem rpExpr_clearEffects {env : PEnv} {expression : Expr}
+    {before after : RState} {roots : List RootRef}
+    (checked : rpExpr env expression before = .ok (roots, after)) :
+    ∃ replayed, rpExpr env expression { before with eff := {} } = .ok (roots, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.1 env expression) checked
+
+theorem rpPrintArgs_clearEffects {env : PEnv} {arguments : List PrintArg}
+    {before after : RState} {result : Unit}
+    (checked : rpPrintArgs env arguments before = .ok (result, after)) :
+    ∃ replayed, rpPrintArgs env arguments { before with eff := {} } = .ok (result, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.2.1 env arguments) checked
+
+theorem rpExprs_clearEffects {env : PEnv} {expressions : List Expr}
+    {before after : RState} {result : Unit}
+    (checked : rpExprs env expressions before = .ok (result, after)) :
+    ∃ replayed, rpExprs env expressions { before with eff := {} } = .ok (result, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.2.2.1 env expressions) checked
+
+theorem rpBlockValue_clearEffects {env : PEnv} {block : Block} {pre : List VarId}
+    {before after : RState} {result : List RootRef × (Nat × Nat)}
+    (checked : rpBlockValue env pre block before = .ok (result, after)) :
+    ∃ replayed, rpBlockValue env pre block { before with eff := {} } = .ok (result, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.2.2.2.1 env pre block) checked
+
+theorem rpStmts_clearEffects {env : PEnv} {statements : List Stmt}
+    {before after : RState} {result : Unit}
+    (checked : rpStmts env statements before = .ok (result, after)) :
+    ∃ replayed, rpStmts env statements { before with eff := {} } = .ok (result, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.1 env statements) checked
+
+theorem rpStmt_clearEffects {env : PEnv} {statement : Stmt}
+    {before after : RState} {result : Unit}
+    (checked : rpStmt env statement before = .ok (result, after)) :
+    ∃ replayed, rpStmt env statement { before with eff := {} } = .ok (result, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.1 env statement) checked
+
+theorem rpNoLocalOperands_clearEffects {env : PEnv} {expressions : List Expr}
+    {before after : RState} {result : Unit}
+    (checked : rpNoLocalOperands env expressions before = .ok (result, after)) :
+    ∃ replayed, rpNoLocalOperands env expressions { before with eff := {} } = .ok (result, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.2.1 env expressions) checked
+
+theorem rpReturnOperands_clearEffects {env : PEnv} {expressions : List Expr} {channels : List (List RootRef)}
+    {before after : RState} {result : Unit}
+    (checked : rpReturnOperands env channels expressions before = .ok (result, after)) :
+    ∃ replayed, rpReturnOperands env channels expressions { before with eff := {} } = .ok (result, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.2.2.1 env channels expressions) checked
+
+theorem rpArgs_clearEffects {env : PEnv} {arguments : List Arg}
+    {before after : RState} {roots : List (List RootRef)}
+    (checked : rpArgs env arguments before = .ok (roots, after)) :
+    ∃ replayed, rpArgs env arguments { before with eff := {} } = .ok (roots, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.2.2.2.1 env arguments) checked
+
+theorem rpBound_clearEffects {env : PEnv} {bound : Bound}
+    {before after : RState} {result : Unit}
+    (checked : rpBound env bound before = .ok (result, after)) :
+    ∃ replayed, rpBound env bound { before with eff := {} } = .ok (result, replayed) ∧
+      after.nextVar = replayed.nextVar ∧ after.valueBreakRoots = replayed.valueBreakRoots :=
+  replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.2.2.2.2 env bound) checked
+
 end Goose.Construct
