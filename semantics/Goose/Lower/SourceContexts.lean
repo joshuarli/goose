@@ -693,7 +693,7 @@ theorem acceptedGlobalSource {cfg : Cfg} {state : St} {g : GlobalId} {global : G
     (invariant : StoreInv cfg.mod g state) (activation : ActId) :
     ∃ source : ExprSource cfg ⟨#[], activation, [], 0⟩ global.init state,
       source.typingEnv = initEnv cfg.mod g ∧
-      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g ∧ source.path = [] := by
+      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g ∧ source.path = [] ∧ source.context.OwnerMatches (cfg.mod.contexts.size + g) := by
   have moduleOk := validate_modOk cfg.mod accepted
   obtain ⟨plans, derived, wellFormed⟩ := moduleOk.demandPlans
   have globalOk := moduleOk.glob g global globalAt
@@ -717,7 +717,8 @@ theorem acceptedGlobalSource {cfg : Cfg} {state : St} {g : GlobalId} {global : G
     access := EvaluationContext.forGlobal_accessMatches derived wellFormed globalAt _ rfl rfl,
     protection := ?_, observed := ObservedSafe.empty _ _ _ _, classified := ?_,
     permission := permission, frame := ?_, typed := typed, rooted := rooted,
-    effects := EffLe.refl _ }, rfl, rfl, rfl, rfl, rfl⟩
+    effects := EffLe.refl _ }, rfl, rfl, rfl, rfl, rfl,
+      EvaluationContext.forGlobal_ownerMatches derived wellFormed globalAt⟩
   · intro holder element target impossible
     exact impossible.elim
   · intro profile i r impossible
@@ -819,7 +820,7 @@ theorem acceptedCalleeSource {m : Module} {prof : NumProfile} {plans : Array (Ar
     (A : RootInst → RootInst → Prop) (depth : Nat) (c : ContextId) (vals : List Val)
     (s : St) (ctx : Context) (impl : Impl) (E : Eff) (observation : Observation)
     (root : EvaluationContext m plans [] (.block impl.body) .block),
-    root.ActiveMatches (implEnv m impl) →
+    root.OwnerMatches c → root.ActiveMatches (implEnv m impl) →
     root.AccessMatches { implEnv m impl with visible := [] } ⟨m, impl, ctx, []⟩ →
     ContextEff m impl ctx E → m.contexts[c]? = some ctx → m.impls[ctx.impl]? = some impl →
     (∀ i r, ownerP i r → P i r) → OwnerParameterShape impl ownerP →
@@ -841,9 +842,10 @@ theorem acceptedCalleeSource {m : Module} {prof : NumProfile} {plans : Array (Ar
       impl.body { s with nextAct := s.nextAct + 1 },
       source.typingEnv = { implEnv m impl with visible := [] } ∧
       source.rootsEnv = ⟨m, impl, ctx, []⟩ ∧
-      source.world = ⟨G, P, ownerP, E, s.nextScope, D, A⟩ := by
+      source.world = ⟨G, P, ownerP, E, s.nextScope, D, A⟩ ∧ source.path = [] ∧
+      source.plans = plans ∧ HEq source.context root ∧ source.context.OwnerMatches c := by
   have hm := validate_modOk m accepted
-  intro G P ownerP D A depth c vals s ctx impl E observation root hActiveRoot hAccessRoot hEff
+  intro G P ownerP D A depth c vals s ctx impl E observation root hOwnerRoot hActiveRoot hAccessRoot hEff
     hctx himpl hOwnerSubset hOwnerShape hInv hObserved hClass hProtected hlen hargs hPage hAO
     hDout hDfun hSA hcont hperm
   obtain ⟨impl', himpl', hcOk⟩ := hm.ctx c ctx hctx
@@ -967,24 +969,32 @@ theorem acceptedCalleeSource {m : Module} {prof : NumProfile} {plans : Array (Ar
     same := ⟨hsame.mod, hsame.impl, hsame.vars, hsame.loops, hsame.inExpr, hsame.scopes,
       fun _ h => by cases h⟩, visible := hvisB, pretyped := hpreOk,
     bounded := Nat.zero_le _, typed := hts, typedValue := ?_, rooted := hrs,
-    rootedValue := ?_, effects := EffLe.refl _, rootsEscape := hkeep }, rfl, rfl, rfl⟩
+    rootedValue := ?_, effects := EffLe.refl _, rootsEscape := hkeep }, rfl, rfl, rfl, rfl, rfl, HEq.rfl, hOwnerRoot⟩
   · cases value with
     | none => exact htv.1
     | some e => exact htv
   · cases value <;> exact hrv
+
+private theorem selectedCallBodyOwner {m : Module} {plans : Array (Array DemandPoint)}
+    {c : ContextId} {ctx : Context} {impl : Impl}
+    (root : EvaluationContext m plans [] (.block impl.body) .block) (owner : root.OwnerMatches c)
+    (contextAt : m.contexts[c]? = some ctx) (implementationAt : m.impls[ctx.impl]? = some impl) :
+    (root.callBody owner contextAt implementationAt).OwnerMatches c := by
+  cases root <;> exact owner
 
 theorem acceptedContextRoot {m : Module} (accepted : Core.validate m = .ok ())
     {c : ContextId} {ctx : Context} {impl : Impl}
     (contextAt : m.contexts[c]? = some ctx) (implementationAt : m.impls[ctx.impl]? = some impl) :
     ∃ plans, ∃ root : EvaluationContext m plans [] (.block impl.body) .block,
       root.ActiveMatches (implEnv m impl) ∧
-      root.AccessMatches { implEnv m impl with visible := [] } ⟨m, impl, ctx, []⟩ := by
+      root.AccessMatches { implEnv m impl with visible := [] } ⟨m, impl, ctx, []⟩ ∧ root.OwnerMatches c := by
   have checked := validate_modOk m accepted
   obtain ⟨plans, derived, wellFormed⟩ := checked.demandPlans
   let selected := EvaluationContext.forContext derived wellFormed contextAt impl implementationAt
   have owner := EvaluationContext.forContext_ownerMatches derived wellFormed contextAt impl implementationAt
   let root := selected.callBody owner contextAt implementationAt
-  refine ⟨plans, root, ?_, ?_⟩
+  have rootOwner : root.OwnerMatches c := selectedCallBodyOwner selected owner contextAt implementationAt
+  refine ⟨plans, root, ?_, ?_, rootOwner⟩
   · apply EvaluationContext.callBody_activeMatches
     intro x
     change x ∈ List.range impl.params.size ↔ x ∈ impl.params.toList.map (·.var)
@@ -1014,22 +1024,22 @@ theorem acceptedEntrySource {cfg : Cfg} {state : St}
           (impl.params.toList.zip [] |>.map (fun item => (item.1.var, item.2))) impl.body
           { state with nextAct := state.nextAct + 1 },
         source.typingEnv = { implEnv cfg.mod impl with visible := [] } ∧
-        source.rootsEnv = ⟨cfg.mod, impl, ctx, []⟩ := by
+        source.rootsEnv = ⟨cfg.mod, impl, ctx, []⟩ ∧ source.path = [] ∧ source.context.OwnerMatches cfg.mod.entry := by
   rcases cfg with ⟨profile, module⟩
   let cfg : Cfg := ⟨profile, module⟩
   have checked := validate_modOk cfg.mod accepted
   obtain ⟨ctx, impl, contextAt, implementationAt, noParameters, noResults⟩ := checked.entry
-  obtain ⟨plans, root, active, access⟩ := acceptedContextRoot accepted contextAt implementationAt
+  obtain ⟨plans, root, active, access, rootOwner⟩ := acceptedContextRoot accepted contextAt implementationAt
   obtain ⟨otherImpl, otherAt, contextOk⟩ := checked.ctx _ ctx contextAt
   rw [implementationAt] at otherAt
   cases otherAt
   obtain ⟨rho, range, replayState, replay, resultCheck, summary⟩ := contextOk.body
   have frameInvariant : StoreInv cfg.mod cfg.mod.globals.size state (ObservationDemand Observation.empty) :=
     invariant.changeDemand (fun _ _ => Or.inl trivial)
-  obtain ⟨source, typingEq, rootsEq, worldEq⟩ := acceptedCalleeSource (prof := cfg.profile) accepted
+  obtain ⟨source, typingEq, rootsEq, worldEq, pathEq, _, _, sourceOwner⟩ := acceptedCalleeSource (prof := cfg.profile) accepted
     cfg.mod.globals.size (fun _ _ => False) (fun _ _ => False) (fun _ _ => False)
     (fun _ _ => False) 0 cfg.mod.entry [] state ctx impl replayState.eff Observation.empty root
-    active access ⟨rho, range, replayState, replay, rfl⟩ contextAt implementationAt
+    rootOwner active access ⟨rho, range, replayState, replay, rfl⟩ contextAt implementationAt
     (by intro i r impossible; exact impossible.elim)
     (by intro i r impossible; exact impossible.elim) frameInvariant (ObservedSafe.empty _ _ _ _)
     (by intro profile i r impossible; exact impossible.elim)
@@ -1046,7 +1056,7 @@ theorem acceptedEntrySource {cfg : Cfg} {state : St}
       omega)
     (Or.inl (Nat.le_refl _))
   refine ⟨ctx, impl, contextAt, implementationAt, noParameters, noResults, ?_⟩
-  exact ⟨source, typingEq, rootsEq⟩
+  exact ⟨source, typingEq, rootsEq, pathEq, sourceOwner⟩
 
 private theorem stmts_visible {tenv tenv' : TEnv} {sc tn tn' : Nat} {ss : List Stmt}
     (ht : tyStmts tenv sc ss tn = .ok (tenv', tn')) :
@@ -1254,7 +1264,7 @@ private theorem sampledCalleeSource {prof : NumProfile} {plans path c args origi
       (callee.params.toList.zip vals |>.map (fun item => (item.1.var, item.2))) callee.body
       { s with nextAct := s.nextAct + 1 },
       source.typingEnv = { implEnv m callee with visible := [] } ∧
-      source.rootsEnv = ⟨m, callee, ctx, []⟩ := by
+      source.rootsEnv = ⟨m, callee, ctx, []⟩ ∧ source.path = [] ∧ source.context.OwnerMatches c := by
   dsimp only
   intro boundarySafe boundaryClassified boundaryProtected
   have futureSubset : ∀ x, x ∈ ec.outputFuture → x ∈ callArgsFuture ec args.length [] := by
@@ -1295,10 +1305,11 @@ private theorem sampledCalleeSource {prof : NumProfile} {plans path c args origi
       root.mayShrink (callOwnerP W callee env ars) (callObservation (m := m) observation W tenv env ec.outputFuture retained s.store) := by
     funext r
     exact propext (root.callBody_mayShrink_iff owner contextAt implementationAt _ _ r)
-  obtain ⟨source, typingEq, rootsEq, worldEq⟩ := acceptedCalleeSource accepted W.G (fun i root => Gam env W.P (ars[i]?.getD []) root)
+  obtain ⟨source, typingEq, rootsEq, worldEq, pathEq, _, _, sourceOwner⟩ := acceptedCalleeSource accepted W.G (fun i root => Gam env W.P (ars[i]?.getD []) root)
     (callOwnerP W callee env ars) (callD W tenv env ec.outputFuture args) (callA W penv env) env.depth c vals s ctx callee E
     (callObservation (m := m) observation W tenv env ec.outputFuture retained s.store)
     (root.callBody owner contextAt implementationAt)
+    (selectedCallBodyOwner root owner contextAt implementationAt)
     (root.callBody_activeMatches owner contextAt implementationAt _ hvisible)
     (root.callBody_accessMatches owner contextAt implementationAt _ _ rfl rfl rfl rfl rfl)
     effectReplay contextAt implementationAt
@@ -1321,7 +1332,7 @@ private theorem sampledCalleeSource {prof : NumProfile} {plans path c args origi
     (callA_older frame) (callD_out frame) (callD_fun frame) outer
     (call_pref frame implementationChecked contextChecked contentsChecked size length sampled)
     (callPermission permission contextChecked effects)
-  exact ⟨source, typingEq, rootsEq⟩
+  exact ⟨source, typingEq, rootsEq, pathEq, sourceOwner⟩
 
 theorem ExprSource.calleeAfterArgs {cfg : Cfg} {env : Env} {state after : St}
     {c : ContextId} {args : List Arg} {origin : OriginId}
@@ -1333,7 +1344,7 @@ theorem ExprSource.calleeAfterArgs {cfg : Cfg} {env : Env} {state after : St}
         (callee.params.toList.zip vals |>.map (fun item => (item.1.var, item.2))) callee.body
         { after with nextAct := after.nextAct + 1 },
         body.typingEnv = { implEnv cfg.mod callee with visible := [] } ∧
-        body.rootsEnv = ⟨cfg.mod, callee, ctx, []⟩ := by
+        body.rootsEnv = ⟨cfg.mod, callee, ctx, []⟩ ∧ body.path = [] ∧ body.context.OwnerMatches c := by
   rcases cfg with ⟨prof, m⟩
   let ec := source.context
   let W := source.world
@@ -1464,7 +1475,7 @@ theorem acceptedGlobalActivation {cfg : Cfg} {state : St} {g : GlobalId} {global
     ∃ source : ExprSource cfg ⟨#[], state.nextAct, [], 0⟩ global.init
         { state with nextAct := state.nextAct + 1 },
       source.typingEnv = initEnv cfg.mod g ∧
-      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g ∧ source.path = [] :=
+      source.rootsEnv = ⟨cfg.mod, initImpl, initContext, []⟩ ∧ source.ty = global.ty ∧ source.world.G = g ∧ source.path = [] ∧ source.context.OwnerMatches (cfg.mod.contexts.size + g) :=
   acceptedGlobalSource accepted globalAt (nextActivationInvariant invariant) state.nextAct
 
 structure InitializedGlobals (module : Module) (count : Nat) (state : St) : Prop where
@@ -1481,7 +1492,7 @@ theorem InitializedGlobals.afterInitializer {cfg : Cfg} {before after : St} {g :
     (fuel : Nat) (done : evalExpr fuel cfg ⟨#[], before.nextAct, [], 0⟩ global.init
       { before with nextAct := before.nextAct + 1 } = .ok value after) :
     InitializedGlobals cfg.mod (g + 1) { after with store := after.store.introduce (.global g) value } := by
-  obtain ⟨source, _, _, typeEq, countEq, _⟩ := acceptedGlobalActivation accepted globalAt initialized.invariant
+  obtain ⟨source, _, _, typeEq, countEq, _, _⟩ := acceptedGlobalActivation accepted globalAt initialized.invariant
   have result := source.result fuel value done
   have domain : ∀ (root : RootInst) (value : Val), after.store.roots[root]? = some value →
       ∃ global : GlobalId, root = RootInst.global global ∧ global < g := by
@@ -1606,7 +1617,7 @@ theorem acceptedEntryAfterGlobals {cfg : Cfg} {state : St}
           (impl.params.toList.zip [] |>.map (fun item => (item.1.var, item.2))) impl.body
           { state with nextAct := state.nextAct + 1 },
         source.typingEnv = { implEnv cfg.mod impl with visible := [] } ∧
-        source.rootsEnv = ⟨cfg.mod, impl, ctx, []⟩ :=
+        source.rootsEnv = ⟨cfg.mod, impl, ctx, []⟩ ∧ source.path = [] ∧ source.context.OwnerMatches cfg.mod.entry :=
   acceptedEntrySource accepted (initializedGlobals_of_success accepted fuel done).invariant
 
 theorem StmtSource.expressionChildSource {cfg : Cfg} {env : Env} {stmt : Stmt}

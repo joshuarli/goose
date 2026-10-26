@@ -50,7 +50,7 @@ theorem typedExprFuelBound_call {sourceFuel fuel : Nat} {cfg : Cfg} {results : L
         cases operationFuel with
         | zero => exact FuelBoundM.of_timeout rfl
         | succ callFuel =>
-          obtain ⟨ctx,impl,contextAt,implAt,bodySource,typing,roots⟩ := source.calleeAfterArgs (sourceFuel + 1) values argsDone
+          obtain ⟨ctx,impl,contextAt,implAt,bodySource,typing,roots, _, _⟩ := source.calleeAfterArgs (sourceFuel + 1) values argsDone
           have call : FuelBoundM (sourceFuel + 1) callFuel (fun n => Core.enterCall n cfg env.depth context values)
               (fun n => GIR.callFn n cx.cfg fr1.depth context values) afterArgs := by
             rw [targetCfg,post.rel.depth]

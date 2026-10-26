@@ -14,7 +14,7 @@ theorem typedGlobal_fuelBound {cfg : Cfg} {globalId : GlobalId} {global : Core.G
     FuelBoundM sourceFuel (fuel + 1)
       (fun n => freshAct >>= fun act => evalExpr n cfg ⟨#[],act,[],0⟩ global.init)
       (fun n => enterFn n ⟨cfg.profile,lower cfg.mod⟩ 0 (lowerGlobal cfg.mod global).init []) state := by
-  obtain ⟨source, typingEq, rootsEq, _, _, _⟩ := acceptedGlobalActivation accepted globalAt invariant
+  obtain ⟨source, typingEq, rootsEq, _, _, _, _⟩ := acceptedGlobalActivation accepted globalAt invariant
   have metadata : SourceResults source.typingEnv source.rootsEnv [global.ty] := by
     intro impl selected
     rw [typingEq] at selected

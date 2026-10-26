@@ -72,7 +72,7 @@ theorem entrySource (profile : NumProfile) :
         { initialState with nextAct := 1 },
       source.rootsEnv = ⟨module, implementation, context, []⟩ := by
   obtain ⟨ctx, impl, contextAt, implementationAt, noParameters, noResults,
-    source, typingEq, rootsEq⟩ := acceptedEntrySource (cfg := ⟨profile, module⟩)
+    source, typingEq, rootsEq, _, _⟩ := acceptedEntrySource (cfg := ⟨profile, module⟩)
       (by cbv) initialInvariant
   have contextEq : ctx = context := by simpa [module] using contextAt.symm
   subst ctx
@@ -134,7 +134,7 @@ example (profile : NumProfile) :
 example (profile : NumProfile) :
     ∃ source : ExprSource ⟨profile, module⟩ noEnv (.bool true) St.initial,
       source.ty = .bool := by
-  obtain ⟨source, _, _, typeEq, _, _⟩ := acceptedGlobalSource (cfg := ⟨profile, module⟩)
+  obtain ⟨source, _, _, typeEq, _, _, _⟩ := acceptedGlobalSource (cfg := ⟨profile, module⟩)
     (g := 0) (global := ⟨"flag", .bool, .mutable, .bool true, 0⟩)
     (state := St.initial) (by cbv) rfl (initialStoreInvariant module) 0
   exact ⟨source, typeEq⟩
@@ -162,11 +162,11 @@ theorem calleeFromInitializer (artifact : ArtifactProfile) (profile : NumProfile
         { St.initial with nextAct := 1 },
       body.typingEnv = { implEnv (callModule artifact) callee with visible := [] } ∧
       body.rootsEnv = ⟨callModule artifact, callee, calleeContext, []⟩ := by
-  obtain ⟨source, typingEq, rootsEq, typeEq, _, _⟩ := acceptedGlobalSource
+  obtain ⟨source, typingEq, rootsEq, typeEq, _, _, _⟩ := acceptedGlobalSource
     (cfg := ⟨profile, callModule artifact⟩) (state := St.initial) (g := 0)
     (global := ⟨"flag", .bool, .mutable, .call 1 [] 0, 0⟩) accepted rfl
     (initialStoreInvariant (callModule artifact)) 0
-  obtain ⟨ctx, impl, contextAt, implementationAt, body, typingEq, rootsEq⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, body, typingEq, rootsEq, _, _⟩ :=
     source.calleeAfterArgs 1 [] rfl
   have contextEq : ctx = calleeContext := by simpa [callModule] using contextAt.symm
   subst ctx
@@ -205,7 +205,7 @@ theorem entryAfterEffectfulGlobals (profile : NumProfile) :
     ∃ source : BlockSource ⟨profile, callModule .pilot⟩ ⟨entryImplementation.vars, 2, [], 1⟩ []
         entryImplementation.body { afterEffectfulGlobals with nextAct := 3 },
       source.rootsEnv = ⟨callModule .pilot, entryImplementation, initContext, []⟩ := by
-  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, rootsEq⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, rootsEq, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, callModule .pilot⟩) (by cbv) 8 (globalsDone profile)
   have contextEq : ctx = initContext := by simpa [callModule] using contextAt.symm
   subst ctx
@@ -245,10 +245,10 @@ example (profile : NumProfile) :
     ∃ child : ExprSource ⟨profile, returnModule⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.bool true)
         { St.initial with nextAct := 2, nextScope := 1 },
       child.typingEnv.impl = some returnImplementation ∧ child.ty.passableTo .bool = true := by
-  obtain ⟨caller, _, _, _, _, _⟩ := acceptedGlobalActivation (cfg := ⟨profile, returnModule⟩)
+  obtain ⟨caller, _, _, _, _, _, _⟩ := acceptedGlobalActivation (cfg := ⟨profile, returnModule⟩)
     (state := St.initial) (g := 0) (global := ⟨"flag", .bool, .mutable, .call 1 [] 0, 0⟩)
     (by cbv) rfl (initialStoreInvariant returnModule)
-  obtain ⟨ctx, impl, contextAt, implementationAt, body, bodyTyping, bodyRoots⟩ := caller.calleeAfterArgs 1 [] rfl
+  obtain ⟨ctx, impl, contextAt, implementationAt, body, bodyTyping, bodyRoots, _, _⟩ := caller.calleeAfterArgs 1 [] rfl
   have contextEq : ctx = calleeContext := by simpa [returnModule, callModule] using contextAt.symm
   subst ctx
   have implEq : impl = returnImplementation := by
@@ -283,7 +283,7 @@ example (profile : NumProfile) :
     ∃ child : BlockSource ⟨profile, conditionalModule⟩ ⟨#[], 0, [(0, 0)], 1⟩ [] (.mk 1 [] none)
       { St.initial with nextAct := 1, nextScope := 1 },
       child.typingEnv.impl = some conditionalImplementation := by
-  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, bodyTyping, _⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, bodyTyping, _, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, conditionalModule⟩) (by cbv) 1 (by cbv)
   have contextEq : ctx = initContext := by simpa [conditionalModule, callModule] using contextAt.symm
   subst ctx
@@ -310,7 +310,7 @@ example (profile : NumProfile) :
     ∃ next : StmtSource ⟨profile, loopModule⟩ ⟨#[], 0, [(0, 0)], 1⟩
       (.while (.bool true) (.mk 1 [] none) 0) { St.initial with nextAct := 1, nextScope := 2 },
       next.typingEnv.impl = some loopImplementation := by
-  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, bodyTyping, _⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, bodyTyping, _, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, loopModule⟩) (by cbv) 1 (by cbv)
   have contextEq : ctx = initContext := by simpa [loopModule, conditionalModule, callModule] using contextAt.symm
   subst ctx
@@ -336,7 +336,7 @@ def assertModule : Module :=
 example (profile : NumProfile) :
     ∃ child : ExprSource ⟨profile, assertModule⟩ ⟨#[], 0, [(0, 0)], 1⟩ (.bool true)
       { St.initial with nextAct := 1, nextScope := 1 }, child.ty = .bool := by
-  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, _⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, _, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, assertModule⟩) (by cbv) 1 (by cbv)
   have contextEq : ctx = initContext := by simpa [assertModule, conditionalModule, callModule] using contextAt.symm
   subst ctx
@@ -358,7 +358,7 @@ def exitModule : Module :=
 example (profile : NumProfile) :
     ∃ child : ExprSource ⟨profile, exitModule⟩ ⟨#[], 0, [(0, 0)], 1⟩ (.lit .i32 0)
       { St.initial with nextAct := 1, nextScope := 1 }, child.ty = (.int .i32) := by
-  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, _⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, _, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, exitModule⟩) (by cbv) 1 (by cbv)
   have contextEq : ctx = initContext := by simpa [exitModule, conditionalModule, callModule] using contextAt.symm
   subst ctx
@@ -390,7 +390,7 @@ example (profile : NumProfile) :
         { afterEffectfulGlobals with nextAct := 3, nextScope := 2 },
         child.ty = destination.ty ∧ child.ty = .bool := by
   have globalDone : initGlobals 8 ⟨profile, assignmentModule⟩ [0] St.initial = .ok () afterEffectfulGlobals := by cbv
-  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, _⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, source, _, _, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, assignmentModule⟩) (by cbv) 8 globalDone
   have contextEq : ctx = initContext := by simpa [assignmentModule, callModule] using contextAt.symm
   subst ctx
@@ -425,7 +425,7 @@ private theorem ownerStatement (profile : NumProfile) (statement : Stmt)
     ∃ source : StmtSource ⟨profile, ownerModule statement⟩ ⟨#[], 1, [(0, 0)], 1⟩ statement
       { afterOwnerGlobals with nextAct := 2, nextScope := 1 }, True := by
   have globalsDone : initGlobals 4 ⟨profile, ownerModule statement⟩ [0] St.initial = .ok () afterOwnerGlobals := by cbv
-  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, body, _, _⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, body, _, _, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, ownerModule statement⟩) accepted 4 globalsDone
   have contextEq : ctx = initContext := by simpa [ownerModule] using contextAt.symm
   subst ctx
@@ -492,7 +492,7 @@ example (profile : NumProfile) :
       ∃ child : ExprSource ⟨profile, compoundModule⟩ ⟨#[], 1, [(0, 0)], 1⟩ (.lit .i32 2)
         { afterIntegerGlobals with nextAct := 2, nextScope := 1 }, child.ty = destination.ty := by
   have globalsDone : initGlobals 2 ⟨profile, compoundModule⟩ [0] St.initial = .ok () afterIntegerGlobals := by cbv
-  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, body, _, _⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, body, _, _, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, compoundModule⟩) (by cbv) 2 globalsDone
   have contextEq : ctx = initContext := by simpa [compoundModule, conditionalModule, callModule] using contextAt.symm
   subst ctx

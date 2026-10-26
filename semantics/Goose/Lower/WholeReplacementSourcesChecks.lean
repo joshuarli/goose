@@ -41,7 +41,7 @@ theorem actual_clear_source (profile : NumProfile) (growOnly : Bool)
       (replacement growOnly) cleared, child.ty = ownerType growOnly := by
   have globalsDone : initGlobals 4 ⟨profile, module growOnly⟩ [0] St.initial =
       .ok () before := by cases growOnly <;> cbv
-  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, body, _, _⟩ :=
+  obtain ⟨ctx, impl, contextAt, implementationAt, _, _, body, _, _, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, module growOnly⟩) accepted 4 globalsDone
   have contextEq : ctx = initContext := by simpa [module] using contextAt.symm
   subst ctx

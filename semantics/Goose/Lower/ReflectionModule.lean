@@ -14,7 +14,7 @@ theorem typedEntry_reflection {cfg : Cfg} {state : St} {fuel globalFuel : Nat}
       TypedBlockReflection bodyFuel cfg impl.results.toList none (callPre impl) [] false impl.body) :
     ReflectMFuel fuel (fun n => Core.enterCall n cfg 0 cfg.mod.entry [])
       (fun n => GIR.callFn n ⟨cfg.profile,lower cfg.mod⟩ 0 (lower cfg.mod).entry []) state := by
-  obtain ⟨context,impl,contextAt,implAt,noParams,noResults,source,typing,roots⟩ :=
+  obtain ⟨context,impl,contextAt,implAt,noParams,noResults,source,typing,roots, _, _⟩ :=
     acceptedEntryAfterGlobals accepted globalFuel initialized
   apply callFn_reflect_of_source contextAt implAt source
   · rw [typing]

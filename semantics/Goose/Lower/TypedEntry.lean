@@ -14,7 +14,7 @@ theorem typedEntry_simulation {cfg : Cfg} {state : St} (n globalFuel : Nat)
       TypedBlockLoopSimulation n cfg impl.results.toList none (callPre impl) [] false impl.body) :
     EventualM (Core.enterCall (n + 1) cfg 0 cfg.mod.entry [])
       (fun fuel => GIR.callFn fuel ⟨cfg.profile, lower cfg.mod⟩ 0 (lower cfg.mod).entry []) state := by
-  obtain ⟨context, impl, contextAt, implAt, noParams, noResults, source, typingEq, rootsEq⟩ :=
+  obtain ⟨context, impl, contextAt, implAt, noParams, noResults, source, typingEq, rootsEq, _, _⟩ :=
     acceptedEntryAfterGlobals accepted globalFuel initialized
   apply typedCall_of_body contextAt implAt cfg.profile n 0 [] state
   intro arity

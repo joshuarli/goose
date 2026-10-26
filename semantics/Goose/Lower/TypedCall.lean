@@ -404,7 +404,7 @@ theorem typedCall_afterArgs {n : Nat} {cfg : Cfg} {env : Env} {state after : St}
     EventualM (enterCall (n + 1) cfg env.depth c values)
       (fun fuel => callFn fuel ⟨cfg.profile, lower cfg.mod⟩ env.depth
         c values) after := by
-  obtain ⟨ctx, impl, hcontext, himplementation, body, htyping, hroots⟩ :=
+  obtain ⟨ctx, impl, hcontext, himplementation, body, htyping, hroots, _, _⟩ :=
     source.calleeAfterArgs argFuel values hdone
   apply typedCall_of_source hcontext himplementation n env.depth values after body
   · simpa [htyping, Core.Sound.implEnv] using congrArg TEnv.impl htyping

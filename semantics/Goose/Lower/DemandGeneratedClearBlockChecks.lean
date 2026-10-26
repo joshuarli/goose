@@ -2,6 +2,7 @@ import Goose.Lower.DemandGeneratedClearValueBlock
 import Goose.Lower.DemandGeneratedIndexEntry
 import Goose.Lower.DemandGeneratedIndexChecks
 import Goose.Lower.TypedControlExpressions
+import Goose.Lower.DemandGeneratedOwner
 
 namespace Goose.Lower.DemandGeneratedClearBlockChecks
 
@@ -53,6 +54,8 @@ theorem accepted_retained_index_body_all_runtime_points
     (accepted : Core.validate retainedIndexSource = .ok ()) :
     ∃ source : BlockSource configuration environment [] retainedIndexBlock initialState,
       source.path = [0, 1, 0] ∧
+    ∃ selected : GeneratedDemandRootSelection retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot 2,
+      GeneratedSourceOwner selected source.context ∧
     ∃ after finalFrame,
       Evidence.RuntimePoint context.cfg context.fn (0, 2) sampledFrame initialState ∧
       DemandUniformTraversal context
@@ -68,11 +71,18 @@ theorem accepted_retained_index_body_all_runtime_points
           DemandFrameAt configuration { environment with scopes := [(0, 0)] } context source.world typing roots future
             retainedSampleRows.values retainedSampleRows.runs reached) ∧
         ∃ values, (getView reached.frame 1 >>= readRun) reached.state = .ok values reached.state := by
-  obtain ⟨rootSource, _, rootRoots, _, _, rootPath⟩ := acceptedGlobalActivation (cfg := configuration)
+  obtain ⟨rootSource, _, rootRoots, _, _, rootPath, rootPlanOwner⟩ := acceptedGlobalActivation (cfg := configuration)
     (g := 1) (global := retainedIndexedGlobal) accepted (by rfl) (initialized accepted).invariant
   change ExprSource configuration environment
     (.read (.elem retainedOwnerView (.blockE retainedIndexBlock) 0)) initialState at rootSource
+  have selected : GeneratedDemandRootSelection retainedIndexSource retainedIndexFunction retainedIndexEnvironment retainedIndexRoot 2 :=
+    .global (globalId := 1) (by rfl)
+  have rootOwned : GeneratedSourceOwner selected rootSource.context :=
+    ⟨rootPlanOwner, by rw [rootPath]; exact .here _⟩
   obtain ⟨place, _, placeRoots, placeCanonical⟩ := rootSource.readChild
+  have placeOwned : GeneratedSourceOwner selected place.context :=
+    (rootOwned.child rfl 0 (.place (.elem retainedOwnerView (.blockE retainedIndexBlock) 0)) .place rfl (by trivial)).transport
+      placeCanonical.plans.symm placeCanonical.path.symm rfl placeCanonical.context.symm
   have placePath : place.path = [0] := by rw [placeCanonical.path, rootPath]; rfl
   have placeAccess : place.rootsEnv.access = retainedIndexAccess := by rw [placeRoots, rootRoots]; rfl
   have placeOccurrence : GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment
@@ -108,7 +118,13 @@ theorem accepted_retained_index_body_all_runtime_points
       (show (⟨[], []⟩ : RetainedSsaMap).Realizes retainedIndexSource place.world environment
         ⟨(0, 0), initialFrame, initialState⟩ from by constructor <;> intro cell member <;> cases member)
       query viewDone viewPost
+  have indexOwned : GeneratedSourceOwner selected indexSource.context :=
+    (placeOwned.child rfl 1 (.expression (.blockE retainedIndexBlock)) .expression rfl (by trivial)).transport
+      indexCanonical.plans.symm indexCanonical.path.symm rfl indexCanonical.context.symm
   obtain ⟨source, _, sourceRoots, canonical⟩ := indexSource.blockEChild
+  have sourceOwned : GeneratedSourceOwner selected source.context :=
+    (indexOwned.child rfl 0 (.block retainedIndexBlock) .block rfl (by trivial)).transport
+      canonical.plans.symm canonical.path.symm rfl canonical.context.symm
   have sourcePath : source.path = [0, 1, 0] := by rw [canonical.path, indexCanonical.path, placePath]; rfl
   have sourceAccess : source.rootsEnv.access = retainedIndexAccess := by rw [sourceRoots, indexRoots, placeAccess]
   have occurrence : GeneratedDemandOccurrence retainedIndexSource retainedIndexFunction retainedIndexEnvironment
@@ -134,7 +150,7 @@ theorem accepted_retained_index_body_all_runtime_points
       sourceAdmitted bounded sourceRealized atPoint related retainedBlockExtended statements
   have finalPointEq : finalPoint = (0, 7) := Option.some.inj (post.pp.symm.trans (by rfl))
   subst finalPoint
-  refine ⟨source, sourcePath, after, finalFrame, sampled_reachable, traversal, evaluatedBlock, ?_⟩
+  refine ⟨source, sourcePath, selected, sourceOwned, after, finalFrame, sampled_reachable, traversal, evaluatedBlock, ?_⟩
   intro taken reached bound steps
   have valid := invariant taken reached bound steps
   have framed := valid.frame

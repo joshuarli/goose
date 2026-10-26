@@ -69,7 +69,7 @@ theorem accepted_return_body (artifact : ArtifactProfile) (profile : NumProfile)
         ⟨⟨profile, lower (module artifact)⟩, lowerContextAt (module artifact) ⟨0, "main", [], [], []⟩ implementation⟩
         initialBuilder initialFrame (loweredBody artifact).2 body false
         (loweredBody artifact).1) { St.initial with nextAct := 1 } := by
-  obtain ⟨context, impl, hcontext, himpl, hparams, hresults, source, htyping, hroots⟩ :=
+  obtain ⟨context, impl, hcontext, himpl, hparams, hresults, source, htyping, hroots, _, _⟩ :=
     acceptedEntryAfterGlobals (cfg := ⟨profile, module artifact⟩) accepted 1 (by rfl)
   have hcontextEq : context = ⟨0, "main", [], [], []⟩ := by
     simpa [module] using hcontext.symm

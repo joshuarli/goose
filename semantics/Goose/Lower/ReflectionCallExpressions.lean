@@ -52,7 +52,7 @@ theorem typedExprReflection_call {fuel : Nat} {cfg : Cfg} {results : List Ty}
         cases operationFuel with
         | zero => exact ReflectMFuel.of_timeout rfl
         | succ callFuel =>
-          obtain ⟨ctx,impl,contextAt,implAt,bodySource,typing,roots⟩ := source.calleeAfterArgs n values argsDone
+          obtain ⟨ctx,impl,contextAt,implAt,bodySource,typing,roots, _, _⟩ := source.calleeAfterArgs n values argsDone
           have call : ReflectMFuel callFuel (fun n => Core.enterCall n cfg env.depth context values)
               (fun n => GIR.callFn n cx.cfg fr1.depth context values) afterArgs := by
             rw [targetCfg,post.rel.depth]

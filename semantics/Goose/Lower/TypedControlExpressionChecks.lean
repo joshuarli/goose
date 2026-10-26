@@ -24,7 +24,7 @@ theorem block_child_source (artifact : ArtifactProfile) (profile : NumProfile)
     ∃ child : BlockSource ⟨profile, blockModule artifact⟩ ⟨#[], 0, [], 0⟩ []
       (.mk 0 [] (some (.bool true))) { St.initial with nextAct := 1 },
       child.typingEnv.loops = 0 ∧ child.typingEnv.inExpr = true := by
-  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, blockModule artifact⟩) (state := St.initial) (g := 0)
     (global := ⟨"value", .bool, .mutable, .blockE (.mk 0 [] (some (.bool true))), 0⟩)
     accepted rfl (InitializedGlobals.initial _).invariant
@@ -85,7 +85,7 @@ theorem conditional_branch_source (artifact : ArtifactProfile) (profile : NumPro
       (if branch then .mk 0 [] (some (.bool true)) else .mk 1 [] (some abortingValue))
       { St.initial with nextAct := 1 },
       child.typingEnv.loops = 0 ∧ child.typingEnv.inExpr = true := by
-  obtain ⟨source, htyping, hroots, htype, hcount, _⟩ := acceptedGlobalActivation
+  obtain ⟨source, htyping, hroots, htype, hcount, _, _⟩ := acceptedGlobalActivation
     (cfg := ⟨profile, conditionalModule artifact branch⟩) (state := St.initial) (g := 0)
     (global := ⟨"selected", .bool, .mutable, conditionalExpression branch, 0⟩)
     accepted rfl (InitializedGlobals.initial _).invariant

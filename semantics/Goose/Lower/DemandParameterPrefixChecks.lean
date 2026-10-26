@@ -80,7 +80,7 @@ theorem accepted_partial_parameter_cursor :
         [(0, .bool true), (1, .bool false)] TypedExpressionChecks.boolCallee.body calleeState,
       Nonempty (ParameterPrefixCursor source 1) ∧
       prefixState = { calleeState with nextScope := calleeState.nextScope + 1, store := preStore 1 calleeState.nextScope [(0, .bool true)] calleeState.store } := by
-  obtain ⟨context, implementation, contextAt, implementationAt, source, typing, roots⟩ :=
+  obtain ⟨context, implementation, contextAt, implementationAt, source, typing, roots, _, _⟩ :=
     (TypedExpressionChecks.callSource .release).calleeAfterArgs (after := TypedExpressionChecks.enteredState) 2 [.bool true, .bool false] (by cbv)
   have contextEq : context = ⟨1, "bools", [], [], []⟩ := by
     simpa [TypedExpressionChecks.sourceModule] using (Option.some.inj contextAt).symm
