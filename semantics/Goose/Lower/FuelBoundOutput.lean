@@ -417,7 +417,7 @@ theorem typedStatementFuelBound_expr {sourceFuel fuel : Nat} {cfg : Cfg} {result
     TypedStatementFuelBound (sourceFuel + 1) fuel cfg results loop (.expr expression origin) := by
   intro env state source metadata loops ls after point cx fr lowering entry extension related moduleEq
     resultsEq depth targets counter generated frames
-  obtain ⟨expressionSource, typing, roots⟩ := source.exprChild
+  obtain ⟨expressionSource, typing, roots, _⟩ := source.exprChild
   have expressionMetadata : SourceResults expressionSource.typingEnv expressionSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata

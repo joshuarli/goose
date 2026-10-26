@@ -38,7 +38,7 @@ theorem typedStatementReflection_expr {fuel : Nat} {cfg : Cfg} {results : List T
     TypedStatementReflection fuel cfg results loop (.expr expression origin) := by
   intro env state source metadata loops ls after pt cx fr lowering point extension rel moduleEq resultsEq depth
     targets counter generated frames
-  obtain ⟨expressionSource,typing,roots⟩ := source.exprChild
+  obtain ⟨expressionSource,typing,roots,_⟩ := source.exprChild
   have expressionMetadata : SourceResults expressionSource.typingEnv expressionSource.rootsEnv results := by
     rw [typing,roots]
     exact metadata

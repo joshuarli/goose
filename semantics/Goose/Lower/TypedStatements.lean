@@ -134,7 +134,7 @@ theorem typedStatementLoopSimulation_expr {n : Nat} {cfg : Cfg} {results : List 
     TypedStatementLoopSimulation (n + 1) cfg results loop (.expr expr org) := by
   intro env state source hmetadata hloops ls ls' result pt cx fr hlow hpp hext hrel
     hgir hresults hdepth htargets hcounter hgenerated hframes
-  obtain ⟨child, htyping, hroots⟩ := source.exprChild
+  obtain ⟨child, htyping, hroots, _⟩ := source.exprChild
   have hchild : SourceResults child.typingEnv child.rootsEnv results := by
     apply hmetadata.transport
     · rw [htyping]

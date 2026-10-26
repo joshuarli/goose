@@ -73,6 +73,8 @@ inductive DemandLoweringAction.FirstChild : DemandLoweringAction → DemandLower
   | bound {parent : Bound} {child : Expr}
       (found : DemandNode.child? (.bound parent) 0 = some (.expression child)) :
       FirstChild (.bound parent) (.expression child)
+  | discard (loop : Option LoopCtx) (expression : Expr) (origin : OriginId) :
+      FirstChild (.statement loop (.expr expression origin)) (.expression expression)
 
 theorem DemandLoweringAction.FirstChild.source {parent child : DemandLoweringAction}
     (first : parent.FirstChild child) : parent.node.child? 0 = some child.node := by

@@ -1735,10 +1735,19 @@ theorem StmtSource.firstExpressionChildSource {cfg : Cfg} {env : Env} {stmt : St
       roots typed rooted effects input source.observed source.classified
   exact ⟨result, typingEq, rootsEq, typeEq, worldEq, observationEq, futureEq, shrinkEq, pathEq, plansEq, contextEq⟩
 
+structure StmtSource.ExpressionChildAt {cfg : Cfg} {env : Env} {stmt : Stmt} {expression : Expr} {state : St}
+    (source : StmtSource cfg env stmt state) (child : ExprSource cfg env expression state)
+    (found : (DemandNode.statement stmt).child? 0 = some (.expression expression)) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [0]
+  plans : child.plans = source.plans
+  context : HEq child.context (source.context.child rfl 0 (.expression expression) .expression found
+    (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]))
+
 theorem StmtSource.exprChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr} {origin : OriginId}
     (source : StmtSource cfg env (.expr expr origin) state) :
     ∃ child : ExprSource cfg env expr state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv := by
+      child.rootsEnv = source.rootsEnv ∧ source.ExpressionChildAt child rfl := by
   have typed := source.typed
   have rooted := source.rooted
   simp only [tyStmt] at typed
@@ -1749,12 +1758,12 @@ theorem StmtSource.exprChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr} 
   obtain ⟨roots, rooted⟩ := rooted
   have childAt : (DemandNode.statement (.expr expr origin)).child? 0 = some (.expression expr) := by
     simp [DemandNode.child?, DemandNode.children]
-  obtain ⟨child, typingEq, rootsEq, _, _⟩ := source.firstExpressionChildSource expr childAt
+  obtain ⟨child, typingEq, rootsEq, _, worldEq, _, _, _, pathEq, plansEq, contextEq⟩ := source.firstExpressionChildSource expr childAt
     (by simp [DemandNode.visibleForChild]) (by simp [Stmt.variables])
     (fun parent => parent.future) (by intro parent x member; exact List.mem_append_right _ member)
     (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
     source.typingStart finish ty source.rootsStart source.rootsEnd roots typed rooted source.effects
-  exact ⟨child, typingEq, rootsEq⟩
+  exact ⟨child, typingEq, rootsEq, worldEq, pathEq, plansEq, contextEq⟩
 
 theorem StmtSource.letChild {cfg : Cfg} {env : Env} {state : St} {slot : VarId}
     {expr : Expr} {origin : OriginId} (source : StmtSource cfg env (.letS slot expr origin) state) :
