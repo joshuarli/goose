@@ -1739,9 +1739,14 @@ private theorem checkModuleRootPass_expanded (module : Module)
     forIn (List.range module.globals.size) next (fun global current => checkInitRootPass module names global current)) = _
   simp only [checkContextRootPass_expanded, checkInitRootPass_expanded]
 
+def ContextRootFactsAt (module : Module) (context : Context) (aliases : List (RootRef × RootRef))
+    (calls : List (ContextId × List (List RootRef)))
+    (escaping : Array (List (Nat × List (List RootRef)))) (names : Array (List RootRef)) : Prop :=
+  ∃ facts, checkContextFacts module context escaping aliases names = .ok facts ∧ facts.calls = calls
+
 def ContextRootFacts (module : Module) (context : Context) (aliases : List (RootRef × RootRef))
     (calls : List (ContextId × List (List RootRef))) : Prop :=
-  ∃ escaping names facts, checkContextFacts module context escaping aliases names = .ok facts ∧ facts.calls = calls
+  ∃ escaping names, ContextRootFactsAt module context aliases calls escaping names
 
 def InitializerRootFacts (module : Module) (global : GlobalId)
     (calls : List (ContextId × List (List RootRef))) : Prop :=
@@ -1953,16 +1958,17 @@ theorem checkModuleExitRoots_facts (module : Module) (checked : checkModuleExitR
   | none => simp [output, Goose.Core.reject] at returned
   | some value => exact maintained.2 value output
 
-theorem contextRootFacts_bodyRoots (module : Module) (context : Context)
+theorem contextRootFactsAt_bodyRoots (module : Module) (context : Context)
     (aliases : List (RootRef × RootRef)) (calls : List (ContextId × List (List RootRef)))
-    (facts : ContextRootFacts module context aliases calls) :
-    ∃ implementation bodyContext escaping actualEscapes names value state,
+    (escaping : Array (List (Nat × List (List RootRef)))) (names : Array (List RootRef))
+    (facts : ContextRootFactsAt module context aliases calls escaping names) :
+    ∃ implementation bodyContext actualEscapes value state,
       module.impls[context.impl]? = some implementation ∧
       parameterBodyRootContext module implementation context = .ok bodyContext ∧
       bodyTargets module = .ok actualEscapes ∧
       (rpBlockValue { mod := module, impl := implementation, ctx := bodyContext, scopes := [], escaping := escaping, targetEscapes := actualEscapes, aliases := aliases, calleeNames := names }
         [] implementation.body).run ⟨implementation.params.size, {}, []⟩ = .ok (value, state) := by
-  obtain ⟨escaping, names, facts, checked, _⟩ := facts
+  obtain ⟨facts, checked, _⟩ := facts
   unfold checkContextFacts at checked
   cases present : module.impls[context.impl]? with
   | none => simp [present, Goose.Core.reject] at checked
@@ -1981,7 +1987,22 @@ theorem contextRootFacts_bodyRoots (module : Module) (context : Context)
       obtain ⟨bodyContext, closed, checked⟩ := (rootFacts_bind_success _ _ _).mp checked
       obtain ⟨⟨token, final⟩, bodyChecked, _⟩ := (rootFacts_bind_success _ _ _).mp checked
       obtain ⟨⟨value, state⟩, replay, _⟩ := (rootFacts_bind_success _ _ _).mp bodyChecked
-      exact ⟨implementation, bodyContext, escaping, actualEscapes, names, value, state, rfl, closed, rfl, replay⟩
+      exact ⟨implementation, bodyContext, actualEscapes, value, state, rfl, closed, rfl, replay⟩
+
+theorem contextRootFacts_bodyRoots (module : Module) (context : Context)
+    (aliases : List (RootRef × RootRef)) (calls : List (ContextId × List (List RootRef)))
+    (facts : ContextRootFacts module context aliases calls) :
+    ∃ implementation bodyContext escaping actualEscapes names value state,
+      module.impls[context.impl]? = some implementation ∧
+      parameterBodyRootContext module implementation context = .ok bodyContext ∧
+      bodyTargets module = .ok actualEscapes ∧
+      (rpBlockValue { mod := module, impl := implementation, ctx := bodyContext, scopes := [], escaping := escaping, targetEscapes := actualEscapes, aliases := aliases, calleeNames := names }
+        [] implementation.body).run ⟨implementation.params.size, {}, []⟩ = .ok (value, state) := by
+  obtain ⟨escaping, names, checked⟩ := facts
+  obtain ⟨implementation, bodyContext, actualEscapes, value, state, present, closed, targets, bodyChecked⟩ :=
+    contextRootFactsAt_bodyRoots module context aliases calls escaping names checked
+  exact ⟨implementation, bodyContext, escaping, actualEscapes, names, value, state,
+    present, closed, targets, bodyChecked⟩
 
 theorem contextRootFacts_annotationShape (module : Module) (context : Context)
     (aliases : List (RootRef × RootRef)) (calls : List (ContextId × List (List RootRef)))
