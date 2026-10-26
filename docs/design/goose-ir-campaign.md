@@ -53,7 +53,7 @@ it does not assert storage backing for an arbitrary input state.
 The owned world now includes ghost root types and nominal layout conformance.
 Its initial factory requires successful validation and derives conformance for every declared global.
 Actual fresh owner binding preserves the world without receiving or pending frames;
-binding the next global advances the initialized prefix.
+binding a stored value to the next global advances the initialized prefix.
 Fresh destination allocation derives byte-cut protection and excludes its new row from existing named values.
 The live-carrier singleton theorem derives native landing success, backing, receiving readiness,
 and outside-root observations from exact row permissions and receiving geometry.
