@@ -67,46 +67,72 @@ private theorem forIn_preserves {α β : Type} (rows : List α) (initial : β)
       exact after
     | yield value => exact ih value after remaining
 
-theorem parameterBodyRootContext_annotationExtends (module : Module) (implementation : Impl)
+private def ContextRootsExtend (before after : Context) : Prop :=
+  AnnotationExtends before after ∧ after.contentRoots = before.contentRoots
+
+private theorem contextRootsExtend_refl (context : Context) : ContextRootsExtend context context :=
+  ⟨annotationExtends_refl context, rfl⟩
+
+private theorem contextRootsExtend_trans {first second third : Context}
+    (left : ContextRootsExtend first second) (right : ContextRootsExtend second third) :
+    ContextRootsExtend first third :=
+  ⟨annotationExtends_trans left.1 right.1, right.2.trans left.2⟩
+
+private theorem contextRootsExtend_map (context : Context) (variableId : VarId) (added : List RootRef) :
+    ContextRootsExtend context { context with varRoots := context.varRoots.map fun (id, previous) =>
+      (id, if id == variableId then unionRoots previous added else previous) } :=
+  ⟨annotationExtends_map context variableId added, rfl⟩
+
+private theorem parameterBodyRootContext_rootsExtend (module : Module) (implementation : Impl)
     (context result : Context) (checked : parameterBodyRootContext module implementation context = .ok result) :
-    AnnotationExtends context result := by
+    ContextRootsExtend context result := by
   unfold parameterBodyRootContext at checked
   split at checked
   · simp only [pure, Except.pure, Except.ok.injEq] at checked
     subst result
-    exact annotationExtends_refl context
+    exact contextRootsExtend_refl context
   · dsimp only [] at checked
     simp only [Std.Legacy.Range.forIn_eq_forIn_range'] at checked
     obtain ⟨final, loop, returned⟩ := (success_bind _ _ _).mp checked
     let invariant (current : Option Context × Context) :=
-      AnnotationExtends context current.2 ∧
-        ∀ output, current.1 = some output → AnnotationExtends context output
+      ContextRootsExtend context current.2 ∧
+        ∀ output, current.1 = some output → ContextRootsExtend context output
     have initial : invariant (none, context) :=
-      ⟨annotationExtends_refl context, fun _ absent => by cases absent⟩
+      ⟨contextRootsExtend_refl context, fun _ absent => by cases absent⟩
     have maintained := forIn_preserves _ _ _ invariant initial (by
       intro index current step valid evaluated
       obtain ⟨next, updates, finished⟩ := (success_bind _ _ _).mp evaluated
-      have extended := forIn_preserves _ current.2 _ (AnnotationExtends current.2)
-        (annotationExtends_refl current.2) (by
+      have extended := forIn_preserves _ current.2 _ (ContextRootsExtend current.2)
+        (contextRootsExtend_refl current.2) (by
           intro assignment before step valid updated
           obtain ⟨variableId, expression⟩ := assignment
           obtain ⟨roots, computed, completed⟩ := (success_bind _ _ _).mp updated
           simp only [pure, Except.pure, Except.ok.injEq] at completed
           subst step
-          exact annotationExtends_trans valid (annotationExtends_map before variableId roots)) next updates
+          exact contextRootsExtend_trans valid (contextRootsExtend_map before variableId roots)) next updates
       split at finished
       · simp only [pure, Except.pure, Except.ok.injEq] at finished
         subst step
         exact ⟨valid.1, fun _ equal => by cases equal; exact valid.1⟩
       · simp only [pure, Except.pure, Except.ok.injEq] at finished
         subst step
-        exact ⟨annotationExtends_trans valid.1 extended, fun _ absent => by cases absent⟩) final loop
+        exact ⟨contextRootsExtend_trans valid.1 extended, fun _ absent => by cases absent⟩) final loop
     cases output : final.1 with
     | none => simp [output, Goose.Core.reject] at returned
     | some value =>
       simp only [output, pure, Except.pure, Except.ok.injEq] at returned
       subst result
       exact maintained.2 value output
+
+theorem parameterBodyRootContext_annotationExtends (module : Module) (implementation : Impl)
+    (context result : Context) (checked : parameterBodyRootContext module implementation context = .ok result) :
+    AnnotationExtends context result :=
+  (parameterBodyRootContext_rootsExtend module implementation context result checked).1
+
+theorem parameterBodyRootContext_contentRoots (module : Module) (implementation : Impl)
+    (context result : Context) (checked : parameterBodyRootContext module implementation context = .ok result) :
+    result.contentRoots = context.contentRoots :=
+  (parameterBodyRootContext_rootsExtend module implementation context result checked).2
 
 theorem localValueRooted_annotationExtends (interpretation : RootInterpretation)
     (before after : Context) (id : VarId) (value : Value)

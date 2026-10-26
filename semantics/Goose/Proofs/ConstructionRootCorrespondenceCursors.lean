@@ -114,4 +114,65 @@ theorem rpStmt_expression {env : PEnv} {expression : Expr} {origin : Nat}
   cases returned
   exact ⟨roots, expressionChecked⟩
 
+theorem rpExpr_call_argumentChecks {env : PEnv} {target : Goose.Core.ContextId} {arguments : List Arg}
+    {origin : Goose.Core.OriginId} {before after : RState} {roots : List RootRef}
+    (checked : rpExpr env (.call target arguments origin) before = .ok (roots, after)) :
+    ∃ selected callee argumentRoots argumentAfter,
+      env.mod.contexts[target]? = some selected ∧ env.mod.impls[selected.impl]? = some callee ∧
+      rpArgs env arguments before = .ok (argumentRoots, argumentAfter) ∧
+      checkContents env target arguments argumentRoots = .ok () := by
+  unfold rpExpr at checked
+  obtain ⟨argumentRoots, argumentAfter, argumentsChecked, checked⟩ := bind_success checked
+  cases contextAt : env.mod.contexts[target]? with
+  | none =>
+    simp only [contextAt] at checked
+    change Except.error _ = Except.ok (roots, after) at checked
+    cases checked
+  | some selected =>
+    simp only [contextAt] at checked
+    cases implementationAt : env.mod.impls[selected.impl]? with
+    | none =>
+      simp only [implementationAt] at checked
+      change Except.error _ = Except.ok (roots, after) at checked
+      cases checked
+    | some callee =>
+      simp only [implementationAt] at checked
+      obtain ⟨ignored, state2, _, checked⟩ := bind_success checked
+      obtain ⟨ignored, state3, contentsChecked, _⟩ := bind_success checked
+      cases contents : checkContents env target arguments argumentRoots with
+      | error error => simp [liftV, contents] at contentsChecked
+      | ok value =>
+        cases value
+        refine ⟨selected, callee, argumentRoots, argumentAfter, ?_, ?_, argumentsChecked, ?_⟩
+        · first | exact contextAt | rfl
+        · first | exact implementationAt | rfl
+        · first | exact contents | rfl
+
+private theorem contents_forAll_at {α : Type} (inputs : List α) (action : α → Goose.Core.V Unit)
+    (checked : Goose.Core.forAll inputs action = .ok ()) :
+    ∀ input ∈ inputs, action input = .ok () := by
+  induction inputs with
+  | nil => intro input absent; cases absent
+  | cons head rest ih =>
+    cases first : action head with
+    | error error => simp [Goose.Core.forAll, first, bind, Except.bind] at checked
+    | ok value =>
+      cases value
+      have remaining : Goose.Core.forAll rest action = .ok () := by
+        simpa only [Goose.Core.forAll, first, bind, Except.bind] using checked
+      intro input member
+      rcases List.mem_cons.mp member with equal | member
+      · subst input
+        exact first
+      · exact ih remaining input member
+
+theorem checkContents_at {env : PEnv} {target : Goose.Core.ContextId} {context : Context}
+    {arguments : List Arg} {argumentRoots : List (List RootRef)}
+    (selected : env.mod.contexts[target]? = some context)
+    (checked : checkContents env target arguments argumentRoots = .ok ())
+    (index : Nat) (bound : index < arguments.length) :
+    checkContent env context arguments argumentRoots index = .ok () := by
+  simp only [checkContents, selected] at checked
+  exact contents_forAll_at _ _ checked index (List.mem_range.mpr bound)
+
 end Goose.Proofs.ConstructionRootCorrespondence
