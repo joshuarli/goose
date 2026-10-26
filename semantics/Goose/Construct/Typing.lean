@@ -40,7 +40,7 @@ end
 
 private def Ty.referenceWritable (ty : Ty) (bindingWritable contentsWritable : Bool) : Bool :=
   match ty with
-  | .grow _ | .growshrink _ => contentsWritable
+  | .grow _ | .growshrink _ | .limited _ _ => contentsWritable
   | _ => bindingWritable
 
 private def referenceRepresentable (place : Place) (ty : Ty) (bindingWritable contentsWritable : Bool) : Bool :=

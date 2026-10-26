@@ -57,8 +57,7 @@ def Mutability.ofKind : VarKind → Mutability
 
 private def addressMutability (kind : VarKind) (ty : Ty) : Mutability :=
   match ty with
-  | .grow _ => .mutable
-  | .growshrink _ => .mutable
+  | .grow _ | .growshrink _ | .limited _ _ => .mutable
   | _ => Mutability.ofKind kind
 
 def TyEnv.boundTy (env : TyEnv) : Bnd → TyR Unit

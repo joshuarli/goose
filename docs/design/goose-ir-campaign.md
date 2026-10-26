@@ -118,6 +118,16 @@ The rebindable-reference capture control retains its `captured-reference` reject
 The limited-borrow guards and permission proofs pass their 310-module dependency closure under pinned Lean 4.35.0.
 These checks do not qualify the whole project or its performance gates.
 
+Combining the limited capture with an owned-array call exposed a construction-profile permission mismatch.
+The compiler exported the supported program, but the Core construction checker rejected its mutable argument;
+the construction GIR checker also inferred a readonly limited-owner address.
+Both now use contents permission for limited owners, matching the existing grow-owner rule.
+Direct reference and argument guards fail before the repair and pass afterward;
+readonly limited references still reject mutable access and allow readonly access.
+The new source regression passes fresh interpreted Core/GIR validation, execution, re-encoding and agreement,
+plus native GIR O0/O2 output `2\n0\n1\n`; fresh Core debug execution matches too.
+These checks reuse current Main runtime commands without its Audit import; no new native semantic executable or global qualification is claimed.
+
 [`accepted_callee_parameter_prologue`](../../semantics/Goose/Lower/DemandParameterPrologue.lean)
 connects every parameter prefix to actual GIR execution, including the empty and complete prefixes.
 It derives the prefix cursor and preserves realized suspended caller value and run maps.
