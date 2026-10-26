@@ -600,6 +600,18 @@ theorem validated_parameter_variable (module : Module) (id : ImplId) (implementa
   · exact same
   · simp [checkParameter, parameterAt, same, reject, bind, Except.bind] at checked
 
+theorem validated_parameter_descriptor (module : Module) (id : ImplId) (implementation : Impl)
+    (index : Nat) (parameter : Param) (accepted : validate module = .ok ())
+    (present : module.impls[id]? = some implementation)
+    (parameterAt : implementation.params[index]? = some parameter) :
+    ∃ descriptor, implementation.vars[parameter.var]? = some descriptor := by
+  have checked := validated_parameter_check module id implementation index
+    (Array.getElem?_eq_some_iff.mp parameterAt).1 accepted present
+  have variableId := validated_parameter_variable module id implementation index parameter accepted present parameterAt
+  cases descriptorAt : implementation.vars[index]? with
+  | none => simp [checkParameter, parameterAt, variableId, descriptorAt, reject] at checked
+  | some descriptor => exact ⟨descriptor, by simpa [variableId] using descriptorAt⟩
+
 theorem validated_parameter_scope (module : Module) (id : ImplId) (implementation : Impl)
     (index : Nat) (parameter : Param) (descriptor : LocalVar) (accepted : validate module = .ok ())
     (present : module.impls[id]? = some implementation)

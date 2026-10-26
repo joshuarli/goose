@@ -62,11 +62,10 @@ theorem freshScope_localRoot (interpretation : RootInterpretation) (scope : Nat)
   ⟨rfl, rootOf_enterScope_current interpretation scope state.nextScope id descriptor _ declared localScope⟩
 
 theorem validated_parameter_initialRoot (module : Module) (implementationId : Nat) (implementation : Impl)
-    (index : Nat) (parameter : Param) (descriptor : LocalVar) (interpretation : RootInterpretation)
+    (index : Nat) (parameter : Param) (interpretation : RootInterpretation)
     (state : ExecutionState) (accepted : validate module = .ok ())
     (present : module.impls[implementationId]? = some implementation)
     (parameterAt : implementation.params[index]? = some parameter)
-    (descriptorAt : implementation.vars[index]? = some descriptor)
     (variables : interpretation.environment.vars = implementation.vars) :
     freshScope state = .ok state.nextScope { state with nextScope := state.nextScope + 1 } ∧
       rootOf (interpretation.enterScope implementation.body.scope state.nextScope).environment parameter.var
@@ -74,6 +73,10 @@ theorem validated_parameter_initialRoot (module : Module) (implementationId : Na
         .ok (.local interpretation.environment.act state.nextScope parameter.var)
           { state with nextScope := state.nextScope + 1 } := by
   have parameterId := validated_parameter_variable module implementationId implementation index parameter accepted present parameterAt
+  obtain ⟨descriptor, parameterDescriptor⟩ :=
+    validated_parameter_descriptor module implementationId implementation index parameter accepted present parameterAt
+  have descriptorAt : implementation.vars[index]? = some descriptor := by
+    simpa [parameterId] using parameterDescriptor
   have parameterScope := validated_parameter_scope module implementationId implementation index parameter descriptor
     accepted present parameterAt descriptorAt
   have bodyScope := validated_body_scope module implementationId implementation accepted present
