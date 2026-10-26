@@ -72,11 +72,22 @@ an unused reference to a later global can be created before that global exists,
 and a static slice parameter can read synthetic roots beyond the module's declared-global table.
 Typing limits, actual read-effect availability and synthetic-root identity remain separate.
 
-The integrated dependency check passes all 304 modules selected by construction backing, root correspondence,
-completed exit observations, live commit and retained-row checks under pinned Lean 4.35.0.
-Later proof-only source-frame, parameter-scope and singleton-carrier components retain their focused lane checks.
-A later integrated world/entry/readiness wave passes 217 modules; decoding and path-reading roots pass their focused 212- and 213-module closures.
+The latest integrated construction check passes 231 selected modules under pinned Lean 4.35.0,
+covering physical-key registration, entry freshness, successful-read typing, fixed encoding widths and element-write geometry.
+A complementary 220-module check passes allocation-world preservation with the same strengthened registration contract.
+The fixed element-builder case consumes those encoding and write proofs; its 222 dependency sources match the qualified lane check exactly.
+The combined block-entry/value/unit/release and length-query check passes 132 modules;
+complete generated global-clear sequences pass their 128-module check on the integrated tree.
+All retained axiom checks use only `propext`, `Classical.choice` and `Quot.sound`.
+These scoped checks do not qualify the whole project or close the three universal obligations.
 Stable-key C++ unit tests pass after sharing the visitation helper.
+
+Review identified a missing link between the construction frame and the world's backed roots.
+The joint induction must derive current action and continuation demand from the actual checker,
+then maintain demanded backing and the active writer's encoded prefix through native evaluation.
+Accumulated checker reads include earlier actions, while subtracting two deduplicated read sets loses repeated reads.
+The next design decision is an action-local checker replay, retaining separate normal, escaping and terminal outcomes.
+Unused references to future globals remain allowed; no blanket pointee-liveness or path-totality assumption is justified.
 
 An isolated report experiment replaces per-node hash allocations in report walks with a pointer set.
 Five interleaved samples per condition on Aincrad3 checking, using Clang Release with libtcc and native layers disabled,
@@ -926,6 +937,7 @@ Each change made is appended to §8.
 - `fuzz/driver.py`: `--semantics TOOL`, `--pipeline NAME`.
 - `Construct.Roots`: source-owned `RootAlias`, `RootSetsOverlap`, `AliasClosure` and accepted module/body root facts replace provisional proof-only alias vocabulary; runtime checking and errors remain equivalent.
 - `Lower`: canonical child metadata, exact retained rows and generated instruction occurrences strengthen source-demand proof interfaces; scoped static coverage does not establish the full runtime demand theorem.
+- Construction proof frames now require physical object and ordinal registration plus uninitialized-key absence; actual entry, binding, static-byte and allocation transitions preserve these freshness contracts.
 
 ## 9. Non-goals and deferrals
 
