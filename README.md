@@ -1,4 +1,8 @@
-![The Goose programming language](docs/logo/logo_black_fg_white_bg_mini.png)
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/logo/logo_white_fg_trans_bg_mini.png">
+  <source media="(prefers-color-scheme: light)" srcset="docs/logo/logo_black_fg_white_bg_mini.png">
+  <img alt="The Goose programming language" src="docs/logo/logo_black_fg_white_bg_mini.png">
+</picture>
 
 # The Goose Programming Language
 
@@ -6,9 +10,11 @@ Goose is a memory-safe systems language with no heap allocator or garbage
 collector. Dynamic values live inline on compiler-managed data stacks, and
 scope exit reclaims them.
 
-[Tutorial](docs/tutorial.md) · [Reference](docs/reference.md) · [Language specification](docs/goose_spec.md) ·
-[Standard library](docs/stdlib.md) · [Packages](docs/packages.md) ·
-[Samples](samples/README.md) · [Benchmarks](bench/summary.md)
+[Tutorial](docs/tutorial.md) · [Reference](docs/reference.md) ·
+[Specification](docs/goose_spec.md) · [Command line](docs/command_line.md) ·
+[Packages](docs/packages.md) ·
+[Samples](samples/README.md) · [Benchmarks](bench/results.md) ·
+[Standard library](docs/stdlib.md)
 
 Goose has syntax familiar to C and Rust programmers, but **there is no heap**.
 Every dynamic value lives inline on data stacks managed by the compiler.
@@ -487,8 +493,8 @@ The default build does not bundle the blessed `audio`, `gfx`, `physics`, or
 use. See the [package guide](docs/packages.md) for package setup, native
 dependencies, and compiler selection.
 
-Run a program directly from source, in-process (`goose run` is the explicit
-form of the same command, and `goose check` only typechecks):
+Run a program directly from source, in-process, with no C compiler and no
+build step (`goose run` is the explicit form of the same command):
 
 ```sh
 goose run samples/01_tour.goose
@@ -496,12 +502,11 @@ goose check samples/01_tour.goose
 goose build samples/01_tour.goose
 ```
 
-Or build an executable, which is written beside the source (`-o` puts it
-elsewhere). The compiler finds a C compiler on the machine (`goose toolchain`
-shows which one: MSVC or clang on Windows, cc, gcc or clang elsewhere; `--cc`
-selects one) and links the generated C with the runtime and any native
-modules the program uses, including graphics. Programs that use threads must
-be built this way, since TinyCC cannot place thread-local storage.
+Or build an executable, which is written beside the source. The compiler
+finds a C compiler on the machine (`goose toolchain` shows which one) and
+links the generated C with the runtime and any native modules the program
+uses, including graphics. Programs that use threads must be built this way,
+since TinyCC cannot place thread-local storage.
 
 `goose toolchain` reports the selected C compiler. Choose one with `--cc`,
 `GOOSE_CC`, or `cc = "clang";` in `~/.goose/config`. Run `goose` without a
@@ -511,53 +516,23 @@ build/goose build samples/01_tour.goose && samples/01_tour
 build/goose build samples/27_gfx_cube.goose && samples/27_gfx_cube
 ```
 
-`--debug` turns on the overflow, range and tag checks in the generated C and
-builds the C with debug information. Each abort from these checks names its
-source line (and, for an overflow or a cast, the values involved). `--dry-run`
-prints the commands a build would run, for use in a build system of your
-own, and `-v` prints them as they run. Intermediate files go under
-`~/.goose` (`GOOSE_HOME`), where the runtime object is compiled once per C
-compiler. Useful flags for both forms (running and building):
-`-O0`/`-O1`/`-O2` set the inlining level (`-O2` by default),
-`--bce-lines` reports the bounds checks kept per line, and `-DGS_DEBUG=1` is
-the define that `--debug` sets. Every resizable value lives on a data stack
-of 2 GB of reserved address space, committed as it is used.
-`--stack-reserve 16G` changes that size for a program. `--stacks` reports
-how many data stacks the program and each of its workers can use, and the
-resulting cap on `hardware_threads()`. `-DGS_STACK_STATS=1` makes a program
-report its actual stack use when it ends.
+`goose check` only typechecks. `--debug` turns on the overflow, range and
+tag checks, each of which names its source line when it fails, and
+`--bce-lines` reports the bounds checks that remain on each line. Every
+resizable value lives on a data stack of 2 GB of reserved address space,
+committed as it is used, and `--stack-reserve 16G` changes that size.
+[The command line](docs/command_line.md) describes every command and
+option, including how to write the C for a build system or a C host of your
+own (`goose -o tour.c tour.goose`).
 
 A program with C of its own lists that C in a sidecar file beside the
-source, `foo.build` beside `foo.goose`: `c_sources = ["impl.c"];`. The
-sidecar can also set `c_include`, `c_defines` and `c_libs`, and each of
-these has `_windows`, `_linux` or `_macos` variants for the part that
-applies to one platform. Both forms build the C: `goose build` links it in,
-and `goose run` builds it into a library that the in-process run loads, so
-an `extern fn` can call it either way. A library does the same with a
-sidecar beside its entry file (or names the static library target of its own
-CMake project, `cmake_target = "x";`, which the compiler builds through
-cmake). A program uses a library by writing `import name from "source";` in
-its root file. The source is a directory (`"./lib"`), or a git repository at
-a tag or commit (`"owner/repo@v1"` on GitHub, `"host/owner/repo@ref"`), which
-is fetched into `~/.goose` and built there once per C compiler
-(`docs/design/packages.md`).
-
-Underneath, `goose -o tour.c tour.goose` writes the C. That file holds the
-program and the part of the runtime that is inlined into it. The rest of the
-runtime (the OS layer, data stack reservation, threads, printing) is one
-more C file, which `goose --emit-runtime goose_runtime.c` writes. It is
-compiled once and linked with every program
-(`cc -O2 tour.c goose_runtime.o -o tour -lm -pthread`; on Windows
-`cl /O2 tour.c goose_runtime.obj`). Build the runtime with the same C
-compiler and flags the programs use. It takes no `-D` of its own, and
-a program from another version of the compiler fails to link against it.
-`--standalone` instead writes a C file that holds the whole runtime, and
-that file builds on its own. A program using `audio`, `gfx`, `physics` or
-`ui` also links that module's layer. `goose --audio-link msvc|cc`,
-`--gfx-link`, `--physics-link` and `--ui-link` print a response file that
-names the layer (`cc cube.c goose_runtime.o -o cube @$(goose --gfx-link cc)`;
-a ui program puts the ui layer before the gfx layer it draws through).
-`goose build --dry-run` prints all of this for the program at hand.
+source, `foo.build` beside `foo.goose`: `c_sources = ["impl.c"];`. Both
+forms build that C, so an `extern fn` can call it either way. A program uses
+a library by writing `import name from "source";` in its root file. The
+source is a directory (`"./lib"`), or a git repository at a tag or commit
+(`"owner/repo@v1"` on GitHub, `"host/owner/repo@ref"`), which is fetched
+into `~/.goose` and built there once per C compiler
+([packages](docs/packages.md)).
 
 A program using `audio` plays procedural mono/stereo PCM through SDL3 without
 opening a graphics window. See the [audio reference](docs/stdlib.md#audio).
@@ -606,9 +581,12 @@ has the configuration for Neovim, Helix and Emacs.
   HUDs](docs/stdlib.md#text-rendering-and-game-huds). It also provides windows
   and widgets on Nuklear, drawn through gfx ([how it is
   built](https://github.com/aardappel/goose_gfx/blob/main/docs/ui.md)).
-* [Building programs and using packages](docs/packages.md): `goose build`,
-  libraries from git repositories or directories, a program's own C, and
-  how to make a package of your own.
+* [The command line](docs/command_line.md): every command and option of
+  `goose`, from running and building to writing the C yourself, the
+  formatter and the language server.
+* [Building programs and using packages](docs/packages.md): libraries from
+  git repositories or directories, a program's own C, and how to make a
+  package of your own.
 * [Benchmarks](bench/summary.md): the numbers, with the
   [full results](bench/results.md) and the [design](bench/design.md) behind them.
 * [Implementation notes](docs/implementation.md): how the compiler works, pass

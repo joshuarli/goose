@@ -869,6 +869,7 @@ inline Node *StrLit::Cp1(Inliner &inl) const {
 inline Node *NullLit::Cp1(Inliner &inl) const { return inl.ast.New<NullLit>(line); }
 inline Node *SelfRef::Cp1(Inliner &inl) const { return inl.ast.New<SelfRef>(line); }
 inline Node *Continue::Cp1(Inliner &inl) const { return inl.ast.New<Continue>(line); }
+inline Node *Defer::Cp1(Inliner &inl) const { return inl.ast.New<Defer>(line, inl.CpBlock(body)); }
 
 inline Node *Ident::Cp1(Inliner &inl) const {
     if (vdef) {
@@ -1096,6 +1097,14 @@ inline Node *StrLit::Opt(Optimizer &) { return this; }
 inline Node *NullLit::Opt(Optimizer &) { return this; }
 inline Node *SelfRef::Opt(Optimizer &) { return this; }
 inline Node *Continue::Opt(Optimizer &) { return this; }
+
+// A body with nothing left in it leaves an empty block behind, which
+// OptStmt drops with the statement.
+inline Node *Defer::Opt(Optimizer &o) {
+    o.OptBlock(body);
+    if (body->stmts.empty() && !body->tail) return body;
+    return this;
+}
 inline Node *FnDecl::Opt(Optimizer &) { return this; }   // Inert statement.
 
 inline Node *Ident::Opt(Optimizer &o) {

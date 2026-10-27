@@ -568,6 +568,7 @@ public:
                 break;
             }
             case NK_EarlyBlock: Expr(((const EarlyBlock *)n)->body); break;
+            case NK_Defer: Expr(((const Defer *)n)->body); break;
             case NK_While: {
                 auto x = (const While *)n;
                 Expr(x->cond);
@@ -1180,6 +1181,7 @@ class DepFinal {
                     Walk(x->body);
                     break;
                 }
+                case NK_Defer: Walk(((const Defer *)n)->body); break;
                 case NK_While: {
                     auto x = (const While *)n;
                     Walk(x->cond);
