@@ -2319,6 +2319,48 @@ private theorem rp_effects_retained :
     | exact retains_call _ _ _]
   all_goals simp_all
 
+theorem rpArgs_byVal_operandEffects {env : PEnv} {expression : Expr} {rest : List Arg}
+    {before middle after : RState} {roots : List RootRef} {allRoots : List (List RootRef)}
+    (operand : rpExpr env expression before = .ok (roots, middle))
+    (checked : rpArgs env (.byVal expression :: rest) before = .ok (allRoots, after)) :
+    EffectTargetsIncluded middle.eff after.eff := by
+  let continuation : List RootRef → P (List (List RootRef)) := fun rho => do
+    let (remaining, effects) ← captureEffects (rpArgs env rest)
+    let retained ← liftV (argumentInteriorRoots env (.byVal expression) rho)
+    checkRetainedShrinks env retained effects
+    pure (rho :: remaining)
+  have retained : ∀ rho, RetainsEffects (continuation rho) := by
+    intro rho
+    dsimp only [continuation]
+    retain_effect_targets [exact (rp_effects_retained.2.2.2.2.2.2.2.2.2.2.1 env rest)]
+  have remaining : continuation roots middle = .ok (allRoots, after) := by
+    simpa [rpArgs, continuation, bind, StateT.bind, Except.bind, operand] using checked
+  exact (retained roots middle allRoots after remaining).1
+
+theorem rpExpr_call_argumentEffects {env : PEnv} {contextId : Nat} {context : Context} {callee : Impl}
+    {parameter : Param} {expression : Expr} {origin : Nat} {before middle after : RState}
+    {argumentRoots : List (List RootRef)} {roots : List RootRef}
+    (contextAt : env.mod.contexts[contextId]? = some context)
+    (calleeAt : env.mod.impls[context.impl]? = some callee)
+    (parameters : callee.params = #[parameter])
+    (arguments : rpArgs env [.byVal expression] before = .ok (argumentRoots, middle))
+    (checked : rpExpr env (.call contextId [.byVal expression] origin) before = .ok (roots, after)) :
+    EffectTargetsIncluded middle.eff after.eff := by
+  let continuation : List (List RootRef) → P (List RootRef) := fun argRoots => do
+    liftV (checkContents env contextId [.byVal expression] argRoots)
+    let escapes := env.targetEscapes[context.impl]?.getD []
+    if escapes.any (fun target => (env.mod.targets[target]?).any (·.contains env.ctx.impl)) then
+      noteResultConstruction env
+    rpCall env contextId argRoots
+  have retained : ∀ rho, RetainsEffects (continuation rho) := by
+    intro rho
+    dsimp only [continuation]
+    retain_effect_targets [exact retains_call _ _ _]
+  have remaining : continuation argumentRoots middle = .ok (roots, after) := by
+    simpa [rpExpr, contextAt, calleeAt, parameters, continuation, bind, StateT.bind, Except.bind,
+      arguments, List.forIn_cons, List.forIn_nil, pure, StateT.pure, Except.pure] using checked
+  exact (retained argumentRoots middle roots after remaining).1
+
 theorem rpPlace_effectTargetsIncluded {env : PEnv} {place : Place} {before after : RState}
     {roots : List RootRef} (checked : rpPlace env place before = .ok (roots, after)) :
     EffectTargetsIncluded before.eff after.eff :=
