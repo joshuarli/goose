@@ -35,6 +35,7 @@ theorem accepted_numeric_register_outcomes {expression : Expr} (form : AcceptedN
     (typingAfter : Nat) (rootsAfter : RState) (checked : CheckedValue frame expression ty roots typingAfter rootsAfter) :
     let action := evalProduce (fuel + 1) config frame.interpretation.environment [.register ty] expression
     EvaluationHistoryLifecycleOutcome .carriers [.register ty] ambient pending (action state) ∧
+      Goose.Proofs.Exit.stepState (action state) = state ∧
       AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState (action state)) ambient types live regions pending ∧
       AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState (action state)) types ∧
       (∀ carriers after, action state = .ok carriers after →
@@ -55,7 +56,7 @@ theorem accepted_numeric_register_outcomes {expression : Expr} (form : AcceptedN
     cases evaluated : evalValue fuel config frame.interpretation.environment expression state <;>
       simp only [bind, evaluated, pure, Goose.Proofs.Exit.stepState] <;>
       simpa only [evaluated, Goose.Proofs.Exit.stepState] using valueResult.1
-  refine ⟨outcome, ?_, ?_, ?_⟩
+  refine ⟨outcome, stateUnchanged, ?_, ?_, ?_⟩
   · simpa only [stateUnchanged] using world
   · simpa only [stateUnchanged] using source
   · intro carriers after success
