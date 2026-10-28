@@ -7,6 +7,11 @@ open Goose.Construct
 mutual
 inductive NestedScalarExpression : Expr → Prop
   | scalar {expression : Expr} (form : AcceptedBinaryExpression expression) : NestedScalarExpression expression
+  | unary {expression : Expr} (operation : Goose.Core.UnOp) (origin : Nat)
+      (operand : NestedScalarExpression expression) : NestedScalarExpression (.un operation expression origin)
+  | binary {left right : Expr} (operation : Goose.Core.BinOp) (origin : Nat)
+      (leftForm : NestedScalarExpression left) (rightForm : NestedScalarExpression right) :
+      NestedScalarExpression (.bin operation left right origin)
   | conditional {condition : Expr} {yes no : Block} (origin : Nat)
       (conditionForm : NestedScalarExpression condition) (yesForm : NestedScalarBlock yes) (noForm : NestedScalarBlock no) :
       NestedScalarExpression (.ifE condition yes no origin)
@@ -31,6 +36,16 @@ theorem nestedScalarExpressionFlow_next {expression : Expr} (form : NestedScalar
     (fuel : Nat) : nextFlowPrivate ∈ expressionFlowPrivate fuel expression := by
   cases form with
   | scalar form => exact recursiveScalarFlow_next form fuel
+  | unary operation origin operand =>
+    cases fuel with
+    | zero => flow_simp
+    | succ fuel => flow_simpa using nestedScalarExpressionFlow_next operand fuel
+  | binary operation origin leftForm rightForm =>
+    cases fuel with
+    | zero => flow_simp
+    | succ fuel =>
+      flow_simp
+      exact ⟨nextFlowPrivate, nestedScalarExpressionFlow_next leftForm fuel, nestedScalarExpressionFlow_next rightForm fuel⟩
   | conditional origin conditionForm yesForm noForm =>
     cases fuel with
     | zero => flow_simp
@@ -95,6 +110,8 @@ theorem nestedScalarExpression_singleton {expression : Expr} (form : NestedScala
     (typed : typeExpr fuel environment expression before = .ok (types, after)) : ∃ ty, types = [ty] := by
   cases form with
   | scalar form => exact typeExpr_scalar_singleton form fuel environment before after types typed
+  | unary operation origin operand => exact typeExpr_unary_singleton fuel environment _ operation origin before after types typed
+  | binary operation origin left right => exact typeExpr_binary_singleton fuel environment _ _ operation origin before after types typed
   | conditional origin conditionForm yesForm noForm =>
     cases fuel with
     | zero => change Except.error _ = Except.ok _ at typed; cases typed

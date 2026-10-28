@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedNestedComposition
+import Goose.Proofs.ConstructionAcceptedNestedArithmeticComposition
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -29,6 +29,67 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
     NestedValueOutcome config accepted frame ambient types live ty (evalValue fuel config frame.interpretation.environment expression before) := by
   cases form with
   | scalar form => exact nestedValue_scalar fuel config accepted frame ambient types live ty _ form before world source roots typingAfter rootsAfter checked
+  | @unary expression operation origin operand =>
+    cases fuel with
+    | zero => simp [NestedValueOutcome, evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState, world, source]
+    | succ fuel =>
+      cases nesting : frame.typingFuel with
+      | zero =>
+        have typed := checked.typing
+        rw [nesting] at typed
+        change Except.error _ = Except.ok _ at typed
+        cases typed
+      | succ checkFuel =>
+        obtain ⟨integer, operandRoots, operandAfter, sameTy, sameRoots, operandChecked⟩ :=
+          checkedValue_un_operand frame checkFuel operation expression origin ty roots typingAfter rootsAfter nesting checked
+        subst ty roots
+        let operandFrame := ordinaryOperandFrame frame checkFuel
+        have operandSource := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
+        have safe := nestedScalarExpression_complete operand fuel config accepted operandFrame before ambient types live world operandSource
+          empty globalLimit noParameters scalars (.int integer) operandRoots typingAfter operandAfter operandChecked
+        have safe' : NestedValueOutcome config accepted frame ambient types live (.int integer)
+            (evalValue fuel config frame.interpretation.environment expression before) :=
+          safe.retarget config accepted frame operandFrame ambient types live (.int integer) before _ source empty rfl rfl
+        exact nestedValueUnary_compose fuel config accepted frame ambient types live integer operation expression origin before safe'
+  | @binary left right operation origin leftForm rightForm =>
+    cases fuel with
+    | zero => simp [NestedValueOutcome, evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState, world, source]
+    | succ fuel =>
+      cases nesting : frame.typingFuel with
+      | zero =>
+        have typed := checked.typing
+        rw [nesting] at typed
+        change Except.error _ = Except.ok _ at typed
+        cases typed
+      | succ checkFuel =>
+        obtain ⟨integer, middle, leftRoots, rightRoots, rootMiddle, rootFinal, sameTy, sameRoots, leftChecked, rightChecked⟩ :=
+          checkedValue_bin_operands frame checkFuel operation left right origin ty roots typingAfter rootsAfter nesting checked
+        subst ty roots
+        let leftFrame := ordinaryOperandFrame frame checkFuel
+        let rightFrame := { leftFrame with
+          typingCounter := middle
+          rootCursor := rootMiddle }
+        have leftFacts := nestedScalarExpression_cursors leftForm checkFuel leftFrame (.int integer) leftRoots middle rootMiddle rfl leftChecked
+        have sameCounter : middle = frame.typingCounter := by simpa [leftFrame, ordinaryOperandFrame] using leftFacts.1
+        have sameRoot : rootMiddle.nextVar = frame.rootCursor.nextVar := by simpa [leftFrame, ordinaryOperandFrame] using leftFacts.2
+        have leftSource := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
+        have leftSafe := nestedScalarExpression_complete leftForm fuel config accepted leftFrame before ambient types live world leftSource
+          empty globalLimit noParameters scalars (.int integer) leftRoots middle rootMiddle leftChecked
+        have leftSafe' : NestedValueOutcome config accepted frame ambient types live (.int integer)
+            (evalValue fuel config frame.interpretation.environment left before) :=
+          leftSafe.retarget config accepted frame leftFrame ambient types live (.int integer) before _ source empty rfl rfl
+        have rightSafe : ∀ state, AcceptedWorld config frame.initialized state ambient types live [] [] →
+            AcceptedFrame config accepted frame state types →
+            NestedValueOutcome config accepted frame ambient types live (.int integer)
+              (evalValue fuel config frame.interpretation.environment right state) := by
+          intro state currentWorld currentSource
+          have rightSource : AcceptedFrame config accepted rightFrame state types := by
+            simpa [rightFrame, leftFrame, ordinaryOperandFrame, sameCounter] using
+              (ordinaryOperandFrame_accepted accepted frame checkFuel state types currentSource).withRootCursor rootMiddle sameRoot
+          have safe := nestedScalarExpression_complete rightForm fuel config accepted rightFrame state ambient types live currentWorld rightSource
+            empty globalLimit noParameters scalars (.int integer) rightRoots typingAfter rootFinal rightChecked
+          exact safe.retarget config accepted frame rightFrame ambient types live (.int integer) state _ currentSource empty rfl rfl
+        exact nestedValueBinary_compose fuel config accepted frame ambient types live integer operation left right origin before leftSafe' rightSafe
   | @conditional condition yes no origin conditionForm yesForm noForm =>
     cases fuel with
     | zero => simpa [NestedValueOutcome, evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState] using And.intro world (And.intro source True.intro)

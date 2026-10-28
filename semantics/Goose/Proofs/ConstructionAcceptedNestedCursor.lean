@@ -11,6 +11,20 @@ private theorem nestedCursor_bind_success {ε α β : Type} (first : Except ε �
   | error failure => cases checked
   | ok value => exact ⟨value, rfl, checked⟩
 
+private theorem nestedBin_final_nextVar (frame : ConstructionSourceFrame) (operation : Goose.Core.BinOp) (left right : Expr)
+    (origin : Goose.Core.OriginId) (roots leftRoots rightRoots : List RootRef) (after middle final : RState)
+    (checked : rpExpr frame.source (.bin operation left right origin) frame.rootCursor = .ok (roots, after))
+    (first : rpExpr frame.source left frame.rootCursor = .ok (leftRoots, middle))
+    (second : rpExpr frame.source right middle = .ok (rightRoots, final)) : after.nextVar = final.nextVar := by
+  change (Except.bind (rpExpr frame.source left frame.rootCursor) _) = .ok (roots, after) at checked
+  simp only [first, Except.bind] at checked
+  change (Except.bind (rpExpr frame.source right middle) _) = .ok (roots, after) at checked
+  simp only [second, Except.bind] at checked
+  cases operation <;> first
+    | change Except.ok ([], final) = Except.ok (roots, after) at checked; cases checked; rfl
+    | change Except.ok ([], { final with eff := { final.eff with aborts := true } }) = Except.ok (roots, after) at checked
+      cases checked; rfl
+
 mutual
 theorem nestedScalarExpression_cursors {expression : Expr} (form : NestedScalarExpression expression)
     (fuel : Nat) (frame : ConstructionSourceFrame) (ty : Ty) (roots : List RootRef)
@@ -19,6 +33,46 @@ theorem nestedScalarExpression_cursors {expression : Expr} (form : NestedScalarE
     typingAfter = frame.typingCounter ∧ rootsAfter.nextVar = frame.rootCursor.nextVar := by
   cases form with
   | scalar form => exact checked_binary_recursive_cursor form frame ty roots typingAfter rootsAfter checked
+  | unary operation origin operand =>
+    cases fuel with
+    | zero =>
+      have typed := checked.typing
+      rw [fuelAt] at typed
+      change Except.error _ = Except.ok _ at typed
+      cases typed
+    | succ fuel =>
+      obtain ⟨integer, operandRoots, operandAfter, sameTy, sameRoots, operandChecked⟩ :=
+        checkedValue_un_operand frame fuel operation _ origin ty roots typingAfter rootsAfter fuelAt checked
+      obtain ⟨otherRoots, otherAfter, otherRooted, nextVar⟩ := rpExpr_un_nextVar frame.source operation _ origin
+        frame.rootCursor rootsAfter roots checked.provenance
+      have same : operandAfter = otherAfter := by
+        have pair := operandChecked.provenance.symm.trans otherRooted
+        exact (Prod.mk.inj (Except.ok.inj pair)).2
+      subst otherAfter
+      have facts := nestedScalarExpression_cursors operand fuel (ordinaryOperandFrame frame fuel) (.int integer)
+        operandRoots typingAfter operandAfter rfl operandChecked
+      exact ⟨by simpa [ordinaryOperandFrame] using facts.1,
+        nextVar.trans (by simpa [ordinaryOperandFrame] using facts.2)⟩
+  | binary operation origin leftForm rightForm =>
+    cases fuel with
+    | zero =>
+      have typed := checked.typing
+      rw [fuelAt] at typed
+      change Except.error _ = Except.ok _ at typed
+      cases typed
+    | succ fuel =>
+      obtain ⟨integer, middle, leftRoots, rightRoots, rootMiddle, rootFinal, sameTy, sameRoots, leftChecked, rightChecked⟩ :=
+        checkedValue_bin_operands frame fuel operation _ _ origin ty roots typingAfter rootsAfter fuelAt checked
+      let leftFrame := ordinaryOperandFrame frame fuel
+      let rightFrame := { leftFrame with
+        typingCounter := middle
+        rootCursor := rootMiddle }
+      have leftFacts := nestedScalarExpression_cursors leftForm fuel leftFrame (.int integer) leftRoots middle rootMiddle rfl leftChecked
+      have rightFacts := nestedScalarExpression_cursors rightForm fuel rightFrame (.int integer) rightRoots typingAfter rootFinal rfl rightChecked
+      have lastRoot := nestedBin_final_nextVar frame operation _ _ origin roots leftRoots rightRoots rootsAfter rootMiddle rootFinal
+        checked.provenance leftChecked.provenance rightChecked.provenance
+      exact ⟨by simpa [leftFrame, rightFrame, ordinaryOperandFrame] using rightFacts.1.trans leftFacts.1,
+        lastRoot.trans (by simpa [leftFrame, rightFrame, ordinaryOperandFrame] using rightFacts.2.trans leftFacts.2)⟩
   | conditional origin conditionForm yesForm noForm =>
     cases fuel with
     | zero =>
