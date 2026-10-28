@@ -722,22 +722,24 @@ private def callWitnessContext : Context := ⟨0, "callee", [], [], []⟩
 private def callWitnessImplementation : Impl := ⟨"callee", #[], #[], #[],
   .mk 0 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none, .unknown⟩
 
-theorem witness_call : ∃ after,
-    invokeCall 40 callWitnessConfig witnessEnvironment 0 [] [] 0 .initial = .ok [] after ∧
-    SourceHistory callWitnessConfig 40 [] (.call witnessEnvironment 0 0) .initial (.ok [] after) := by
+private theorem callWitness_supported : SupportedOperation callWitnessConfig (.call witnessEnvironment 0 0) := by
   have bodySupported : ∀ environment, SupportedOperation callWitnessConfig
       (.statements environment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
     intro environment
     exact .sequence environment (.expression environment 0 (.value environment
       (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
-  have supported : SupportedOperation callWitnessConfig (.call witnessEnvironment 0 0) := by
-    apply SupportedOperation.call witnessEnvironment 0 0 callWitnessContext callWitnessImplementation
-    · rfl
-    · rfl
-    · rfl
-    · rfl
-    · intro act
-      exact .activation _ 0 _ 0 bodySupported
+  apply SupportedOperation.call witnessEnvironment 0 0 callWitnessContext callWitnessImplementation
+  · rfl
+  · rfl
+  · rfl
+  · rfl
+  · intro act
+    exact .activation _ 0 _ 0 bodySupported
+
+theorem witness_call : ∃ after,
+    invokeCall 40 callWitnessConfig witnessEnvironment 0 [] [] 0 .initial = .ok [] after ∧
+    SourceHistory callWitnessConfig 40 [] (.call witnessEnvironment 0 0) .initial (.ok [] after) := by
+  have supported := callWitness_supported
   have history := history_exists 40 callWitnessConfig (.call witnessEnvironment 0 0) [] .initial supported
   refine ⟨witnessState (invokeCall 40 callWitnessConfig witnessEnvironment 0 [] [] 0 .initial), ?_, ?_⟩
   · unfold callWitnessConfig witnessEnvironment witnessState
@@ -754,19 +756,7 @@ theorem witness_call : ∃ after,
 theorem witness_valueCall : ∃ after,
     evalValue 40 callWitnessConfig witnessEnvironment (.call 0 [] 0) .initial = .ok .unit after ∧
     SourceHistory callWitnessConfig 40 [] (.value witnessEnvironment (.call 0 [] 0)) .initial (.ok .unit after) := by
-  have bodySupported : ∀ environment, SupportedOperation callWitnessConfig
-      (.statements environment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
-    intro environment
-    exact .sequence environment (.expression environment 0 (.value environment
-      (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
-  have callee : SupportedOperation callWitnessConfig (.call witnessEnvironment 0 0) := by
-    apply SupportedOperation.call witnessEnvironment 0 0 callWitnessContext callWitnessImplementation
-    · rfl
-    · rfl
-    · rfl
-    · rfl
-    · intro act
-      exact .activation _ 0 _ 0 bodySupported
+  have callee := callWitness_supported
   have supported : SupportedOperation callWitnessConfig (.value witnessEnvironment (.call 0 [] 0)) :=
     .valueCall witnessEnvironment 0 0 callWitnessContext callWitnessImplementation rfl rfl rfl callee
   have history := history_exists 40 callWitnessConfig (.value witnessEnvironment (.call 0 [] 0)) [] .initial supported
@@ -791,19 +781,7 @@ theorem witness_nestedCallArgument : ∃ after,
     SourceHistory callWitnessConfig 40 []
       (.arguments witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments) .initial
       (.ok [.unit, .int .i64 9] after) := by
-  have bodySupported : ∀ environment, SupportedOperation callWitnessConfig
-      (.statements environment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
-    intro environment
-    exact .sequence environment (.expression environment 0 (.value environment
-      (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
-  have callee : SupportedOperation callWitnessConfig (.call witnessEnvironment 0 0) := by
-    apply SupportedOperation.call witnessEnvironment 0 0 callWitnessContext callWitnessImplementation
-    · rfl
-    · rfl
-    · rfl
-    · rfl
-    · intro act
-      exact .activation _ 0 _ 0 bodySupported
+  have callee := callWitness_supported
   have supported : SupportedOperation callWitnessConfig
       (.arguments witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments) := by
     unfold argumentWitnessParameters argumentWitnessArguments
@@ -828,19 +806,7 @@ theorem witness_nestedCallArgument : ∃ after,
 theorem witness_producerCall : ∃ after,
     evalProduce 40 callWitnessConfig witnessEnvironment [] (.call 0 [] 0) .initial = .ok [] after ∧
     SourceHistory callWitnessConfig 40 [] (.producer witnessEnvironment (.call 0 [] 0)) .initial (.ok [] after) := by
-  have bodySupported : ∀ environment, SupportedOperation callWitnessConfig
-      (.statements environment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
-    intro environment
-    exact .sequence environment (.expression environment 0 (.value environment
-      (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
-  have callee : SupportedOperation callWitnessConfig (.call witnessEnvironment 0 0) := by
-    apply SupportedOperation.call witnessEnvironment 0 0 callWitnessContext callWitnessImplementation
-    · rfl
-    · rfl
-    · rfl
-    · rfl
-    · intro act
-      exact .activation _ 0 _ 0 bodySupported
+  have callee := callWitness_supported
   have history := history_exists 40 callWitnessConfig (.producer witnessEnvironment (.call 0 [] 0)) [] .initial
     (.producerCall witnessEnvironment 0 0 callee)
   refine ⟨witnessState (evalProduce 40 callWitnessConfig witnessEnvironment [] (.call 0 [] 0) .initial), ?_, ?_⟩
