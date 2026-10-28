@@ -7,7 +7,7 @@ namespace Goose.Proofs.ExitExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionExecutionProtocol
 
-private theorem prepareExitDestination_tickets (incoming : Nat) (source : ExitSource)
+theorem prepareExitDestination_tickets (incoming : Nat) (source : ExitSource)
     (state : ConstructionState) (valid : ReservationLifecycleInvariant state) :
     (prepareExitDestinationAction incoming source state).finalState.exitReservations = state.exitReservations := by
   have renewal := renewReceivingDestination_reservation_frame incoming state valid.1 valid.2.resumptions
