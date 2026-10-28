@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedRecursiveCallGlobal
+import Goose.Proofs.ConstructionAcceptedRecursiveLocalCallGlobal
 import Goose.Proofs.ConstructionAcceptedNestedGlobalSequence
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -15,11 +15,25 @@ def RecursiveCallGlobalInitializer (config : EvalConfig) (descriptor : Global) :
     config.module.contexts[target]? = some context ∧ config.module.impls[context.impl]? = some callee ∧
     callee.params = #[] ∧ callee.results = #[⟨descriptor.ty, .register, none⟩] ∧ RegisterCallGraph config descriptor.ty
 
-theorem initGlobals_recursiveCall_head (fuel initialized : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+def RecursiveCallGlobalInitializerWithLocals (config : EvalConfig) (descriptor : Global) : Prop :=
+  NestedGlobalInitializer descriptor ∨
+  ∃ target origin context callee,
+    descriptor.init = .call target [] origin ∧
+    ((∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool) ∧
+    config.module.contexts[target]? = some context ∧ config.module.impls[context.impl]? = some callee ∧
+    callee.params = #[] ∧ callee.results = #[⟨descriptor.ty, .register, none⟩] ∧ RegisterCallGraphWithLocals config descriptor.ty
+
+theorem RecursiveCallGlobalInitializer.withLocals {config : EvalConfig} {descriptor : Global}
+    (form : RecursiveCallGlobalInitializer config descriptor) : RecursiveCallGlobalInitializerWithLocals config descriptor := by
+  rcases form with nested | ⟨target, origin, context, callee, init, scalar, contextAt, calleeAt, parameters, results, graph⟩
+  · exact Or.inl nested
+  · exact Or.inr ⟨target, origin, context, callee, init, scalar, contextAt, calleeAt, parameters, results, graph.withLocals⟩
+
+theorem initGlobals_recursiveCall_head_withLocals (fuel initialized : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (scalars : FlatGlobalsAreScalar config) (before : ExecutionState) (ambient : OwnershipAmbient)
     (types : RootTypes) (live : Goose.Core.RootInst → Prop) (descriptor : Global)
     (world : AcceptedWorld config initialized before ambient types live [] []) (clear : FutureGlobalsClear config initialized before)
-    (declared : config.module.globals[initialized]? = some descriptor) (form : RecursiveCallGlobalInitializer config descriptor) :
+    (declared : config.module.globals[initialized]? = some descriptor) (form : RecursiveCallGlobalInitializerWithLocals config descriptor) :
     ∃ completed nextTypes nextLive nextAmbient regions,
       let outcome := initGlobals fuel config [initialized] before
       let after := Goose.Proofs.Exit.stepState outcome
@@ -38,7 +52,7 @@ theorem initGlobals_recursiveCall_head (fuel initialized : Nat) (config : EvalCo
     | stop reason after => simpa only [execution] using flow
     | escape address carriers after | jump target kind after => simp only [execution] at flow
   · obtain ⟨completed, nextTypes, nextLive, nextAmbient, extend, lower, upper, afterWorld, flow⟩ :=
-      initGlobals_recursive_register_single fuel initialized config accepted before ambient types live descriptor target origin context callee
+      initGlobals_recursive_register_single_withLocals fuel initialized config accepted before ambient types live descriptor target origin context callee
         world clear declared init scalar contextAt calleeAt parameters results graph
     refine ⟨completed, nextTypes, nextLive, nextAmbient, [], extend, lower, upper, afterWorld, ?_⟩
     cases execution : initGlobals fuel config [initialized] before with
@@ -48,12 +62,29 @@ theorem initGlobals_recursiveCall_head (fuel initialized : Nat) (config : EvalCo
     | stop reason after => simp only [execution] at flow ⊢; omega
     | escape address carriers after | jump target kind after => simp only [execution] at flow
 
-theorem initGlobals_recursiveCall_complete (count : Nat) :
+theorem initGlobals_recursiveCall_head (fuel initialized : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (scalars : FlatGlobalsAreScalar config) (before : ExecutionState) (ambient : OwnershipAmbient)
+    (types : RootTypes) (live : Goose.Core.RootInst → Prop) (descriptor : Global)
+    (world : AcceptedWorld config initialized before ambient types live [] []) (clear : FutureGlobalsClear config initialized before)
+    (declared : config.module.globals[initialized]? = some descriptor) (form : RecursiveCallGlobalInitializer config descriptor) :
+    ∃ completed nextTypes nextLive nextAmbient regions,
+      let outcome := initGlobals fuel config [initialized] before
+      let after := Goose.Proofs.Exit.stepState outcome
+      RootTypesExtend types nextTypes ∧ initialized ≤ completed ∧ completed ≤ initialized + 1 ∧
+      AcceptedWorld config completed after nextAmbient nextTypes nextLive regions [] ∧
+      (match outcome with
+       | .ok _ _ => nextAmbient = ambient ∧ completed = initialized + 1 ∧ regions = [] ∧ FutureGlobalsClear config completed after
+       | .stop _ _ => completed < initialized + 1
+       | .escape .. | .jump .. => False) := by
+  exact initGlobals_recursiveCall_head_withLocals fuel initialized config accepted scalars before ambient types live descriptor
+    world clear declared form.withLocals
+
+theorem initGlobals_recursiveCall_complete_withLocals (count : Nat) :
     ∀ (fuel initialized : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : FlatGlobalsAreScalar config)
       (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop),
       initialized + count ≤ config.module.globals.size →
       (∀ id, initialized ≤ id → id < initialized + count →
-        ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializer config descriptor) →
+        ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializerWithLocals config descriptor) →
       AcceptedWorld config initialized before ambient types live [] [] → FutureGlobalsClear config initialized before →
       ∃ completed nextTypes nextLive nextAmbient regions,
         let outcome := initGlobals fuel config (List.range' initialized count) before
@@ -73,7 +104,7 @@ theorem initGlobals_recursiveCall_complete (count : Nat) :
     intro fuel initialized config accepted scalars before ambient types live bound declarations world clear
     obtain ⟨descriptor, declared, form⟩ := declarations initialized (Nat.le_refl _) (by omega)
     obtain ⟨completed, nextTypes, nextLive, nextAmbient, regions, extend, lower, upper, headWorld, headFlow⟩ :=
-      initGlobals_recursiveCall_head fuel initialized config accepted scalars before ambient types live descriptor world clear declared form
+      initGlobals_recursiveCall_head_withLocals fuel initialized config accepted scalars before ambient types live descriptor world clear declared form
     have factor := initGlobals_head_factor fuel config initialized (List.range' (initialized + 1) count)
     cases head : initGlobals fuel config [initialized] before with
     | stop reason after =>
@@ -89,7 +120,7 @@ theorem initGlobals_recursiveCall_complete (count : Nat) :
       obtain ⟨ambientEq, completedEq, regionsEq, nextClear⟩ := headFlow
       subst nextAmbient completed regions
       have tailDeclarations : ∀ id, initialized + 1 ≤ id → id < initialized + 1 + count →
-          ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializer config descriptor := by
+          ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializerWithLocals config descriptor := by
         intro id lower upper
         exact declarations id (by omega) (by omega)
       obtain ⟨finalCompleted, finalTypes, finalLive, finalAmbient, finalRegions, finalExtend, finalLower, finalUpper, finalWorld, finalFlow⟩ :=
@@ -109,10 +140,32 @@ theorem initGlobals_recursiveCall_complete (count : Nat) :
       | stop reason after => simp only [tail] at finalFlow ⊢; omega
       | escape address carriers after | jump target kind after => simp only [tail] at finalFlow
 
-theorem initGlobals_recursiveCall_initial_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+theorem initGlobals_recursiveCall_complete (count : Nat) :
+    ∀ (fuel initialized : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : FlatGlobalsAreScalar config)
+      (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop),
+      initialized + count ≤ config.module.globals.size →
+      (∀ id, initialized ≤ id → id < initialized + count →
+        ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializer config descriptor) →
+      AcceptedWorld config initialized before ambient types live [] [] → FutureGlobalsClear config initialized before →
+      ∃ completed nextTypes nextLive nextAmbient regions,
+        let outcome := initGlobals fuel config (List.range' initialized count) before
+        let after := Goose.Proofs.Exit.stepState outcome
+        RootTypesExtend types nextTypes ∧ initialized ≤ completed ∧ completed ≤ initialized + count ∧
+        AcceptedWorld config completed after nextAmbient nextTypes nextLive regions [] ∧
+        (match outcome with
+         | .ok _ _ => nextAmbient = ambient ∧ completed = initialized + count ∧ regions = [] ∧ FutureGlobalsClear config completed after
+         | .stop _ _ => completed < initialized + count
+         | .escape .. | .jump .. => False) := by
+  intro fuel initialized config accepted scalars before ambient types live bound declarations world clear
+  apply initGlobals_recursiveCall_complete_withLocals count fuel initialized config accepted scalars before ambient types live bound ?_ world clear
+  intro id lower upper
+  obtain ⟨descriptor, declared, form⟩ := declarations id lower upper
+  exact ⟨descriptor, declared, form.withLocals⟩
+
+theorem initGlobals_recursiveCall_initial_complete_withLocals (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (scalars : FlatGlobalsAreScalar config)
     (declarations : ∀ id, id < config.module.globals.size →
-      ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializer config descriptor) :
+      ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializerWithLocals config descriptor) :
     ∃ completed types live ambient regions,
       let outcome := initGlobals fuel config (List.range config.module.globals.size) .initial
       let after := Goose.Proofs.Exit.stepState outcome
@@ -123,11 +176,11 @@ theorem initGlobals_recursiveCall_initial_complete (fuel : Nat) (config : EvalCo
        | .stop stop _ => completed < config.module.globals.size ∧ runModule fuel config .initial = .stop stop after
        | .escape .. | .jump .. => False) := by
   have checked : ∀ id, 0 ≤ id → id < 0 + config.module.globals.size →
-      ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializer config descriptor := by
+      ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializerWithLocals config descriptor := by
     intro id lower upper
     exact declarations id (by simpa using upper)
   obtain ⟨completed, types, live, ambient, regions, extend, lower, upper, finalWorld, final⟩ :=
-    initGlobals_recursiveCall_complete config.module.globals.size fuel 0 config accepted scalars .initial [] (declaredRootTypes config.module)
+    initGlobals_recursiveCall_complete_withLocals config.module.globals.size fuel 0 config accepted scalars .initial [] (declaredRootTypes config.module)
       (fun _ => False) (by simp) checked (initial_acceptedWorld config accepted.accepted) (futureGlobalsClear_initial config)
   simp only [Nat.zero_add, ← List.range_eq_range'] at upper finalWorld final
   refine ⟨completed, types, live, ambient, regions, extend, upper, finalWorld, ?_⟩
@@ -142,6 +195,27 @@ theorem initGlobals_recursiveCall_initial_complete (fuel : Nat) (config : EvalCo
     simp only [runModule, bind, outcome, Goose.Proofs.Exit.stepState]
   | escape target carriers after | jump target kind after => simp only [outcome] at final
 
+theorem initGlobals_recursiveCall_initial_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (scalars : FlatGlobalsAreScalar config)
+    (declarations : ∀ id, id < config.module.globals.size →
+      ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializer config descriptor) :
+    ∃ completed types live ambient regions,
+      let outcome := initGlobals fuel config (List.range config.module.globals.size) .initial
+      let after := Goose.Proofs.Exit.stepState outcome
+      RootTypesExtend (declaredRootTypes config.module) types ∧ completed ≤ config.module.globals.size ∧
+      AcceptedWorld config completed after ambient types live regions [] ∧
+      (match outcome with
+       | .ok _ _ => ambient = [] ∧ completed = config.module.globals.size ∧ regions = [] ∧ FutureGlobalsClear config completed after
+       | .stop stop _ => completed < config.module.globals.size ∧ runModule fuel config .initial = .stop stop after
+       | .escape .. | .jump .. => False) := by
+  apply initGlobals_recursiveCall_initial_complete_withLocals fuel config accepted scalars
+  intro id inside
+  obtain ⟨descriptor, declared, form⟩ := declarations id inside
+  exact ⟨descriptor, declared, form.withLocals⟩
+
+#print axioms initGlobals_recursiveCall_initial_complete_withLocals
+#print axioms initGlobals_recursiveCall_complete_withLocals
+#print axioms initGlobals_recursiveCall_head_withLocals
 #print axioms initGlobals_recursiveCall_initial_complete
 #print axioms initGlobals_recursiveCall_complete
 #print axioms initGlobals_recursiveCall_head

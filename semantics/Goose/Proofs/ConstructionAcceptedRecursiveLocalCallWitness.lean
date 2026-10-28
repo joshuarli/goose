@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionAcceptedRecursiveMixedGlobalModule
 import Goose.Proofs.ConstructionAcceptedRecursiveLocalCallModule
 import Goose.Proofs.ConstructionAcceptedNestedGlobal
 
@@ -136,6 +137,73 @@ theorem localTail_module_allFuel (fuel : Nat) :
   · simp [localTailEntry, Block.stmts]
   · rfl
 
+private def localTailMixedModule : Module := ⟨#["mixed-local-call.goose"], #[.int .i64, .varr (.int .u8)],
+  #[⟨"bytes", .varr (.int .u8), .immutable, .bytes (.varr (.int .u8)) [65] 0, 0⟩,
+    ⟨"answer", .int .i64, .immutable, .call 1 [] 0, 0⟩], #[localTailEntry, localTailOuter, localTailInner],
+  #[⟨0, "entry", [], [], []⟩, ⟨1, "outer", [], [[]], []⟩, ⟨2, "inner", [], [[]], []⟩],
+  0, #[⟨0, 1, "call"⟩], #[], #[]⟩
+private def localTailMixedConfig : EvalConfig := ⟨.release, localTailMixedModule⟩
+
+theorem localTailMixed_validated : validate localTailMixedModule = .ok () := by cbv
+
+theorem localTailMixed_graph : RegisterCallGraphWithLocals localTailMixedConfig (.int .i64) := by
+  simpa [RegisterCallGraphWithLocals, RegisterCalleeFormWithLocals, localTailMixedConfig, localTailMixedModule,
+    localTailConfig, localTailModule] using localTail_graph
+
+private def localTailMixedObservation : Option Int :=
+  match runModule 100 localTailMixedConfig .initial with
+  | .ok () state => match state.objects.lookup (.global 1) with
+    | some (.int .i64 value) => some value
+    | _ => none
+  | _ => none
+
+theorem localTailMixed_result : localTailMixedObservation = some 7 := by decide +kernel
+
+theorem localTailMixed_module_allFuel (fuel : Nat) :
+    ∃ initialized ambient types live regions,
+      AcceptedWorld localTailMixedConfig initialized
+        (Goose.Proofs.Exit.stepState (runModule fuel localTailMixedConfig .initial)) ambient types live regions [] ∧
+      (match runModule fuel localTailMixedConfig .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  have scalars : FlatGlobalsAreScalar localTailMixedConfig := by
+    intro id descriptor declared flat
+    cases id with
+    | zero =>
+      have same : descriptor = ⟨"bytes", .varr (.int .u8), .immutable, .bytes (.varr (.int .u8)) [65] 0, 0⟩ := by
+        simpa [localTailMixedConfig, localTailMixedModule] using declared.symm
+      subst descriptor
+      simp [Ty.flat] at flat
+    | succ id =>
+      cases id with
+      | zero =>
+        have same : descriptor = ⟨"answer", .int .i64, .immutable, .call 1 [] 0, 0⟩ := by
+          simpa [localTailMixedConfig, localTailMixedModule] using declared.symm
+        subst descriptor
+        exact Or.inl ⟨.i64, rfl⟩
+      | succ id => simp [localTailMixedConfig, localTailMixedModule] at declared
+  apply acceptedRecursiveMixedGlobalModule_allFuel_withLocals fuel localTailMixedConfig
+    (acceptedModule localTailMixedConfig localTailMixed_validated) scalars ⟨0, "entry", [], [], []⟩ localTailEntry
+  · intro id inside
+    change id < 2 at inside
+    cases id with
+    | zero => exact ⟨_, rfl, Or.inl (Or.inr ⟨[65], 0, rfl, rfl⟩)⟩
+    | succ id =>
+      cases id with
+      | zero => exact ⟨_, rfl, Or.inr ⟨1, 0, ⟨1, "outer", [], [[]], []⟩, localTailOuter,
+          rfl, Or.inl ⟨.i64, rfl⟩, rfl, rfl, rfl, rfl, localTailMixed_graph⟩⟩
+      | succ id => omega
+  · rfl
+  · rfl
+  · exact .nil
+  · simp [localTailEntry, Block.stmts]
+  · simp [localTailEntry, Block.stmts]
+  · simp [localTailEntry, Block.stmts]
+  · simp [localTailEntry, Block.stmts]
+  · rfl
+
+#print axioms localTailMixed_module_allFuel
+#print axioms localTailMixed_result
+#print axioms localTailMixed_graph
+#print axioms localTailMixed_validated
 #print axioms localTail_module_allFuel
 #print axioms localTail_eval_allFuel
 #print axioms localTail_invoke_allFuel

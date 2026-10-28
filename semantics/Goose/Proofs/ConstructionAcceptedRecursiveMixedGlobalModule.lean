@@ -84,6 +84,42 @@ theorem acceptedRecursiveMixedGlobalModule_allFuel (fuel : Nat) (config : EvalCo
     originalAt implementationAt form owners scalarOwners localTargets globalTargets tail
 
 
+theorem recursiveLocalCallInitialGlobalsOutcome (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (scalars : FlatGlobalsAreScalar config)
+    (declarations : ∀ id, id < config.module.globals.size →
+      ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializerWithLocals config descriptor) :
+    InitialGlobalsOutcome fuel config := by
+  obtain ⟨completed, types, live, ambient, regions, extend, bound, world, final⟩ :=
+    initGlobals_recursiveCall_initial_complete_withLocals fuel config accepted scalars declarations
+  exact ⟨completed, types, live, ambient, regions, bound, world, final⟩
+
+theorem acceptedRecursiveMixedGlobalModule_allFuel_withLocals (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : FlatGlobalsAreScalar config)
+    (original : Context) (implementation : Impl)
+    (globals : ∀ id, id < config.module.globals.size →
+      ∃ descriptor, config.module.globals[id]? = some descriptor ∧ RecursiveCallGlobalInitializerWithLocals config descriptor)
+    (originalAt : config.module.contexts[config.module.entry]? = some original)
+    (implementationAt : config.module.impls[original.impl]? = some implementation)
+    (form : MixedAssignStatements implementation.body.stmts)
+    (owners : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ implementation.body.stmts →
+      (implementation.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
+    (scalarOwners : ∀ id expression origin, .letS id expression origin ∈ implementation.body.stmts →
+      AcceptedBinaryExpression expression → ∀ descriptor, implementation.vars[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool)
+    (localTargets : ∀ id expression origin, .assign (.var id) expression origin ∈ implementation.body.stmts →
+      ∀ descriptor, implementation.vars[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool)
+    (globalTargets : ∀ id expression origin, .assign (.global id) expression origin ∈ implementation.body.stmts →
+      ∀ descriptor, config.module.globals[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool)
+    (tail : implementation.body.value = none) :
+    ∃ initialized ambient types live regions,
+      AcceptedWorld config initialized (Goose.Proofs.Exit.stepState (runModule fuel config .initial)) ambient types live regions [] ∧
+      (match runModule fuel config .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  exact acceptedModuleFromGlobals_allFuel fuel config accepted original implementation
+    (recursiveLocalCallInitialGlobalsOutcome fuel config accepted scalars globals)
+    originalAt implementationAt form owners scalarOwners localTargets globalTargets tail
+
+#print axioms acceptedRecursiveMixedGlobalModule_allFuel_withLocals
 #print axioms acceptedRecursiveMixedGlobalModule_allFuel
 #print axioms acceptedRecursiveMixedGlobalModule_noTail
 #print axioms acceptedRecursiveMixedGlobalModule_lowFuel
