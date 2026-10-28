@@ -1,5 +1,6 @@
 import Goose.Proofs.ConstructionGhostModuleResultEvents
 import Goose.Proofs.ConstructionGhostDeclarationNestedCall
+import Goose.Proofs.ConstructionGhostBuilderCallEvents
 
 namespace Goose.Proofs.ConstructionGhostCallResultEvents
 open Goose.Construct Goose.Proofs.ConstructionExecution
@@ -9,7 +10,7 @@ open Goose.Proofs.ConstructionGhostStatements Goose.Proofs.ConstructionGhostStat
 open Goose.Proofs.ConstructionGhostInvocationVisitEvents Goose.Proofs.ConstructionGhostDeclarationReplay
 open Goose.Proofs.ConstructionGhostDeclaration Goose.Proofs.ConstructionGhostSourceMutual
 open Goose.Proofs.ConstructionGhostDeclarationOnce Goose.Proofs.ConstructionGhostDeclarationSelection
-open Goose.Proofs.ConstructionGhostDeclarationFallback
+open Goose.Proofs.ConstructionGhostDeclarationFallback Goose.Proofs.ConstructionGhostBuilderCallEvents
 
 theorem call_visitPrefix (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
     (implementation : Impl) (pre : List (Goose.Core.VarId × Value)) (scope : Nat)
@@ -63,6 +64,38 @@ theorem declarationClassification_resultPrefix (config : EvalConfig) (environmen
     | some destination => exact ⟨child.1, eventPrefix_trans _ _ _ child.2 visitPrefix⟩
   · exact Or.inr terminal
 
+theorem builderCall_visitPrefix (fuel : Nat) (config : EvalConfig) (caller activation : RuntimeActivation)
+    (implementation : Impl) (pre : List (Goose.Core.VarId × Value)) (scope : Nat)
+    (statements : List Stmt) (tail : Option Expr) (activated ready before sourceReady : ExecutionState)
+    (incoming destination : Goose.Core.DestinationId) (context : Goose.Core.ContextId) (arguments : List Arg)
+    (origin : Goose.Core.OriginId) (outcome : ExecutionStep Flow) (visits : List StatementInvocation)
+    (visit : StatementInvocation)
+    (found : config.module.impls[activation.implementation]? = some implementation)
+    (body : implementation.body = .mk scope statements tail)
+    (replay : StatementReplay config { activation with scopes := (scope, activated.nextScope) :: activation.scopes }
+      fuel 0 statements ready outcome visits)
+    (member : visit ∈ visits)
+    (execution : execActivationBody (fuel + 1) config activation pre implementation.body activated =
+      activationBodyFinish (withScope activation scope activated.nextScope (fun _ =>
+        resultScopeContinuation activation.channels tail
+          (fun expression => withCompletionChannels activation.channels (expressionOrigin expression)
+            (fun channels => evalProduce fuel config
+              { activation with scopes := (scope, activated.nextScope) :: activation.scopes } channels expression)) outcome)
+        (resultScopeStart activation scope activated)))
+    (renewed : liftConstruction origin (renewReceivingDestination incoming) before = .ok destination sourceReady)
+    (call : invokeCall (fuel + 3) config caller context arguments [.construct destination] origin sourceReady =
+      ((enterActivation (fuel + 2) config activation pre implementation.body origin >>= fun carriers =>
+        deliverCarriers (fuel + 2) config.layout [.construct destination] carriers origin) activated)) :
+    EventPrefix (Goose.Proofs.Exit.stepState visit.outcome).construction.events
+      (Goose.Proofs.Exit.stepState
+        (buildExpr (fuel + 4) config caller incoming (.call context arguments origin) before)).construction.events := by
+  have callee := call_visitPrefix fuel config activation implementation pre scope statements tail activated ready
+    [.construct destination] origin (invokeCall (fuel + 3) config caller context arguments [.construct destination] origin sourceReady)
+    outcome visits visit found body replay member execution call
+  exact eventPrefix_trans _ _ _ callee
+    (builderCall_sourcePrefix (fuel + 3) config caller incoming destination context arguments origin before sourceReady renewed)
+
+#print axioms builderCall_visitPrefix
 #print axioms declarationClassification_resultPrefix
 #print axioms call_visitPrefix
 end Goose.Proofs.ConstructionGhostCallResultEvents
