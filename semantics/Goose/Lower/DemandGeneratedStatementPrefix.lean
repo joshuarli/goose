@@ -107,6 +107,17 @@ def InvariantStatementPrefixFamily {cfg : Cfg} {env : Env} (cx : FnCtx) (results
       (cursor source before (lowerStmt loop statement (lowerEnv cfg.mod env.vars results) before).2 initial start map required) taken reached
 
 
+theorem GeneratedStatementPrefixFamily.withInvariant {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+    {loop : Option LoopCtx} {statement : Stmt}
+    {cursor : ∀ {statement : Stmt} {state : St}, StmtSource cfg env statement state →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop}
+    (family : GeneratedStatementPrefixFamily cx results selected loop statement (@cursor)) (invariant : DemandRuntimePoint → Prop) :
+    InvariantStatementPrefixFamily cx results selected loop statement (@cursor) invariant := by
+  intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended _ taken reached steps
+  exact family source owned occurrence rows coverage admitted bounded realized input extended steps
+
 theorem accepted_generated_global_clear_prefix {cfg : Cfg} {env : Env} {global : GlobalId} {origin : OriginId} {state : St}
     (source : StmtSource cfg env (.clear (.global global) origin) state)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}

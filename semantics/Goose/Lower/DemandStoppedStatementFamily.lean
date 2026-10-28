@@ -57,6 +57,15 @@ def InvariantStoppedStatementPrefixFamily {cfg : Cfg} {env : Env} (cx : FnCtx) (
     StoppedStatementPrefix source map cx results loop before initial start taken reached stop after
 
 
+theorem GeneratedStoppedStatementPrefixFamily.withInvariant {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+    {loop : Option LoopCtx} {statement : Stmt}
+    (family : GeneratedStoppedStatementPrefixFamily cx results selected loop statement) (invariant : DemandRuntimePoint → Prop) :
+    InvariantStoppedStatementPrefixFamily cx results selected loop statement invariant := by
+  intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended _ taken reached steps fuel stop after stopped nonTimeout
+  exact family source owned occurrence rows coverage admitted bounded realized input extended steps stopped nonTimeout
+
 theorem accepted_generated_expression_statement_stopped_family {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
