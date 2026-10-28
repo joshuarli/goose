@@ -740,10 +740,10 @@
  },
  {
   "feature": "Recursive conditional global initialization",
-  "statement": "At every fuel, the mixed module world-preservation result also covers integer and Boolean globals initialized by a conditional with a recursive scalar condition and recursive scalar branch values. A validated witness reads an earlier global in both the condition and selected value, initializes the result to 3, and later assigns 9.",
-  "assumptions": "Accepted module, the specified mixed global and no-tail entry forms, matching local and assignment types, and conditional branches with no statements.",
-  "limits": "Conditional branches with statements, other global forms and the general evaluator induction remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionAcceptedConditionalAlignment.lean; Goose/Proofs/ConstructionAcceptedConditionalRecursive.lean; Goose/Proofs/ConstructionAcceptedRecursiveConditionalModule.lean; Goose/Proofs/ConstructionAcceptedRecursiveConditionalWitness.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "At every fuel, the mixed module world-preservation result also covers integer and Boolean globals initialized by a conditional with a recursive scalar condition and branches containing recursive scalar expression statements and recursive scalar values. A validated witness reads an earlier global in the selected branch, initializes the result to 3, and later assigns 9.",
+  "assumptions": "Accepted module, the specified mixed global and no-tail entry forms, matching local and assignment types, and scalar expression statements in conditional branches.",
+  "limits": "Assignments or declarations in conditional branches, other global forms and the general evaluator induction remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedConditionalStatements.lean; Goose/Proofs/ConstructionAcceptedGlobalBranchValidated.lean; Goose/Proofs/ConstructionAcceptedStatementConditionalModule.lean; Goose/Proofs/ConstructionAcceptedStatementConditionalWitness.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Byte module with empty helper tail",
