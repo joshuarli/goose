@@ -1,27 +1,8 @@
+import Goose.Proofs.ConstructionGhostResultScopeCore
 import Goose.Proofs.ConstructionGhostBlockInitializers
 
 namespace Goose.Proofs.ConstructionGhostResultScope
 open Goose.Construct Goose.Proofs.ConstructionGhostStatements Goose.Proofs.ConstructionGhostBlockInitializers
-
-def resultScopeContinuation (channels : List Channel) (value : Option Expr)
-    (tailAction : Expr → EvalM (List Carrier)) (statements : ExecutionStep Flow) : ExecutionStep (Flow × List Carrier) :=
-  match statements with
-  | .ok flow state => (match flow, value with
-      | .normal _, some expression => do pure (Flow.normal .unit, ← tailAction expression)
-      | .normal _, none =>
-          if channels.isEmpty then pure (flow, [])
-          else match channels with
-            | [.register .unit] => pure (flow, [.register .unit])
-            | _ => fault .arity
-      | flow, _ => pure (flow, [])) state
-  | .stop reason state => .stop reason state
-  | .escape address carriers state => .escape address carriers state
-  | .jump target kind state => .jump target kind state
-
-def resultScopeStart (environment : RuntimeActivation) (scope : Nat) (before : ExecutionState) : ExecutionState :=
-  let scopeEnv := { environment with scopes := (scope, before.nextScope) :: environment.scopes }
-  { before with nextScope := before.nextScope + 1, activations := before.activations.map (fun current =>
-      if current.act == environment.act then { current with scopes := scopeEnv.scopes } else current) }
 
 theorem execResultScope_initializerForest (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (scope : Nat)
