@@ -69,7 +69,21 @@ theorem accepted_generated_slice_assignment_literal_stage {cfg : Cfg} {env : Env
           (lowerEnv cfg.mod env.vars results) (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).2
         (lowerExpr (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin)
           (lowerEnv cfg.mod env.vars results) (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
-        value sliceState slicePoint sliceFrame := by
+        value sliceState slicePoint sliceFrame ∧
+      ∀ (finalPoint : Pt) (finalFrame : GIR.Frame) (after : St),
+      RuntimeStep cx.cfg cx.fn slicePoint sliceFrame sliceState finalPoint finalFrame after →
+      DemandRuntimePrefix cx 7 ⟨start, initial, state⟩ ⟨finalPoint, finalFrame, after⟩ ∧
+      execStmt 4 cfg env (.assign (.deref reference)
+        (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin) state = .ok (.normal .unit) after ∧
+      Post cfg env cx before initial (lowerStmt loop (.assign (.deref reference)
+        (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin)
+        (lowerEnv cfg.mod env.vars results) before).2 finalFrame finalPoint [] ∧
+      StmtResult source (.normal .unit) after ∧
+      map.Bounded (lowerStmt loop (.assign (.deref reference)
+        (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin)
+        (lowerEnv cfg.mod env.vars results) before).2.vals.size ∧
+      DemandFrameAt cfg env cx source.world source.typingAfter source.rootsEnv source.context.outputFuture
+        map.values map.runs ⟨finalPoint, finalFrame, after⟩ := by
   obtain ⟨location, destinationPoint, destinationFrame, alias, destination, canonical, placed, destinationSteps,
     traversal, destinationPost, query, child, childTyping, childRoots, childAt, childOwner, valueOccurrence, valueRows, valueCoverage,
     valueBounded, valueAdmitted, valueRealized, valueInput⟩ :=
@@ -97,7 +111,12 @@ theorem accepted_generated_slice_assignment_literal_stage {cfg : Cfg} {env : Env
       obtain ⟨runAliases, value, rhsSteps, evaluated, site, boundary⟩ :=
         accepted_generated_slice_assignment_store_cursor source child occurrence rows destinationPost query valueRows valueCoverage
           valueAdmitted valueBounded valueRealized extended snapshot sliceStep
-      exact ⟨destinationFrame, runAliases, value, evaluated, site, boundary⟩
+      refine ⟨destinationFrame, runAliases, value, evaluated, site, boundary, ?_⟩
+      intro finalPoint finalFrame after store
+      obtain ⟨suffixSteps, done, post, result, demanded⟩ :=
+        accepted_generated_slice_assignment_store source child childAt occurrence rows admitted bounded realized placed destinationPost
+          query childTyping childRoots valueRows valueCoverage valueAdmitted valueBounded valueRealized extended snapshot sliceStep store
+      exact ⟨destinationSteps.append suffixSteps, done, post, result, bounded.mono post.mono, demanded⟩
 
 
 #print axioms accepted_generated_slice_assignment_literal_stage
@@ -201,10 +220,58 @@ theorem accepted_generated_slice_assignment_store_split {cfg : Cfg} {env : Env} 
   · omega
   · cases sliceEnd with
     | mk slicePoint sliceFrame sliceState =>
-      obtain ⟨destinationFrame, runAliases, value, evaluated, site, boundary⟩ :=
+      obtain ⟨destinationFrame, runAliases, value, evaluated, site, boundary, complete⟩ :=
         next slicePoint sliceFrame sliceState sliceStep
       exact ⟨destinationFrame, slicePoint, sliceFrame, sliceState, alias, runAliases, value, child, childAt,
         restCount, by omega, remainingSteps, evaluated, site, boundary⟩
 
 #print axioms accepted_generated_slice_assignment_store_split
+theorem accepted_generated_slice_assignment_completed_prefix {cfg : Cfg} {env : Env} {state : St}
+    {reference : Expr} {mutability : Mutability} {global : GlobalId} {sliceOrigin origin : OriginId}
+    {intType : IntTy} {number : Int}
+    (source : StmtSource cfg env (.assign (.deref reference)
+      (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin) state)
+    {ty : Ty} (slice : sliceRefTy source.typingEnv reference = some ty)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.statement loop (.assign (.deref reference)
+        (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin)) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerStmt loop (.assign (.deref reference)
+      (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin)
+      (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+
+    (cursor : DemandRuntimePoint → Prop)
+    {taken : Nat} {reached : DemandRuntimePoint} (enough : 7 ≤ taken)
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
+    GeneratedStatementPrefixDecomposition source selected occurrence rows map initial start cursor taken reached := by
+  obtain ⟨snapshotPoint, snapshotFrame, sampledState, alias, aliases, child, upper, childAt, upperAt,
+    suffix, count, suffixSteps, upperDemand, next⟩ :=
+    accepted_generated_slice_assignment_literal_stage source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
+  rcases suffixSteps.uncons with ⟨empty, _⟩ | ⟨restCount, sliceEnd, countSlice, sliceStep, remainingSteps⟩
+  · omega
+  · cases sliceEnd with
+    | mk slicePoint sliceFrame sliceState =>
+      obtain ⟨destinationFrame, runAliases, value, evaluated, site, boundary, complete⟩ :=
+        next slicePoint sliceFrame sliceState sliceStep
+      rcases remainingSteps.uncons with ⟨empty, _⟩ | ⟨finalCount, final, countFinal, store, residual⟩
+      · omega
+      · cases final with
+        | mk finalPoint finalFrame after =>
+          obtain ⟨executed, done, post, result, finalBounded, finalDemand⟩ := complete finalPoint finalFrame after store
+          have prepared : (execStmt 4 cfg env (.assign (.deref reference)
+              (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin) >>= prepareLoopFlow env loop) state =
+                .ok (.normal .unit) after := by
+            simp only [bind_apply, done]
+            cases loop <;> rfl
+          exact ⟨owned, coverage, .complete (by omega) executed residual prepared
+            (.normal post result finalBounded finalDemand.operands)⟩
+
+#print axioms accepted_generated_slice_assignment_completed_prefix
 end Goose.Lower
