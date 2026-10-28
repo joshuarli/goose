@@ -739,6 +739,13 @@
   "evidence": "Goose/Proofs/ConstructionAcceptedMixedEffects.lean; Goose/Proofs/ConstructionAcceptedMixedLocalExecution.lean; Goose/Proofs/ConstructionAcceptedMixedLocalModule.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Byte module with empty helper tail",
+  "statement": "At every fuel, a validated byte-owner module ending in a call to a zero-parameter, zero-result, variableless empty helper preserves an accepted world at its actual result. A checked byte-owner module with such a helper instantiates the theorem and returns successfully.",
+  "assumptions": "Accepted module, byte-owner globals and entry declarations, the stated helper context and empty implementation, and sufficient checker fuel.",
+  "limits": "Nonempty helpers, other call forms, other entry statements and general evaluator preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionEmptyHelperCall.lean; Goose/Proofs/ConstructionByteModuleHelperTail.lean; Goose/Proofs/ConstructionUnitTailWitness.lean; Goose/Proofs/ConstructionUnitTailWorldWitness.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Stopped byte-owner local construction",
   "statement": "At every fuel, an actual stop in local construction of a byte owner preserves the accepted world and source frame, including a fresh receiving region when allocation succeeded.",
   "assumptions": "Accepted world and source frame before construction. Allocation and byte expression origins may differ.",
