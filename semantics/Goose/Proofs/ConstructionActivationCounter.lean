@@ -109,6 +109,123 @@ theorem evalValue_cmp_counter (fuel : Nat) (config : EvalConfig)
 
 #print axioms evalValue_not_counter
 #print axioms evalValue_cmp_counter
+theorem counter_fault (reason : Goose.Core.FaultKind) : PreservesActivationCounter (fault (α := α) reason) :=
+  counter_stop _
+
+theorem counter_abortAt (reason : Goose.Core.AbortKind) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (abortAt (α := α) reason origin) := counter_stop _
+
+theorem evalValue_un_counter (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (operation : Goose.Core.UnOp) (expression : Expr) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.un operation expression origin)) := by
+  simp only [evalValue]
+  apply counter_bind
+  · exact previous.value environment expression
+  · intro value
+    apply counter_bind
+    · exact counter_stateQuery _ (stateQuery_expectInt value)
+    · intro result
+      cases result with
+      | mk ty number =>
+        cases Goose.Core.evalUn config.profile operation ty number with
+        | ok value => exact counter_pure _
+        | error reason => exact counter_abortAt (Goose.Core.AbortKind.ofNum reason) origin
+
+theorem evalValue_bin_counter (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (operation : Goose.Core.BinOp) (first second : Expr) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.bin operation first second origin)) := by
+  simp only [evalValue]
+  apply counter_bind
+  · exact previous.value environment first
+  · intro firstValue
+    apply counter_bind
+    · exact counter_stateQuery _ (stateQuery_expectInt firstValue)
+    · intro firstResult
+      cases firstResult with
+      | mk ty firstNumber =>
+        apply counter_bind
+        · exact previous.value environment second
+        · intro secondValue
+          apply counter_bind
+          · exact counter_stateQuery _ (stateQuery_expectInt secondValue)
+          · intro secondResult
+            cases secondResult with
+            | mk otherTy secondNumber =>
+              apply counter_bind
+              · exact counter_stateQuery _ (stateQuery_sameIntType ty otherTy)
+              · intro ignored
+                cases Goose.Core.evalBin config.profile operation ty firstNumber secondNumber with
+                | ok value => exact counter_pure _
+                | error reason => exact counter_abortAt (Goose.Core.AbortKind.ofNum reason) origin
+
+theorem evalValue_conv_counter (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (kind : Goose.Core.ConvKind) (target : Ty) (expression : Expr) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.conv kind target expression origin)) := by
+  simp only [evalValue]
+  apply counter_bind
+  · exact previous.value environment expression
+  · intro value
+    apply counter_bind
+    · exact counter_stateQuery _ (stateQuery_expectInt value)
+    · intro result
+      cases result with
+      | mk source number =>
+        cases target with
+        | int target =>
+          simp only
+          cases Goose.Core.evalConv config.profile kind source target number with
+          | ok value => exact counter_pure _
+          | error reason => exact counter_abortAt (Goose.Core.AbortKind.ofNum reason) origin
+        | _ => exact counter_fault _
+
+#print axioms evalValue_conv_counter
+theorem evalValue_and_counter (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (first second : Expr) :
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.and first second)) := by
+  simp only [evalValue]
+  apply counter_bind
+  · exact previous.value environment first
+  · intro value
+    apply counter_bind
+    · exact counter_stateQuery _ (stateQuery_expectBool value)
+    · intro condition
+      cases condition with
+      | false => exact counter_pure _
+      | true =>
+        apply counter_bind
+        · exact previous.value environment second
+        · intro value
+          apply counter_bind
+          · exact counter_stateQuery _ (stateQuery_expectBool value)
+          · intro value
+            exact counter_pure _
+
+theorem evalValue_or_counter (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (first second : Expr) :
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.or first second)) := by
+  simp only [evalValue]
+  apply counter_bind
+  · exact previous.value environment first
+  · intro value
+    apply counter_bind
+    · exact counter_stateQuery _ (stateQuery_expectBool value)
+    · intro condition
+      cases condition with
+      | true => exact counter_pure _
+      | false =>
+        apply counter_bind
+        · exact previous.value environment second
+        · intro value
+          apply counter_bind
+          · exact counter_stateQuery _ (stateQuery_expectBool value)
+          · intro value
+            exact counter_pure _
+
+#print axioms evalValue_bin_counter
+#print axioms evalValue_and_counter
 theorem freshActs_distinct_across (action : EvalM α) (preserved : PreservesActivationCounter action)
     (before afterFirst afterAction afterSecond : ExecutionState) (first second : Goose.Core.ActId) (value : α)
     (firstStep : freshAct before = .ok first afterFirst)
