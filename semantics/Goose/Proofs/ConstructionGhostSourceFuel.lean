@@ -1,7 +1,7 @@
 import Goose.Proofs.ConstructionGhostSourceMutual
 
 namespace Goose.Proofs.ConstructionGhostSourceFuel
-open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual
+open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostArguments
 
 inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOperation α → Prop
   | timeout (operation : SourceOperation α) : FuelSupport config 0 operation
@@ -25,6 +25,49 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (origin : Goose.Core.OriginId)
       (body : FuelSupport config fuel (.activationBody activation (.mk scope statements none))) :
       FuelSupport config (fuel + 1) (.activation activation (.mk scope statements none) origin)
+  | boundActivationBody (fuel : Nat) (activation : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
+      (scope : Nat) (statements : List Stmt)
+      (body : ∀ environment, FuelSupport config fuel (.statements environment statements)) :
+      FuelSupport config (fuel + 1) (.boundActivationBody activation pre (.mk scope statements none))
+  | boundActivation (fuel : Nat) (activation : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
+      (scope : Nat) (statements : List Stmt) (origin : Goose.Core.OriginId)
+      (body : FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements none))) :
+      FuelSupport config (fuel + 1) (.boundActivation activation pre (.mk scope statements none) origin)
+  | argumentValue (fuel : Nat) (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param)
+      (parameters : List Param) (operand : Expr) (arguments : List Arg)
+      (child : FuelSupport config fuel (.value environment operand))
+      (tail : FuelSupport config fuel (.arguments environment vars parameters arguments)) :
+      FuelSupport config (fuel + 1) (.arguments environment vars (parameter :: parameters) (.byVal operand :: arguments))
+  | argumentReference (fuel : Nat) (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param)
+      (parameters : List Param) (mutability : Goose.Core.Mutability) (place : Place) (arguments : List Arg)
+      (child : FuelSupport config fuel (.place environment place))
+      (tail : FuelSupport config fuel (.arguments environment vars parameters arguments)) :
+      FuelSupport config (fuel + 1) (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments))
+  | argumentConstruct (fuel : Nat) (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param)
+      (parameters : List Param) (operand : Expr) (arguments : List Arg)
+      (materialized : FuelSupport config fuel (.value environment operand))
+      (direct : ∀ destination, FuelSupport config fuel (.builder environment destination operand))
+      (tail : FuelSupport config fuel (.arguments environment vars parameters arguments)) :
+      FuelSupport config (fuel + 1) (.arguments environment vars (parameter :: parameters) (.construct operand :: arguments))
+  | callWith (fuel : Nat) (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (arguments : List Arg)
+      (origin : Goose.Core.OriginId) (context : Context) (implementation : Impl)
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (resultsEmpty : implementation.results = #[])
+      (argumentsSupported : FuelSupport config fuel (.arguments environment implementation.vars implementation.params.toList arguments))
+      (body : ∀ act pre, FuelSupport config fuel
+        (.boundActivation ⟨context.impl, act, implementation.vars, [], []⟩ pre implementation.body origin)) :
+      FuelSupport config (fuel + 1) (.callWith environment contextId arguments origin)
+  | valueCallWith (fuel : Nat) (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (arguments : List Arg)
+      (origin : Goose.Core.OriginId) (context : Context) (implementation : Impl)
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (resultsEmpty : implementation.results = #[])
+      (callee : FuelSupport config fuel (.callWith environment contextId arguments origin)) :
+      FuelSupport config (fuel + 1) (.value environment (.call contextId arguments origin))
+  | producerCallWith (fuel : Nat) (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (arguments : List Arg)
+      (origin : Goose.Core.OriginId) (callee : FuelSupport config fuel (.callWith environment contextId arguments origin)) :
+      FuelSupport config (fuel + 1) (.producer environment (.call contextId arguments origin))
   | callOne (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (origin : Goose.Core.OriginId)
       (context : Context) (implementation : Impl)
       (contextFound : config.module.contexts[contextId]? = some context)
@@ -112,6 +155,67 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           simp only [execute]
           rw [activationEnter_source]
           exact .activation body
+      | boundActivationBody _ activation pre scope statements bodySupported =>
+          simp only [execute]
+          rw [boundActivationBody_source]
+          refine .boundActivationBody ?_
+          intro ready bound
+          exact ih (.statements { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements)
+            (path ++ [0]) ready (bodySupported _)
+      | boundActivation _ activation pre scope statements origin bodySupported =>
+          refine .boundActivation ?_
+          intro implementation found
+          exact ih (.boundActivationBody activation pre (.mk scope statements none)) (path ++ [0]) before bodySupported
+      | argumentValue _ environment vars parameter parameters operand arguments childSupported tailSupported =>
+          have child := ih (.value environment operand) (path ++ [0]) before childSupported
+          have tail : ∀ value middle, evalValue fuel config environment operand before = .ok value middle →
+              SourceHistory config fuel (path ++ [1]) (.arguments environment vars parameters arguments) middle
+                (evalArguments fuel config environment vars parameters arguments middle) := by
+            intro value middle _
+            exact ih (.arguments environment vars parameters arguments) (path ++ [1]) middle tailSupported
+          simp only [execute]
+          rw [valueArgument_source]
+          exact .argumentValue child tail
+      | argumentReference _ environment vars parameter parameters mutability place arguments childSupported tailSupported =>
+          refine .argumentReference (ih (.place environment place) (path ++ [0]) before childSupported) ?_
+          intro location middle result
+          exact ih (.arguments environment vars parameters arguments) (path ++ [1]) middle tailSupported
+      | argumentConstruct _ environment vars parameter parameters operand arguments materializedSupported directSupported tailSupported =>
+          refine .argumentConstruct ?_ ?_ ?_
+          · intro localVar count found query
+            exact ih (.value environment operand) (path ++ [0]) before materializedSupported
+          · intro localVar destination ready found query allocated
+            exact ih (.builder environment destination operand) (path ++ [0]) ready (directSupported destination)
+          · intro value middle result
+            exact ih (.arguments environment vars parameters arguments) (path ++ [1]) middle tailSupported
+      | callWith _ environment contextId arguments origin context implementation contextFound implementationFound resultsEmpty argumentsSupported bodySupported =>
+          have argumentsHistory := ih (.arguments environment implementation.vars implementation.params.toList arguments)
+            (path ++ [0]) before argumentsSupported
+          have activationHistory : ∀ values ready,
+              evalArguments fuel config environment implementation.vars implementation.params.toList arguments before = .ok values ready →
+              ready.activations.length < Goose.Core.maxCallDepth →
+              let activation : RuntimeActivation := ⟨context.impl, ready.nextAct, implementation.vars, [], []⟩
+              let activated := { ready with nextAct := ready.nextAct + 1, activations := activation :: ready.activations }
+              let pre := (implementation.params.toList.zip values).map fun (parameter, value) => (parameter.var, value)
+              SourceHistory config fuel (path ++ [1]) (.boundActivation activation pre implementation.body origin) activated
+                (enterActivation fuel config activation pre implementation.body origin activated) := by
+            intro values ready result depth
+            exact ih _ _ _ (bodySupported ready.nextAct _)
+          simp only [execute] at argumentsHistory ⊢
+          rw [callWith_source fuel config environment contextId arguments origin context implementation before
+            contextFound implementationFound resultsEmpty]
+          exact .callWith contextFound implementationFound resultsEmpty argumentsHistory activationHistory
+      | valueCallWith _ environment contextId arguments origin context implementation contextFound implementationFound resultsEmpty callee =>
+          have child := ih (.callWith environment contextId arguments origin) (path ++ [0]) before callee
+          simp only [execute] at child ⊢
+          rw [valueCallWith_source fuel config environment contextId arguments context implementation origin before
+            contextFound implementationFound resultsEmpty]
+          exact .valueCallWith contextFound implementationFound resultsEmpty child
+      | producerCallWith _ environment contextId arguments origin callee =>
+          have child := ih (.callWith environment contextId arguments origin) (path ++ [0]) before callee
+          simp only [execute] at child ⊢
+          rw [producerCallWith_source]
+          exact .producerCallWith child
       | callOne environment contextId origin context implementation contextFound implementationFound resultsEmpty =>
           simpa only [execute, emptyCall_one config environment contextId context implementation origin before
             contextFound implementationFound resultsEmpty] using
@@ -255,6 +359,85 @@ theorem recursiveModule_terminal : ∃ state,
   rw [call] at actual
   subst outcome
   exact ⟨state, execution, allocated, history⟩
+
+private def parameterContext : Context := ⟨0, "recursive", [], [], []⟩
+private def parameterArguments : List Arg := [.byVal (.lit .i64 1)]
+private def parameterImplementation : Impl := ⟨"recursive", #[⟨0, .byValue⟩], #[],
+  #[⟨"n", .int .i64, .immutable, 0, 0⟩], .mk 0 [.expr (.call 0 parameterArguments 0) 0] none, .unknown⟩
+private def parameterConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[], #[parameterImplementation], #[parameterContext], 0, #[], #[], #[]⟩⟩
+
+theorem recursiveParameterCall_supported (fuel : Nat) : ∀ environment,
+    FuelSupport parameterConfig fuel (.callWith environment 0 parameterArguments 0) := by
+  induction fuel using Nat.strongRecOn with
+  | ind fuel ih =>
+    intro environment
+    cases fuel with
+    | zero => exact .timeout _
+    | succ fuel =>
+      apply FuelSupport.callWith fuel environment 0 parameterArguments 0 parameterContext parameterImplementation rfl rfl rfl
+      · cases fuel with
+        | zero => exact .timeout _
+        | succ fuel =>
+          change FuelSupport parameterConfig (fuel + 1)
+            (.arguments environment parameterImplementation.vars [⟨0, .byValue⟩] [.byVal (.lit .i64 1)])
+          exact .argumentValue fuel environment parameterImplementation.vars ⟨0, .byValue⟩ [] (.lit .i64 1) []
+            (.legacy fuel (.value environment (.integer .i64 1))) (.legacy fuel (.argumentsDone environment _))
+      · intro act pre
+        let activation : RuntimeActivation := ⟨0, act, parameterImplementation.vars, [], []⟩
+        change FuelSupport parameterConfig fuel
+          (.boundActivation activation pre (.mk 0 [.expr (.call 0 parameterArguments 0) 0] none) 0)
+        cases fuel with
+        | zero => exact .timeout _
+        | succ fuel =>
+          apply FuelSupport.boundActivation fuel activation pre 0 _ 0
+          cases fuel with
+          | zero => exact .timeout _
+          | succ fuel =>
+            apply FuelSupport.boundActivationBody fuel
+            intro scopedEnvironment
+            cases fuel with
+            | zero => exact .timeout _
+            | succ fuel =>
+              apply FuelSupport.sequence fuel
+              · cases fuel with
+                | zero => exact .timeout _
+                | succ fuel =>
+                  apply FuelSupport.expression fuel
+                  cases fuel with
+                  | zero => exact .timeout _
+                  | succ fuel =>
+                    apply FuelSupport.valueCallWith fuel scopedEnvironment 0 parameterArguments 0
+                      parameterContext parameterImplementation rfl rfl rfl
+                    exact ih fuel (by omega) scopedEnvironment
+              · exact .legacy fuel (.empty scopedEnvironment)
+
+theorem recursiveParameterCall_history (fuel : Nat) (environment : RuntimeActivation) :
+    SourceHistory parameterConfig fuel [] (.callWith environment 0 parameterArguments 0) .initial
+      (invokeCall fuel parameterConfig environment 0 parameterArguments [] 0 .initial) :=
+  fuelHistory_exists fuel parameterConfig (.callWith environment 0 parameterArguments 0) [] .initial
+    (recursiveParameterCall_supported fuel environment)
+
+theorem recursiveParameterCall_terminal : ∃ state,
+    invokeCall 20 parameterConfig recursiveEnvironment 0 parameterArguments [] 0 .initial = .stop .timeout state ∧
+    1 < state.nextAct ∧
+    SourceHistory parameterConfig 20 [] (.callWith recursiveEnvironment 0 parameterArguments 0) .initial (.stop .timeout state) := by
+  refine ⟨recursiveState (invokeCall 20 parameterConfig recursiveEnvironment 0 parameterArguments [] 0 .initial), ?_, ?_, ?_⟩
+  · unfold recursiveState parameterConfig parameterContext parameterImplementation parameterArguments recursiveEnvironment
+    cbv
+  · unfold recursiveState parameterConfig parameterContext parameterImplementation parameterArguments recursiveEnvironment
+    cbv
+  · have actual : invokeCall 20 parameterConfig recursiveEnvironment 0 parameterArguments [] 0 .initial =
+        .stop .timeout (recursiveState (invokeCall 20 parameterConfig recursiveEnvironment 0 parameterArguments [] 0 .initial)) := by
+      unfold recursiveState parameterConfig parameterContext parameterImplementation parameterArguments recursiveEnvironment
+      cbv
+    have history := recursiveParameterCall_history 20 recursiveEnvironment
+    rw [actual] at history
+    exact history
+
+#print axioms recursiveParameterCall_supported
+#print axioms recursiveParameterCall_history
+#print axioms recursiveParameterCall_terminal
 
 #print axioms recursiveModule_history
 #print axioms recursiveModule_terminal
