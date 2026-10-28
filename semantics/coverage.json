@@ -739,6 +739,13 @@
   "evidence": "Goose/Proofs/ConstructionAcceptedRecursiveGlobal.lean; Goose/Proofs/ConstructionAcceptedMixedAssignExecution.lean; Goose/Proofs/ConstructionAcceptedRecursiveGlobalModule.lean; Goose/Proofs/ConstructionAcceptedRecursiveGlobalWitness.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Recursive conditional global initialization",
+  "statement": "At every fuel, the mixed module world-preservation result also covers integer and Boolean globals initialized by a conditional with a recursive scalar condition and recursive scalar branch values. A validated witness reads an earlier global in both the condition and selected value, initializes the result to 3, and later assigns 9.",
+  "assumptions": "Accepted module, the specified mixed global and no-tail entry forms, matching local and assignment types, and conditional branches with no statements.",
+  "limits": "Conditional branches with statements, other global forms and the general evaluator induction remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedConditionalAlignment.lean; Goose/Proofs/ConstructionAcceptedConditionalRecursive.lean; Goose/Proofs/ConstructionAcceptedRecursiveConditionalModule.lean; Goose/Proofs/ConstructionAcceptedRecursiveConditionalWitness.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Byte module with empty helper tail",
   "statement": "At every fuel, a validated byte-owner module ending in a call to a zero-parameter, zero-result helper with a no-tail byte-declaration body preserves an accepted world at its actual result. Checked modules with both empty and nonempty helper bodies instantiate the theorem and return successfully.",
   "assumptions": "Accepted module, byte-owner globals and entry declarations, the specified helper context, byte declarations and local types, and sufficient checker fuel.",
