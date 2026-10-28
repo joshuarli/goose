@@ -49,6 +49,47 @@ theorem acceptedByteGlobalsEntry (fuel : Nat) (config : EvalConfig) (accepted : 
       Array.toList_empty, channelsFor, List.mapM_nil, pure]
   exact ⟨frame, activation, live, moduleStep, call, environmentEq, finalWorld, finalSource, position, phase, results⟩
 
+theorem acceptedByteGlobalsEntryOrStop (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (declarations : ∀ id, id < config.module.globals.size →
+      ∃ descriptor bytes bytesOrigin, config.module.globals[id]? = some descriptor ∧
+        descriptor.ty = .varr (.int .u8) ∧ descriptor.init = .bytes (.varr (.int .u8)) bytes bytesOrigin) :
+    (∃ stop after completed live regions,
+      runModule (fuel + 3) config .initial = .stop stop after ∧
+      completed < config.module.globals.size ∧
+      AcceptedWorld config completed after [] (declaredRootTypes config.module) live regions []) ∨
+    ∃ (initialized : ExecutionState) (frame : ConstructionSourceFrame) (activation : RuntimeActivation)
+      (live : Goose.Core.RootInst → Prop),
+      let environment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
+      let activated := { initialized with nextAct := initialized.nextAct + 1, activations := activation :: initialized.activations }
+      let after := ownershipResultScopeState activation frame.source.impl.body.scope activated
+      let next := entryStatementsFrame config frame activated.nextScope
+      initGlobals (fuel + 3) config (List.range config.module.globals.size) .initial = .ok () initialized ∧
+      runModule (fuel + 3) config .initial =
+        (invokeCall (fuel + 3) config environment config.module.entry [] [] 0 >>= fun carriers => publishCarriers 0 carriers) initialized ∧
+      invokeCall (fuel + 3) config environment config.module.entry [] [] 0 initialized =
+        (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
+          deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
+      frame.interpretation.environment = activation ∧
+      AcceptedWorld config next.initialized after [.callChannels activation []] (declaredRootTypes config.module) live [] [] ∧
+      AcceptedFrame config accepted next after (declaredRootTypes config.module) ∧
+      SourcePosition accepted next (.statements frame.source.impl.body.stmts) ∧
+      frame.phase = .implementation config.module.entry ∧ frame.source.impl.results = #[] := by
+  obtain ⟨completed, live, regions, bound, world, final⟩ :=
+    initGlobals_byteOwners_initial_complete (fuel + 3) config accepted declarations
+  cases globals : initGlobals (fuel + 3) config (List.range config.module.globals.size) .initial with
+  | stop stop after =>
+    simp only [globals, Goose.Proofs.Exit.stepState] at world final
+    exact Or.inl ⟨stop, after, completed, live, regions, final.2, final.1, world⟩
+  | ok value initialized =>
+    cases value
+    obtain ⟨frame, activation, entryLive, moduleStep, call, environmentEq, finalWorld, finalSource, position, phase, results⟩ :=
+      acceptedByteGlobalsEntry fuel config accepted initialized declarations globals
+    exact Or.inr ⟨initialized, frame, activation, entryLive, rfl, moduleStep, call, environmentEq, finalWorld, finalSource,
+      position, phase, results⟩
+  | escape target carriers after | jump target kind after =>
+    simp only [globals] at final
+
 #print axioms acceptedByteGlobalsEntry
+#print axioms acceptedByteGlobalsEntryOrStop
 
 end Goose.Proofs.ConstructionAcceptedExecution
