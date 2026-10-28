@@ -39,6 +39,18 @@ theorem IfMixedStatements.fragment {cfg : Cfg} {env : Env} {statements : List St
       subst value
       simp only [Core.Block.stmts] at valid
       simp [stmtsOk, stmtOk, blockOk, condition.fragment, valid, ih]
+  | conditionalElse condition yes no origin yesBranch noBranch yesNoValue noNoValue tail ih =>
+    have yesValid := (yesBranch St.initial).fragment
+    have noValid := (noBranch St.initial).fragment
+    cases yes with
+    | mk yesScope yesStatements yesValue =>
+      cases no with
+      | mk noScope noStatements noValue =>
+        simp only [Core.Block.value] at yesNoValue noNoValue
+        subst yesValue
+        subst noValue
+        simp only [Core.Block.stmts] at yesValid noValid
+        simp [stmtsOk, stmtOk, blockOk, condition.fragment, yesValid, noValid, ih]
 
 theorem stmts_fragment_normal {cfg : Cfg} {env : Env} {statements : List Stmt}
     (valid : stmtsOk statements = true) {fuel : Nat} {state after : St} {flow : Flow}

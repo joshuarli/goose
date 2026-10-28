@@ -18,7 +18,7 @@ theorem generated_if_some_join {le : LEnv} {conditionId : ValueId} {before forke
     (conditionAt : before.pp = some conditionPoint)
     (selectedAt : (if takeYes then yesEnd else noEnd).pp = some point)
     (extended : ExtT after cx.fn.blocks) :
-    after.pp = some (noEnd.blocks.size, 0) ∧ after.stack = before.stack ∧ before.vals.size ≤ after.vals.size ∧
+    after.pp = some (noEnd.blocks.size, 0) ∧ after.stack = before.stack ∧ before.vals.size ≤ after.vals.size ∧ after.vals.size = noEnd.vals.size ∧
       ∀ fuel, DemandInstructionStep cx fuel ⟨point, frame, state⟩ ⟨(noEnd.blocks.size, 0), frame, state⟩ := by
   have yesSet : setCur (some yesBlock) le forked = ((), yesStart) := by rw [setCur_run, yesStartEq]
   have noSet : setCur (some noBlock) le yesEnd = ((), noStart) := by rw [setCur_run, noStartEq]
@@ -62,7 +62,7 @@ theorem generated_if_some_join {le : LEnv} {conditionId : ValueId} {before forke
     have branchAt : instAt cx.fn point = some (.term branch.term) := by simpa [branch, DemandBranch.term] using inst
     have execution : branch.enter cx.fn frame state = .ok (noEnd.blocks.size, instsAt cx.fn (noEnd.blocks.size, 0), frame) state := by
       simp [branch, DemandBranch.enter, mapList, enterBlock, joinBlockAt, joinParams, bindParams, instsAt, bind_apply, pure_apply]
-    refine ⟨LS.pp_eq joinCur joinAt, stack.trans noStack, ?_, fun fuel => .control branchAt execution⟩
+    refine ⟨LS.pp_eq joinCur joinAt, stack.trans noStack, ?_, values, fun fuel => .control branchAt execution⟩
     have advance := noAdvance.vals
     have previous := yesAdvance.vals
     rw [values]
@@ -88,7 +88,7 @@ theorem generated_if_some_join {le : LEnv} {conditionId : ValueId} {before forke
     have branchAt : instAt cx.fn point = some (.term branch.term) := by simpa [branch, DemandBranch.term] using inst
     have execution : branch.enter cx.fn frame state = .ok (noEnd.blocks.size, instsAt cx.fn (noEnd.blocks.size, 0), frame) state := by
       simp [branch, DemandBranch.enter, mapList, enterBlock, joinBlockAt, joinParams, bindParams, instsAt, bind_apply, pure_apply]
-    refine ⟨LS.pp_eq joinCur joinAt, stack.trans noStack, ?_, fun fuel => .control branchAt execution⟩
+    refine ⟨LS.pp_eq joinCur joinAt, stack.trans noStack, ?_, values, fun fuel => .control branchAt execution⟩
     have advance := noAdvance.vals
     have previous := yesAdvance.vals
     rw [values]

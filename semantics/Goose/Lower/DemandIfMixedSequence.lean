@@ -1,4 +1,5 @@
 import Goose.Lower.DemandIfPrefixFamily
+import Goose.Lower.DemandIfElsePrefixFamily
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -54,6 +55,10 @@ inductive IfMixedStatementCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (results :
   | conditional {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
       (cursor : IfStatementPrefixCursor cx results selected source before built initial start map required runtime) :
+      IfMixedStatementCursor cx results selected source before built initial start map required runtime
+  | conditionalElse {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+      {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+      (cursor : IfElseStatementPrefixCursor cx results selected source before built initial start map required runtime) :
       IfMixedStatementCursor cx results selected source before built initial start map required runtime
 
 theorem accepted_generated_if_mixed_sequence {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}

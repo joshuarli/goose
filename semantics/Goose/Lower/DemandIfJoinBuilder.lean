@@ -72,6 +72,21 @@ theorem generated_if_none_join_builder {le : LEnv} {before after : LS} {loop : O
   exact ⟨yesBlock, joinBlock, forked, branchStart, branchEnd, jumped, value, forkRun, startEq,
     branchRun, jumpRun, finalEq, forkExtended, branchExtended, jumpedExtended, joinPoint, joinStack, joinVals⟩
 
+theorem generated_if_branch_post {cfg : Cfg} {env : Env} {cx : FnCtx}
+    {before conditionEnd branchStart branchEnd after : LS} {initial conditionFrame finalFrame : GIR.Frame}
+    {conditionPoint branchPoint : Pt} {conditionCells : List (ValueId × RVal)} {joinBlock : BlockId}
+    (conditionPost : Post cfg env cx before initial conditionEnd conditionFrame conditionPoint conditionCells)
+    (branchPost : Post cfg env cx branchStart conditionFrame branchEnd finalFrame branchPoint [])
+    (branchVals : conditionEnd.vals.size ≤ branchStart.vals.size)
+    (joinPoint : after.pp = some (joinBlock, 0)) (joinStack : after.stack = conditionEnd.stack)
+    (joinVals : conditionEnd.vals.size ≤ after.vals.size) :
+    Post cfg env cx before initial after finalFrame (joinBlock, 0) [] := by
+  have same : Same before.vals.size initial finalFrame := conditionPost.same.trans branchPost.same
+    (Nat.le_trans conditionPost.mono branchVals)
+  have related : Rel cfg env cx finalFrame after := branchPost.rel.stack_eq (by rw [joinStack, conditionPost.rel.stack, branchPost.rel.stack])
+  exact Post.nil joinPoint (Nat.le_trans conditionPost.mono joinVals) same related
+
+
 theorem generated_if_join_post {cfg : Cfg} {env : Env} {cx : FnCtx}
     {before conditionEnd branchStart branchEnd after : LS} {initial conditionFrame finalFrame : GIR.Frame}
     {conditionPoint branchPoint : Pt} {conditionCells : List (ValueId × RVal)} {joinBlock : BlockId}
@@ -81,11 +96,7 @@ theorem generated_if_join_post {cfg : Cfg} {env : Env} {cx : FnCtx}
     (joinPoint : after.pp = some (joinBlock, 0)) (joinStack : after.stack = conditionEnd.stack)
     (joinVals : conditionEnd.vals.size ≤ after.vals.size) :
     Post cfg env cx before initial after finalFrame (joinBlock, 0) [] := by
-  have same : Same before.vals.size initial finalFrame := conditionPost.same.trans branchPost.same (by
-    rw [branchVals]
-    exact conditionPost.mono)
-  have related : Rel cfg env cx finalFrame after := branchPost.rel.stack_eq (by rw [joinStack, conditionPost.rel.stack, branchPost.rel.stack])
-  exact Post.nil joinPoint (Nat.le_trans conditionPost.mono joinVals) same related
+  exact generated_if_branch_post conditionPost branchPost (Nat.le_of_eq branchVals.symm) joinPoint joinStack joinVals
 
 theorem generated_if_skip_post {cfg : Cfg} {env : Env} {cx : FnCtx}
     {before conditionEnd after : LS} {initial frame : GIR.Frame} {conditionPoint : Pt}
