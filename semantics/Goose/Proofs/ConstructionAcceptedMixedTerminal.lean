@@ -14,25 +14,25 @@ private theorem mixedTerminal_bind_success {ε α β : Type} (first : Except ε 
   | error failure => cases checked
   | ok value => exact ⟨value, rfl, checked⟩
 
-theorem execStmts_mixedTerminal_world {statements : List Stmt} (form : MixedLocalStatements statements)
+theorem execStmts_mixedSuffix_world {statements : List Stmt} (form : MixedLocalStatements statements)
     (config : EvalConfig) (accepted : AcceptedModule config) (context : Nat) (ambient : OwnershipAmbient)
-    (pending : List PendingCarrierFrame) (terminal : Stmt) (guard : ConstructionSourceFrame → Prop)
+    (pending : List PendingCarrierFrame) (terminal : List Stmt) (guard : ConstructionSourceFrame → Prop)
     (guardStable : ∀ first next, first.source = next.source → first.interpretation = next.interpretation →
       first.phase = next.phase → guard first → guard next)
     (terminalWorld : ∀ (fuel : Nat) (frame : ConstructionSourceFrame) (state : ExecutionState) (types : RootTypes)
       (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion),
       AcceptedWorld config frame.initialized state ambient types live regions pending →
       AcceptedFrame config accepted frame state types → frame.phase = .implementation context → guard frame →
-      SourcePosition accepted frame (.statement terminal) → frame.initialized = config.module.globals.size →
+      SourcePosition accepted frame (.statements terminal) → frame.initialized = config.module.globals.size →
       frame.typing.globalLimit ≤ config.module.globals.size →
       GlobalEffectTargetsBounded frame.rootCursor.eff config.module.globals.size →
       StatementWorldOutcome config accepted frame.initialized ambient pending
-        (execStmt fuel config frame.interpretation.environment terminal state)) :
+        (execStmts fuel config frame.interpretation.environment terminal state)) :
     ∀ (fuel : Nat) (frame : ConstructionSourceFrame) (before : ExecutionState) (types : RootTypes)
       (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion),
       AcceptedWorld config frame.initialized before ambient types live regions pending →
       AcceptedFrame config accepted frame before types → frame.phase = .implementation context → guard frame →
-      SourcePosition accepted frame (.statements (statements ++ [terminal])) →
+      SourcePosition accepted frame (.statements (statements ++ terminal)) →
       frame.initialized = config.module.globals.size → frame.typing.globalLimit ≤ config.module.globals.size →
       GlobalEffectTargetsBounded frame.rootCursor.eff config.module.globals.size →
       (∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ statements →
@@ -43,24 +43,11 @@ theorem execStmts_mixedTerminal_world {statements : List Stmt} (form : MixedLoca
       (∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ statements →
         (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none) →
       StatementWorldOutcome config accepted frame.initialized ambient pending
-        (execStmts fuel config frame.interpretation.environment (statements ++ [terminal]) before) := by
+        (execStmts fuel config frame.interpretation.environment (statements ++ terminal) before) := by
   induction form with
   | nil =>
     intro fuel frame before types live regions world source phase guarded position initialized limit bounded owners scalarOwners unnamed
-    cases fuel with
-    | zero =>
-      simp only [List.nil_append, execStmts, timeout, EvalM.stop, StatementWorldOutcome]
-      exact ⟨ambient, types, live, regions, world⟩
-    | succ fuel =>
-      obtain ⟨_, _, _, typed, _⟩ := position.checked accepted frame _
-      cases nesting : frame.typingFuel with
-      | zero => rw [nesting] at typed; change Except.error _ = Except.ok _ at typed; cases typed
-      | succ checkFuel =>
-        have head := position.statements_head accepted frame terminal [] checkFuel nesting
-        have checked := terminalWorld fuel { frame with typingFuel := checkFuel } before types live regions world
-          (source.withTypingFuel checkFuel) phase (guardStable frame _ rfl rfl rfl guarded) head initialized limit bounded
-        simpa only [List.nil_append] using execStmts_terminal_world fuel config accepted frame
-          frame.interpretation.environment terminal before ambient pending checked
+    simpa only [List.nil_append] using terminalWorld fuel frame before types live regions world source phase guarded position initialized limit bounded
   | byte declaration rest tail ih =>
     intro fuel frame before types live regions world source phase guarded position initialized limit bounded owners scalarOwners unnamed
     cases fuel with
@@ -79,10 +66,10 @@ theorem execStmts_mixedTerminal_world {statements : List Stmt} (form : MixedLoca
             rw [← source.compatible.sourceVariables]; exact owners declaration (by simp)
           have headUnnamed := unnamed declaration (by simp)
           have headPosition : SourcePosition accepted frame (.statements
-              (.letS declaration.id (.bytes (.varr (.int .u8)) declaration.bytes declaration.bytesOrigin) declaration.origin :: (rest ++ [terminal]))) := by
+              (.letS declaration.id (.bytes (.varr (.int .u8)) declaration.bytes declaration.bytesOrigin) declaration.origin :: (rest ++ terminal))) := by
             simpa only [List.cons_append, ByteOwnerDeclaration.statement] using position
           have headOutcome := execStmt_acceptedByteOwner_outcome fuel (checkFuel + 1) config accepted frame context declaration.id
-            declaration.bytes declaration.origin declaration.bytesOrigin (rest ++ [terminal]) before ambient types live regions pending
+            declaration.bytes declaration.origin declaration.bytesOrigin (rest ++ terminal) before ambient types live regions pending
             world source phase headPosition nesting byteOwner headUnnamed
           cases head : execStmt fuel config frame.interpretation.environment declaration.statement before with
           | stop reason after =>
@@ -135,7 +122,7 @@ theorem execStmts_mixedTerminal_world {statements : List Stmt} (form : MixedLoca
         cases headFuel with
         | zero => rw [nesting] at typedAll; change Except.error _ = Except.ok _ at typedAll; cases typedAll
         | succ checkFuel =>
-          have headPosition := position.statements_head accepted frame (.expr expression origin) (rest ++ [terminal]) (checkFuel + 1) nesting
+          have headPosition := position.statements_head accepted frame (.expr expression origin) (rest ++ terminal) (checkFuel + 1) nesting
           obtain ⟨next, statementAfter, headRoots, headTyped, headRooted'⟩ := headPosition.checked accepted _ _
           have sameHead : headRoots = rootMiddle := (Prod.mk.inj (Except.ok.inj (headRooted'.symm.trans headRooted))).2
           subst headRoots
@@ -159,7 +146,7 @@ theorem execStmts_mixedTerminal_world {statements : List Stmt} (form : MixedLoca
             expression origin expressionForm checkFuel ty roots typingAfter rootMiddle checked next statementAfter rootMiddle headTyped headRooted
           subst next statementAfter
           let nextFrame := { frame with typingFuel := checkFuel + 1, rootCursor := rootMiddle }
-          have nextPosition := position.statements_tail accepted frame (.expr expression origin) (rest ++ [terminal]) (checkFuel + 1) frame.typing frame.typingCounter
+          have nextPosition := position.statements_tail accepted frame (.expr expression origin) (rest ++ terminal) (checkFuel + 1) frame.typing frame.typingCounter
             rootMiddle nesting headTyped headRooted
           have headOutcome := execStmt_checkedScalarExpression_complete expression origin expressionForm fuel checkFuel config accepted frame before
             ambient types live regions pending world source ty roots typingAfter rootMiddle checked
@@ -206,7 +193,7 @@ theorem execStmts_mixedTerminal_world {statements : List Stmt} (form : MixedLoca
             intro descriptor declared
             apply scalarOwners id expression origin (by simp) expressionForm descriptor
             rw [source.compatible.sourceVariables]; exact declared
-          have headOutcome := execStmt_acceptedScalarLocal_outcome fuel checkFuel config accepted frame context id expression origin (rest ++ [terminal])
+          have headOutcome := execStmt_acceptedScalarLocal_outcome fuel checkFuel config accepted frame context id expression origin (rest ++ terminal)
             before ambient types live regions pending expressionForm world source phase position nesting initialized bounded localScalar
           cases head : execStmt fuel config frame.interpretation.environment (.letS id expression origin) before with
           | stop reason after =>
@@ -240,5 +227,52 @@ theorem execStmts_mixedTerminal_world {statements : List Stmt} (form : MixedLoca
                 remainingOwners remainingScalar remainingUnnamed
             simpa only [List.cons_append, execStmts, bind, head, nextFrame, advanceLocalFrame] using result
 
+theorem execStmts_mixedTerminal_world {statements : List Stmt} (form : MixedLocalStatements statements)
+    (config : EvalConfig) (accepted : AcceptedModule config) (context : Nat) (ambient : OwnershipAmbient)
+    (pending : List PendingCarrierFrame) (terminal : Stmt) (guard : ConstructionSourceFrame → Prop)
+    (guardStable : ∀ first next, first.source = next.source → first.interpretation = next.interpretation →
+      first.phase = next.phase → guard first → guard next)
+    (terminalWorld : ∀ (fuel : Nat) (frame : ConstructionSourceFrame) (state : ExecutionState) (types : RootTypes)
+      (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion),
+      AcceptedWorld config frame.initialized state ambient types live regions pending →
+      AcceptedFrame config accepted frame state types → frame.phase = .implementation context → guard frame →
+      SourcePosition accepted frame (.statement terminal) → frame.initialized = config.module.globals.size →
+      frame.typing.globalLimit ≤ config.module.globals.size →
+      GlobalEffectTargetsBounded frame.rootCursor.eff config.module.globals.size →
+      StatementWorldOutcome config accepted frame.initialized ambient pending
+        (execStmt fuel config frame.interpretation.environment terminal state)) :
+    ∀ (fuel : Nat) (frame : ConstructionSourceFrame) (before : ExecutionState) (types : RootTypes)
+      (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion),
+      AcceptedWorld config frame.initialized before ambient types live regions pending →
+      AcceptedFrame config accepted frame before types → frame.phase = .implementation context → guard frame →
+      SourcePosition accepted frame (.statements (statements ++ [terminal])) →
+      frame.initialized = config.module.globals.size → frame.typing.globalLimit ≤ config.module.globals.size →
+      GlobalEffectTargetsBounded frame.rootCursor.eff config.module.globals.size →
+      (∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ statements →
+        (frame.source.impl.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8))) →
+      (∀ id expression origin, .letS id expression origin ∈ statements → AcceptedBinaryExpression expression →
+        ∀ descriptor, frame.source.impl.vars[id]? = some descriptor →
+          (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool) →
+      (∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ statements →
+        (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none) →
+      StatementWorldOutcome config accepted frame.initialized ambient pending
+        (execStmts fuel config frame.interpretation.environment (statements ++ [terminal]) before) := by
+  apply execStmts_mixedSuffix_world form config accepted context ambient pending [terminal] guard guardStable
+  intro fuel frame state types live regions world source phase guarded position initialized limit bounded
+  cases fuel with
+  | zero =>
+    simp only [execStmts, timeout, EvalM.stop, StatementWorldOutcome]
+    exact ⟨ambient, types, live, regions, world⟩
+  | succ fuel =>
+    obtain ⟨_, _, _, typed, _⟩ := position.checked accepted frame _
+    cases nesting : frame.typingFuel with
+    | zero => rw [nesting] at typed; change Except.error _ = Except.ok _ at typed; cases typed
+    | succ checkFuel =>
+      have head := position.statements_head accepted frame terminal [] checkFuel nesting
+      have checked := terminalWorld fuel { frame with typingFuel := checkFuel } state types live regions world
+        (source.withTypingFuel checkFuel) phase (guardStable frame _ rfl rfl rfl guarded) head initialized limit bounded
+      exact execStmts_terminal_world fuel config accepted frame frame.interpretation.environment terminal state ambient pending checked
+
 #print axioms execStmts_mixedTerminal_world
+#print axioms execStmts_mixedSuffix_world
 end Goose.Proofs.ConstructionAcceptedExecution
