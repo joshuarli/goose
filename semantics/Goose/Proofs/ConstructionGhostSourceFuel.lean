@@ -3,7 +3,8 @@ import Goose.Proofs.ConstructionGhostSourceMutual
 namespace Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostArguments
 open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
-open Goose.Proofs.ConstructionGhostProducerChannel
+open Goose.Proofs.ConstructionGhostProducerChannel Goose.Proofs.ConstructionGhostRegisterProducer
+open Goose.Proofs.ConstructionGhostSourceTransition
 
 inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOperation α → Prop
   | timeout (operation : SourceOperation α) : FuelSupport config 0 operation
@@ -111,6 +112,16 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (body : ∀ act pre, FuelSupport config fuel
         (.boundActivation ⟨context.impl, act, implementation.vars, [], []⟩ pre implementation.body origin)) :
       FuelSupport config (fuel + 1) (.callWith environment contextId arguments origin)
+  | supportedBuilder (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (expression : Expr) (supported : SupportedValue expression)
+      (valueChild : FuelSupport config fuel (.value environment (supportedBuilderOperand expression)))
+      (builderChild : ∀ source, FuelSupport config fuel (.builder environment source (supportedBuilderOperand expression))) :
+      FuelSupport config (fuel + 1) (.builder environment incoming expression)
+  | supportedProducer (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel)
+      (expression : Expr) (supported : SupportedValue expression)
+      (valueChild : FuelSupport config fuel (.value environment expression))
+      (builderChild : ∀ destination, FuelSupport config fuel (.builder environment destination expression)) :
+      FuelSupport config (fuel + 1) (.producerWith environment channels expression)
   | producerChannelCall (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel)
       (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
       (callee : ∀ selected, FuelSupport config fuel (.channelCall environment context arguments selected origin)) :
@@ -336,6 +347,19 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           rw [callWith_source fuel config environment contextId arguments origin context implementation before
             contextFound implementationFound resultsEmpty]
           exact .callWith contextFound implementationFound resultsEmpty argumentsHistory activationHistory
+      | supportedBuilder _ environment incoming expression supported valueSupported builderSupported =>
+          refine .supportedBuilder fuel path environment incoming expression before supported ?_ ?_
+          · intro destination ready renewed needsValue
+            exact ih (.value environment (supportedBuilderOperand expression)) (path ++ [0]) ready valueSupported
+          · intro destination ready element count operand origin source allocated renewed shape nonfixed made
+            subst expression
+            exact ih (.builder environment source operand) (path ++ [0]) allocated (by simpa [supportedBuilderOperand] using builderSupported source)
+      | supportedProducer _ environment channels expression supported valueSupported builderSupported =>
+          refine .supportedProducer fuel path environment channels expression before supported ?_ ?_
+          · intro selected ready prepared valueShape
+            exact ih (.value environment expression) (path ++ [0]) ready valueSupported
+          · intro destination ready prepared
+            exact ih (.builder environment destination expression) (path ++ [0]) ready (builderSupported destination)
       | producerChannelCall _ environment channels context arguments origin calleeSupported =>
           refine .producerChannelCall fuel path environment channels context arguments origin before ?_
           intro selected ready prepared

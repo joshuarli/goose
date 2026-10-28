@@ -2,6 +2,7 @@ import Goose.Proofs.ConstructionGhostSourceFuel
 
 namespace Goose.Proofs.ConstructionGhostSyntaxFuel
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceFuel
+open Goose.Proofs.ConstructionGhostSourceTransition Goose.Proofs.ConstructionGhostRegisterProducer
 
 mutual
 inductive ValueSyntax (config : EvalConfig) : Expr → Prop
@@ -72,6 +73,7 @@ def ClosedModule (config : EvalConfig) : Prop :=
 
 inductive TailSyntax (config : EvalConfig) : Option Expr → Prop
   | none : TailSyntax config none
+  | value (expression : Expr) (supported : SupportedValue expression) : TailSyntax config (some expression)
   | call (contextId : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
       (argumentsSyntax : ∀ id implementation start lookupReady,
         getImplementation config contextId start = .ok (id, implementation) lookupReady →
@@ -143,6 +145,16 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
       getImplementation config contextId start = .ok (id, implementation) lookupReady →
       ArgumentSyntax config implementation.params.toList arguments) →
     FuelSupport config fuel (.boundActivation activation pre (.mk scope statements (some (.call contextId arguments tailOrigin))) origin)
+  supportedBuilder : ∀ environment destination expression, SupportedValue expression →
+    FuelSupport config fuel (.builder environment destination expression)
+  supportedProducer : ∀ environment channels expression, SupportedValue expression →
+    FuelSupport config fuel (.producerWith environment channels expression)
+  activationBodyValueTail : ∀ activation pre scope statements expression,
+    (∀ statement ∈ statements, StatementSyntax config statement) → SupportedValue expression →
+    FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements (some expression)))
+  activationValueTail : ∀ activation pre scope statements expression origin,
+    (∀ statement ∈ statements, StatementSyntax config statement) → SupportedValue expression →
+    FuelSupport config fuel (.boundActivation activation pre (.mk scope statements (some expression)) origin)
   producerCall : ∀ environment channels contextId arguments origin,
     (∀ id implementation start lookupReady,
       getImplementation config contextId start = .ok (id, implementation) lookupReady →
@@ -249,6 +261,21 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
       · intro activation pre scope statements contextId arguments tailOrigin origin derivation argumentSyntax
         exact .boundActivationWithTail fuel activation pre scope statements (.call contextId arguments tailOrigin) origin
           (previous.activationBodyTail activation pre scope statements contextId arguments tailOrigin derivation argumentSyntax)
+      · intro environment destination expression supported
+        have operandSupported := supportedBuilderOperand_supported expression supported
+        exact .supportedBuilder fuel environment destination expression supported
+          (previous.value environment (supportedBuilderOperand expression) (.base operandSupported))
+          (fun source => previous.supportedBuilder environment source (supportedBuilderOperand expression) operandSupported)
+      · intro environment channels expression supported
+        exact .supportedProducer fuel environment channels expression supported (previous.value environment expression (.base supported))
+          (fun destination => previous.supportedBuilder environment destination expression supported)
+      · intro activation pre scope statements expression derivation supported
+        exact .boundActivationTail fuel activation pre scope statements expression
+          (fun environment => previous.statements environment statements derivation)
+          (fun environment channels => previous.supportedProducer environment channels expression supported)
+      · intro activation pre scope statements expression origin derivation supported
+        exact .boundActivationWithTail fuel activation pre scope statements expression origin
+          (previous.activationBodyValueTail activation pre scope statements expression derivation supported)
       · intro environment channels contextId arguments origin argumentSyntax
         exact .producerChannelCall fuel environment channels contextId arguments origin
           (fun selected => previous.channelCall environment contextId arguments selected origin argumentSyntax)
@@ -265,6 +292,8 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
           rw [body]
           cases tailDerivation with
           | none => exact previous.activation ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements origin derivation
+          | value expression supported =>
+              exact previous.activationValueTail ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements expression origin derivation supported
           | call tailContext tailArguments tailOrigin tailArgumentsSyntax =>
               exact previous.activationTail ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements
                 tailContext tailArguments tailOrigin origin derivation tailArgumentsSyntax
@@ -276,6 +305,8 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         rw [body]
         cases tailDerivation with
         | none => exact previous.activation ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements origin derivation
+        | value expression supported =>
+            exact previous.activationValueTail ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements expression origin derivation supported
         | call tailContext tailArguments tailOrigin tailArgumentsSyntax =>
             exact previous.activationTail ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements
               tailContext tailArguments tailOrigin origin derivation tailArgumentsSyntax

@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionGhostRegisterProducer
 import Goose.Proofs.ConstructionGhostProducerChannel
 import Goose.Proofs.ConstructionGhostChannelTransition
 import Goose.Proofs.ConstructionGhostCallActivation
@@ -16,7 +17,7 @@ open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultSco
 open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInvocation Goose.Proofs.ConstructionInitializerLoopReplay
 open Goose.Proofs.ConstructionGhostArguments Goose.Proofs.ConstructionGhostEachCore
 open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
-open Goose.Proofs.ConstructionGhostProducerChannel
+open Goose.Proofs.ConstructionGhostProducerChannel Goose.Proofs.ConstructionGhostRegisterProducer
 
 inductive SourceOperation : Type → Type
   | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
@@ -841,6 +842,34 @@ inductive SourceHistory (config : EvalConfig) :
       SourceHistory config (fuel + 1) path
         (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments)) before
         (evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.byRef mutability place :: arguments) before)
+  | supportedBuilder (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (incoming : Goose.Core.DestinationId) (expression : Expr) (before : ExecutionState) (supported : SupportedValue expression)
+      (valueChild : ∀ destination ready,
+        liftConstruction (expressionOrigin expression) (renewReceivingDestination incoming) before = .ok destination ready →
+        supportedBuilderNeedsValue expression = true →
+        SourceHistory config fuel (path ++ [0]) (.value environment (supportedBuilderOperand expression)) ready
+          (evalValue fuel config environment (supportedBuilderOperand expression) ready))
+      (builderChild : ∀ destination ready element count operand origin source allocated,
+        liftConstruction (expressionOrigin expression) (renewReceivingDestination incoming) before = .ok destination ready →
+        expression = .fill (.arr element count) operand origin → element.nonfixed = true →
+        newDestination config.layout environment.act element .value origin none none ready = .ok source allocated →
+        SourceHistory config fuel (path ++ [0]) (.builder environment source operand) allocated
+          (buildExpr fuel config environment source operand allocated)) :
+      SourceHistory config (fuel + 1) path (.builder environment incoming expression) before
+        (buildExpr (fuel + 1) config environment incoming expression before)
+  | supportedProducer (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (channels : List Channel)
+      (expression : Expr) (before : ExecutionState) (supported : SupportedValue expression)
+      (valueChild : ∀ selected ready,
+        prepareProducerCallChannels environment expression channels before = .ok selected ready →
+        (selected = [] ∨ ∃ ty, selected = [.register ty]) →
+        SourceHistory config fuel (path ++ [0]) (.value environment expression) ready
+          (evalValue fuel config environment expression ready))
+      (builderChild : ∀ destination ready,
+        prepareProducerCallChannels environment expression channels before = .ok [.construct destination] ready →
+        SourceHistory config fuel (path ++ [0]) (.builder environment destination expression) ready
+          (buildExpr fuel config environment destination expression ready)) :
+      SourceHistory config (fuel + 1) path (.producerWith environment channels expression) before
+        (evalProduce (fuel + 1) config environment channels expression before)
   | producerChannelCall (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (channels : List Channel)
       (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId) (before : ExecutionState)
       (callee : ∀ selected ready,
@@ -920,7 +949,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail => rfl
+  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | supportedProducer => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]
