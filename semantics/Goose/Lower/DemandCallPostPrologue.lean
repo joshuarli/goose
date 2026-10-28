@@ -1,10 +1,11 @@
+import Goose.Lower.DemandParameterizedBlockBody
 import Goose.Lower.DemandCallPrologueLayout
 import Goose.Lower.DemandWhileMixedStatements
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 
-theorem accepted_generated_post_prologue {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
+theorem accepted_generated_post_prologue_canonical {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
     {block : Core.Block} {state : St} (source : BlockSource cfg env pre block state)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS}
     {bindings : List (SlotId × ValueId × OriginId)} {want : Bool}
@@ -23,6 +24,7 @@ theorem accepted_generated_post_prologue {cfg : Cfg} {env : Env} {pre : List (Va
     ∃ body : StmtsSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts
         { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store },
       body.all = block.stmts ∧ body.scope = block.scope ∧ body.value = block.value ∧ body.offset = 0 ∧
+      ParameterizedBlockBodyAt source body ∧
       ∃ bodyOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
           root body.path (.block none bindings want block) before,
         GeneratedDemandRows cfg.mod body.rootsEnv.access bodyOccurrence required ∧
@@ -109,9 +111,54 @@ theorem accepted_generated_post_prologue {cfg : Cfg} {env : Env} {pre : List (Va
     · rw [bodyValues]; exact Nat.le_refl _
     · intro id bound
       rfl
-  refine ⟨body, bodyAll, bodyScope, bodyValue, bodyOffset, bodyOccurrence, bodyRows, bodyOwned, bodyAdmitted, ?_, ?_, bodyInput, prologuePost, reachable⟩
+  refine ⟨body, bodyAll, bodyScope, bodyValue, bodyOffset,
+    ⟨bodyTyping, bodyTypingAfter, bodyRoots, bodyWorld, bodyPlans, bodyPath, bodyScope, bodyAll, bodyValue, bodyOffset, bodyContext, bodyTypingEnd, bodyRootsEnd⟩, bodyOccurrence, bodyRows, bodyOwned, bodyAdmitted, ?_, ?_, bodyInput, prologuePost, reachable⟩
   · rw [bodyValues]; exact bounded
   · exact bodyDemand.operands
 
+
+theorem accepted_generated_post_prologue {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
+    {block : Core.Block} {state : St} (source : BlockSource cfg env pre block state)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS}
+    {bindings : List (SlotId × ValueId × OriginId)} {want : Bool}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block none bindings want block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (cells : PreRel initial bindings pre)
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock none bindings want block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (reached : RuntimePoint cx.cfg cx.fn start initial state) :
+    ∃ body : StmtsSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts
+        { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store },
+      body.all = block.stmts ∧ body.scope = block.scope ∧ body.value = block.value ∧ body.offset = 0 ∧
+      ∃ bodyOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+          root body.path (.block none bindings want block) before,
+        GeneratedDemandRows cfg.mod body.rootsEnv.access bodyOccurrence required ∧
+        GeneratedSourceOwner selected body.context ∧ map.Admitted cfg.mod.profile body.context.retained ∧
+        map.Bounded (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block).vals.size ∧
+        map.Realizes cfg.mod body.world { env with scopes := (block.scope, state.nextScope) :: env.scopes }
+          ⟨(start.1, start.2 + 1 + bindings.length), { initial with scopes := (block.scope, state.nextScope) :: initial.scopes },
+            { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store }⟩ ∧
+        GeneratedPrefixInput cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results none
+          body.typingEnv body.rootsEnv
+          (lowerStmts none (block.stmts.take body.offset) (lowerEnv cfg.mod env.vars results)
+            (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2
+          { initial with scopes := (block.scope, state.nextScope) :: initial.scopes } (start.1, start.2 + 1 + bindings.length) ∧
+        Post cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx before initial
+          (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)
+          { initial with scopes := (block.scope, state.nextScope) :: initial.scopes } (start.1, start.2 + 1 + bindings.length) [] ∧
+        RuntimePoint cx.cfg cx.fn (start.1, start.2 + 1 + bindings.length)
+          { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
+          { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store } := by
+  obtain ⟨body, all, scope, value, offset, _, occurrence, rows, owner, admitted, bounded, realized, input, post, reached⟩ :=
+    accepted_generated_post_prologue_canonical source selected owned occurrence rows coverage admitted bounded cells realized input extended reached
+  exact ⟨body, all, scope, value, offset, occurrence, rows, owner, admitted, bounded, realized, input, post, reached⟩
+
+#print axioms accepted_generated_post_prologue_canonical
 #print axioms accepted_generated_post_prologue
 end Goose.Lower
