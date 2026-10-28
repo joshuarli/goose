@@ -548,6 +548,12 @@ inductive SourceHistory (config : EvalConfig) :
         (evalView fuel config environment view before)) :
       SourceHistory config (fuel + 1) path (.value environment (.len view)) before
         (evalValue (fuel + 1) config environment (.len view) before)
+  | popValue {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {owner : Place}
+      {origin : Goose.Core.OriginId} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.place environment owner) before
+        (evalPlace fuel config environment owner before)) :
+      SourceHistory config (fuel + 1) path (.value environment (.pop owner origin)) before
+        (evalValue (fuel + 1) config environment (.pop owner origin) before)
   | sliceValue {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {mutability : Goose.Core.Mutability}
       {view : View} {lo hi : Bound} {origin : Goose.Core.OriginId} {before : ExecutionState}
       (viewChild : SourceHistory config fuel (path ++ [0]) (.view environment view) before
@@ -570,6 +576,12 @@ inductive SourceHistory (config : EvalConfig) :
         (evalValue fuel config environment expression before)) :
       SourceHistory config (fuel + 1) path (.printArgument environment (.expr expression)) before
         (evalPrintArg (fuel + 1) config environment (.expr expression) before)
+  | printArgumentView {fuel : Nat} {path : List Nat} {environment : RuntimeActivation}
+      {view : View} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.view environment view) before
+        (evalView fuel config environment view before)) :
+      SourceHistory config (fuel + 1) path (.printArgument environment (.view view)) before
+        (evalPrintArg (fuel + 1) config environment (.view view) before)
   | printArguments (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (arguments : List PrintArg)
       (origin : Goose.Core.OriginId) (before : ExecutionState)
       (children : ∀ outcome visits,
@@ -726,9 +738,9 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       cases outcome <;> rfl
   | omittedBound => simp [execute, evalBound, pure]
   | expressionBound | localPlace | globalPlace | dereferencePlace | fieldPlace | elementPlace | placeView | valueView |
-    readValue | referenceValue | lengthValue | sliceValue => rfl
+    readValue | referenceValue | lengthValue | popValue | sliceValue => rfl
   | printArgumentText => simp [execute, evalPrintArg, pure]
-  | printArgumentExpression | printArguments | printText => rfl
+  | printArgumentExpression | printArgumentView | printArguments | printText => rfl
   | builderBytes => rfl
   | @fixedElement fuel path environment parent element operand before outcome fixed child ih =>
       simp only [execute] at ih ⊢
@@ -934,6 +946,9 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
   | lengthValue (environment : RuntimeActivation) (view : View)
       (child : SupportedOperation config (.view environment view)) :
       SupportedOperation config (.value environment (.len view))
+  | popValue (environment : RuntimeActivation) (owner : Place) (origin : Goose.Core.OriginId)
+      (child : SupportedOperation config (.place environment owner)) :
+      SupportedOperation config (.value environment (.pop owner origin))
   | sliceValue (environment : RuntimeActivation) (mutability : Goose.Core.Mutability) (view : View)
       (lo hi : Bound) (origin : Goose.Core.OriginId)
       (viewChild : SupportedOperation config (.view environment view))
@@ -945,6 +960,9 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
   | printArgumentExpression (environment : RuntimeActivation) (expression : Expr)
       (child : SupportedOperation config (.value environment expression)) :
       SupportedOperation config (.printArgument environment (.expr expression))
+  | printArgumentView (environment : RuntimeActivation) (view : View)
+      (child : SupportedOperation config (.view environment view)) :
+      SupportedOperation config (.printArgument environment (.view view))
   | printArguments (environment : RuntimeActivation) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
       (children : ∀ argument ∈ arguments, SupportedOperation config (.printArgument environment argument)) :
       SupportedOperation config (.statement environment (.print arguments origin))
@@ -1223,6 +1241,8 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           exact .referenceValue (ih (.place environment place) (path ++ [0]) before child)
       | lengthValue environment view child =>
           exact .lengthValue (ih (.view environment view) (path ++ [0]) before child)
+      | popValue environment owner origin child =>
+          exact .popValue (ih (.place environment owner) (path ++ [0]) before child)
       | sliceValue environment mutability view lo hi origin viewChild loChild hiChild =>
           refine .sliceValue (ih (.view environment view) (path ++ [0]) before viewChild) ?_ ?_
           · intro value middle result
@@ -1233,6 +1253,8 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simpa [execute, evalPrintArg, pure] using (SourceHistory.printArgumentText fuel path environment text before)
       | printArgumentExpression environment expression childSupported =>
           exact .printArgumentExpression (ih (.value environment expression) (path ++ [0]) before childSupported)
+      | printArgumentView environment view childSupported =>
+          exact .printArgumentView (ih (.view environment view) (path ++ [0]) before childSupported)
       | printArguments environment arguments origin childrenSupported =>
           refine .printArguments fuel path environment arguments origin before ?_
           intro outcome visits replay visit member
@@ -1758,6 +1780,36 @@ theorem witness_printArgumentCall : ∃ after,
       (execStmt 40 sideEffectConfig witnessEnvironment (.print printWitnessArguments 0) .initial) at history
     rw [actual] at history
     exact history
+
+theorem witness_printViewCall : ∃ after,
+    execStmt 40 sideEffectConfig witnessEnvironment (.print [.view (.val (.call 0 [] 0))] 0) .initial =
+      .stop (.fault .shape) after ∧ after.construction.stdout.data.toList = [120, 10] ∧
+    SourceHistory sideEffectConfig 40 []
+      (.statement witnessEnvironment (.print [.view (.val (.call 0 [] 0))] 0)) .initial (.stop (.fault .shape) after) := by
+  have supported : SupportedOperation sideEffectConfig
+      (.statement witnessEnvironment (.print [.view (.val (.call 0 [] 0))] 0)) := by
+    apply SupportedOperation.printArguments
+    intro argument member
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at member
+    subst argument
+    exact .printArgumentView witnessEnvironment _ (.valueView witnessEnvironment _ sideEffectValue_supported)
+  have history := history_exists 40 sideEffectConfig _ [] .initial supported
+  refine ⟨witnessState (execStmt 40 sideEffectConfig witnessEnvironment (.print [.view (.val (.call 0 [] 0))] 0) .initial), ?_, ?_, ?_⟩
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · have actual : execStmt 40 sideEffectConfig witnessEnvironment (.print [.view (.val (.call 0 [] 0))] 0) .initial =
+        .stop (.fault .shape) (witnessState (execStmt 40 sideEffectConfig witnessEnvironment (.print [.view (.val (.call 0 [] 0))] 0) .initial)) := by
+      unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+      cbv
+    change SourceHistory sideEffectConfig 40 []
+      (.statement witnessEnvironment (.print [.view (.val (.call 0 [] 0))] 0)) .initial
+      (execStmt 40 sideEffectConfig witnessEnvironment (.print [.view (.val (.call 0 [] 0))] 0) .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_printViewCall
 
 #print axioms witness_printArgumentCall
 
