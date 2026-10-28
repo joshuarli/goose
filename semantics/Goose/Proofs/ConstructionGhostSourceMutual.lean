@@ -265,6 +265,10 @@ inductive SourceHistory (config : EvalConfig) :
         { before with nextAct := before.nextAct + 1, activations := (⟨context.impl, before.nextAct, implementation.vars, [], []⟩ : RuntimeActivation) :: before.activations } outcome) :
       SourceHistory config (fuel + 2) path (.call environment contextId origin) before
         (callDeliveryResult (fuel + 1) config origin outcome)
+  | printText (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (text : String)
+      (origin : Goose.Core.OriginId) (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.statement environment (.print [.text text] origin)) before
+        (execStmt (fuel + 1) config environment (.print [.text text] origin) before)
   | argumentsDone (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (vars : Array LocalVar)
       (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.arguments environment vars [] []) before (.ok [] before)
@@ -352,6 +356,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
         contextFound implementationFound parametersEmpty resultsEmpty depth]
       simp only [bind, ih, callDeliveryResult]
       cases outcome <;> rfl
+  | printText => rfl
   | argumentsDone => simp [execute, evalArguments, pure]
   | @argumentValue fuel path environment vars parameter parameters operand arguments before outcome child tail ihChild ihTail =>
       simp only [execute] at ihChild ⊢
@@ -460,6 +465,8 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (body : ∀ act, SupportedOperation config
         (.activation ⟨context.impl, act, implementation.vars, [], []⟩ implementation.body origin)) :
       SupportedOperation config (.call environment contextId origin)
+  | printText (environment : RuntimeActivation) (text : String) (origin : Goose.Core.OriginId) :
+      SupportedOperation config (.statement environment (.print [.text text] origin))
   | argumentsDone (environment : RuntimeActivation) (vars : Array LocalVar) :
       SupportedOperation config (.arguments environment vars [] [])
   | argumentValue (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param)
@@ -610,6 +617,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
                   contextFound implementationFound parametersEmpty resultsEmpty full] using
                   (SourceHistory.callDepth contextFound implementationFound parametersEmpty resultsEmpty full :
                     SourceHistory config (fuel + 2) path (.call environment contextId origin) before _)
+      | printText environment text origin => exact .printText fuel path environment text origin before
       | argumentsDone environment vars => simpa [execute, evalArguments, pure] using
           (SourceHistory.argumentsDone fuel path environment vars before :
             SourceHistory config (fuel + 1) path (.arguments environment vars [] []) before _)
@@ -833,6 +841,50 @@ theorem witness_producerCall : ∃ after,
       (evalProduce 40 callWitnessConfig witnessEnvironment [] (.call 0 [] 0) .initial) at history
     rw [actual] at history
     exact history
+
+private def sideEffectContext : Context := ⟨0, "source", [], [], []⟩
+private def sideEffectImplementation : Impl := ⟨"source", #[], #[], #[], .mk 0 [.print [.text "x"] 0] none, .unknown⟩
+private def sideEffectConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[], #[sideEffectImplementation], #[sideEffectContext], 0, #[], #[], #[]⟩⟩
+private def sideEffectFill : Expr := .fill (.arr .unit 3) (.call 0 [] 0) 0
+
+theorem witness_fillSourceOnce : ∃ after,
+    evalValue 40 sideEffectConfig witnessEnvironment sideEffectFill .initial = .ok (.fixed #[.unit, .unit, .unit]) after ∧
+    after.construction.stdout.data.toList = [120, 10] ∧
+    SourceHistory sideEffectConfig 40 [] (.value witnessEnvironment sideEffectFill) .initial
+      (.ok (.fixed #[.unit, .unit, .unit]) after) := by
+  have bodySupported : ∀ environment, SupportedOperation sideEffectConfig
+      (.statements environment [.print [.text "x"] 0]) := by
+    intro environment
+    exact .sequence environment (.printText environment "x" 0) (.empty environment)
+  have callee : SupportedOperation sideEffectConfig (.call witnessEnvironment 0 0) := by
+    apply SupportedOperation.call witnessEnvironment 0 0 sideEffectContext sideEffectImplementation
+    · rfl
+    · rfl
+    · rfl
+    · rfl
+    · intro act
+      exact .activation _ 0 _ 0 bodySupported
+  have valueCall : SupportedOperation sideEffectConfig (.value witnessEnvironment (.call 0 [] 0)) :=
+    .valueCall witnessEnvironment 0 0 sideEffectContext sideEffectImplementation rfl rfl rfl callee
+  have supported : SupportedOperation sideEffectConfig (.value witnessEnvironment sideEffectFill) :=
+    .fill witnessEnvironment .unit 3 0 (.call 0 [] 0) rfl valueCall
+  have history := history_exists 40 sideEffectConfig (.value witnessEnvironment sideEffectFill) [] .initial supported
+  refine ⟨witnessState (evalValue 40 sideEffectConfig witnessEnvironment sideEffectFill .initial), ?_, ?_, ?_⟩
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation sideEffectFill witnessEnvironment
+    cbv
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation sideEffectFill witnessEnvironment
+    cbv
+  · have actual : evalValue 40 sideEffectConfig witnessEnvironment sideEffectFill .initial =
+        .ok (.fixed #[.unit, .unit, .unit]) (witnessState (evalValue 40 sideEffectConfig witnessEnvironment sideEffectFill .initial)) := by
+      unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation sideEffectFill witnessEnvironment
+      cbv
+    change SourceHistory sideEffectConfig 40 [] (.value witnessEnvironment sideEffectFill) .initial
+      (evalValue 40 sideEffectConfig witnessEnvironment sideEffectFill .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_fillSourceOnce
 
 #print axioms witness_producerCall
 
