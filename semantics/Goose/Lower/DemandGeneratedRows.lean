@@ -31,6 +31,12 @@ inductive GeneratedDemandRows (m : Core.Module) (access : AccessEnv) :
       {occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.while condition body origin)) before}
       {required : RetainedSsaMap} (rows : GeneratedDemandRows m access occurrence required) :
       GeneratedDemandRows m access (.whileCondition occurrence) required
+  | whileBody {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {loop : Option LoopCtx} {condition : Expr} {body : Core.Block} {origin : OriginId}
+      {occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.while condition body origin)) before}
+      {live : (demandWhileTest condition le before).2.cur.isSome = true} {required : RetainedSsaMap}
+      (rows : GeneratedDemandRows m access occurrence required) :
+      GeneratedDemandRows m access (.whileBody occurrence live) required
   | binaryRight {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {operation : BinOp} {left right : Expr} {origin : OriginId}
       {occurrence : GeneratedDemandOccurrence m function le root path (.expression (.bin operation left right origin)) before}

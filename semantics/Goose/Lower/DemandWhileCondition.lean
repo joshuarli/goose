@@ -78,7 +78,7 @@ theorem accepted_generated_while_initial_condition {cfg : Cfg} {env : Env} {cond
         GeneratedDemandRows cfg.mod child.rootsEnv.access childOccurrence required := by
   obtain ⟨child, typing, roots, ty, canonical, childOwner, childAdmitted, childOccurrence, childRows⟩ :=
     accepted_generated_while_condition_entry source selected owned occurrence rows admitted
-  obtain ⟨header, headerState, loopRun, headerEq, post, generated, step⟩ :=
+  obtain ⟨header, headerState, loopRun, _, headerEq, _, post, generated, step⟩ :=
     generated_while_header_entry lowered input.atPoint extended input.related input.generated
   have childRealized : map.Realizes cfg.mod child.world env ⟨(header, 0), frame, state⟩ := by
     simpa only [RetainedSsaMap.Realizes, canonical.world] using realized

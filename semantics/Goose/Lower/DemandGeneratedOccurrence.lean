@@ -93,6 +93,12 @@ def demandWhileHeaderBefore (le : LEnv) (before : LS) : LS :=
   let jumped := emitTerm (.br header.1.1 []) le header.2
   { jumped.2 with cur := some header.1.1 }
 
+def demandWhileTest (condition : Expr) (le : LEnv) (before : LS) : ValueId × LS :=
+  lowerExpr condition le (demandWhileHeaderBefore le before)
+
+def demandWhileFork (condition : Expr) (le : LEnv) (before : LS) : (BlockId × BlockId) × LS :=
+  fork (demandWhileTest condition le before).1 le (demandWhileTest condition le before).2
+
 inductive GeneratedDemandOccurrence (m : Core.Module) :
     Func → LEnv → DemandNode → List Nat → DemandLoweringAction → LS → Prop
   | functionRoot {contextId : ContextId} {context : Context} {implementation : Impl}
@@ -113,6 +119,14 @@ inductive GeneratedDemandOccurrence (m : Core.Module) :
       {loop : Option LoopCtx} {condition : Expr} {body : Core.Block} {origin : OriginId}
       (occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.while condition body origin)) before) :
       GeneratedDemandOccurrence m function le root (path ++ [0]) (.expression condition) (demandWhileHeaderBefore le before)
+  | whileBody {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {loop : Option LoopCtx} {condition : Expr} {body : Core.Block} {origin : OriginId}
+      (occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.while condition body origin)) before)
+      (live : (demandWhileTest condition le before).2.cur.isSome = true) :
+      GeneratedDemandOccurrence m function le root (path ++ [1])
+        (.block (some ⟨(demandWhileTest condition le before).2.stack.length,
+          (demandWhileFork condition le before).1.2, .jump (newBlock [] le before).1.1⟩) [] false body)
+        { (demandWhileFork condition le before).2 with cur := some (demandWhileFork condition le before).1.1 }
   | binaryRight {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {operation : BinOp} {left right : Expr} {origin : OriginId}
       (occurrence : GeneratedDemandOccurrence m function le root path (.expression (.bin operation left right origin)) before) :
@@ -216,6 +230,7 @@ theorem GeneratedDemandOccurrence.source {m : Core.Module} {function : Func} {le
   | globalRoot => exact .here _
   | first occurrence first induction => exact induction.snoc 0 first.source
   | whileCondition occurrence induction => exact induction.snoc 0 rfl
+  | whileBody occurrence live induction => exact induction.snoc 1 rfl
   | binaryRight occurrence induction => exact induction.snoc 1 rfl
   | comparisonRight occurrence induction => exact induction.snoc 1 rfl
   | @shortCircuitRight function le root path before isAnd left right occurrence live induction =>

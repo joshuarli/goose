@@ -13,7 +13,9 @@ theorem generated_while_header_entry {cfg : Cfg} {env : Env} {cx : FnCtx} {resul
       lowerWhile header (lowerExpr condition)
         (fun depth exitBlock => lowerBlock (some ⟨depth, exitBlock, .jump header⟩) [] false body)
         (lowerEnv cfg.mod env.vars results) headerState = ((), after) ∧
+      header = (newBlock [] (lowerEnv cfg.mod env.vars results) before).1.1 ∧
       headerState = demandWhileHeaderBefore (lowerEnv cfg.mod env.vars results) before ∧
+      (∃ target, cx.fn.blocks[header]? = some target ∧ target.params = []) ∧
       Post cfg env cx before frame headerState frame (header, 0) [] ∧
       GeneratedBuilderState headerState ∧
       ∀ fuel, DemandInstructionStep cx fuel ⟨point, frame, state⟩ ⟨(header, 0), frame, state⟩ := by
@@ -78,6 +80,7 @@ theorem generated_while_header_entry {cfg : Cfg} {env : Env} {cx : FnCtx} {resul
   have branchAt : instAt cx.fn point = some (.term branch.term) := by simpa [branch, DemandBranch.term] using inst
   have execution : branch.enter cx.fn frame state = .ok (header, instsAt cx.fn (header, 0), frame) state := by
     simp [branch, DemandBranch.enter, mapList, enterBlock, targetAt, targetParams, bindParams, instsAt, bind_apply, pure_apply]
+  have headerId : header = (newBlock [] le before).1.1 := (congrArg (fun pair => pair.1.1) newRun).symm
   have headerCanonical : headerState = demandWhileHeaderBefore le before := by
     unfold demandWhileHeaderBefore
     rw [newRun]
@@ -86,7 +89,7 @@ theorem generated_while_header_entry {cfg : Cfg} {env : Env} {cx : FnCtx} {resul
     exact headerEq
   have post : Post cfg env cx before frame headerState frame (header, 0) [] :=
     Post.nil headerPoint (Nat.le_of_eq headerValues.symm) (Same.refl _ _) headerRelated
-  exact ⟨header, headerState, loopRun, headerCanonical, post, headerGenerated, fun fuel => .control branchAt execution⟩
+  exact ⟨header, headerState, loopRun, headerId, headerCanonical, ⟨target, targetAt, targetParams⟩, post, headerGenerated, fun fuel => .control branchAt execution⟩
 
 #print axioms generated_while_header_entry
 end Goose.Lower
