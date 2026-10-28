@@ -24,6 +24,13 @@ theorem EarlierCallerObservations.refl (frontier : Nat) (state : ExecutionState)
   intro root earlier
   exact ⟨rfl, rfl, rfl⟩
 
+theorem EarlierCallerObservations.restrict {frontier nextFrontier : Nat} {before after : ExecutionState}
+    {types nextTypes : RootTypes} (bound : frontier ≤ nextFrontier)
+    (observations : EarlierCallerObservations nextFrontier before after types nextTypes) :
+    EarlierCallerObservations frontier before after types nextTypes := by
+  intro root earlier
+  exact observations root (earlier.mono bound root)
+
 theorem EarlierCallerObservations.trans {frontier nextFrontier : Nat} {before middle after : ExecutionState}
     {types middleTypes finalTypes : RootTypes} (bound : frontier ≤ nextFrontier)
     (first : EarlierCallerObservations frontier before middle types middleTypes)
@@ -96,6 +103,7 @@ theorem AcceptedFrame.afterEarlierObservations
     (fun root earlier => (observations root earlier).2.1) (fun root earlier => (observations root earlier).2.2)
 
 #print axioms EarlierCallerObservations.bindFreshLocal
+#print axioms EarlierCallerObservations.restrict
 #print axioms EarlierCallerObservations.trans
 #print axioms AcceptedFrame.afterEarlierObservations
 end Goose.Proofs.ConstructionAcceptedExecution
