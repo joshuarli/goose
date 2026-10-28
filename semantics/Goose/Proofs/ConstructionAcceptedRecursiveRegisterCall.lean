@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedRegisterCallCompose
+import Goose.Proofs.ConstructionAcceptedRecursiveCallLocalTail
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -23,8 +24,36 @@ def RegisterCallGraph (config : EvalConfig) (ty : Ty) : Prop :=
     config.module.impls[context.impl]? = some implementation → implementation.params = #[] →
     implementation.results = #[⟨ty, .register, none⟩] → RegisterCalleeForm config ty implementation
 
-theorem invokeCall_recursive_register (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (ty : Ty) (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool) (graph : RegisterCallGraph config ty) :
+def RegisterCalleeFormWithLocals (config : EvalConfig) (ty : Ty) (implementation : Impl) : Prop :=
+  ∃ summary, implementation.summary = .known summary ∧
+    ((∃ scope statements expression,
+      implementation.body = ⟨scope, statements, some expression⟩ ∧ ScalarLocalStatements statements ∧
+      AcceptedBinaryExpression expression ∧
+      ∀ id expression origin, .letS id expression origin ∈ statements → ∀ descriptor,
+        implementation.vars[id]? = some descriptor → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool) ∨
+     (∃ scope statements target origin context callee,
+      implementation.body = ⟨scope, statements, some (.call target [] origin)⟩ ∧ ScalarLocalStatements statements ∧
+      (∀ id expression origin, .letS id expression origin ∈ statements → ∀ descriptor,
+        implementation.vars[id]? = some descriptor → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool) ∧
+      config.module.contexts[target]? = some context ∧ config.module.impls[context.impl]? = some callee ∧
+      callee.params = #[] ∧ callee.results = #[⟨ty, .register, none⟩]))
+
+def RegisterCallGraphWithLocals (config : EvalConfig) (ty : Ty) : Prop :=
+  ∀ (target : Nat) (context : Context) (implementation : Impl), config.module.contexts[target]? = some context →
+    config.module.impls[context.impl]? = some implementation → implementation.params = #[] →
+    implementation.results = #[⟨ty, .register, none⟩] → RegisterCalleeFormWithLocals config ty implementation
+
+theorem RegisterCallGraph.withLocals {config : EvalConfig} {ty : Ty} (graph : RegisterCallGraph config ty) :
+    RegisterCallGraphWithLocals config ty := by
+  intro target context implementation contextAt implementationAt parameters results
+  obtain ⟨summary, known, leaf | tail⟩ := graph target context implementation contextAt implementationAt parameters results
+  · exact ⟨summary, known, Or.inl leaf⟩
+  · obtain ⟨scope, target, origin, context, callee, body, contextAt, calleeAt, parameters, results⟩ := tail
+    exact ⟨summary, known, Or.inr ⟨scope, [], target, origin, context, callee, body, .nil,
+      (by intro id expression origin member; cases member), contextAt, calleeAt, parameters, results⟩⟩
+
+theorem invokeCall_recursive_register_withLocals (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (ty : Ty) (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool) (graph : RegisterCallGraphWithLocals config ty) :
     ∀ (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (target : Nat) (context : Context) (implementation : Impl) (origin : Nat)
@@ -52,7 +81,7 @@ theorem invokeCall_recursive_register (fuel : Nat) (config : EvalConfig) (accept
       exact invokeCall_scalarLocal_prefix fuel config accepted caller state ambient types live regions pending target context implementation ty origin
         scope statements expression summary world source contextAt implementationAt parameters results body known scalar statementsForm tailForm locals
         roots typingAfter rootsAfter checked
-    · obtain ⟨scope, innerTarget, innerOrigin, innerContext, innerCallee, body, innerContextAt, innerCalleeAt, innerParameters, innerResults⟩ := form
+    · obtain ⟨scope, statements, innerTarget, innerOrigin, innerContext, innerCallee, body, statementsForm, locals, innerContextAt, innerCalleeAt, innerParameters, innerResults⟩ := form
       cases fuel with
       | zero =>
         simp only [invokeCall, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
@@ -71,8 +100,8 @@ theorem invokeCall_recursive_register (fuel : Nat) (config : EvalConfig) (accept
               target context implementation ty source world contextAt implementationAt parameters
           have scopes : frame.interpretation.environment.scopes = [] := by rw [interpretation]; rfl
           have channels : frame.interpretation.environment.channels = [.register ty] := by rw [interpretation]; rfl
-          have bodyEq : frame.source.impl.body = ⟨scope, [], some (.call innerTarget [] innerOrigin)⟩ := by simpa [impl] using body
-          have bodyPosition : SourcePosition accepted frame (.block ⟨scope, [], some (.call innerTarget [] innerOrigin)⟩) := by simpa [bodyEq] using position
+          have bodyEq : frame.source.impl.body = ⟨scope, statements, some (.call innerTarget [] innerOrigin)⟩ := by simpa [impl] using body
+          have bodyPosition : SourcePosition accepted frame (.block ⟨scope, statements, some (.call innerTarget [] innerOrigin)⟩) := by simpa [bodyEq] using position
           have actualParameters : frame.source.impl.params = #[] := by simpa [impl] using parameters
           have requests : frame.typing.resultRequests = [.register] := by
             have equal := congrArg (fun f : ConstructionSourceFrame => f.typing.resultRequests) frameBody
@@ -112,29 +141,21 @@ theorem invokeCall_recursive_register (fuel : Nat) (config : EvalConfig) (accept
                   (by simpa [entryStatementsFrame, blockStatementsFrame, frameBody, bodyEq, Block.scope, frameEnv, ownershipResultScopeState, initialized] using scopeWorld),
                   (by simpa [entryStatementsFrame, blockStatementsFrame, frameBody, bodyEq, Block.scope, frameEnv, ownershipResultScopeState, initialized, FutureGlobalsClear] using scopeSource.futureGlobals), trivial⟩
               | succ fuel =>
-                have safe := execActivationBody_checked_registerCall_compose fuel config accepted frame target pushed
-                  (.callChannels activation [] :: ambient) types live regions pending scope innerTarget innerOrigin innerContext innerCallee ty
-                  frameWorld frameSource phase actualParameters scopes cursor frameBody bodyEq channels bodyPosition
+                have localScalar : ∀ id expression origin, .letS id expression origin ∈ statements → ∀ descriptor,
+                    frame.source.impl.vars[id]? = some descriptor → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool := by
+                  intro id expression origin member descriptor present
+                  apply locals id expression origin member descriptor
+                  simpa [impl] using present
+                have safe := execActivationBody_scalarLocal_registerCall_compose fuel config accepted frame target pushed
+                  (.callChannels activation [] :: ambient) types live regions pending scope statements innerTarget innerOrigin innerContext innerCallee ty
+                  frameWorld frameSource phase actualParameters scopes cursor frameBody bodyEq channels bodyPosition statementsForm localScalar
                   (by simpa [typingModule] using innerContextAt) (by simpa [typingModule] using innerCalleeAt) innerResults scalar requests
                   (by simpa [bodyEq] using checkedEffects)
                   (by
-                    intro r t ra innerChecked scopedWorld scopedSource
-                    have recur := ih fuel (by omega) (entryStatementsFrame config frame pushed.nextScope)
-                      (ownershipResultScopeState frame.interpretation.environment scope pushed)
-                      (.callChannels activation [] :: ambient) types live regions pending innerTarget innerContext innerCallee innerOrigin
-                      scopedWorld scopedSource innerContextAt innerCalleeAt innerParameters innerResults r t ra innerChecked
-                    obtain ⟨nt, nl, na, ext, ac, sc, w, cl, res⟩ := recur
-                    refine ⟨nt, nl, na, ext, ?_, ?_, ?_, ?_, ?_⟩
-                    · simpa only [entryStatementsFrame, blockStatementsFrame, frameBody, bodyEq, Block.scope, RootInterpretation.enterScope] using ac
-                    · simpa only [entryStatementsFrame, blockStatementsFrame, frameBody, bodyEq, Block.scope, RootInterpretation.enterScope] using sc
-                    · simpa only [entryStatementsFrame, blockStatementsFrame, frameBody, bodyEq, Block.scope, RootInterpretation.enterScope] using w
-                    · simpa only [entryStatementsFrame, blockStatementsFrame, frameBody, bodyEq, Block.scope, RootInterpretation.enterScope] using cl
-                    · simp only [entryStatementsFrame, blockStatementsFrame, frameBody, bodyEq, Block.scope, RootInterpretation.enterScope] at res
-                      cases execution : invokeCall fuel config
-                        { frame.interpretation.environment with scopes := (scope, pushed.nextScope) :: frame.interpretation.environment.scopes }
-                        innerTarget [] [.register ty] innerOrigin (ownershipResultScopeState frame.interpretation.environment scope pushed) <;>
-                        simpa [execution] using res
-)
+                    intro nextFrame after currentTypes currentLive roots typingAfter rootsAfter currentWorld currentSource checked
+                    exact ih fuel (by omega) nextFrame after (.callChannels activation [] :: ambient) currentTypes currentLive regions pending
+                      innerTarget innerContext innerCallee innerOrigin currentWorld currentSource innerContextAt innerCalleeAt innerParameters innerResults
+                      roots typingAfter rootsAfter checked)
                 have fuelEq : fuel + 2 = fuel + 1 + 1 := by omega
                 obtain ⟨nt, nl, na, ext, ac, sc, w, cl, res⟩ := safe
                 refine ⟨nt, nl, na, ext, ?_, ?_, ?_, ?_, ?_⟩
@@ -144,11 +165,34 @@ theorem invokeCall_recursive_register (fuel : Nat) (config : EvalConfig) (accept
                 · simpa only [frameEnv, body, initialized, fuelEq] using cl
                 · simp only [frameEnv, body, initialized, fuelEq] at res
                   cases execution : execActivationBody (fuel + 1 + 1) config activation []
-                    ⟨scope, [], some (.call innerTarget [] innerOrigin)⟩ pushed <;>
+                    ⟨scope, statements, some (.call innerTarget [] innerOrigin)⟩ pushed <;>
                     simpa [body, execution] using res
 
           exact invokeCall_register_compose fuel config caller.initialized caller.interpretation.environment state ambient types live regions pending
             target context implementation ty origin world source.futureGlobals contextAt implementationAt parameters results bodySafe
+
+theorem invokeCall_recursive_register (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (ty : Ty) (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool) (graph : RegisterCallGraph config ty) :
+    ∀ (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (target : Nat) (context : Context) (implementation : Impl) (origin : Nat)
+    (world : AcceptedWorld config caller.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted caller state types)
+    (contextAt : config.module.contexts[target]? = some context)
+    (implementationAt : config.module.impls[context.impl]? = some implementation)
+    (parameters : implementation.params = #[]) (results : implementation.results = #[⟨ty, .register, none⟩])
+    (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue caller (.call target [] origin) ty roots typingAfter rootsAfter),
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := invokeCall fuel config caller.interpretation.environment target [] [.register ty] origin state
+      RootTypesExtend types nextTypes ∧ state.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      state.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config caller.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      FutureGlobalsClear config caller.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation ty value
+       | .stop .. => True | .escape .. | .jump .. => False) := by
+  exact invokeCall_recursive_register_withLocals fuel config accepted ty scalar graph.withLocals
 
 theorem evalValue_recursive_register (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
@@ -236,5 +280,7 @@ theorem evalValue_recursive_register_emptyCaller (fuel : Nat) (config : EvalConf
 
 #print axioms evalValue_recursive_register_emptyCaller
 #print axioms evalValue_recursive_register
+#print axioms invokeCall_recursive_register_withLocals
+#print axioms RegisterCallGraph.withLocals
 #print axioms invokeCall_recursive_register
 end Goose.Proofs.ConstructionAcceptedExecution
