@@ -460,6 +460,15 @@
   "evidence": "Goose/Lower/DemandExpressionBoundary.lean; DemandExpressionBoundaryChecks.lean covers an accepted call, checked push-result roots and an invalid retained run; registered axiom audit."
  },
  {
+  "feature": "Generated unary expression demand prefixes",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_unary_prefix_family; Goose.Lower.accepted_generated_unary_literal_prefix_family",
+  "statement": "Every finite successful target prefix of a generated unary integer expression decomposes through its actual operand prefix and unary instruction, preserving the source owner and retained demand map.",
+  "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and an operand prefix family.",
+  "limits": "Numeric aborts and general expression recursion remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandGeneratedExpressionPrefixUnary.lean; 138-module pinned Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
