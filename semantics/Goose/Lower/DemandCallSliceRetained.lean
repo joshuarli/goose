@@ -24,6 +24,66 @@ def SliceSlotArgumentCell.Checked {cfg : Cfg} {env : Env} {initial : St}
   root.rootsEnv.ann cell.slot = some cell.alias.roots ∧ cell.alias.ty = .slice cell.mutability cell.element ∧
   frame.vals[cell.value]? = some (.val (.ref ⟨.local env.act cell.scope cell.slot, []⟩))
 
+theorem SliceSlotArgumentCell.ofReference {cfg : Cfg} {env : Env} {initial state after : St}
+    {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
+    (root : ExprSource cfg env (.call contextId arguments origin) initial)
+    {index : Nat} {borrow : Mutability} {slot : VarId}
+    (found : arguments[index]? = some (.byRef borrow (.var slot)))
+    (child : PlaceSource cfg env (.var slot) state)
+    (target : child.ty.refTarget = true ∨ (child.ty.isSlice = true ∧ child.mutable = true ∧ (Place.var slot).sliceArg = true))
+    (canonical : (ArgSource.byRef borrow child target).MatchesContext root.world root.typingEnv root.rootsEnv
+      (callArgContext root.context index (.byRef borrow (.var slot)) found))
+    {mutability : Mutability} {element : Ty} (type : child.ty = .slice mutability element)
+    {fuel : Nat} {location : Loc} (placed : evalPlace fuel cfg env (.var slot) state = .ok location after)
+    {cx : FnCtx} {before built : LS} {initialFrame frame : GIR.Frame} {point : Pt} {id : ValueId}
+    (post : Post cfg env cx before initialFrame built frame point [(id, .val (.ref location))]) :
+    ∃ cell : SliceSlotArgumentCell, cell.value = id ∧ cell.Checked root (index + 1) frame ∧
+      SliceSlotAliasAt cfg.mod root.world env after.store frame id cell.alias mutability element := by
+  obtain ⟨plans, path, world, typing, roots, childContext⟩ := canonical
+  have typed := child.typed
+  simp only [tyPlace] at typed
+  obtain ⟨binding, next, checked, resultType⟩ := (st_bind_ok _ _ _ _).1 typed
+  have visibleChild := ((varOf_ok child.typingEnv slot child.typingStart (binding, next)).1 checked).1
+  have visible : slot ∈ root.typingEnv.visible := by simpa only [typing] using visibleChild
+  have placeOk := (child.result fuel location placed).typed
+  rw [type] at placeOk
+  rcases placeOk with impossible | valid | impossible
+  · simp [Ty.refTarget] at impossible
+  · obtain ⟨x, lv, si, value, equal, variableAt, scope, locationEq, variableType, _, stored, typedValue⟩ := valid
+    cases equal
+    obtain ⟨alias, query, relation⟩ := child.sliceSlotAlias type placed post (path := root.path ++ [index])
+    have accessVariable : root.rootsEnv.impl.vars[slot]? = some lv := by
+      rw [← roots, child.frame.vars_p]
+      exact variableAt
+    have annotation : root.rootsEnv.ann slot = some alias.roots := by
+      rw [roots] at query
+      cases annotation : root.rootsEnv.ann slot with
+      | none =>
+        have rawAnn : (root.rootsEnv.ctx.varRoots.find? (·.1 == slot)).map (·.2) = none := annotation
+        simp [AccessEnv.aliasArg, AccessEnv.placeType?, PEnv.access, accessVariable, variableType,
+          AccessEnv.exprRoots, AccessEnv.variableRoots, rawAnn, Ty.isRefLike, Functor.map, Except.map, reject] at query
+      | some declared =>
+        have rawAnn : (root.rootsEnv.ctx.varRoots.find? (·.1 == slot)).map (·.2) = some declared := annotation
+        simp [AccessEnv.aliasArg, AccessEnv.placeType?, PEnv.access, accessVariable, variableType,
+          AccessEnv.exprRoots, AccessEnv.variableRoots, rawAnn, Ty.isRefLike, Functor.map, Except.map] at query
+        cases query
+        rfl
+    obtain ⟨slotLoc, backing, start, length, valueAt, slotPath, slotStored, referenceTyped, aliasType, aliasAt⟩ := relation
+    have slotEq : slotLoc = location := by
+      have same := valueAt.symm.trans (post.has (id, .val (.ref location)) (by simp))
+      cases same
+      rfl
+    subst slotLoc
+    let cell : SliceSlotArgumentCell := ⟨id, index, slot, si, lv, borrow, mutability, element, alias⟩
+    refine ⟨cell, rfl, ?_, ?_⟩
+    · exact ⟨found, by change index < index + 1; omega, visible, variableAt, scope, variableType, annotation, aliasType, by simpa [locationEq] using valueAt⟩
+    · simpa only [world] using (show SliceSlotAliasAt cfg.mod child.world env after.store frame id alias mutability element from
+        ⟨location, backing, start, length, valueAt, slotPath, slotStored, referenceTyped, aliasType, aliasAt⟩)
+  · obtain ⟨x, lv, mu0, mu, ty, ann, impossible, _⟩ := impossible
+    cases impossible
+
+#print axioms SliceSlotArgumentCell.ofReference
+
 theorem SliceSlotArgumentCell.advance {cfg : Cfg} {env : Env} {initialState : St}
     {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
     {root : ExprSource cfg env (.call contextId arguments origin) initialState}
