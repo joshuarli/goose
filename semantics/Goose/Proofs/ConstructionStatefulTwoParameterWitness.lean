@@ -41,6 +41,28 @@ theorem statefulTwoParameterWitness_argumentOrder :
       | _ => False
     | _ => False := by cbv
 
+theorem statefulTwoParameterWitness_registerResult :
+    match initGlobals 80 ⟨.release, statefulTwoParameterWitness⟩ [0, 1] .initial with
+    | .ok _ initialized =>
+      let activation : RuntimeActivation := ⟨0, initialized.nextAct,
+        #[⟨"bytes", .varr (.int .u8), .immutable, 0, 0⟩, ⟨"number", .int .i64, .immutable, 0, 0⟩,
+          ⟨"result", .int .i64, .immutable, 0, 0⟩], [], []⟩
+      let activated := { initialized with nextAct := initialized.nextAct + 1, activations := activation :: initialized.activations }
+      let scopeState := ownershipResultScopeState activation 0 activated
+      let environment := { activation with scopes := [(0, activated.nextScope)] }
+      match execStmts 50 ⟨.release, statefulTwoParameterWitness⟩ environment
+        [.letS 0 (.bytes (.varr (.int .u8)) [65] 0) 0, .letS 1 (.lit .i64 7) 0] scopeState with
+      | .ok (.normal .unit) afterPrefix =>
+        match invokeCall 50 ⟨.release, statefulTwoParameterWitness⟩ environment 1
+          [.byVal (.blockE (.mk 1 [.assign (.global 0) (.lit .i64 8) 0] (some (.lit .i64 3))) 0),
+            .byVal (.read (.global 0))] [.register (.int .i64)] 0 afterPrefix with
+        | .ok [.register (.int .i64 5)] after => after.objects.lookup (.global 0) = some (.int .i64 8)
+        | _ => False
+      | _ => False
+    | _ => False := by cbv
+
+#print axioms statefulTwoParameterWitness_registerResult
+
 theorem statefulTwoParameterWitness_world (fuel : Nat) :
     ∃ initialized ambient types live regions,
       AcceptedWorld ⟨.release, statefulTwoParameterWitness⟩ initialized
