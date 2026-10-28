@@ -54,6 +54,29 @@ theorem moduleGlobals_beforeEntryActivation (fuel : Nat) (config : EvalConfig)
     ⟨0, 0, #[], [], []⟩ config.module.entry [] entryChannels 0 callLookupReady argumentsReady valuesReady activationReady
     entryId entryImpl callableChannels refreshed values globals entryLookup entryPreparation callLookup prepared argumentsResult refresh
 
+theorem moduleGlobals_beforeCallHistory (fuel : Nat) (config : EvalConfig)
+    (before initialized lookupReady callStart callEnd : ExecutionState) (callIds : List Goose.Core.ActId)
+    (entryId : Goose.Core.ImplId) (entryImpl : Impl) (entryChannels : List Channel)
+    (globals : initGlobals fuel config (List.range config.module.globals.size) before = .ok () initialized)
+    (entryLookup : getImplementation config config.module.entry initialized = .ok (entryId, entryImpl) lookupReady)
+    (entryPreparation : channelsFor config.layout 0 entryImpl.results.toList 0 lookupReady = .ok entryChannels callStart)
+    (calls : CallHistory config callStart callEnd callIds) :
+    ∃ outcome visits,
+      OperandReplay (globalInitializer fuel config) 0 (List.range config.module.globals.size) [] before outcome visits ∧
+      (visits.map fun visit => visit.before.nextAct).Nodup ∧ callIds.Nodup ∧
+      ∀ visit ∈ visits, ∀ id ∈ callIds, visit.before.nextAct < id := by
+  obtain ⟨outcome, visits, replay, unique, earlier⟩ := completedGlobals_activationBounds fuel config before initialized globals
+  have lookupBound := counter_stateQuery _ (stateQuery_getImplementation config config.module.entry) initialized
+  simp only [entryLookup, Goose.Proofs.Exit.stepState] at lookupBound
+  have channelsBound := counter_channelsFor config.layout 0 entryImpl.results.toList 0 lookupReady
+  simp only [entryPreparation, Goose.Proofs.Exit.stepState] at channelsBound
+  refine ⟨outcome, visits, replay, unique, calls.unique, ?_⟩
+  intro visit member id present
+  have callLower := (calls.bounds).2 id present
+  exact Nat.lt_of_lt_of_le (earlier visit member)
+    (Nat.le_trans lookupBound (Nat.le_trans channelsBound callLower.1))
+
+#print axioms moduleGlobals_beforeCallHistory
 private def witnessModule : Module :=
   ⟨#[], #[], #[⟨"global", .int .i64, .immutable, .lit .i64 7, 0⟩],
     #[⟨"entry", #[], #[], #[], .mk 0 [.print [.text "entry"] 0] none, .unknown⟩],
