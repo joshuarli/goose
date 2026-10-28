@@ -40,6 +40,20 @@ theorem advanceParameterFrames_canonicalVisible {config : EvalConfig} {accepted 
   simp only [List.mem_append, List.mem_reverse] at member ⊢
   exact member
 
+theorem advanceParameterFrames_eq (frame : ConstructionSourceFrame) (start count : Nat) :
+    advanceParameterFrames frame start count =
+      { frame with
+        typing := { frame.typing with visible := (List.range' start count).reverse ++ frame.typing.visible }
+        typingCounter := frame.typingCounter + count
+        rootCursor := { frame.rootCursor with nextVar := frame.rootCursor.nextVar + count } } := by
+  induction count generalizing frame start with
+  | zero => simp [advanceParameterFrames]
+  | succ count ih =>
+    simp only [advanceParameterFrames, ih, advanceLocalFrame, List.range'_succ, List.reverse_cons,
+      List.append_assoc, List.singleton_append]
+    simp [Nat.add_assoc, Nat.add_comm, Nat.add_left_comm]
+
+#print axioms advanceParameterFrames_eq
 theorem FreshScalarParameterPlan.finalFrame {scope : Nat} {frame : ConstructionSourceFrame} {types : RootTypes}
     {live : Goose.Core.RootInst → Prop} {values : List (Nat × Value)} {finalFrame : ConstructionSourceFrame}
     {finalTypes : RootTypes} {finalLive : Goose.Core.RootInst → Prop}
