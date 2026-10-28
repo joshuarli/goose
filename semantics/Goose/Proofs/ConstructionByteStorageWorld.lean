@@ -23,6 +23,19 @@ theorem reserveByteStorage_world (config : EvalConfig) (initialized : Nat) (stat
     exact ⟨reserveByteStorage_carriers_ready state carrierFrame.channels carrierFrame.carriers ready,
       fun carrier present => reserveByteStorage_carrier_backing state config.layout carrier (backed carrier present)⟩
 
+theorem newDestination_byteOwner_stopped_world_any (config : EvalConfig) (initialized : Nat)
+    (owner : Goose.Core.ActId) (origin : Goose.Core.OriginId) (knownCount : Option Nat) (before after : ExecutionState)
+    (stop : Goose.Core.Stop) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (executed : newDestination config.layout owner (.varr (.int .u8)) .value origin none knownCount before = .stop stop after) :
+    AcceptedWorld config initialized after ambient types live regions pending := by
+  have same := newDestination_byteOwner_stopped_state_any config.layout owner origin knownCount before after stop executed
+  change after = reserveByteStorage before at same
+  subst after
+  exact reserveByteStorage_world config initialized before ambient types live regions pending world
+
+
 theorem newDestination_byteOwner_stopped_world (config : EvalConfig) (initialized : Nat)
     (owner : Goose.Core.ActId) (origin : Goose.Core.OriginId) (count : Nat) (before after : ExecutionState)
     (stop : Goose.Core.Stop) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
@@ -30,12 +43,11 @@ theorem newDestination_byteOwner_stopped_world (config : EvalConfig) (initialize
     (world : AcceptedWorld config initialized before ambient types live regions pending)
     (executed : newDestination config.layout owner (.varr (.int .u8)) .value origin none (some count) before = .stop stop after) :
     AcceptedWorld config initialized after ambient types live regions pending := by
-  have same := newDestination_byteOwner_stopped_state config.layout owner origin count before after stop executed
-  change after = reserveByteStorage before at same
-  subst after
-  exact reserveByteStorage_world config initialized before ambient types live regions pending world
+  exact newDestination_byteOwner_stopped_world_any config initialized owner origin (some count) before after stop
+    ambient types live regions pending world executed
 
 #print axioms reserveByteStorage_world
 #print axioms newDestination_byteOwner_stopped_world
+#print axioms newDestination_byteOwner_stopped_world_any
 
 end Goose.Proofs.ConstructionAcceptedExecution
