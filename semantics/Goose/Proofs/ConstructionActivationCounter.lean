@@ -46,6 +46,61 @@ theorem counter_lift (origin : Goose.Core.OriginId) (action : ConstructionM α) 
   intro state
   cases result : action state.construction <;> simp [liftConstruction, result, Goose.Proofs.Exit.stepState]
 
+theorem counter_get : PreservesActivationCounter EvalM.get := by
+  intro state
+  exact Nat.le_refl _
+
+theorem counter_setObjectOrdinal (root : Goose.Core.RootInst) (ordinal : Goose.Core.StorageId) :
+    PreservesActivationCounter (setObjectOrdinal root ordinal) := by
+  intro state
+  simp [setObjectOrdinal, EvalM.get, EvalM.set, bind, Goose.Proofs.Exit.stepState]
+
+theorem counter_bindStaticRoot (root : Goose.Core.RootInst) (value : Value) :
+    PreservesActivationCounter (bindStaticRoot root value) := by
+  intro state
+  simp [bindStaticRoot, EvalM.get, EvalM.set, bind, Goose.Proofs.Exit.stepState]
+
+theorem counter_reserveRootObject (root : Goose.Core.RootInst) :
+    PreservesActivationCounter (reserveRootObject root) := by
+  simp only [reserveRootObject]
+  apply counter_bind
+  · exact counter_get
+  · intro state
+    cases lookup : state.objectOrdinals.lookup root with
+    | some ordinal => simp only [lookup]; exact counter_pure _
+    | none =>
+      simp only [lookup]
+      apply counter_bind
+      · exact counter_lift _ _
+      · intro ordinal
+        apply counter_bind
+        · exact counter_setObjectOrdinal root ordinal
+        · intro ignored
+          exact counter_pure _
+
+theorem counter_bindRoot (root : Goose.Core.RootInst) (value : Value) :
+    PreservesActivationCounter (bindRoot root value) := by
+  simp only [bindRoot]
+  apply counter_bind
+  · exact counter_get
+  · intro state
+    cases lookup : state.objectOrdinals.lookup root with
+    | some ordinal => simp [lookup]; exact counter_bindStaticRoot root value
+    | none =>
+      simp only [lookup, Option.isNone_none, ↓reduceIte]
+      cases value with
+      | stored stored =>
+        apply counter_bind
+        · exact counter_setObjectOrdinal root _
+        · intro ignored
+          exact counter_bindStaticRoot root _
+      | _ =>
+        apply counter_bind
+        · exact counter_reserveRootObject root
+        · intro ignored
+          exact counter_bindStaticRoot root _
+
+#print axioms counter_bindRoot
 theorem counter_listMapM (action : α → EvalM β) (items : List α)
     (preserved : ∀ item, PreservesActivationCounter (action item)) : PreservesActivationCounter (items.mapM action) := by
   induction items with
