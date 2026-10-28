@@ -91,6 +91,16 @@ theorem RecursiveIfCursor.mono {cfg : Cfg} {cx : FnCtx} {results : List Ty} {roo
   | refl => exact demanded
   | @step larger bound ih => exact RecursiveIfCursor.succ larger ih
 
+def RecursiveIfBranchFamily {cfg : Cfg} {env : Env} (cx : FnCtx) (results : List Ty) {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (depth : Nat) (block : Core.Block) : Prop :=
+  ∀ (state : St) (before : LS),
+    GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before none [] false block block.stmts
+      (@RecursiveIfCursor cfg cx results root owner depth { env with scopes := (block.scope, state.nextScope) :: env.scopes } selected) ∧
+    GeneratedStoppedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before none [] false block block.stmts
+
 #print axioms RecursiveIfCursor.mono
 #print axioms RecursiveIfCursor.succ
 #print axioms GeneratedGenericBlockPrefixDemand.mapCursor

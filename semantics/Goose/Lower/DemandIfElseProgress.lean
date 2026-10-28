@@ -139,6 +139,84 @@ theorem accepted_generated_if_selected_stopped {cfg : Cfg} {env : Env} {conditio
     bodyFamily (fun done => fragment.normal done) noTail steps stopped nonTimeout
 
 
+theorem accepted_generated_if_generic_selected_prefix_canonical {cfg : Cfg} {env : Env} {condition : Expr} {yes no : Core.Block}
+    {origin : OriginId} {state middle : St} (source : StmtSource cfg env (.ifS condition yes (some no) origin) state)
+    (child : ExprSource cfg env condition state)
+    (canonical : source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
+    (takeYes : Bool) {conditionFuel : Nat} (conditionDone : evalExpr conditionFuel cfg env condition state = .ok (.bool takeYes) middle)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    {before forked yesStart yesEnd noStart noEnd built : LS} {initial conditionFrame : GIR.Frame} {start conditionPoint : Pt}
+    {map required : RetainedSsaMap} {yesBlock noBlock yesValue noValue : Nat} {yesEndPoint noEndPoint : Option BlockId}
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.statement none (.ifS condition yes (some no) origin)) before)
+    (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
+    (boundary : ExpressionDemandBoundary child map cx before initial
+      (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2
+      (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1 (.bool takeYes) middle conditionPoint conditionFrame)
+    (forkRun : fork (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1
+      (lowerEnv cfg.mod env.vars results) (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2 =
+      ((yesBlock, noBlock), forked))
+    (forkExtended : ExtT forked cx.fn.blocks) (yesStartEq : yesStart = { forked with cur := some yesBlock })
+    (yesRun : lowerBlock none [] false yes (lowerEnv cfg.mod env.vars results) yesStart = (yesValue, yesEnd))
+    (yesCurrent : yesEndPoint = yesEnd.cur) (yesExtended : ExtT yesEnd cx.fn.blocks)
+    (noStartEq : noStart = { yesEnd with cur := some noBlock })
+    (noRun : lowerBlock none [] false no (lowerEnv cfg.mod env.vars results) noStart = (noValue, noEnd))
+    (noCurrent : noEndPoint = noEnd.cur) (noExtended : ExtT noEnd cx.fn.blocks)
+    (joined : joinArms yesEndPoint noEndPoint (lowerEnv cfg.mod env.vars results) noEnd = ((), built))
+    (extended : ExtT built cx.fn.blocks)
+    (cursor : ∀ {statement : Stmt} {innerState : St}, StmtSource cfg
+      { env with scopes := ((if takeYes then yes else no).scope, middle.nextScope) :: env.scopes } statement innerState →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    (bodyFamily : GeneratedSequencePrefixFamily
+      (env := { env with scopes := ((if takeYes then yes else no).scope, middle.nextScope) :: env.scopes })
+      cx results selected (if takeYes then yesStart else noStart) none [] false (if takeYes then yes else no)
+      (if takeYes then yes else no).stmts cursor)
+    (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
+      execStmts fuel cfg { env with scopes := ((if takeYes then yes else no).scope, middle.nextScope) :: env.scopes }
+        (if takeYes then yes else no).stmts innerState = .ok flow after → flow = .normal .unit)
+    (noTail : (if takeYes then yes else no).value = none) {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨(if takeYes then yesBlock else noBlock, 0), conditionFrame, middle⟩ reached)
+    : (∃ branch : BlockSource cfg env [] (if takeYes then yes else no) middle,
+        (∃ index, ∃ found : (DemandNode.statement (.ifS condition yes (some no) origin)).child? index =
+            some (.block (if takeYes then yes else no)),
+          index = (if takeYes then 1 else 2) ∧ source.BlockChildAt branch index found) ∧
+        GeneratedGenericBlockPrefixDemand branch selected map required (if takeYes then yesStart else noStart) none conditionFrame cursor
+          (GeneratedClearBlockDemand branch map required cx results (if takeYes then yesStart else noStart) none conditionFrame) reached) ∨
+      ∃ consumed remaining current fuel,
+        consumed + remaining = taken ∧
+        DemandRuntimePrefix cx consumed ⟨(if takeYes then yesBlock else noBlock, 0), conditionFrame, middle⟩ current ∧
+        DemandRuntimePrefix cx remaining current reached ∧
+        execStmt fuel cfg env (.ifS condition yes (some no) origin) state = .ok (.normal .unit) current.state ∧
+        (∀ targetFuel, DemandInstructionStep cx targetFuel current ⟨(noEnd.blocks.size, 0), current.frame, current.state⟩) ∧
+        GeneratedStatementPrefixEnd source map cx before initial built none (.normal .unit)
+          ⟨(noEnd.blocks.size, 0), current.frame, current.state⟩ := by
+  obtain ⟨branch, world, branchCanonical, branchOwner, branchAdmitted, branchBounded, branchRealized, branchInput, branchOccurrence, branchRows⟩ :=
+    accepted_generated_if_selected_input_canonical source child canonical takeYes conditionDone selected owned occurrence rows admitted input boundary
+      forkRun forkExtended yesStartEq yesRun noStartEq
+  have selectedRun : (lowerBlock none [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
+      (if takeYes then yesStart else noStart)).2 = (if takeYes then yesEnd else noEnd) := by
+    cases takeYes <;> simp [yesRun, noRun]
+  have branchExtended : ExtT (lowerBlock none [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
+      (if takeYes then yesStart else noStart)).2 cx.fn.blocks := by
+    rw [selectedRun]
+    cases takeYes <;> assumption
+  have progress := accepted_generated_generic_branch_block_prefix branch selected branchOwner branchOccurrence branchRows
+    coverage branchAdmitted branchBounded branchRealized branchInput branchExtended cursor bodyFamily normal noTail steps
+  cases progress.progress with
+  | interior demanded => exact Or.inl ⟨branch, branchCanonical, demanded⟩
+  | @complete fuel consumed remaining current flow count executed residual branchDone ended =>
+    have normal := ended.normal
+    subst flow
+    have combined := accepted_generated_if_some_join source takeYes branch world conditionDone branchDone boundary.post
+      forkRun forkExtended yesStartEq yesRun yesCurrent noStartEq noRun noCurrent joined extended ended
+    obtain ⟨joinStep, ⟨sourceFuel, sourceDone⟩, finalPost⟩ := combined
+    exact Or.inr ⟨consumed, remaining, current, sourceFuel, count, executed, residual, sourceDone, joinStep, finalPost⟩
+
+
 theorem accepted_generated_if_generic_selected_prefix {cfg : Cfg} {env : Env} {condition : Expr} {yes no : Core.Block}
     {origin : OriginId} {state middle : St} (source : StmtSource cfg env (.ifS condition yes (some no) origin) state)
     (child : ExprSource cfg env condition state)
@@ -191,27 +269,12 @@ theorem accepted_generated_if_generic_selected_prefix {cfg : Cfg} {env : Env} {c
         (∀ targetFuel, DemandInstructionStep cx targetFuel current ⟨(noEnd.blocks.size, 0), current.frame, current.state⟩) ∧
         GeneratedStatementPrefixEnd source map cx before initial built none (.normal .unit)
           ⟨(noEnd.blocks.size, 0), current.frame, current.state⟩ := by
-  obtain ⟨branch, world, branchOwner, branchAdmitted, branchBounded, branchRealized, branchInput, branchOccurrence, branchRows⟩ :=
-    accepted_generated_if_selected_input source child canonical takeYes conditionDone selected owned occurrence rows admitted input boundary
-      forkRun forkExtended yesStartEq yesRun noStartEq
-  have selectedRun : (lowerBlock none [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
-      (if takeYes then yesStart else noStart)).2 = (if takeYes then yesEnd else noEnd) := by
-    cases takeYes <;> simp [yesRun, noRun]
-  have branchExtended : ExtT (lowerBlock none [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
-      (if takeYes then yesStart else noStart)).2 cx.fn.blocks := by
-    rw [selectedRun]
-    cases takeYes <;> assumption
-  have progress := accepted_generated_generic_branch_block_prefix branch selected branchOwner branchOccurrence branchRows
-    coverage branchAdmitted branchBounded branchRealized branchInput branchExtended cursor bodyFamily normal noTail steps
-  cases progress.progress with
-  | interior demanded => exact Or.inl ⟨branch, demanded⟩
-  | @complete fuel consumed remaining current flow count executed residual branchDone ended =>
-    have normal := ended.normal
-    subst flow
-    have combined := accepted_generated_if_some_join source takeYes branch world conditionDone branchDone boundary.post
-      forkRun forkExtended yesStartEq yesRun yesCurrent noStartEq noRun noCurrent joined extended ended
-    obtain ⟨joinStep, ⟨sourceFuel, sourceDone⟩, finalPost⟩ := combined
-    exact Or.inr ⟨consumed, remaining, current, sourceFuel, count, executed, residual, sourceDone, joinStep, finalPost⟩
+  have progress := accepted_generated_if_generic_selected_prefix_canonical source child canonical takeYes conditionDone selected owned occurrence rows coverage admitted input boundary
+    forkRun forkExtended yesStartEq yesRun yesCurrent yesExtended noStartEq noRun noCurrent noExtended joined extended
+    cursor bodyFamily normal noTail steps
+  rcases progress with ⟨branch, _, demanded⟩ | completed
+  · exact Or.inl ⟨branch, demanded⟩
+  · exact Or.inr completed
 
 
 theorem accepted_generated_if_selected_prefix {cfg : Cfg} {env : Env} {condition : Expr} {yes no : Core.Block}
@@ -278,6 +341,7 @@ theorem accepted_generated_if_selected_prefix {cfg : Cfg} {env : Env} {condition
     | body canonical cursor => exact Or.inl ⟨branch, .body canonical cursor⟩
   · exact Or.inr completed
 
+#print axioms accepted_generated_if_generic_selected_prefix_canonical
 #print axioms accepted_generated_if_selected_prefix
 #print axioms accepted_generated_if_selected_stopped
 end Goose.Lower
