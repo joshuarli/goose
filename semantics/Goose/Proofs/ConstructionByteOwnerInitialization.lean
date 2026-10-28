@@ -8,7 +8,7 @@ open Goose.Construct
 
 private def byteOwnerType : Ty := .grow (.int .u8)
 
-private def byteOwnerState (raw : ByteArray) (phase : DestinationProgress)
+def byteOwnerState (raw : ByteArray) (phase : DestinationProgress)
     (published : Nat) (total : Nat) (events : List Goose.Core.ConstructionEvent) : ConstructionState :=
   { ConstructionState.initial with
     storage := #[⟨raw, published⟩]
@@ -16,7 +16,7 @@ private def byteOwnerState (raw : ByteArray) (phase : DestinationProgress)
       .direct 0, .elements, .receiver, phase, raw.size, 0, some total, none⟩]
     events := events }
 
-private def byteOwnerRuntime (construction : ConstructionState) : ExecutionState :=
+def byteOwnerRuntime (construction : ConstructionState) : ExecutionState :=
   { ExecutionState.initial with nextAct := 1, construction := construction }
 
 def byteOwnerModule (data : List UInt8) : Module :=
@@ -84,6 +84,42 @@ private theorem byteOwner_writeLoop (data : List UInt8) (raw : ByteArray) (total
         rfl
       simp only [List.forIn_cons, bind, byteOwner_runtimeWrite, pure]
       simpa only [bind, pure, currentSize, combined] using tail
+
+theorem byteOwner_writeLoop_direct (data : List UInt8) (raw : ByteArray) (total : Nat)
+    (events : List Goose.Core.ConstructionEvent) :
+    ∃ following,
+      ((forIn data PUnit.unit fun byte _ => do
+          receivingAction 0 0 (fun destination => writeElement destination ⟨#[byte]⟩)
+          pure (.yield PUnit.unit)) : EvalM PUnit)
+        (byteOwnerRuntime (byteOwnerState raw (.open raw.size) 0 total events)) =
+      .ok PUnit.unit (byteOwnerRuntime (byteOwnerState (raw ++ ⟨data.toArray⟩) (.open (raw ++ ⟨data.toArray⟩).size)
+        0 total following)) ∧
+      ∃ suffix, following = events ++ suffix ∧ ∀ event ∈ suffix, ∃ index, event = .write 0 index := by
+  induction data generalizing raw events with
+  | nil =>
+      refine ⟨events, ?_, [], by simp, by simp⟩
+      have empty : (⟨(#[] : Array UInt8)⟩ : ByteArray) = ByteArray.empty := rfl
+      simp only [List.forIn_nil, pure, bind, empty, ByteArray.append_empty]
+  | cons byte rest ih =>
+      obtain ⟨following, tail, suffix, equal, writes⟩ := ih (raw ++ ⟨#[byte]⟩) (events ++ [.write 0 raw.size])
+      refine ⟨following, ?_, .write 0 raw.size :: suffix, ?_, ?_⟩
+      · have combined : (raw ++ ⟨#[byte]⟩) ++ ⟨rest.toArray⟩ = raw ++ ⟨(byte :: rest).toArray⟩ := by
+          rw [ByteArray.ext_iff]
+          simp only [ByteArray.data_append]
+          change (raw.data ++ #[byte]) ++ rest.toArray = raw.data ++ (byte :: rest).toArray
+          rw [List.toArray_cons byte rest]
+          exact Array.append_assoc
+        have currentSize : (raw ++ ⟨#[byte]⟩).size = raw.size + 1 := by
+          rw [ByteArray.size_append]
+          rfl
+        simp only [List.forIn_cons, bind, byteOwner_runtimeWrite, pure]
+        simpa only [bind, pure, currentSize, combined] using tail
+      · simpa [List.append_assoc] using equal
+      · intro event member
+        simp only [List.mem_cons] at member
+        rcases member with rfl | member
+        · exact ⟨raw.size, rfl⟩
+        · exact writes event member
 
 private theorem byteOwner_finish (raw : ByteArray) (total : Nat)
     (events : List Goose.Core.ConstructionEvent) :
