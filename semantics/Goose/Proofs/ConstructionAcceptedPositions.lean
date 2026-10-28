@@ -133,6 +133,14 @@ inductive DirectSourceChild : ConstructionSourceFrame → SourceAction → Const
       (nesting : frame.typingFuel = fuel + 1) :
       DirectSourceChild frame (.block (.mk scope statements tail))
         (blockStatementsFrame frame scope fuel) (.statements statements)
+  | blockTail (frame : ConstructionSourceFrame) (scope fuel : Nat) (statements : List Stmt) (expression : Expr)
+      (next : TypingEnv) (typingAfter : Nat) (rootsAfter : RState)
+      (nesting : frame.typingFuel = fuel + 1)
+      (typed : typeStatements fuel { frame.typing with scope := scope } statements frame.typingCounter = .ok (next, typingAfter))
+      (rooted : rpStmts { frame.source with scopes := scope :: frame.source.scopes } statements frame.rootCursor = .ok ((), rootsAfter)) :
+      DirectSourceChild frame (.block (.mk scope statements (some expression)))
+        { frame with typingFuel := fuel, typing := next, typingCounter := typingAfter, source := { frame.source with scopes := scope :: frame.source.scopes }, rootCursor := rootsAfter }
+        (.expression expression)
   | statementsHead (frame : ConstructionSourceFrame) (statement : Stmt) (rest : List Stmt) (fuel : Nat)
       (nesting : frame.typingFuel = fuel + 1) :
       DirectSourceChild frame (.statements (statement :: rest)) { frame with typingFuel := fuel } (.statement statement)

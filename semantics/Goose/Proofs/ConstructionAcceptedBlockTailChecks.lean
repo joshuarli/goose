@@ -31,6 +31,23 @@ theorem SourcePosition.blockTail_checks {config : EvalConfig} (accepted : Accept
     exact ⟨next, typingMiddle, rootMiddle, types, typingAfter, roots, rootsAfter,
       blockTyped, rfl, rootedStatements, typed, rootedTail⟩
 
+theorem SourcePosition.blockTail {config : EvalConfig} (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (scope fuel : Nat) (statements : List Stmt) (expression : Expr)
+    (position : SourcePosition accepted frame (.block ⟨scope, statements, some expression⟩))
+    (nesting : frame.typingFuel = fuel + 1) :
+    ∃ next typingMiddle rootMiddle,
+      typeStatements fuel { frame.typing with scope := scope } statements frame.typingCounter = .ok (next, typingMiddle) ∧
+      rpStmts { frame.source with scopes := scope :: frame.source.scopes } statements frame.rootCursor = .ok ((), rootMiddle) ∧
+      SourcePosition accepted
+        { frame with typingFuel := fuel, typing := next, typingCounter := typingMiddle, source := { frame.source with scopes := scope :: frame.source.scopes }, rootCursor := rootMiddle }
+        (.expression expression) := by
+  obtain ⟨next, typingMiddle, rootMiddle, types, typingAfter, roots, rootsAfter,
+    blockTyped, typedStatements, rootedStatements, typedTail, rootedTail⟩ :=
+    position.blockTail_checks accepted frame scope fuel statements expression nesting
+  exact ⟨next, typingMiddle, rootMiddle, typedStatements, rootedStatements,
+    .child position (.blockTail frame scope fuel statements expression next typingMiddle rootMiddle nesting typedStatements rootedStatements)
+      ⟨types, typingAfter, roots, rootsAfter, typedTail, rootedTail⟩⟩
+
 theorem SourcePosition.blockTail_checkedScalar {config : EvalConfig} (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (scope fuel : Nat) (statements : List Stmt) (expression : Expr)
     (position : SourcePosition accepted frame (.block ⟨scope, statements, some expression⟩))
@@ -76,6 +93,7 @@ theorem SourcePosition.blockTail_checkedUnit {config : EvalConfig} (accepted : A
     ⟨typedTail, rootedTail, available rootMiddle roots rootsAfter rootedStatements rootedTail⟩⟩
 
 #print axioms SourcePosition.blockTail_checkedUnit
+#print axioms SourcePosition.blockTail
 #print axioms SourcePosition.blockTail_checks
 #print axioms SourcePosition.blockTail_checkedScalar
 end Goose.Proofs.ConstructionAcceptedExecution
