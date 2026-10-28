@@ -721,6 +721,15 @@
   "evidence": "Goose/Lower/DemandAssignmentScalarAlias.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Generated assignment store outcome",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_assignment_store_step; Goose.Lower.accepted_generated_assignment_store_stop",
+  "statement": "After successful source destination and value evaluation, the actual generated assignment store reflects its successful or non-timeout stopping outcome to the source. A successful store preserves the accepted statement frame and original retained demand map.",
+  "assumptions": "Accepted assignment source, generated store site, successful source operand evaluations, matching target address and value cells, builder postcondition and extension. The successful case also requires an admitted, bounded, realized retained map.",
+  "limits": "Operand-prefix composition, destination alias propagation into the value, operand stops and general whole-statement traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandAssignmentStore.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
