@@ -36,6 +36,18 @@ theorem SplitCallArgumentRows.length {access : AccessEnv} {path : List Nat} {ind
   | value ordinary query tail ih => simp [ih]
   | slot ordinal type query tail ih => simp [ih]
 
+theorem GeneratedCallArgumentRows.splitOrdinary {access : AccessEnv} {path : List Nat} {index : Nat}
+    {arguments : List Arg} {ids : List ValueId} {values : List (ValueId × RetainedAlias)}
+    (rows : GeneratedCallArgumentRows access path index arguments ids values)
+    (ordinary : ∀ argument ∈ arguments, OrdinaryCallArgument access argument) :
+    SplitCallArgumentRows access path index arguments ids values [] := by
+  induction rows with
+  | nil index => exact .nil index
+  | @cons index head rest id ids aliases retained query tail ih =>
+    exact .value (ordinary head (by simp)) query (ih (fun argument member => ordinary argument (by simp [member])))
+
+#print axioms GeneratedCallArgumentRows.splitOrdinary
+
 theorem SplitCallArgumentRows.generatedRows {access : AccessEnv} {path : List Nat} {index : Nat}
     {arguments : List Arg} {ids : List ValueId} {values : List (ValueId × RetainedAlias)}
     {slots : List SliceSlotArgumentCell} (rows : SplitCallArgumentRows access path index arguments ids values slots) :
@@ -126,6 +138,34 @@ theorem SplitCallArgumentRows.snocSlot {access : AccessEnv} {path : List Nat} {i
       omega
     have next := ih nextOrdinal
     simpa only [List.cons_append] using (SplitCallArgumentRows.slot headOrdinal headType queryHead next)
+
+theorem SplitCallArgumentRows.snocValue {access : AccessEnv} {path : List Nat} {index : Nat}
+    {arguments : List Arg} {ids : List ValueId} {values : List (ValueId × RetainedAlias)}
+    {slots : List SliceSlotArgumentCell} (rows : SplitCallArgumentRows access path index arguments ids values slots)
+    {argument : Arg} {id : ValueId} {aliases : List RetainedAlias}
+    (ordinary : OrdinaryCallArgument access argument)
+    (query : access.aliasArg (path ++ [index + arguments.length]) argument = .ok aliases) :
+    SplitCallArgumentRows access path index (arguments ++ [argument]) (ids ++ [id])
+      (values ++ aliases.map (fun alias => (id, alias))) slots := by
+  induction rows with
+  | nil index =>
+    simpa using (SplitCallArgumentRows.value ordinary (by simpa using query) (SplitCallArgumentRows.nil (index + 1)))
+  | @value index head arguments id ids oldAliases values slots oldOrdinary oldQuery tail ih =>
+    have nextQuery : access.aliasArg (path ++ [(index + 1) + arguments.length]) argument = .ok aliases := by
+      have equal : index + (head :: arguments).length = (index + 1) + arguments.length := by simp; omega
+      rw [← equal]
+      exact query
+    have next := ih nextQuery
+    simpa only [List.cons_append, List.append_assoc] using (SplitCallArgumentRows.value oldOrdinary oldQuery next)
+  | @slot index arguments ids values slots head headOrdinal headType headQuery tail ih =>
+    have nextQuery : access.aliasArg (path ++ [(index + 1) + arguments.length]) argument = .ok aliases := by
+      have equal : index + (.byRef head.borrow (.var head.slot) :: arguments).length = (index + 1) + arguments.length := by simp; omega
+      rw [← equal]
+      exact query
+    have next := ih nextQuery
+    simpa only [List.cons_append] using (SplitCallArgumentRows.slot headOrdinal headType headQuery next)
+
+#print axioms SplitCallArgumentRows.snocValue
 
 theorem SplitCallArgumentRows.snocCheckedSlot {cfg : Cfg} {env : Env} {initial : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
