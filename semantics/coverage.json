@@ -506,6 +506,15 @@
   "evidence": "ConstructionAcceptedBytePublication.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Published byte owner ownership source state",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.allocated_published_byteOwner_sourceState",
+  "statement": "Actual fresh byte-owner allocation, construction and publication preserve the ownership source state, including successor and reservation invariants.",
+  "assumptions": "An accepted world and successful allocation, construction and publication.",
+  "limits": "Deriving the corresponding fresh destination frame and full evaluator preservation remains open; this result does not discharge TH-CON-01.",
+  "evidence": "ConstructionAcceptedByteSource.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Published owner storage from fresh allocation",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_publishedOwner_storage; Goose.Proofs.ConstructionAcceptedExecution.bytes_publishedOwner_storage",
