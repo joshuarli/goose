@@ -52,6 +52,73 @@ theorem SliceSlotArgumentCells.ofLaterValueCursor {cfg : Cfg} {env : Env} {initi
   have result := SliceSlotAliasAt.ofFrame source childVisible demanded variableAt scope variableType childAnnotation aliasType valueAt
   simpa only [world] using result
 
+theorem SliceSlotArgumentCells.ofLaterReferencePoint {cfg : Cfg} {env : Env} {initialState state : St}
+    {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
+    (root : ExprSource cfg env (.call contextId arguments origin) initialState)
+    {offset : Nat} {place : Place} {borrow : Mutability} (current : arguments[offset]? = some (.byRef borrow place))
+    (child : PlaceSource cfg env place state)
+    (target : child.ty.refTarget = true ∨ (child.ty.isSlice = true ∧ child.mutable = true ∧ place.sliceArg = true))
+    (canonical : (ArgSource.byRef borrow child target).MatchesContext root.world root.typingEnv root.rootsEnv
+      (callArgContext root.context offset (.byRef borrow place) current))
+    {cx : FnCtx} {runtime : DemandRuntimePoint} {values runs : List (ValueId × RetainedAlias)}
+    (demanded : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture values runs runtime ∨
+      DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture values runs runtime)
+    (cells : List SliceSlotArgumentCell) (checked : ∀ cell ∈ cells, cell.Checked root offset runtime.frame) :
+    SliceSlotArgumentCells.Realizes cells cfg.mod root.world env runtime := by
+  intro cell member
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := checked cell member
+  obtain ⟨plans, path, world, typing, roots, childContext⟩ := canonical
+  have contextEq : HEq child.context
+      (root.context.child rfl offset (.place place) .place
+        (by simp [DemandNode.child?, DemandNode.children, current]) (by trivial)) := by
+    simpa only [ArgSource.MatchesContext, callArgContext] using childContext
+  have outputEq := demandContextOutputFutureEq plans path rfl contextEq
+  have inputEq := demandContextInputFutureEq plans path rfl contextEq
+  have needed := callArgContext_priorSliceHolder_output root.context root.active root.access root.frame.vars_t
+    variableAt variableType visible current found prior
+  have outputNeeded : cell.slot ∈ child.context.outputFuture := by
+    rw [outputEq]
+    simpa only [callArgContext, ArgContext.outputFuture] using needed
+  have inputNeeded : cell.slot ∈ child.context.inputFuture := by
+    rw [inputEq]
+    have neededInput : cell.slot ∈ (callArgContext root.context offset (.byRef borrow place) current).inputFuture := by
+      rw [callArgContext_input_output]
+      exact List.mem_append_right _ needed
+    simpa only [callArgContext, ArgContext.inputFuture] using neededInput
+  have childVisible : cell.slot ∈ child.typingEnv.visible := by simpa only [typing] using visible
+  have childAnnotation : child.rootsEnv.ann cell.slot = some cell.alias.roots := by simpa only [roots] using annotation
+  rcases demanded with input | output
+  · have result := SliceSlotAliasAt.ofFrame input.source childVisible inputNeeded variableAt scope variableType childAnnotation aliasType valueAt
+    simpa only [world] using result
+  · have result := SliceSlotAliasAt.ofFrame output.source childVisible outputNeeded variableAt scope variableType childAnnotation aliasType valueAt
+    simpa only [world] using result
+
+theorem SliceSlotArgumentCells.ofLaterReferenceCursor {cfg : Cfg} {env : Env} {initialState state : St}
+    {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
+    (root : ExprSource cfg env (.call contextId arguments origin) initialState)
+    {offset : Nat} {place : Place} {borrow : Mutability} (current : arguments[offset]? = some (.byRef borrow place))
+    (child : PlaceSource cfg env place state)
+    (target : child.ty.refTarget = true ∨ (child.ty.isSlice = true ∧ child.mutable = true ∧ place.sliceArg = true))
+    (canonical : (ArgSource.byRef borrow child target).MatchesContext root.world root.typingEnv root.rootsEnv
+      (callArgContext root.context offset (.byRef borrow place) current))
+    {cx : FnCtx} {runtime : DemandRuntimePoint} {values runs : List (ValueId × RetainedAlias)}
+    (demanded : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture values runs runtime ∨
+      DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture values runs runtime)
+    {before : LS} {initial : GIR.Frame} (same : Same before.vals.size initial runtime.frame)
+    (cells : List SliceSlotArgumentCell) (checked : ∀ cell ∈ cells, cell.Checked root offset initial)
+    (bounded : ∀ cell ∈ cells, cell.value < before.vals.size) :
+    SliceSlotArgumentCells.Realizes cells cfg.mod root.world env runtime := by
+  apply SliceSlotArgumentCells.ofLaterReferencePoint root current child target canonical demanded cells
+  intro cell member
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := checked cell member
+  refine ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, ?_⟩
+  rw [same cell.value (bounded cell member)]
+  exact valueAt
+
+#print axioms SliceSlotArgumentCells.ofLaterReferenceCursor
+
+#print axioms SliceSlotArgumentCells.ofLaterReferencePoint
+
 #print axioms SliceSlotArgumentCells.ofLaterValueCursor
 
 #print axioms SliceSlotArgumentCell.atControlCursor

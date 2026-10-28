@@ -36,10 +36,10 @@ theorem accepted_generated_call_reference_complete_demand {cfg : Cfg} {env : Env
       let nextPrior := prior ++ aliases.map (fun alias => (id, alias))
       evalArg 2 cfg env (.byRef mutability place) state = .ok (.ref location) state ∧
       DemandUniformTraversal cx
-        (fun runtime => DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
+        (fun runtime => (DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
             (prior ++ map.values) map.runs runtime ∨
           DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
-            (prior ++ map.values) map.runs runtime)
+            (prior ++ map.values) map.runs runtime) ∧ Same stage.vals.size initial runtime.frame)
         (length + 1) ⟨start, initial, state⟩ ⟨point, frame, state⟩ ∧
       (∀ fuel, DemandInstructionStep cx fuel ⟨start, initial, state⟩ middle) ∧
       DemandRuntimePrefix cx length middle ⟨point, frame, state⟩ ∧
@@ -81,19 +81,19 @@ theorem accepted_generated_call_reference_complete_demand {cfg : Cfg} {env : Env
       ⟨(start.1, start.2 + 1), initial.set address (.val (.ref location)), state⟩ ⟨finalPoint, finalFrame, state⟩ := by
     have forget {length : Nat} {first last : DemandRuntimePoint}
         (path : DemandUniformTraversal cx
-          (DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
-            (prior ++ map.values) map.runs) length first last) : DemandRuntimePrefix cx length first last := by
+          (fun runtime => DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
+            (prior ++ map.values) map.runs runtime ∧ Same stage.vals.size initial runtime.frame) length first last) : DemandRuntimePrefix cx length first last := by
       induction path with
       | done _ => exact .zero _
       | next _ step tail ih => exact .next ((step 0).runtime) ih
     exact forget borrowTraversal
   have totalTraversal : DemandUniformTraversal cx
-      (fun runtime => DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
+      (fun runtime => (DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
           (prior ++ map.values) map.runs runtime ∨
         DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
-          (prior ++ map.values) map.runs runtime)
+          (prior ++ map.values) map.runs runtime) ∧ Same stage.vals.size initial runtime.frame)
       (borrowLength + 1) ⟨start, initial, state⟩ ⟨finalPoint, finalFrame, state⟩ :=
-    .next (.inl placeEntry) firstStep (borrowTraversal.mono (fun _ valid => .inr valid))
+    .next ⟨.inl placeEntry, Same.refl _ _⟩ firstStep (borrowTraversal.mono (fun _ valid => ⟨.inr valid.1, valid.2⟩))
   have finalPost : Post cfg env cx stage initial (lowerArg (.byRef mutability place) le stage).2 finalFrame finalPoint
       [((lowerArg (.byRef mutability place) le stage).1, .val (.ref location))] := by
     rw [argEq]

@@ -54,6 +54,8 @@ inductive CallMixedPrefix {cfg : Cfg} {env : Env} {initialState : St}
           (prior ++ map.values) map.runs reached ∨
         DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
           (prior ++ map.values) map.runs reached)
+      (same : Same (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2.vals.size
+        start.frame reached.frame)
       (evaluated : evalArg 2 cfg env (.byRef mutability place) start.state = .ok (.ref location) boundary.state)
       (expected : DemandRuntimePrefix cx length start boundary)
       (count : taken + remaining = length)
@@ -166,7 +168,7 @@ theorem accepted_generated_call_mixed_prefix_suffix {cfg : Cfg} {env : Env} {ini
             exact same
           subst actualLocation
           have currentDemand := traversal.runtimePrefix_invariant (by omega) steps
-          exact .referenceInterior found child target childCanonical placeEntry placeAddressed currentDemand done executed count suffix
+          exact .referenceInterior found child target childCanonical placeEntry placeAddressed currentDemand.1 currentDemand.2 done executed count suffix
 
 theorem accepted_generated_call_mixed_prefix {cfg : Cfg} {env : Env} {state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}

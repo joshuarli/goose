@@ -14,15 +14,17 @@ theorem generated_call_reference_borrow_demand {cfg : Cfg} {env : Env} {cx : FnC
     (realized : map.Realizes cfg.mod world env ⟨point, initial, state⟩) :
     ∃ length finalPoint finalFrame,
       DemandUniformTraversal cx
-        (DemandFrameAt cfg env cx world typing roots future map.values map.runs) length
+        (fun runtime => DemandFrameAt cfg env cx world typing roots future map.values map.runs runtime ∧
+          Same before.vals.size initial runtime.frame) length
         ⟨point, frame, state⟩ ⟨finalPoint, finalFrame, state⟩ ∧
       Post cfg env cx before initial (borrowTo mutability id le middle).2 finalFrame finalPoint
         [((borrowTo mutability id le middle).1, .val (.ref location))] := by
   apply generated_call_reference_borrow_traversal post mutability le extended
-    (DemandFrameAt cfg env cx world typing roots future map.values map.runs)
+    (fun runtime => DemandFrameAt cfg env cx world typing roots future map.values map.runs runtime ∧
+      Same before.vals.size initial runtime.frame)
   intro built current currentPoint cells currentPost
-  exact ⟨⟨_, currentPost.pp, currentPost.rel⟩, sourceFrame,
-    realized.retained currentPost.same bounded.1 bounded.2 RetainsAliases.refl⟩
+  exact ⟨⟨⟨_, currentPost.pp, currentPost.rel⟩, sourceFrame,
+    realized.retained currentPost.same bounded.1 bounded.2 RetainsAliases.refl⟩, currentPost.same⟩
 
 #print axioms generated_call_reference_borrow_demand
 end Goose.Lower

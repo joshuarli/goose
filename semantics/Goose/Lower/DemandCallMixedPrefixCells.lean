@@ -197,14 +197,14 @@ theorem accepted_generated_call_mixed_prefix_cells_suffix {cfg : Cfg} {env : Env
           have currentDemand := traversal.runtimePrefix_invariant (by omega) steps
           have world : child.world = source.world := childCanonical.2.2.1
           have sourceCarried : (⟨prior ++ map.values, map.runs⟩ : RetainedSsaMap).Realizes cfg.mod source.world env reached := by
-            cases currentDemand with
+            cases currentDemand.1 with
             | inl current => simpa only [RetainedSsaMap.Realizes, world] using current.operands
             | inr current => simpa only [RetainedSsaMap.Realizes, world] using current.operands
           have current : map.Realizes cfg.mod source.world env reached :=
             ⟨fun cell member => sourceCarried.1 cell (List.mem_append_right prior member), sourceCarried.2⟩
           have progress := traversal.runtimePrefix_next (by omega) steps
           exact .interior (required := required)
-            (.referenceInterior found child target childCanonical placeEntry placeAddressed currentDemand done executed count suffix)
+            (.referenceInterior found child target childCanonical placeEntry placeAddressed currentDemand.1 currentDemand.2 done executed count suffix)
             current (.inr progress)
 
 theorem accepted_generated_call_mixed_prefix_cells {cfg : Cfg} {env : Env} {state : St}
