@@ -184,10 +184,9 @@ theorem ownershipAmbientBoundaries_noTickets (state : ConstructionState) (ambien
     rw [empty] at member
     cases member
 
-theorem publish_direct_packed_context (origin : Goose.Core.OriginId) (before after : ExecutionState)
+theorem publish_direct_packed_context_general (origin : Goose.Core.OriginId) (before after : ExecutionState)
     (ambient : OwnershipAmbient) (id storageId count : Nat) (row : PendingDestination) (storage : ReceivingStorage)
     (context : OwnershipExecutionContext before (.returned [.completed id] :: ambient))
-    (noTickets : ∀ frame ∈ ambient, frame.tickets = [])
     (present : before.construction.destinations[id]? = some row)
     (stored : before.construction.storage[storageId]? = some storage)
     (progress : row.progress = .built count) (receiver : row.use = .receiver)
@@ -203,8 +202,10 @@ theorem publish_direct_packed_context (origin : Goose.Core.OriginId) (before aft
     simpa [OwnershipAmbient.retained, OwnershipAmbientFrame.carriers] using context.retention.anchors
   have anchors := publish_direct_packed_anchors origin before after ambient id storageId count row storage context.source
     oldAnchors present stored progress receiver backing packed executed
-  have retained : OwnershipAmbientInvariant after.construction ambient :=
-    ⟨source.structural.1, anchors, ownershipAmbientBoundaries_noTickets after.construction ambient noTickets⟩
+  have uses := source_extension_same_uses before.construction after.construction size history
+  have boundaries := boundaries_indexing_frame before.construction after.construction ambient size successors tickets uses
+    context.retention.boundaries.2
+  have retained : OwnershipAmbientInvariant after.construction ambient := ⟨source.structural.1, anchors, boundaries⟩
   have runtimeOld := (ownershipRuntimeFrames_returned before ambient [.completed id]).mp context.runtime
   have runtime : OwnershipRuntimeFrames after ambient := by
     rw [outer]
@@ -225,7 +226,21 @@ theorem publish_direct_packed_context (origin : Goose.Core.OriginId) (before aft
     exact ⟨context.identities.activations, context.identities.breaks⟩
   exact ⟨source, retained, runtime, reservations, receiving, bounds, identities⟩
 
+theorem publish_direct_packed_context (origin : Goose.Core.OriginId) (before after : ExecutionState)
+    (ambient : OwnershipAmbient) (id storageId count : Nat) (row : PendingDestination) (storage : ReceivingStorage)
+    (context : OwnershipExecutionContext before (.returned [.completed id] :: ambient))
+    (noTickets : ∀ frame ∈ ambient, frame.tickets = [])
+    (present : before.construction.destinations[id]? = some row)
+    (stored : before.construction.storage[storageId]? = some storage)
+    (progress : row.progress = .built count) (receiver : row.use = .receiver)
+    (backing : row.backing = .direct storageId) (packed : row.layout = .packed)
+    (executed : publishCarriers origin [.completed id] before = .ok () after) :
+    OwnershipExecutionContext after ambient := by
+  exact publish_direct_packed_context_general origin before after ambient id storageId count row storage context
+    present stored progress receiver backing packed executed
+
 #print axioms ownershipAmbientBoundaries_noTickets
+#print axioms publish_direct_packed_context_general
 #print axioms publish_direct_packed_context
 #print axioms publish_direct_packed_anchors
 #print axioms replacementSupported_preimage_rows
