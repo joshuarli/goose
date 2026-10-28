@@ -1,4 +1,5 @@
 import Goose.Lower.DemandWhileScalarCallAgreement
+import Goose.Lower.DemandCallLoopMixedNormal
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -62,6 +63,30 @@ theorem ReachableNestedCallLoopCursor.excludes_maximal_terminal {cfg : Cfg} {env
   cases cursor with
   | existing cursor => exact cursor.excludes_maximal_terminal terminal maximal
   | nested cursor => exact cursor.excludes_maximal_terminal terminal maximal
+
+theorem nested_call_loop_sequence_normal {cfg : Cfg} {env : Env} {condition : Expr} {body : Core.Block}
+    {origin : OriginId} {later : List Stmt}
+    (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
+    (noValue : body.value = none) (tail : ReachableScalarCallStatements cfg env later)
+    {fuel : Nat} {state after : St} {flow : Flow}
+    (done : execStmts fuel cfg env (.while condition body origin :: later) state = .ok flow after) : flow = .normal .unit := by
+  cases fuel with
+  | zero => simp [execStmts, timeout, M.stop] at done
+  | succ fuel =>
+    simp only [execStmts, bind_apply] at done
+    cases head : execStmt fuel cfg env (.while condition body origin) state with
+    | stop reason final => simp only [head] at done; cases done
+    | ok first middle =>
+      cases fuel with
+      | zero => simp [execStmt, timeout, M.stop] at head
+      | succ fuel =>
+        have normal : first = .normal .unit := scalar_call_loop_normal (fragment St.initial) noValue (by simpa [execStmt] using head)
+        subst first
+        simp only [head] at done
+        exact tail.normal done
+
+#print axioms nested_call_loop_sequence_normal
 
 #print axioms ReachableNestedCallLoopCursor.excludes_maximal_terminal
 
