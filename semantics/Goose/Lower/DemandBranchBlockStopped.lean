@@ -16,21 +16,34 @@ inductive StoppedBranchBlockPrefix {cfg : Cfg} {env : Env} {block : Core.Block} 
       (post : GeneratedBranchBlockEnd source map required cx results before none initial flow boundary) :
       StoppedBranchBlockPrefix source map required cx results before initial start taken reached stop after
 
-theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+inductive StoppedLoopBranchBlockPrefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) (map required : RetainedSsaMap) (cx : FnCtx) (results : List Ty)
+    (before : LS) (loop : Option LoopCtx) (initial : GIR.Frame) (start : Pt) (taken : Nat) (reached : DemandRuntimePoint)
+    (stop : Stop) (after : St) : Prop
+  | aborted (fuel : Nat) (evaluated : execBlock fuel cfg env [] block state = .stop stop after) :
+      StoppedLoopBranchBlockPrefix source map required cx results before loop initial start taken reached stop after
+  | complete {fuel consumed remaining : Nat} {boundary : DemandRuntimePoint} {flow : Flow}
+      (count : consumed + remaining = taken) (executed : DemandRuntimePrefix cx consumed ⟨start, initial, state⟩ boundary)
+      (residual : DemandRuntimePrefix cx remaining boundary reached)
+      (evaluated : execBlock fuel cfg env [] block state = .ok flow boundary.state)
+      (post : GeneratedBranchBlockEnd source map required cx results before loop initial flow boundary) :
+      StoppedLoopBranchBlockPrefix source map required cx results before loop initial start taken reached stop after
+
+theorem accepted_generated_loop_branch_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
-    {owner : Nat} {before : LS}
+    {owner : Nat} {before : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (owned : GeneratedSourceOwner selected source.context)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root source.path (.block none [] false block) before)
+      root source.path (.block loop [] false block) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
     (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
     (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
-    (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
-    (extended : ExtT (lowerBlock none [] false block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock loop [] false block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
     (bodyFamily : GeneratedStoppedSequencePrefixFamily
-      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before none [] false block block.stmts)
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] false block block.stmts)
     (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
       execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts innerState = .ok flow after →
       flow = .normal .unit) (noValue : block.value = none)
@@ -38,8 +51,7 @@ theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} 
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
     {targetFuel : Nat} {stop : Stop} {after : St}
     (stopped : DemandInstructionStop cx targetFuel reached stop after) (nonTimeout : stop ≠ .timeout) :
-    StoppedBranchBlockPrefix source map required cx results before initial start taken reached stop after := by
-  let loop : Option LoopCtx := none
+    StoppedLoopBranchBlockPrefix source map required cx results before loop initial start taken reached stop after := by
   let le := lowerEnv cfg.mod env.vars results
   let enteredFrame : GIR.Frame := { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
   let enteredState : St := { state with nextScope := state.nextScope + 1 }
@@ -92,13 +104,14 @@ theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} 
       rw [currentEq]
       refine ⟨?_, ?_, bodyPoint, bodyRelated, input.moduleEq, input.resultsEq,
         loopDepthFits_entered block.scope state.nextScope input.depth,
-        input.targets, input.counter.sameValues rfl enteredValues,
+        ?_, input.counter.sameValues rfl enteredValues,
         bodyGenerated, bodyFrames⟩
       · apply input.metadata.transport
         · rw [bodyTyping]; exact source.same.impl
         · rw [bodyRoots]
       · apply input.loops.transport
         rw [bodyTyping]; exact source.same.loops
+      · cases loop <;> exact input.targets
     have bodyProgress := bodyFamily body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted
       (by rw [currentEq, enteredValues]; exact bounded) bodyDemand.operands bodyInput
       (by rw [currentEq]; exact generated_block_statements_extended extended) residual stopped nonTimeout
@@ -107,7 +120,7 @@ theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} 
       have raw : execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts enteredState =
           .stop stop after := by
         change (execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts >>=
-          prepareLoopFlow { env with scopes := (block.scope, state.nextScope) :: env.scopes } none) enteredState = .stop stop after at done
+          prepareLoopFlow { env with scopes := (block.scope, state.nextScope) :: env.scopes } loop) enteredState = .stop stop after at done
         simp only [bind_apply] at done
         cases raw : execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts enteredState with
         | stop reason final =>
@@ -118,8 +131,8 @@ theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} 
           simp only [raw] at done
           have normal := normal raw
           subst flow
-          simp [prepareLoopFlow, prepareReturn, pure_apply] at done
-      apply StoppedBranchBlockPrefix.aborted (fuel + 1)
+          cases loop <;> simp [prepareLoopFlow, prepareReturn, prepareLoopExit, pure_apply] at done
+      apply StoppedLoopBranchBlockPrefix.aborted (fuel + 1)
       cases block with
       | mk scope statements value =>
         simp only [Core.Block.scope, Core.Block.stmts] at raw ⊢
@@ -128,7 +141,7 @@ theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} 
       cases finished with
       | transfer abnormal post =>
         change (execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts >>=
-          prepareLoopFlow { env with scopes := (block.scope, state.nextScope) :: env.scopes } none) enteredState = .ok flow boundary.state at evaluated
+          prepareLoopFlow { env with scopes := (block.scope, state.nextScope) :: env.scopes } loop) enteredState = .ok flow boundary.state at evaluated
         simp only [bind_apply] at evaluated
         cases raw : execStmts fuel cfg
             { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts
@@ -139,7 +152,7 @@ theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} 
           subst rawFlow
           simp only [raw] at evaluated
           have prepared : prepareLoopFlow { env with scopes := (block.scope, state.nextScope) :: env.scopes }
-              none (.normal .unit) rawState = .ok (.normal .unit) rawState := rfl
+              loop (.normal .unit) rawState = .ok (.normal .unit) rawState := by cases loop <;> rfl
           rw [prepared] at evaluated
           exact (abnormal .unit (Res.ok.inj evaluated).1.symm).elim
       | normal bodyPost bodyResult bodyBounded bodyRealized =>
@@ -154,6 +167,63 @@ theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} 
             coverage admitted bounded realized raw (enteredPost.comp bodyPost) bodyRealized extended
             (DemandRuntimePrefix.next enterStep bodySteps) afterBody stopped nonTimeout
         exact .complete (by omega) finalSteps finalResidual sourceDone finalBoundary
+
+
+theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
+    {owner : Nat} {before : LS}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block none [] false block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock none [] false block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (bodyFamily : GeneratedStoppedSequencePrefixFamily
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before none [] false block block.stmts)
+    (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
+      execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts innerState = .ok flow after →
+      flow = .normal .unit) (noValue : block.value = none)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (stopped : DemandInstructionStop cx targetFuel reached stop after) (nonTimeout : stop ≠ .timeout) :
+    StoppedBranchBlockPrefix source map required cx results before initial start taken reached stop after := by
+  have result := accepted_generated_loop_branch_block_stopped source selected owned occurrence rows coverage admitted bounded realized input extended
+    bodyFamily normal noValue steps stopped nonTimeout
+  cases result with
+  | aborted fuel evaluated => exact .aborted fuel evaluated
+  | complete count executed residual evaluated post => exact .complete count executed residual evaluated post
+
+
+theorem accepted_generated_scalar_loop_branch_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
+    {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block loop [] false block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock loop [] false block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts) (noValue : block.value = none)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (stopped : DemandInstructionStop cx targetFuel reached stop after) (nonTimeout : stop ≠ .timeout) :
+    StoppedLoopBranchBlockPrefix source map required cx results before loop initial start taken reached stop after := by
+  have bodyFamily : GeneratedStoppedSequencePrefixFamily
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] false block block.stmts :=
+    (accepted_generated_scalar_assignment_statements_agreement
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) selected before loop [] false block fragment).2
+  exact accepted_generated_loop_branch_block_stopped source selected owned occurrence rows coverage admitted bounded realized input extended
+    bodyFamily (fun done => fragment.normal done) noValue steps stopped nonTimeout
 
 
 theorem accepted_generated_scalar_branch_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
@@ -182,5 +252,7 @@ theorem accepted_generated_scalar_branch_block_stopped {cfg : Cfg} {env : Env} {
   exact accepted_generated_generic_branch_block_stopped source selected owned occurrence rows coverage admitted bounded realized input extended
     bodyFamily (fun done => fragment.normal done) noValue steps stopped nonTimeout
 
+#print axioms accepted_generated_loop_branch_block_stopped
+#print axioms accepted_generated_scalar_loop_branch_block_stopped
 #print axioms accepted_generated_scalar_branch_block_stopped
 end Goose.Lower
