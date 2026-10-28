@@ -93,17 +93,34 @@ theorem publishCompleted_local (origin : Goose.Core.OriginId) (id : Nat) :
     List.filterMap_nil, _root_.id]
   exact LocalConstructionAction.lift origin _
 
+theorem storedDestination_local (id : Nat) : LocalConstructionAction (storedDestination id) := by
+  unfold storedDestination
+  apply LocalConstructionAction.bind (getDestination_local id)
+  intro destination
+  split
+  · split <;> exact LocalConstructionAction.pure _
+  · exact LocalConstructionAction.fault _
+
 theorem carrierCompleted_local (id : Nat) : LocalConstructionAction (carrierValue (.completed id)) := by
   simp only [carrierValue]
-  apply LocalConstructionAction.bind
-  · unfold storedDestination
-    apply LocalConstructionAction.bind (getDestination_local id)
-    intro destination
-    split
-    · split <;> exact LocalConstructionAction.pure _
-    · exact LocalConstructionAction.fault _
-  · intro value
-    exact LocalConstructionAction.pure _
+  apply LocalConstructionAction.bind (storedDestination_local id)
+  intro value
+  exact LocalConstructionAction.pure _
+
+theorem bindRoot_local (root : Goose.Core.RootInst) (value : Value) : LocalConstructionAction (bindRoot root value) := by
+  intro state
+  cases lookup : state.objectOrdinals.lookup root <;> cases value <;>
+    simp [bindRoot, EvalM.get, bind, pure, bindStaticRoot, setObjectOrdinal, EvalM.set,
+      reserveRootObject, lookup, liftConstruction, reserveStorage, ConstructionM.get, ConstructionM.set]
+
+theorem rootOf_local (environment : RuntimeActivation) (id : Nat) : LocalConstructionAction (rootOf environment id) := by
+  intro state
+  cases declared : environment.vars[id]? with
+  | none => simp [rootOf, declared, Goose.Construct.fault, EvalM.stop]
+  | some descriptor =>
+    cases scope : environment.scopes.find? (fun entry => entry.1 == descriptor.scope) with
+    | none => simp [rootOf, declared, scope, Goose.Construct.fault, EvalM.stop]
+    | some found => cases found; simp [rootOf, declared, scope, pure]
 
 theorem newByteDestination_local (config : EvalConfig) (environment : RuntimeActivation)
     (origin : Goose.Core.OriginId) (count : Nat) :
@@ -137,6 +154,36 @@ theorem evalValue_byteOwner_local (fuel : Nat) (config : EvalConfig) (environmen
     | completed id => exact carrierCompleted_local id
     | pendingNamed id => exact LocalConstructionAction.fault _
 
+theorem execStmt_byteOwner_local (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (id : Nat) (descriptor : LocalVar) (implementation : Impl) (bytes : List UInt8)
+    (origin bytesOrigin : Goose.Core.OriginId)
+    (declared : environment.vars[id]? = some descriptor) (ty : descriptor.ty = .varr (.int .u8))
+    (implementationFound : config.module.impls[environment.implementation]? = some implementation)
+    (unnamed : (implementation.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some id)) = none) :
+    LocalConstructionAction (execStmt (fuel + 2) config environment
+      (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)) := by
+  simp only [execStmt, declared, ty, Ty.nonfixed, implementationFound, unnamed, ordinaryProducerCount?,
+    producerCount?, literalCount, Option.isSome_some, ↓reduceIte, materializeProducer]
+  apply LocalConstructionAction.bind (rootOf_local environment id)
+  intro root
+  simp only [bind, pure, Option.isNone_none, Option.isSome_none, Option.map_none, Bool.false_eq_true,
+    ↓reduceIte, Option.orElse_eq_orElse, Option.orElse]
+  apply LocalConstructionAction.bind (newByteDestination_local config environment origin bytes.length)
+  intro destination
+  apply LocalConstructionAction.bind (buildExpr_byteOwner_local fuel config environment destination _ bytes bytesOrigin)
+  intro value
+  cases value
+  apply LocalConstructionAction.bind (completedReceivingDestination_local destination)
+  intro completed
+  apply LocalConstructionAction.bind (publishCompleted_local origin completed)
+  intro value
+  cases value
+  apply LocalConstructionAction.bind (storedDestination_local completed)
+  intro stored
+  apply LocalConstructionAction.bind (bindRoot_local root (.stored { stored with ty := .varr (.int .u8), object := none }))
+  intro result
+  exact LocalConstructionAction.pure _
+
 theorem evalValue_byteOwner_timeout_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (before after : ExecutionState)
     (bytes : List UInt8) (origin : Goose.Core.OriginId)
@@ -165,8 +212,56 @@ theorem evalValue_byteOwner_timeout_complete (fuel : Nat) (config : EvalConfig) 
       rw [executed] at noTimeout
       exact (noTimeout rfl).elim
 
+theorem execStmt_acceptedByteOwner_timeout_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (context id : Nat) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
+    (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (typingNext : TypingEnv) (typingAfter : Nat)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation context)
+    (typed : typeStatement frame.typingFuel frame.typing (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
+      frame.typingCounter = .ok (typingNext, typingAfter))
+    (byteOwner : (frame.typing.variables[id]?).map (·.ty) = some (.varr (.int .u8)))
+    (unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some id)) = none)
+    (executed : execStmt fuel config frame.interpretation.environment
+      (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .stop .timeout after) :
+    (after = before ∧ AcceptedWorld config frame.initialized after ambient types live regions pending ∧
+      AcceptedFrame config accepted frame after types) ∨
+    ∃ destination, AcceptedWorld config frame.initialized after ambient types live
+      (freshReceivingRegion before destination :: regions) pending ∧ AcceptedFrame config accepted frame after types := by
+  cases fuel with
+  | zero =>
+    simp only [execStmt, timeout, EvalM.stop, ExecutionStep.stop.injEq, true_and] at executed
+    subst after
+    exact Or.inl ⟨rfl, world, source⟩
+  | succ fuel =>
+    cases fuel with
+    | zero =>
+      exact Or.inr (execStmt_acceptedByteOwner_timeout_world config accepted frame context id bytes origin bytesOrigin
+        before after ambient types live regions pending typingNext typingAfter world source phase typed byteOwner unnamed executed)
+    | succ fuel =>
+      cases declared : frame.typing.variables[id]? with
+      | none => simp [declared] at byteOwner
+      | some descriptor =>
+        have descriptorType : descriptor.ty = .varr (.int .u8) := by simpa [declared] using byteOwner
+        have runtimeDeclared : frame.interpretation.environment.vars[id]? = some descriptor := by
+          rw [source.compatible.variables]
+          exact declared
+        have originFact := source.compatible.origin
+        unfold SourceOrigin at originFact
+        rw [phase] at originFact
+        obtain ⟨original, calls, contextFound, implementationFound, implementationId, restOrigin⟩ := originFact
+        have implementation : config.module.impls[frame.interpretation.environment.implementation]? = some frame.source.impl := by
+          rw [implementationId]
+          exact implementationFound
+        have noTimeout := execStmt_byteOwner_local fuel config frame.interpretation.environment id descriptor frame.source.impl
+          bytes origin bytesOrigin runtimeDeclared descriptorType implementation unnamed before
+        rw [executed] at noTimeout
+        exact (noTimeout rfl).elim
+
 #print axioms buildExpr_byteOwner_local
 #print axioms evalValue_byteOwner_local
+#print axioms execStmt_byteOwner_local
 #print axioms evalValue_byteOwner_timeout_complete
+#print axioms execStmt_acceptedByteOwner_timeout_complete
 
 end Goose.Proofs.ConstructionAcceptedExecution
