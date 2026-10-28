@@ -2,6 +2,7 @@ import Goose.Proofs.ConstructionAcceptedByteFinishCall
 import Goose.Proofs.ConstructionAcceptedByteReturnComplete
 import Goose.Proofs.ConstructionAcceptedChannelScopeExit
 import Goose.Proofs.ConstructionAcceptedUnusedScope
+import Goose.Proofs.ConstructionAcceptedEntryActivation
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -58,5 +59,39 @@ theorem byteBody_finish_world (fuel : Nat) (config : EvalConfig) (initialized : 
     _ before released ambient types live regions [⟨[.construct id], [.completed id]⟩] channels done releasedWorld releasedValid
   exact ⟨_, finish, finalWorld⟩
 
+theorem byteBody_finish_from_activation (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (activation : RuntimeActivation) (scope id : Nat) (bytes : List UInt8) (origin : OriginId)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion)
+    (channels : activation.channels = [.construct id])
+    (absent : ∀ descriptor ∈ activation.vars.toList, descriptor.scope ≠ scope)
+    (world : AcceptedWorld config initialized before (.callChannels activation [] :: ambient) types live regions [])
+    (history : ReservationReferencesBounded before.construction (.callChannels activation [] :: ambient))
+    (noRetained : completedCarrierIds (OwnershipAmbient.retained (.callChannels activation [] :: ambient)) = [])
+    (ready : OpenDestinationBacking config.layout before id (.varr (.int .u8)) 0)
+    (packed : ready.destination.layout = .packed) (adaptation : ready.destination.adaptation = none)
+    (receiver : ready.destination.use = .receiver) (request : ready.destination.capability.request = .value)
+    (physical : ready.destination.capability.layout = .varr (.int .u8))
+    (current : destinationCurrent before.construction id = .ok id) (fits : bytes.length < 2 ^ 32)
+    (mutable : ∀ region ∈ regions, id ∈ region.mutableDestinations)
+    (cutoff : ∀ region ∈ regions, region.limit ready.destination.storage ≤ ready.destination.capability.start)
+    (covered : ∀ root, live root → ∃ region ∈ regions, ¬ region.mutableRoots root) :
+    ∃ after, (finishActivation config.layout activation [.varr (.int .u8)] origin
+        (execActivationBody (fuel + 3) config activation [] ⟨scope, [], some (.bytes (.varr (.int .u8)) bytes origin)⟩) >>= fun carriers =>
+        deliverCarriers fuel config.layout [.construct id] carriers origin) before = .ok [.completed id] after ∧
+      AcceptedWorld config initialized after (.returned [.completed id] :: ambient) types live regions
+        [⟨[.construct id], [.completed id]⟩] := by
+  let scopeState := ownershipResultScopeState activation scope before
+  have scopedWorld := acceptedWorld_resultScope config initialized before (.callChannels activation [] :: ambient)
+    types live regions [] activation scope world
+  have bound : bindAll activation.act before.nextScope [] scopeState = .ok () scopeState := by simp [bindAll, bind, pure]
+  have normal : execStmts (fuel + 2) config { activation with scopes := (scope, before.nextScope) :: activation.scopes }
+      [] scopeState = .ok (.normal .unit) scopeState := by simp [execStmts, pure]
+  let scopeReady : OpenDestinationBacking config.layout scopeState id (.varr (.int .u8)) 0 :=
+    { ready with present := ready.present, bytes := ready.bytes }
+  exact byteBody_finish_world fuel config initialized activation scope id bytes origin before scopeState scopeState ambient types live regions
+    channels bound normal absent scopedWorld history noRetained scopeReady packed adaptation receiver request physical current fits mutable cutoff covered
+
+#print axioms byteBody_finish_from_activation
 #print axioms byteBody_finish_world
 end Goose.Proofs.ConstructionAcceptedExecution
