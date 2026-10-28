@@ -150,6 +150,10 @@ theorem ScalarAssignmentStatementPrefixCursor.frame {cfg : Cfg} {env : Env} {cx 
     ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
   cases cursor with
   | control cursor => exact cursor.frame
+  | scalarClear cursor =>
+    cases cursor with
+    | clear demanded => cases demanded with
+      | atFrame frame => exact ⟨_, _, _, frame⟩
   | assignment cursor => exact cursor.frame
 
 theorem GeneratedSequencePrefixCursor.scalar_assignment_frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}

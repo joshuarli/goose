@@ -28,6 +28,22 @@ theorem assignment_normal {cfg : Cfg} {env : Env} {place : Place} {expression : 
           simp only [written, pure_apply, Res.ok.injEq] at head
           exact head.1.symm
 
+theorem clear_normal {cfg : Cfg} {env : Env} {place : Place} {origin : OriginId}
+    {fuel : Nat} {state after : St} {flow : Flow}
+    (head : execStmt fuel cfg env (.clear place origin) state = .ok flow after) :
+    flow = .normal .unit := by
+  cases fuel with
+  | zero => simp [execStmt, timeout, M.stop] at head
+  | succ fuel =>
+    simp only [execStmt, bind_apply] at head
+    cases placed : evalPlace fuel cfg env place state with
+    | stop stop final => simp only [placed] at head; cases head
+    | ok location addressed =>
+      simp only [placed] at head
+      cases cleared : truncateLoc location 0 addressed with
+      | stop stop final => simp only [cleared] at head; cases head
+      | ok value final => simp only [cleared, pure_apply, Res.ok.injEq] at head; exact head.1.symm
+
 theorem ScalarAssignmentStatements.normal {cfg : Cfg} {env : Env} {statements : List Stmt}
     (fragment : ScalarAssignmentStatements cfg env statements) {fuel : Nat} {state after : St} {flow : Flow}
     (done : execStmts fuel cfg env statements state = .ok flow after) : flow = .normal .unit := by
@@ -47,6 +63,18 @@ theorem ScalarAssignmentStatements.normal {cfg : Cfg} {env : Env} {statements : 
       | stop stop final => simp only [head] at done; cases done
       | ok headFlow middle =>
         obtain ⟨rfl, _⟩ := global_clear_source head
+        simp only [head] at done
+        exact ih done
+  | localClear slot origin tail ih =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, bind_apply] at done
+      cases head : execStmt fuel cfg env (.clear (.var slot) origin) state with
+      | stop stop final => simp only [head] at done; cases done
+      | ok headFlow middle =>
+        have normal := clear_normal head
+        subst headFlow
         simp only [head] at done
         exact ih done
   | @expression expression origin form rest tail ih =>

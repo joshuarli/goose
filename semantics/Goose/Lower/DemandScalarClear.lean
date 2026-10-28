@@ -42,11 +42,7 @@ theorem accepted_generated_scalar_clear_prefix {cfg : Cfg} {env : Env} {place : 
     childOccurrence childRows atPoint related (generated_clear_place_extended extended)
   let middle : DemandRuntimePoint := ⟨(point.1, point.2 + 1), frame.set addressed.1 (.val (.ref location)), state⟩
   have placeResult := child.result 1 location placed
-  have childCarried : map.Realizes cfg.mod child.world env ⟨point, frame, state⟩ := by
-    simpa only [RetainedSsaMap.Realizes, canonical.world] using realized
   have middleCarried := realized.retained addressPost.same bounded.1 bounded.2 RetainsAliases.refl
-  have middleChildCarried : map.Realizes cfg.mod child.world env middle := by
-    simpa only [RetainedSsaMap.Realizes, canonical.world] using middleCarried
   refine ⟨owned, coverage, ?_⟩
   rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨length, current, rfl, actual, tail⟩
   · exact .interior (.atFrame ⟨⟨_, atPoint, related⟩, source.frame, realized⟩)
