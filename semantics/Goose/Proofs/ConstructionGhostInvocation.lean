@@ -55,11 +55,26 @@ def shortCircuitContinuation (fuel : Nat) (config : EvalConfig) (environment : R
 def shortCircuitExpr (isAnd : Bool) (first second : Expr) : Expr :=
   if isAnd then .and first second else .or first second
 
+def binaryContinuation (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (operation : Goose.Core.BinOp) (second : Expr) (origin : Goose.Core.OriginId)
+    (first : ExecutionStep Value) : ExecutionStep Value :=
+  match first with
+  | .ok value state => (do
+      let (ty, first) ← expectInt value
+      let (otherTy, second) ← expectInt (← evalValue fuel config environment second)
+      sameIntType ty otherTy
+      match Goose.Core.evalBin config.profile operation ty first second with
+      | .ok result => pure (Value.int ty result)
+      | .error reason => abortAt (Goose.Core.AbortKind.ofNum reason) origin) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
 def trackedInitializer : Expr → Bool
   | .arrLit ty _ _ => !ty.nonfixed
   | .fill (.arr element count) _ _ => !(Ty.arr element count).nonfixed
   | .structLit (.structT _ _) _ => true
-  | .cmp _ _ _ | .not _ | .and _ _ | .or _ _ => true
+  | .cmp _ _ _ | .not _ | .and _ _ | .or _ _ | .bin _ _ _ _ => true
   | _ => false
 
 theorem structLiteral_replay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
@@ -99,6 +114,18 @@ inductive EvaluationTree (config : EvalConfig) (environment : RuntimeActivation)
         | .stop reason after => .stop reason after
         | .escape address carriers after => .escape address carriers after
         | .jump target kind after => .jump target kind after)
+  | binary (fuel : Nat) (path : List Nat) (operation : Goose.Core.BinOp)
+      (first second : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (left : EvaluationTree config environment fuel (path ++ [0]) first before
+        (evalValue fuel config environment first before))
+      (right : ∀ value middle ty number ready,
+        evalValue fuel config environment first before = .ok value middle →
+        expectInt value middle = .ok (ty, number) ready →
+        EvaluationTree config environment fuel (path ++ [1]) second ready
+          (evalValue fuel config environment second ready)) :
+      EvaluationTree config environment (fuel + 1) path (.bin operation first second origin) before
+        (binaryContinuation fuel config environment operation second origin
+          (evalValue fuel config environment first before))
   | shortCircuit (fuel : Nat) (path : List Nat) (isAnd : Bool)
       (first second : Expr) (before : ExecutionState)
       (left : EvaluationTree config environment fuel (path ++ [0]) first before
@@ -166,6 +193,14 @@ theorem evaluationTree_exists (fuel : Nat) (config : EvalConfig) (environment : 
           rw [← visit_executes replay visit member]
           exact ih _ _ _)
       | true => exact .opaque fuel path _ before (by simp [trackedInitializer, fixed])
+    | bin operation first second origin =>
+      have execution : evalValue (fuel + 1) config environment (.bin operation first second origin) before =
+          binaryContinuation fuel config environment operation second origin
+            (evalValue fuel config environment first before) := by
+        simp only [evalValue, bind, binaryContinuation]
+        cases evalValue fuel config environment first before <;> rfl
+      rw [execution]
+      exact .binary fuel path operation first second origin before (ih _ _ _) (fun _ _ _ _ _ _ _ => ih _ _ _)
     | and first second =>
       have execution : evalValue (fuel + 1) config environment (.and first second) before =
           shortCircuitContinuation fuel config environment true second
@@ -236,6 +271,9 @@ theorem evaluationTree_sound {fuel : Nat} {config : EvalConfig} {environment : R
     change (operands.mapM (evalValue fuel config environment)) before = mapped at actual
     rw [actual]
     cases mapped <;> rfl
+  | binary fuel path operation first second origin before left right =>
+    simp only [evalValue, bind, binaryContinuation]
+    cases evalValue fuel config environment first before <;> rfl
   | shortCircuit fuel path isAnd first second before left right =>
     cases isAnd <;> simp only [shortCircuitExpr, Bool.false_eq_true, ↓reduceIte, evalValue, bind, shortCircuitContinuation]
     all_goals cases evalValue fuel config environment first before <;> simp [bind]
@@ -309,6 +347,18 @@ theorem shortCircuit_skips_source :
   unfold witnessConfig witnessEnv
   cbv
 
+theorem binary_source_sideEffect :
+    ∃ state, evalValue 31 witnessConfig witnessEnv
+      (.bin .add witnessSource (.blockE (.mk 1 [.print [.text "second"] 0]
+        (some (.lit .i64 7))) 0) 0) .initial = .ok (.int .i64 14) state ∧
+      state.construction.stdout.data.toList =
+        [111, 110, 99, 101, 10, 115, 101, 99, 111, 110, 100, 10] := by
+  refine ⟨finalState (evalValue 31 witnessConfig witnessEnv
+    (.bin .add witnessSource (.blockE (.mk 1 [.print [.text "second"] 0]
+      (some (.lit .i64 7))) 0) 0) .initial), ?_, ?_⟩ <;>
+    unfold finalState witnessConfig witnessEnv witnessSource <;> cbv
+
+#print axioms binary_source_sideEffect
 #print axioms shortCircuit_skips_source
 #print axioms comparison_source_sideEffect
 #print axioms record_source_sideEffect
