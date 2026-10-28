@@ -97,13 +97,16 @@ theorem accepted_globalConditional_tail_checks (config : EvalConfig) (accepted :
     (conditionForm : AcceptedBinaryExpression condition) (yesForm : AcceptedBinaryExpression yes) (noForm : AcceptedBinaryExpression no) :
     ∃ names conditionTyping yesTyping noTyping yesTy noTy conditionRoots conditionCursor yesRoots yesCursor noRoots noCursor,
       let frame := scalarGlobalInitializerFrame config id before.nextAct names
+      AcceptedWorld config id { before with nextAct := before.nextAct + 1 } ambient types live [] [] ∧
+      AcceptedFrame config accepted frame { before with nextAct := before.nextAct + 1 } types ∧
       typeExpr 4094 { frame.typing with scope := yesScope } yes conditionTyping = .ok ([yesTy], yesTyping) ∧
       typeExpr 4094 { frame.typing with scope := noScope } no yesTyping = .ok ([noTy], noTyping) ∧
       rpExpr frame.source condition frame.rootCursor = .ok (conditionRoots, conditionCursor) ∧
       rpExpr { frame.source with scopes := yesScope :: frame.source.scopes } yes conditionCursor = .ok (yesRoots, yesCursor) ∧
       rpExpr { frame.source with scopes := noScope :: frame.source.scopes } no yesCursor = .ok (noRoots, noCursor) ∧
       GlobalEffectTargetsBounded conditionCursor.eff id ∧ GlobalEffectTargetsBounded yesCursor.eff id ∧
-      GlobalEffectTargetsBounded noCursor.eff id := by
+      GlobalEffectTargetsBounded noCursor.eff id ∧ conditionTyping = 0 ∧ yesTyping = 0 ∧
+      conditionCursor.nextVar = 0 ∧ yesCursor.nextVar = 0 := by
   obtain ⟨names, activeWorld, frameSource, roots, rootsAfter, rooted⟩ :=
     accepted_scalarGlobalInitializer_frame config accepted id descriptor before ambient types live world clear present
   obtain ⟨ty, typingAfter, typed, adapts⟩ := validated_global_initializer_typing config.module id descriptor accepted.accepted present
@@ -133,9 +136,42 @@ theorem accepted_globalConditional_tail_checks (config : EvalConfig) (accepted :
     { frame.typing with scope := noScope } { frame.source with scopes := noScope :: frame.source.scopes } id
     yesTyping noTyping yesCursor rootsAfter [noTy] noRoots (by simp [frame, scalarGlobalInitializerFrame])
     yesBound noTail noTailRooted
+  have conditionAvailable : GlobalEffectsAvailable frame.interpretation id conditionCursor.eff := by
+    intro target member global instantiated
+    cases target with
+    | global other =>
+      change global = other at instantiated
+      subst global
+      exact conditionBound other member
+    | param parameter => exact instantiated.1.elim
+  let conditionFrame := ordinaryOperandFrame frame 4095
+  have conditionChecked : CheckedValue conditionFrame condition .bool conditionRoots conditionTyping conditionCursor :=
+    ⟨conditionTyped, conditionRooted, conditionAvailable⟩
+  have conditionCursorFacts := checked_binary_recursive_cursor conditionForm conditionFrame .bool conditionRoots
+    conditionTyping conditionCursor conditionChecked
+  have typingZero : conditionTyping = 0 := by simpa [conditionFrame, ordinaryOperandFrame, frame, scalarGlobalInitializerFrame] using conditionCursorFacts.1
+  have cursorZero : conditionCursor.nextVar = 0 := by simpa [conditionFrame, ordinaryOperandFrame, frame, scalarGlobalInitializerFrame] using conditionCursorFacts.2
+  let yesFrame := { frame with
+    typingFuel := 4094
+    typing := { frame.typing with scope := yesScope }
+    typingCounter := conditionTyping
+    source := { frame.source with scopes := yesScope :: frame.source.scopes }
+    rootCursor := conditionCursor }
+  have yesAvailable : GlobalEffectsAvailable yesFrame.interpretation id yesCursor.eff := by
+    intro target member global instantiated
+    cases target with
+    | global other =>
+      change global = other at instantiated
+      subst global
+      exact yesBound other member
+    | param parameter => exact instantiated.1.elim
+  have yesChecked : CheckedValue yesFrame yes yesTy yesRoots yesTyping yesCursor := ⟨yesTail, yesTailRooted, yesAvailable⟩
+  have yesCursorFacts := checked_binary_recursive_cursor yesForm yesFrame yesTy yesRoots yesTyping yesCursor yesChecked
+  have yesTypingZero : yesTyping = 0 := by simpa [yesFrame, typingZero] using yesCursorFacts.1
+  have yesCursorZero : yesCursor.nextVar = 0 := by simpa [yesFrame, cursorZero] using yesCursorFacts.2
   exact ⟨names, conditionTyping, yesTyping, noTyping, yesTy, noTy, conditionRoots, conditionCursor,
-    yesRoots, yesCursor, noRoots, rootsAfter, yesTail, noTail, conditionRooted, yesTailRooted, noTailRooted,
-    conditionBound, yesBound, noBound⟩
+    yesRoots, yesCursor, noRoots, rootsAfter, activeWorld, frameSource, yesTail, noTail, conditionRooted, yesTailRooted, noTailRooted,
+    conditionBound, yesBound, noBound, typingZero, yesTypingZero, cursorZero, yesCursorZero⟩
 
 #print axioms accepted_globalConditional_tail_checks
 #print axioms rpBlockValue_empty_tail
