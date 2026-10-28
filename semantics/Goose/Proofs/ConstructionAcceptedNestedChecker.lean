@@ -103,6 +103,34 @@ theorem typeExpr_if_nonEscapingBranches (fuel : Nat) (environment : TypingEnv) (
     change Except.error _ = Except.ok _ at checked
     cases checked
 
+theorem typeExpr_if_nonEscaping_types (fuel : Nat) (environment : TypingEnv) (condition : Expr) (yes no : Block)
+    (origin before after conditionAfter yesAfter noAfter : Nat) (ty yesTy noTy : Ty)
+    (checked : typeExpr (fuel + 1) environment (.ifE condition yes no origin) before = .ok ([ty], after))
+    (conditionTyped : typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] }
+      condition before = .ok ([.bool], conditionAfter))
+    (yesTyped : typeBlock fuel environment yes conditionAfter = .ok ([yesTy], yesAfter))
+    (noTyped : typeBlock fuel environment no yesAfter = .ok ([noTy], noAfter))
+    (yesNoEscape : blockEscapes fuel yes = false)
+    (noNoEscape : blockEscapes fuel no = false) :
+    yesTy = ty ∧ noTy = ty := by
+  simp only [typeExpr, bind, StateT.bind] at checked
+  change (Except.bind (typeExpr fuel
+    { environment with use := .ordinary, request := .value, resultRequests := [] } condition before) _) = _ at checked
+  simp only [conditionTyped, Except.bind] at checked
+  change (Except.bind (typeBlock fuel environment yes conditionAfter) _) = _ at checked
+  simp only [yesTyped, Except.bind] at checked
+  change (Except.bind (typeBlock fuel environment no yesAfter) _) = _ at checked
+  simp only [noTyped, Except.bind, yesNoEscape, noNoEscape, Bool.false_and] at checked
+  unfold_typing_require
+  by_cases same : yesTy = noTy
+  · subst noTy
+    simp [bind, StateT.bind, pure, StateT.pure, Except.pure, Except.bind] at checked
+    exact ⟨checked.1, checked.1⟩
+  · simp [same, bind, StateT.bind, pure, StateT.pure, Except.pure, Except.bind] at checked
+    change Except.error _ = Except.ok _ at checked
+    cases checked
+
+#print axioms typeExpr_if_nonEscaping_types
 theorem typeExpr_if_nonEscaping_result (fuel : Nat) (environment : TypingEnv) (condition : Expr) (yes no : Block)
     (origin before after conditionAfter yesAfter noAfter : Nat) (types yesTypes noTypes : List Ty)
     (checked : typeExpr (fuel + 1) environment (.ifE condition yes no origin) before = .ok (types, after))

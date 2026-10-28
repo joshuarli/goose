@@ -1,5 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedAssignConditionalModule
-import Goose.Proofs.ConstructionAcceptedNestedSyntax
+import Goose.Proofs.ConstructionAcceptedNestedGlobalModule
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -54,6 +54,51 @@ private def nestedConditionalTransition : Option (Int × Int) :=
 
 theorem nestedConditional_changesEarlierGlobal : nestedConditionalTransition = some (1, 7) := by decide +kernel
 
+theorem nestedConditional_allFuel (fuel : Nat) :
+    ∃ initialized ambient types live regions,
+      AcceptedWorld nestedConditionalConfig initialized
+        (Goose.Proofs.Exit.stepState (runModule fuel nestedConditionalConfig .initial)) ambient types live regions [] ∧
+      (match runModule fuel nestedConditionalConfig .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  have scalars : AllGlobalScalars nestedConditionalConfig := by
+    intro id descriptor declared
+    cases id with
+    | zero =>
+      have same : descriptor = ⟨"source", .int .i64, .mutable, .lit .i64 1, 0⟩ := by
+        simpa [nestedConditionalConfig, nestedConditionalModule] using declared.symm
+      subst descriptor
+      exact Or.inl ⟨.i64, rfl⟩
+    | succ id =>
+      cases id with
+      | zero =>
+        have same : descriptor = ⟨"number", .int .i64, .immutable, nestedConditionalExpression, 0⟩ := by
+          simpa [nestedConditionalConfig, nestedConditionalModule] using declared.symm
+        subst descriptor
+        exact Or.inl ⟨.i64, rfl⟩
+      | succ id => simp [nestedConditionalConfig, nestedConditionalModule] at declared
+  apply acceptedNestedGlobalModule_allFuel fuel nestedConditionalConfig
+    (acceptedModule nestedConditionalConfig nestedConditional_validated) scalars ⟨0, "entry", [], [], []⟩ nestedConditionalEntry
+  · intro id inside
+    change id < 2 at inside
+    cases id with
+    | zero => exact ⟨_, rfl, .scalar (.numeric (.scalar (.scalar (.integer .i64 1)))), Or.inl ⟨.i64, rfl⟩⟩
+    | succ id =>
+      cases id with
+      | zero => exact ⟨_, rfl, nestedConditional_form, Or.inl ⟨.i64, rfl⟩⟩
+      | succ id => omega
+  · rfl
+  · rfl
+  · exact .nil
+  · intro declaration member
+    simp [nestedConditionalEntry, Block.stmts] at member
+  · intro id expression origin member
+    simp [nestedConditionalEntry, Block.stmts] at member
+  · intro id expression origin member
+    simp [nestedConditionalEntry, Block.stmts] at member
+  · intro id expression origin member
+    simp [nestedConditionalEntry, Block.stmts] at member
+  · rfl
+
+#print axioms nestedConditional_allFuel
 #print axioms nestedConditional_form
 #print axioms nestedConditional_validated
 #print axioms nestedConditional_result
