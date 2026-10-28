@@ -45,10 +45,33 @@ theorem entry_sourceHistory (fuel : Nat) (config : EvalConfig)
   rw [replay.sound] at history
   exact history
 
+private def witnessCallee : Impl := ⟨"callee", #[], #[], #[],
+  .mk 1 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none, .unknown⟩
+private def witnessCalleeContext : Context := ⟨1, "callee", [], [], []⟩
+private def witnessEntry : Impl := ⟨"entry", #[], #[], #[], .mk 0 [.expr (.call 1 [] 0) 0] none, .unknown⟩
+private def witnessEntryContext : Context := ⟨0, "entry", [], [], []⟩
 private def witnessModule : Module :=
-  ⟨#[], #[], #[], #[⟨"entry", #[], #[], #[],
-    .mk 0 [.expr (.ifE (.bool true) (.mk 1 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none) (.mk 2 [] none) 0) 0] none, .unknown⟩],
-    #[⟨0, "entry", [], [], []⟩], 0, #[], #[], #[]⟩
+  ⟨#[], #[], #[], #[witnessEntry, witnessCallee], #[witnessEntryContext, witnessCalleeContext], 0, #[], #[], #[]⟩
+
+private theorem entryWitness_supported : ∀ environment,
+    SupportedOperation ⟨.release, witnessModule⟩ (.statements environment [.expr (.call 1 [] 0) 0]) := by
+  intro environment
+  have bodySupported : ∀ scopedEnvironment, SupportedOperation ⟨.release, witnessModule⟩
+      (.statements scopedEnvironment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
+    intro scopedEnvironment
+    exact .sequence scopedEnvironment (.expression scopedEnvironment 0 (.value scopedEnvironment
+      (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty scopedEnvironment)
+  have callee : SupportedOperation ⟨.release, witnessModule⟩ (.call environment 1 0) := by
+    apply SupportedOperation.call environment 1 0 witnessCalleeContext witnessCallee
+    · rfl
+    · rfl
+    · rfl
+    · rfl
+    · intro act
+      exact .activation _ 1 _ 0 bodySupported
+  exact .sequence environment (.expression environment 0
+    (.valueCall environment 1 0 witnessCalleeContext witnessCallee rfl rfl rfl callee)) (.empty environment)
+
 private def witnessState : ExecutionStep α → ExecutionState
   | .ok _ state | .stop _ state | .escape _ _ state | .jump _ _ state => state
 
@@ -58,6 +81,22 @@ theorem entryWitness_runs :
   unfold witnessState witnessModule
   cbv
 
+theorem entryWitness_nestedCallHistory :
+    let activation : RuntimeActivation := ⟨0, 0, #[], [], []⟩
+    let activated := { ExecutionState.initial with nextAct := 1, activations := [activation] }
+    let environment := { activation with scopes := [(0, activated.nextScope)] }
+    ∃ outcome state,
+      SourceHistory ⟨.release, witnessModule⟩ 37 [] (.statements environment [.expr (.call 1 [] 0) 0])
+        (resultScopeStart activation 0 activated) outcome ∧
+      runModule 40 ⟨.release, witnessModule⟩ .initial = .ok () state := by
+  obtain ⟨outcome, history, execution⟩ := entry_sourceHistory 36 ⟨.release, witnessModule⟩ witnessEntryContext
+    witnessEntry 0 [.expr (.call 1 [] 0) 0] rfl rfl rfl rfl rfl rfl entryWitness_supported
+  obtain ⟨state, finished⟩ := entryWitness_runs
+  exact ⟨outcome, state, history, finished⟩
+
+#print axioms entryWitness_nestedCallHistory
+
+#print axioms entryWitness_supported
 #print axioms entryWitness_runs
 
 #print axioms entry_sourceHistory
