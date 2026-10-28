@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionExitEvaluationHistoryNamed
+import Goose.Proofs.ConstructionExitCancellationHistory
 import Goose.Proofs.ConstructionExecutionProtocolNamedReservationRestore
 import Goose.Proofs.ConstructionExecutionProtocolNamedReservationChildren
 import Lean.Elab.Tactic.Split
@@ -69,6 +70,22 @@ theorem namedReservationChildren_ticket_count (selected : Nat) (parent : Pending
                     | simp only [bind, pure, ConstructionM.fail, ConstructionResult.finalState]
                     | history_named_split_if
 
+theorem restoreNamedDestination_ticket_count (id : Nat) (state : ConstructionState)
+    (valid : ReservationLifecycleInvariant state) :
+    (restoreNamedDestination id state).finalState.exitReservations.size = state.exitReservations.size := by
+  let invariant : ConstructionState → Prop := fun current =>
+    ReservationLifecycleInvariant current ∧ current.exitReservations.size = state.exitReservations.size
+  have step : ∀ token current, invariant current → invariant (cancelExitReservation token [] current).finalState := by
+    intro token current before
+    exact ⟨cancelExitReservation_lifecycle token [] current before.1,
+      (cancelExitReservation_ticket_count token [] current before.1).trans before.2⟩
+  have initial : invariant state := ⟨valid, rfl⟩
+  have all : invariant (restoreNamedDestination id state).finalState := by
+    simp only [restoreNamedDestination, ConstructionM.get, bind]
+    exact constructionInvariant_forEach invariant _ (fun token => cancelExitReservation token []) step state initial
+  exact all.2
+
+#print axioms restoreNamedDestination_ticket_count
 #print axioms namedReservationChildren_ticket_count
 #print axioms namedReservationFinish_ticket_count
 
