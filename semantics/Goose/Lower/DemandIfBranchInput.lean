@@ -84,6 +84,7 @@ theorem accepted_generated_if_then_input {cfg : Cfg} {env : Env} {condition : Ex
     (startEq : branchStart = { forked with cur := some yesBlock })
     (extended : ExtT forked cx.fn.blocks) :
     ∃ branch : BlockSource cfg env [] yes middle,
+      branch.typingEnv = source.typingEnv ∧ branch.rootsEnv = source.rootsEnv ∧
       source.BlockChildAt branch 1 (by simp [DemandNode.child?, DemandNode.children]) ∧
       GeneratedSourceOwner selected branch.context ∧ map.Admitted cfg.mod.profile branch.context.retained ∧
       map.Bounded branchStart.vals.size ∧ map.Realizes cfg.mod branch.world env ⟨(yesBlock, 0), frame, middle⟩ ∧
@@ -107,7 +108,7 @@ theorem accepted_generated_if_then_input {cfg : Cfg} {env : Env} {condition : Ex
     exact boundary.bounded
   have branchRealized : map.Realizes cfg.mod branch.world env ⟨(yesBlock, 0), frame, middle⟩ := by
     simpa only [RetainedSsaMap.Realizes, world, canonical.world] using boundary.demanded.operands
-  exact ⟨branch, branchCanonical, branchOwner, branchAdmitted, branchBounded, branchRealized,
+  exact ⟨branch, typing, roots, branchCanonical, branchOwner, branchAdmitted, branchBounded, branchRealized,
     generated_if_branch_input source child branch typing roots true input boundary forkRun startEq extended⟩
 
 #print axioms accepted_generated_if_then_input
