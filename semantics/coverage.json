@@ -649,10 +649,10 @@
  },
  {
   "feature": "Accepted scalar value evaluation",
-  "statement": "At every fuel, checked integer literals, Boolean literals and initialized global reads preserve the accepted world and source frame; every successful value satisfies its checked value invariant.",
+  "statement": "At every fuel, checked integer literals, Boolean literals, initialized global reads and recursively nested Boolean negations preserve the accepted world and source frame; every successful value satisfies its checked value invariant.",
   "assumptions": "Accepted world and source frame, and a checked value expression.",
   "limits": "Other scalar operations, places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; Goose/Proofs/ConstructionAcceptedNotComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Stopped byte-owner local construction",
@@ -662,11 +662,18 @@
   "evidence": "Goose/Proofs/ConstructionByteLocalStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
-  "feature": "Accepted byte-owner declaration stops",
-  "statement": "At every fuel, an actual stop in a checked unnamed byte-owner declaration preserves the accepted world and source frame, whether or not the runtime scope stack is empty.",
-  "assumptions": "Accepted source frame and world, implementation phase, checked byte-owner declaration and unnamed result.",
-  "limits": "This covers stopped declarations; the general evaluator induction and other declaration forms remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionByteStatementStopped.lean; Goose/Proofs/ConstructionByteStatementAllScopes.lean; scoped Lean 4.35 closure and axiom checks."
+  "feature": "Accepted byte-owner declaration outcomes",
+  "statement": "At every fuel, a checked unnamed byte-owner declaration at the head of a statement sequence preserves the accepted world and source frame. Success advances the source frame and extends root types and liveness; stops preserve the original types and liveness. Escape and jump outcomes are impossible.",
+  "assumptions": "Accepted source frame, world and statement-sequence position, implementation phase, checked byte-owner declaration and unnamed result.",
+  "limits": "The general evaluator induction and other declaration forms remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionByteStatementStopped.lean; Goose/Proofs/ConstructionByteStatementAllScopes.lean; Goose/Proofs/ConstructionByteStatementOutcome.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Accepted byte-owner declaration sequences",
+  "statement": "At every fuel and outcome, an actual sequence of checked unnamed byte-owner declarations preserves an accepted world and source frame while extending root types for completed declarations. Successful sequences return normally; escape and jump outcomes are impossible.",
+  "assumptions": "Accepted source frame, world and statement-sequence position, implementation phase, checked byte-owner declarations and unnamed results.",
+  "limits": "This covers sequences consisting entirely of byte-owner declarations. The general evaluator induction and other statements remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionByteBatchComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Expression-statement sequence stop reflection",
