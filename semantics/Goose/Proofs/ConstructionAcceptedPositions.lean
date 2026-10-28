@@ -144,6 +144,27 @@ inductive DirectSourceChild : ConstructionSourceFrame → SourceAction → Const
       (nesting : frame.typingFuel = fuel + 2) :
       DirectSourceChild frame (.expression (.call contextId (.byVal first :: rest) origin))
         (ordinaryOperandFrame frame fuel) (.expression first)
+  | callArguments (frame : ConstructionSourceFrame) (contextId origin fuel : Nat) (context : Context) (callee : Impl) (arguments : List Arg)
+      (nesting : frame.typingFuel = fuel + 1)
+      (selected : frame.typing.module.contexts[contextId]? = some context)
+      (implementation : frame.typing.module.impls[context.impl]? = some callee) :
+      DirectSourceChild frame (.expression (.call contextId arguments origin))
+        { frame with typingFuel := fuel } (.arguments callee callee.params.toList arguments)
+  | argumentsByValueHead (frame : ConstructionSourceFrame) (callee : Impl) (parameter : Param)
+      (parameters : List Param) (expression : Expr) (arguments : List Arg) (fuel : Nat)
+      (nesting : frame.typingFuel = fuel + 1) :
+      DirectSourceChild frame (.arguments callee (parameter :: parameters) (.byVal expression :: arguments))
+        (ordinaryOperandFrame frame fuel) (.expression expression)
+  | argumentsByValueTail (frame : ConstructionSourceFrame) (callee : Impl) (parameter : Param) (descriptor : LocalVar)
+      (parameters : List Param) (expression : Expr) (arguments : List Arg) (fuel typingAfter : Nat) (roots : List RootRef) (rootsAfter : RState)
+      (nesting : frame.typingFuel = fuel + 1) (mode : parameter.mode = .byValue)
+      (declared : callee.vars[parameter.var]? = some descriptor)
+      (typed : typeExpr fuel { frame.typing with use := .ordinary, request := .value, resultRequests := [] }
+        expression frame.typingCounter = .ok ([descriptor.ty], typingAfter))
+      (rooted : rpExpr frame.source expression frame.rootCursor = .ok (roots, rootsAfter)) :
+      DirectSourceChild frame (.arguments callee (parameter :: parameters) (.byVal expression :: arguments))
+        { frame with typingFuel := fuel, typingCounter := typingAfter, rootCursor := { rootsAfter with eff := {} } }
+        (.arguments callee parameters arguments)
   | valueBlockExpression (frame : ConstructionSourceFrame) (scope fuel origin : Nat)
       (statements : List Stmt) (tail : Expr) (expected : List Ty)
       (nesting : frame.typingFuel = fuel + 1)
