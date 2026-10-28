@@ -681,8 +681,17 @@
   "theorem": "Goose.Lower.accepted_generated_block_value_suffix_stopped",
   "statement": "After accepted block statements complete, a non-timeout stop in a final expression reflects to the source block with the same stop and state. The generated scope-leave instruction cannot stop for a non-timeout reason, and later stops retain the completed block boundary.",
   "assumptions": "Accepted block and body sources, completed source statements, generated occurrences, realized and bounded retained map, builder extension, and a stopped-expression family for the final value.",
-  "limits": "Body-to-value composition, other statement and expression forms, calls, timeout stops and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "limits": "The mixed value-block result composes body and value stops; other statement and expression forms, calls, timeout stops and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandStoppedValueBlockSuffix.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Mixed value-block stop reflection",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_control_value_block_stopped",
+  "statement": "A non-timeout target stop through a block with mixed expression statements, global clears and a final scalar or short-circuit value either reflects to the source block with the same stop and final state or occurs after source block completion, with its actual residual target prefix retained.",
+  "assumptions": "Accepted block source and generated occurrence, realized and bounded retained map, builder extension, no loop context or entry bindings, and the stated statement and value-expression fragments.",
+  "limits": "Other statement and expression forms, loop contexts, calls, timeout stops and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandStoppedControlValueBlock.lean and its stopped-body and value-suffix dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted Core short-circuit control demand transfer",
