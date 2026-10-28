@@ -28,6 +28,19 @@ theorem initGlobals_byteOwners_initial_stopped_world (fuel : Nat) (config : Eval
       (futureGlobalsClear_initial config) checked run
   exact ⟨completed, live, regions, by simpa using upper, world⟩
 
+theorem runModule_byteOwners_initialization_stopped (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (after : ExecutionState) (stop : Goose.Core.Stop)
+    (declarations : ∀ id, id < config.module.globals.size →
+      ∃ descriptor bytes bytesOrigin, config.module.globals[id]? = some descriptor ∧
+        descriptor.ty = .varr (.int .u8) ∧ descriptor.init = .bytes (.varr (.int .u8)) bytes bytesOrigin)
+    (executed : initGlobals (fuel + 1) config (List.range config.module.globals.size) .initial = .stop stop after) :
+    runModule (fuel + 1) config .initial = .stop stop after ∧
+      ∃ completed live regions, completed < config.module.globals.size ∧
+        AcceptedWorld config completed after [] (declaredRootTypes config.module) live regions [] := by
+  refine ⟨?_, initGlobals_byteOwners_initial_stopped_world fuel config accepted after stop declarations executed⟩
+  simp only [runModule, bind, executed]
+
 #print axioms initGlobals_byteOwners_initial_stopped_world
+#print axioms runModule_byteOwners_initialization_stopped
 
 end Goose.Proofs.ConstructionAcceptedExecution

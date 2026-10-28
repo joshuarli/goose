@@ -428,10 +428,10 @@
  },
  {
   "feature": "Constructed byte receiver landing",
-  "statement": "A completed byte carrier is backed and can land in its own receiver after successful byte construction in an accepted world.",
+  "statement": "A completed byte carrier is backed and can land in its own receiver after successful byte construction in an accepted world. Actual byte production retains that backing and landing readiness through scope release.",
   "assumptions": "Accepted world and open destination backing, successful byte construction, matching packed value and receiver shape, size bound and current destination.",
   "limits": "Replacement reservations, exit cleanup and normalized result-channel readiness remain open. This component does not close TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionExitByteBacking.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Proofs/ConstructionExitByteBacking.lean; Goose/Proofs/ConstructionExitByteProduce.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted construction value representation fragment",
@@ -628,7 +628,7 @@
   "feature": "Accepted global byte-owner timeout",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwners_timeout_world; Goose.Proofs.ConstructionAcceptedExecution.acceptedByteGlobal_zero_run_timeout_world; Goose.Proofs.ConstructionAcceptedExecution.acceptedByteGlobals_run_timeout_afterInit",
-  "statement": "A timeout at any fuel during a sequence of byte-owner global initializers preserves the accepted world with its fresh open receiving region and leaves future globals unbound. Every positive-fuel stop in a sequence of byte-owner initializers preserves an accepted world, including after earlier globals succeeded; this also holds from the initial state of a validated module. Positive-fuel byte-owner initialization cannot time out. The zero-fuel result is connected to an actual stopped module run when the first global has that initializer. With positive fuel and only byte-owner globals, a module timeout occurs after an accepted initialized world.",
+  "statement": "A timeout at any fuel during a sequence of byte-owner global initializers preserves the accepted world with its fresh open receiving region and leaves future globals unbound. Every positive-fuel stop in a sequence of byte-owner initializers preserves an accepted world, including after earlier globals succeeded; this also holds from the initial state of a validated module and yields the same stopped module run. Positive-fuel byte-owner initialization cannot time out. The zero-fuel result is connected to an actual stopped module run when the first global has that initializer. With positive fuel and only byte-owner globals, a module timeout occurs after an accepted initialized world.",
   "assumptions": "Accepted initial world and future-global freshness, byte-owner global descriptors, and an actual stop. The initial-state and module results assume validation; the zero-fuel module result also assumes global zero is the stated byte owner.",
   "limits": "Other global types and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionAcceptedByteGlobalTimeout.lean; Goose/Proofs/ConstructionByteGlobalLocal.lean; Goose/Proofs/ConstructionByteGlobalStopped.lean; Goose/Proofs/ConstructionByteGlobalInitialStopped.lean; scoped Lean 4.35 closure and axiom checks."
