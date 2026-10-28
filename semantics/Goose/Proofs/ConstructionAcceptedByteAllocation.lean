@@ -16,13 +16,13 @@ elab_rules : tactic
         return [yes.mvarId, no.mvarId]
 
 set_option maxHeartbeats 1200000 in
-theorem openDestination_packed_value (state after : ConstructionState) (target : Nat)
+theorem openDestination_packed_value_with_adaptation (state after : ConstructionState) (target : Nat)
     (capability : Goose.Core.Destination Ty) (knownCount : Option Nat) (id : Nat)
     (request : capability.request = .value)
     (executed : openDestination target capability .packed knownCount state = .ok id after) :
     ∃ destination, after.destinations[id]? = some destination ∧
       destination.layout = .packed ∧ destination.capability.request = .value ∧
-      destination.backing = .direct target ∧ destination.use = .receiver := by
+      destination.backing = .direct target ∧ destination.use = .receiver ∧ destination.adaptation = none := by
   rw [openDestination_transition] at executed
   simp only [lookupStorage_result, bind] at executed
   cases targetFound : state.storage[target]? with
@@ -42,7 +42,19 @@ theorem openDestination_packed_value (state after : ConstructionState) (target :
         | byte_allocation_split executed
         | split at executed
         | rcases executed with ⟨rfl, rfl⟩
-    all_goals exact ⟨_, rfl, rfl, rfl, rfl, rfl⟩
+    all_goals exact ⟨_, rfl, rfl, rfl, rfl, rfl, rfl⟩
+
+
+theorem openDestination_packed_value (state after : ConstructionState) (target : Nat)
+    (capability : Goose.Core.Destination Ty) (knownCount : Option Nat) (id : Nat)
+    (request : capability.request = .value)
+    (executed : openDestination target capability .packed knownCount state = .ok id after) :
+    ∃ destination, after.destinations[id]? = some destination ∧
+      destination.layout = .packed ∧ destination.capability.request = .value ∧
+      destination.backing = .direct target ∧ destination.use = .receiver := by
+  obtain ⟨destination, found, packed, request, backing, receiver, adaptation⟩ :=
+    openDestination_packed_value_with_adaptation state after target capability knownCount id request executed
+  exact ⟨destination, found, packed, request, backing, receiver⟩
 
 theorem openDestination_packed_count_bound (state after : ConstructionState) (target : Nat)
     (capability : Goose.Core.Destination Ty) (count id : Nat)
@@ -59,12 +71,12 @@ theorem openDestination_packed_count_bound (state after : ConstructionState) (ta
         Bool.not_false, ↓reduceIte, ConstructionM.fail] at executed
       split at executed <;> cases executed
 
-theorem newDestination_byteOwner_packed_value (layout : LayoutEnv) (owner : Goose.Core.ActId)
+theorem newDestination_byteOwner_packed_value_with_adaptation (layout : LayoutEnv) (owner : Goose.Core.ActId)
     (origin : Goose.Core.OriginId) (knownCount : Option Nat) (before after : ExecutionState) (id : Nat)
     (executed : newDestination layout owner (.varr (.int .u8)) .value origin none knownCount before = .ok id after) :
     ∃ destination, after.construction.destinations[id]? = some destination ∧
       destination.layout = .packed ∧ destination.capability.request = .value ∧
-      destination.backing = .direct before.construction.storage.size ∧ destination.use = .receiver := by
+      destination.backing = .direct before.construction.storage.size ∧ destination.use = .receiver ∧ destination.adaptation = none := by
   let prepared : ExecutionState := { before with construction :=
     { before.construction with storage := before.construction.storage.push ⟨ByteArray.empty, 0⟩ } }
   simp only [newDestination, liftConstruction, reserveStorage, ConstructionM.get,
@@ -81,7 +93,18 @@ theorem newDestination_byteOwner_packed_value (layout : LayoutEnv) (owner : Goos
   | ok value final =>
     simp only [opened] at executed
     cases executed
-    exact openDestination_packed_value prepared.construction final before.construction.storage.size _ knownCount id rfl opened
+    exact openDestination_packed_value_with_adaptation prepared.construction final before.construction.storage.size _ knownCount id rfl opened
+
+
+theorem newDestination_byteOwner_packed_value (layout : LayoutEnv) (owner : Goose.Core.ActId)
+    (origin : Goose.Core.OriginId) (knownCount : Option Nat) (before after : ExecutionState) (id : Nat)
+    (executed : newDestination layout owner (.varr (.int .u8)) .value origin none knownCount before = .ok id after) :
+    ∃ destination, after.construction.destinations[id]? = some destination ∧
+      destination.layout = .packed ∧ destination.capability.request = .value ∧
+      destination.backing = .direct before.construction.storage.size ∧ destination.use = .receiver := by
+  obtain ⟨destination, found, packed, request, backing, receiver, adaptation⟩ :=
+    newDestination_byteOwner_packed_value_with_adaptation layout owner origin knownCount before after id executed
+  exact ⟨destination, found, packed, request, backing, receiver⟩
 
 theorem newDestination_byteOwner_count_bound (layout : LayoutEnv) (owner : Goose.Core.ActId)
     (origin : Goose.Core.OriginId) (count : Nat) (before after : ExecutionState) (id : Nat)
@@ -131,8 +154,10 @@ theorem allocated_byteOwner_backing (fuel : Nat) (config : EvalConfig) (initiali
     (by simpa using fits) allocatedWorld.ownership.source.structural.1.1.1 current constructed
 
 #print axioms openDestination_packed_value
+#print axioms openDestination_packed_value_with_adaptation
 #print axioms openDestination_packed_count_bound
 #print axioms newDestination_byteOwner_packed_value
+#print axioms newDestination_byteOwner_packed_value_with_adaptation
 #print axioms newDestination_byteOwner_count_bound
 #print axioms allocated_byteOwner_backing
 
