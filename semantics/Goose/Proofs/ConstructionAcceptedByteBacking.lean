@@ -36,12 +36,13 @@ theorem bytes_writeLoop_open_backing (bytes : List UInt8) (layout : LayoutEnv) (
       pure (.yield PUnit.unit)) : EvalM PUnit) before = .ok PUnit.unit after) :
     ∃ following : OpenDestinationBacking layout after id (.varr (.int .u8)) (count + bytes.length),
       following.destination.layout = ready.destination.layout ∧
-      following.destination.capability = ready.destination.capability := by
+      following.destination.capability = ready.destination.capability ∧
+      following.destination.backing = ready.destination.backing ∧ following.destination.use = ready.destination.use := by
   induction bytes generalizing before count with
   | nil =>
     simp only [List.forIn_nil, pure, ExecutionStep.ok.injEq, true_and] at executed
     subst after
-    exact ⟨ready, rfl, rfl⟩
+    exact ⟨ready, rfl, rfl, rfl, rfl⟩
   | cons byte rest ih =>
     have renewal : renewReceivingDestination id before.construction = .ok id before.construction := by
       simp only [renewReceivingDestination, ConstructionM.get, bind, current, pure,
@@ -70,13 +71,15 @@ theorem bytes_writeLoop_open_backing (bytes : List UInt8) (layout : LayoutEnv) (
       have current' : destinationCurrent final id = .ok id := by
         rw [destinationCurrent_result, destinationCurrentSteps_same_indexing _ before.construction final indexing.1 indexing.2, indexing.1]
         simpa only [destinationCurrent_result] using current
-      obtain ⟨following, layoutSame, capabilitySame⟩ :=
+      obtain ⟨following, layoutSame, capabilitySame, backingSame, useSame⟩ :=
         ih (count + 1) { before with construction := final } next current' executed
       have length : count + (byte :: rest).length = (count + 1) + rest.length := by simp; omega
       rw [length]
-      refine ⟨following, ?_, ?_⟩
+      refine ⟨following, ?_, ?_, ?_, ?_⟩
       · simpa only [same] using layoutSame
       · simpa only [same] using capabilitySame
+      · simpa only [same] using backingSame
+      · simpa only [same] using useSame
 
 theorem finished_byteOwner_backing (layout : LayoutEnv) (before : ExecutionState) (after : ConstructionState)
     (id count : Nat) (ready : OpenDestinationBacking layout before id (.varr (.int .u8)) count)
@@ -116,7 +119,7 @@ theorem bytes_writeLoop_finished_backing (bytes : List UInt8) (layout : LayoutEn
     ∃ value, storedDestination id { middle with construction := after } =
       .ok value { middle with construction := after } ∧
       Goose.Proofs.ConstructionRepresentation.StoredValueBacking layout { middle with construction := after } value := by
-  obtain ⟨following, sameLayout, sameCapability⟩ :=
+  obtain ⟨following, sameLayout, sameCapability, sameBacking, sameUse⟩ :=
     bytes_writeLoop_open_backing bytes layout origin id count before middle ready current loop
   apply finished_byteOwner_backing layout middle after id (count + bytes.length) following
   · exact sameLayout.trans packed

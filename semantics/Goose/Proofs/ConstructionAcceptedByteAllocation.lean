@@ -21,7 +21,8 @@ theorem openDestination_packed_value (state after : ConstructionState) (target :
     (request : capability.request = .value)
     (executed : openDestination target capability .packed knownCount state = .ok id after) :
     ∃ destination, after.destinations[id]? = some destination ∧
-      destination.layout = .packed ∧ destination.capability.request = .value := by
+      destination.layout = .packed ∧ destination.capability.request = .value ∧
+      destination.backing = .direct target ∧ destination.use = .receiver := by
   rw [openDestination_transition] at executed
   simp only [lookupStorage_result, bind] at executed
   cases targetFound : state.storage[target]? with
@@ -41,13 +42,14 @@ theorem openDestination_packed_value (state after : ConstructionState) (target :
         | byte_allocation_split executed
         | split at executed
         | rcases executed with ⟨rfl, rfl⟩
-    all_goals exact ⟨_, rfl, rfl, rfl⟩
+    all_goals exact ⟨_, rfl, rfl, rfl, rfl, rfl⟩
 
 theorem newDestination_byteOwner_packed_value (layout : LayoutEnv) (owner : Goose.Core.ActId)
     (origin : Goose.Core.OriginId) (knownCount : Option Nat) (before after : ExecutionState) (id : Nat)
     (executed : newDestination layout owner (.varr (.int .u8)) .value origin none knownCount before = .ok id after) :
     ∃ destination, after.construction.destinations[id]? = some destination ∧
-      destination.layout = .packed ∧ destination.capability.request = .value := by
+      destination.layout = .packed ∧ destination.capability.request = .value ∧
+      destination.backing = .direct before.construction.storage.size ∧ destination.use = .receiver := by
   let prepared : ExecutionState := { before with construction :=
     { before.construction with storage := before.construction.storage.push ⟨ByteArray.empty, 0⟩ } }
   simp only [newDestination, liftConstruction, reserveStorage, ConstructionM.get,
@@ -82,7 +84,7 @@ theorem allocated_byteOwner_backing (fuel : Nat) (config : EvalConfig) (initiali
       Goose.Proofs.ConstructionRepresentation.StoredValueBacking config.layout built value := by
   obtain ⟨ready⟩ := newDestination_initial_backing config.layout environment.act (.varr (.int .u8)) .value
     origin (some bytes.length) before allocated id (.int .u8) rfl created
-  obtain ⟨destination, present, packed, request⟩ := newDestination_byteOwner_packed_value config.layout
+  obtain ⟨destination, present, packed, request, backing, use⟩ := newDestination_byteOwner_packed_value config.layout
     environment.act origin (some bytes.length) before allocated id created
   have same : destination = ready.destination := Option.some.inj (present.symm.trans ready.present)
   subst destination
