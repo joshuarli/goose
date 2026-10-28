@@ -712,6 +712,15 @@
   "evidence": "Goose/Lower/SourceContexts.lean; Goose/Lower/DemandAssignmentSource.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Scalar assignment destination retention",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_assignment_scalar_destination_alias; Goose.Lower.StmtSource.AssignmentValueAt.retains_generated; Goose.Lower.accepted_assignment_scalar_value_demand",
+  "statement": "After an accepted scalar local or global assignment destination is evaluated, its actual address realizes the generated retained alias. The right-hand-side context admits that alias and inherits the bounded, realized demand map and generated builder context.",
+  "assumptions": "Accepted assignment and canonical source children, scalar local or global destination, successful destination evaluation and generated address postcondition, and the stated retained-map and builder input.",
+  "limits": "Right-hand-side prefix composition, store execution, stops and general assignment destinations remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandAssignmentScalarAlias.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
