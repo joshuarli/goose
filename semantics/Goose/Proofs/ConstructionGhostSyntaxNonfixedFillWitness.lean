@@ -55,6 +55,20 @@ theorem module_fillPaths : ∃ outcome,
     intro impossible
     cases impossible
 
+theorem module_fillEvents : ∃ outcome,
+    SourceHistory config 60 [] (.callWith ⟨0, 0, #[], [], []⟩ 0 [] 0) .initial outcome ∧
+    runModule 60 config .initial = moduleCallResult outcome ∧
+    (stepState (runModule 60 config .initial)).construction.events =
+      [.begin 0, .begin 1, .write 1 0, .write 1 1, .copy (.repeat 1) 0, .write 0 0,
+       .copy (.repeat 1) 0, .write 0 1, .publish 0,
+       .begin 2, .begin 3, .write 3 0, .write 3 1, .copy (.repeat 3) 2, .write 2 0,
+       .copy (.repeat 3) 2, .write 2 1, .publish 2] := by
+  obtain ⟨outcome, history, execution⟩ := module_history 60
+  refine ⟨outcome, history, execution, ?_⟩
+  simp only [stepState, config, context, implementation, statements, expression, operand, element]
+  cbv
+
+#print axioms module_fillEvents
 #print axioms module_history
 #print axioms module_fillPaths
 end Goose.Proofs.ConstructionGhostSyntaxNonfixedFillWitness
