@@ -74,6 +74,10 @@ theorem scalar_checked_cursor {expression : Expr} (form : AcceptedScalarExpressi
             simp [rpExpr, rpPlace, readRoots, addReads, addRoots, modify, bind, pure] at provenance
             cases provenance
             exact ⟨sameCounter, rfl⟩
+  | localRead id =>
+    obtain ⟨descriptor, visible, declared, sameTy, sameCounter, fixed⟩ :=
+      typeExpr_localRead_descriptor frame.typingFuel frame.typing id frame.typingCounter typingAfter ty checked.typing
+    exact ⟨sameCounter, localRead_provenance_nextVar frame id roots rootsAfter checked.provenance⟩
 
 theorem not_checked_cursor {expression : Expr} (form : AcceptedNotExpression expression)
     (frame : ConstructionSourceFrame) (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)

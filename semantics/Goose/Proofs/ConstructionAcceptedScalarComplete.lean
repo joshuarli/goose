@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedCursor
+import Goose.Proofs.ConstructionAcceptedLocalRead
 import Goose.Proofs.ConstructionByteValueComplete
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -12,6 +12,7 @@ inductive AcceptedScalarExpression : Expr → Prop
   | integer (type : Goose.Core.IntTy) (value : Int) : AcceptedScalarExpression (.lit type value)
   | boolean (value : Bool) : AcceptedScalarExpression (.bool value)
   | globalRead (id : Nat) : AcceptedScalarExpression (.read (.global id))
+  | localRead (id : Nat) : AcceptedScalarExpression (.read (.var id))
 
 theorem evalValue_checked_scalar_complete {expression : Expr} (form : AcceptedScalarExpression expression)
     (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (frame : ConstructionSourceFrame)
@@ -56,6 +57,19 @@ theorem evalValue_checked_scalar_complete {expression : Expr} (form : AcceptedSc
         | succ fuel =>
           obtain ⟨value, evaluated, valid⟩ := evalValue_checkedGlobalRead_accepted fuel config accepted frame state ambient types live
             regions pending world source.compatible id ty roots typingAfter rootsAfter checked
+          simp only [evaluated, Goose.Proofs.Exit.stepState, ExecutionStep.ok.injEq, true_and]
+          intro result after ⟨sameValue, sameState⟩
+          subst result after
+          exact valid
+    | localRead id =>
+      cases fuel with
+      | zero => simp [evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
+      | succ fuel =>
+        cases fuel with
+        | zero => simp [evalValue, evalPlace, timeout, EvalM.stop, bind, Goose.Proofs.Exit.stepState]
+        | succ fuel =>
+          obtain ⟨value, evaluated, valid⟩ := evalValue_checkedLocalRead_accepted fuel config accepted frame state ambient types live
+            regions pending world source id ty roots typingAfter rootsAfter checked
           simp only [evaluated, Goose.Proofs.Exit.stepState, ExecutionStep.ok.injEq, true_and]
           intro result after ⟨sameValue, sameState⟩
           subst result after
