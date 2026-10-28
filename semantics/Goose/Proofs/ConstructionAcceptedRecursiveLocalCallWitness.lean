@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedRecursiveRegisterCall
+import Goose.Proofs.ConstructionAcceptedRecursiveLocalCallModule
 import Goose.Proofs.ConstructionAcceptedNestedGlobal
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -93,6 +93,51 @@ theorem localTail_invoke_allFuel (fuel : Nat) :
       roots typingAfter rootsAfter checked
   exact ⟨types, live, ambient, finalWorld, clear, flow⟩
 
+theorem localTail_eval_allFuel (fuel : Nat) :
+    ∃ types live ambient,
+      let activated := { ExecutionState.initial with nextAct := ExecutionState.initial.nextAct + 1 }
+      let environment : RuntimeActivation := ⟨0, ExecutionState.initial.nextAct, #[], [], []⟩
+      let outcome := evalValue fuel localTailConfig environment (.call 1 [] 0) activated
+      AcceptedWorld localTailConfig 0 (Goose.Proofs.Exit.stepState outcome) ambient types live [] [] ∧
+      FutureGlobalsClear localTailConfig 0 (Goose.Proofs.Exit.stepState outcome) ∧
+      (match outcome with
+       | .ok value _ => ambient = [] ∧ ValueRepresentation (.int .i64) value
+       | .stop .. => True | .escape .. | .jump .. => False) := by
+  let descriptor : Global := ⟨"answer", .int .i64, .immutable, .call 1 [] 0, 0⟩
+  obtain ⟨names, roots, typingAfter, rootsAfter, world, source, checked⟩ :=
+    accepted_nestedGlobal_checked localTailConfig (acceptedModule localTailConfig localTail_validated) 0 descriptor .initial []
+      (declaredRootTypes localTailModule) (fun _ => False) (initial_acceptedWorld localTailConfig localTail_validated)
+      (futureGlobalsClear_initial localTailConfig) (by rfl) (Or.inl ⟨.i64, rfl⟩)
+  let frame := scalarGlobalInitializerFrame localTailConfig 0 ExecutionState.initial.nextAct names
+  let activated := { ExecutionState.initial with nextAct := ExecutionState.initial.nextAct + 1 }
+  let context : Context := ⟨1, "outer", [], [[]], []⟩
+  obtain ⟨types, live, ambient, extend, acts, scopes, finalWorld, clear, flow⟩ :=
+    evalValue_recursive_register_withLocals fuel localTailConfig (acceptedModule localTailConfig localTail_validated)
+      frame activated [] (declaredRootTypes localTailModule) (fun _ => False) [] [] 1 context localTailOuter (.int .i64) 0
+      localTail_graph world source (by rfl) (by rfl) (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩)
+      roots typingAfter rootsAfter checked
+  exact ⟨types, live, ambient, finalWorld, clear, flow⟩
+
+theorem localTail_module_allFuel (fuel : Nat) :
+    ∃ initialized ambient types live regions,
+      AcceptedWorld localTailConfig initialized
+        (Goose.Proofs.Exit.stepState (runModule fuel localTailConfig .initial)) ambient types live regions [] ∧
+      (match runModule fuel localTailConfig .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  let descriptor : Global := ⟨"answer", .int .i64, .immutable, .call 1 [] 0, 0⟩
+  let calleeContext : Context := ⟨1, "outer", [], [[]], []⟩
+  let entryContext : Context := ⟨0, "entry", [], [], []⟩
+  apply acceptedLocalCallModule_allFuel fuel localTailConfig (acceptedModule localTailConfig localTail_validated)
+    descriptor 1 0 calleeContext localTailOuter (by rfl) (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩)
+    (by rfl) (by rfl) (by rfl) (by rfl) localTail_graph entryContext localTailEntry (by rfl) (by rfl)
+  · exact .nil
+  · simp [localTailEntry, Block.stmts]
+  · simp [localTailEntry, Block.stmts]
+  · simp [localTailEntry, Block.stmts]
+  · simp [localTailEntry, Block.stmts]
+  · rfl
+
+#print axioms localTail_module_allFuel
+#print axioms localTail_eval_allFuel
 #print axioms localTail_invoke_allFuel
 #print axioms localTail_result
 #print axioms localTail_graph
