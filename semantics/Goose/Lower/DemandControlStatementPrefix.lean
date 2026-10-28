@@ -117,7 +117,7 @@ theorem accepted_generated_control_block_statements_prefix {cfg : Cfg} {env : En
     {taken : Nat} {reached : DemandRuntimePoint} (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
     (taken = 0 ∧ reached = ⟨start, initial, state⟩ ∧
       GeneratedClearBlockDemand source map required cx results before loop initial reached) ∨
-      GeneratedBlockStatementsPrefix (before := before) (loop := loop) source selected map required initial start
+      GeneratedBlockStatementsPrefix (before := before) (loop := loop) (want := true) source selected map required initial start
         (@ControlStatementPrefixCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results) taken reached := by
   have family : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
       cx results selected before loop [] true block block.stmts

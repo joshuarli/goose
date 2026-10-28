@@ -128,12 +128,16 @@ inductive AcceptedIfSelection {cfg : Cfg} {env : Env} {condition : Expr} {yes : 
   | yes (evaluated : evalExpr fuel cfg env condition state = .ok (.bool true) after)
       (child : BlockSource cfg env [] yes after) (typing : child.typingEnv = source.typingEnv)
       (roots : child.rootsEnv = source.rootsEnv) (world : child.world = source.world)
-      (observation : child.observation = source.observation) : AcceptedIfSelection source fuel (.bool true)
+      (observation : child.observation = source.observation)
+      (canonical : source.BlockChildAt child 1 (by simp [DemandNode.child?, DemandNode.children])) :
+      AcceptedIfSelection source fuel (.bool true)
   | no {block : Core.Block} (branch : no = some block)
       (evaluated : evalExpr fuel cfg env condition state = .ok (.bool false) after)
       (child : BlockSource cfg env [] block after) (typing : child.typingEnv = source.typingEnv)
       (roots : child.rootsEnv = source.rootsEnv) (world : child.world = source.world)
-      (observation : child.observation = source.observation) : AcceptedIfSelection source fuel (.bool false)
+      (observation : child.observation = source.observation)
+      (canonical : source.BlockChildAt child 2 (by simp [DemandNode.child?, DemandNode.children, branch])) :
+      AcceptedIfSelection source fuel (.bool false)
   | skip (branch : no = none) (evaluated : evalExpr fuel cfg env condition state = .ok (.bool false) after) :
       AcceptedIfSelection source fuel (.bool false)
 
@@ -149,14 +153,14 @@ theorem accepted_if_selection {cfg : Cfg} {env : Env} {condition : Expr} {yes : 
   obtain ⟨boolean, rfl⟩ := hasTy_bool typed
   cases boolean with
   | true =>
-    obtain ⟨body, typing, roots, world, observation⟩ := source.ifThenChild fuel evaluated
-    exact .yes evaluated body typing roots world observation
+    obtain ⟨body, typing, roots, world, observation, canonical⟩ := source.ifThenChildAt fuel evaluated
+    exact .yes evaluated body typing roots world observation canonical
   | false =>
     cases no with
     | none => exact .skip rfl evaluated
     | some block =>
-      obtain ⟨body, typing, roots, world, observation⟩ := source.ifElseChild fuel evaluated
-      exact .no rfl evaluated body typing roots world observation
+      obtain ⟨body, typing, roots, world, observation, canonical⟩ := source.ifElseChildAt fuel evaluated
+      exact .no rfl evaluated body typing roots world observation canonical
 
 theorem accepted_generated_if_condition_selection_prefix {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat} {loop : Option LoopCtx} {condition : Expr} {yes : Core.Block} {no : Option Core.Block}
@@ -191,6 +195,8 @@ theorem accepted_generated_if_condition_selection_prefix {cfg : Cfg} {env : Env}
     exact .complete count prefixSteps residual evaluated ⟨post, ⟨_, accepted_if_selection source evaluated⟩⟩
 
 #print axioms accepted_generated_if_condition_selection_prefix
+#print axioms StmtSource.ifThenChildAt
+#print axioms StmtSource.ifElseChildAt
 #print axioms accepted_if_selection
 #print axioms if_condition_stop
 #print axioms accepted_generated_if_condition_stopped

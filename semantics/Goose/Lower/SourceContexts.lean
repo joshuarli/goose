@@ -2052,7 +2052,8 @@ private theorem blockSourceAt {cfg : Cfg} {env : Env} {stmt : Stmt} {before stat
     (effects : EffLe rootsEnd.eff source.world.E) :
     ∃ child : BlockSource cfg env [] block state, child.typingEnv = typingEnv ∧
       child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation ∧ child.context.outputFuture = context.outputFuture ∧
-      child.context.mayShrink source.world.ownerP source.observation = context.mayShrink source.world.ownerP source.observation := by
+      child.context.mayShrink source.world.ownerP source.observation = context.mayShrink source.world.ownerP source.observation ∧
+      child.plans = source.plans ∧ child.path = path ∧ HEq child.context context := by
   cases block with
   | mk scope stmts value =>
     obtain ⟨fresh, inner, start, final, middle, declared, typedStmts, typedValue⟩ :=
@@ -2073,7 +2074,7 @@ private theorem blockSourceAt {cfg : Cfg} {env : Env} {stmt : Stmt} {before stat
       frame := frame, fresh := fresh, same := same, visible := visible,
       pretyped := ⟨List.nodup_nil, by intro slot v member; cases member⟩,
       bounded := Nat.le_refl _, typed := typedStmts, typedValue := ?_, rooted := rootedStmts,
-      rootedValue := ?_, effects := effects, rootsEscape := escaped }, rfl, rfl, rfl, rfl, rfl, rfl⟩
+      rootedValue := ?_, effects := effects, rootsEscape := escaped }, rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl⟩
     · cases value with
       | none => exact typedValue.1
       | some expr => exact typedValue
@@ -2132,6 +2133,15 @@ private theorem conditionBlockInput {cfg : Cfg} {env : Env} {stmt : Stmt} {befor
     rw [hcontext] at activeMatches
     exact activeMatches y
 
+structure StmtSource.BlockChildAt {cfg : Cfg} {env : Env} {stmt : Stmt} {block : Block} {state after : St}
+    (source : StmtSource cfg env stmt state) (child : BlockSource cfg env [] block after) (index : Nat)
+    (found : (DemandNode.statement stmt).child? index = some (.block block)) : Prop where
+  world : child.world = source.world
+  path : child.path = source.path ++ [index]
+  plans : child.plans = source.plans
+  context : HEq child.context (source.context.child rfl index (.block block) .block found
+    (by simp [DemandNodeHasPhase, DemandNode.phaseMatches]))
+
 private theorem ifBlockAt {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
     {yes : Block} {no : Option Block} {origin : OriginId}
     (source : StmtSource cfg env (.ifS condition yes no origin) state)
@@ -2149,7 +2159,8 @@ private theorem ifBlockAt {cfg : Cfg} {env : Env} {state after : St} {condition 
     (rooted : rpBlockValue source.rootsEnv [] block rootStart = .ok ((roots, range), rootFinish))
     (effects : EffLe rootFinish.eff source.world.E) :
     ∃ child : BlockSource cfg env [] block after, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation := by
+      child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation ∧
+      source.BlockChildAt child index blockAt := by
   obtain ⟨conditionSource, typingEq, rootsEq, _, worldEq, observationEq, outputEq, mayEq, _⟩ := ifConditionData source
   have result := conditionSource.result fuel (.bool value) done
   have frame := result.frame
@@ -2178,19 +2189,20 @@ private theorem ifBlockAt {cfg : Cfg} {env : Env} {state after : St} {condition 
     funext root
     exact propext (source.context.child_mayShrink_iff rfl index (.block block) .block blockAt phase
       source.world.ownerP source.observation root)
-  obtain ⟨child, typingEq, rootsEq, worldEq, observationEq, _⟩ := blockSourceAt source block source.typingEnv (source.path ++ [index]) context
+  obtain ⟨child, typingEq, rootsEq, worldEq, observationEq, _, _, plansEq, pathEq, contextEq⟩ := blockSourceAt source block source.typingEnv (source.path ++ [index]) context
     (source.context.child_activeMatches rfl index (.block block) .block blockAt phase
       source.typingEnv source.typingEnv source.active (by intro x; rw [visible]))
     ((source.context.child_accessMatches_iff rfl index (.block block) .block blockAt phase _ _).mpr source.access)
     (may ▸ source.protection) (may ▸ observed) classified input start finish ty rootStart rootFinish roots range typed rooted effects
-  exact ⟨child, typingEq, rootsEq, worldEq, observationEq⟩
+  exact ⟨child, typingEq, rootsEq, worldEq, observationEq, ⟨worldEq, pathEq, plansEq, contextEq⟩⟩
 
-theorem StmtSource.ifThenChild {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
+theorem StmtSource.ifThenChildAt {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
     {yes : Block} {no : Option Block} {origin : OriginId}
     (source : StmtSource cfg env (.ifS condition yes no origin) state)
     (fuel : Nat) (done : evalExpr fuel cfg env condition state = .ok (.bool true) after) :
     ∃ child : BlockSource cfg env [] yes after, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation := by
+      child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation ∧
+      source.BlockChildAt child 1 (by simp [DemandNode.child?, DemandNode.children]) := by
   have typed := source.typed
   have rooted := source.rooted
   cases no with
@@ -2224,12 +2236,13 @@ theorem StmtSource.ifThenChild {cfg : Cfg} {env : Env} {state after : St} {condi
       conditionEnd yesEnd yesTy conditionRoots yesFinish
       yesRoots (yesLow, yesHigh) yesTyped yesRooted
       ((rpBlockValue_mono noRooted).2.trans source.effects)
-theorem StmtSource.ifElseChild {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
+theorem StmtSource.ifElseChildAt {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
     {yes : Block} {no : Block} {origin : OriginId}
     (source : StmtSource cfg env (.ifS condition yes (some no) origin) state)
     (fuel : Nat) (done : evalExpr fuel cfg env condition state = .ok (.bool false) after) :
     ∃ child : BlockSource cfg env [] no after, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation := by
+      child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation ∧
+      source.BlockChildAt child 2 (by simp [DemandNode.child?, DemandNode.children]) := by
   have typed := source.typed
   have rooted := source.rooted
   simp only [tyStmt] at typed
@@ -2246,6 +2259,24 @@ theorem StmtSource.ifElseChild {cfg : Cfg} {env : Env} {state after : St} {condi
     yesEnd noEnd noTy yesFinish source.rootsEnd
     noRoots (noLow, noHigh) noTyped noRooted
     source.effects
+
+theorem StmtSource.ifThenChild {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
+    {yes : Block} {no : Option Block} {origin : OriginId}
+    (source : StmtSource cfg env (.ifS condition yes no origin) state)
+    (fuel : Nat) (done : evalExpr fuel cfg env condition state = .ok (.bool true) after) :
+    ∃ child : BlockSource cfg env [] yes after, child.typingEnv = source.typingEnv ∧
+      child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation := by
+  obtain ⟨child, typing, roots, world, observation, _⟩ := source.ifThenChildAt fuel done
+  exact ⟨child, typing, roots, world, observation⟩
+
+theorem StmtSource.ifElseChild {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
+    {yes : Block} {no : Block} {origin : OriginId}
+    (source : StmtSource cfg env (.ifS condition yes (some no) origin) state)
+    (fuel : Nat) (done : evalExpr fuel cfg env condition state = .ok (.bool false) after) :
+    ∃ child : BlockSource cfg env [] no after, child.typingEnv = source.typingEnv ∧
+      child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation := by
+  obtain ⟨child, typing, roots, world, observation, _⟩ := source.ifElseChildAt fuel done
+  exact ⟨child, typing, roots, world, observation⟩
 
 private theorem whileConditionData {cfg : Cfg} {env : Env} {state : St} {condition : Expr}
     {body : Block} {origin : OriginId}
@@ -2367,7 +2398,7 @@ private theorem whileBodyData {cfg : Cfg} {env : Env} {state after : St} {condit
   simp only [rpStmt] at rooted
   inv at rooted
   obtain ⟨_, conditionRoots, _, bodyRoots, low, high, bodyRooted⟩ := rooted
-  obtain ⟨child, typingEq, rootsEq, worldEq, observationEq, outputEq, shrinkEq⟩ := blockSourceAt source body
+  obtain ⟨child, typingEq, rootsEq, worldEq, observationEq, outputEq, shrinkEq, _, _, _⟩ := blockSourceAt source body
     { source.typingEnv with loops := source.typingEnv.loops + 1 } (source.path ++ [1]) context
     (source.context.child_activeMatches rfl 1 (.block body) .block bodyAt phase
       source.typingEnv { source.typingEnv with loops := source.typingEnv.loops + 1 }

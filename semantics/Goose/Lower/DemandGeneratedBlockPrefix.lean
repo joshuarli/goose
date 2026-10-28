@@ -7,7 +7,7 @@ open Goose.Core Goose.GIR Goose.Core.Sound
 
 inductive GeneratedBlockStatementsPrefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
-    {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    {owner : Nat} {before : LS} {loop : Option LoopCtx} {want : Bool}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (map required : RetainedSsaMap) (initial : GIR.Frame) (start : Pt)
     (cursor : ∀ {statement : Stmt} {innerState : St},
@@ -18,7 +18,7 @@ inductive GeneratedBlockStatementsPrefix {cfg : Cfg} {env : Env} {block : Core.B
       block.stmts { state with nextScope := state.nextScope + 1 })
       (canonical : GeneratedBlockBodyAt source body)
       (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-        root body.path (.block loop [] true block) before)
+        root body.path (.block loop [] want block) before)
       (rows : GeneratedDemandRows cfg.mod body.rootsEnv.access occurrence required)
       (remaining : Nat) (count : remaining + 1 = taken)
       (entry : Evidence.RuntimeStep cx.cfg cx.fn start initial state
@@ -33,30 +33,30 @@ inductive GeneratedBlockStatementsPrefix {cfg : Cfg} {env : Env} {block : Core.B
         body selected occurrence rows map
         { initial with scopes := (block.scope, state.nextScope) :: initial.scopes } (start.1, start.2 + 1)
         (@cursor) remaining reached) :
-      GeneratedBlockStatementsPrefix (before := before) (loop := loop) source selected map required initial start (@cursor) taken reached
+      GeneratedBlockStatementsPrefix (before := before) (loop := loop) (want := want) source selected map required initial start (@cursor) taken reached
 
 theorem accepted_generated_block_statements_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
-    {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    {owner : Nat} {before : LS} {loop : Option LoopCtx} {want : Bool}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (owned : GeneratedSourceOwner selected source.context)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root source.path (.block loop [] true block) before)
+      root source.path (.block loop [] want block) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
     (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
     (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
     (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
-    (extended : ExtT (lowerBlock loop [] true block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (extended : ExtT (lowerBlock loop [] want block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
     (cursor : ∀ {statement : Stmt} {innerState : St},
       StmtSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } statement innerState →
       LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
-    (bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] true block block.stmts (@cursor))
+    (bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] want block block.stmts (@cursor))
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
     (taken = 0 ∧ reached = ⟨start, initial, state⟩ ∧
       GeneratedClearBlockDemand source map required cx results before loop initial reached) ∨
-      GeneratedBlockStatementsPrefix (before := before) (loop := loop) source selected map required initial start (@cursor) taken reached := by
+      GeneratedBlockStatementsPrefix (before := before) (loop := loop) (want := want) source selected map required initial start (@cursor) taken reached := by
   let le := lowerEnv cfg.mod env.vars results
   let enteredFrame : GIR.Frame := { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
   let enteredState : St := { state with nextScope := state.nextScope + 1 }
