@@ -16,10 +16,26 @@ private def operand : Expr := .call 0 [] 0
 private def operands : List Expr := [operand, operand]
 private def expression : Expr := .arrLit (.arr .unit 2) operands 0
 
+private theorem replay_success_length {action : α → EvalM β} {offset : Nat} {operands : List α}
+    {accumulator : List β} {before : ExecutionState} {outcome : ExecutionStep (List β)} {visits : List (Invocation α β)}
+    (replay : OperandReplay action offset operands accumulator before outcome visits)
+    (success : ∃ values after, outcome = .ok values after) : visits.length = operands.length := by
+  induction replay with
+  | done => rfl
+  | next head tail ih => simpa using ih success
+  | stopped | escaped | jumped => simp_all
+
+private theorem aligned_length {visits : List (Invocation α β)} {chunks : List (List Goose.Core.ConstructionEvent)}
+    (aligned : ChunksAlign visits chunks) : visits.length = chunks.length := by
+  induction aligned with
+  | nil => rfl
+  | cons visit chunk visits chunks events tail ih => simpa only [List.length_cons] using congrArg Nat.succ ih
+
 theorem aggregate_declaration_nonempty : ∃ mapped visits chunks continuation,
     OperandReplay (evalValue 39 config environment) 0 operands [] .initial mapped visits ∧
     (∀ visit ∈ visits, SourceHistory config 39 [4, 0, 0, visit.ordinal]
       (.value environment visit.operand) visit.before visit.outcome) ∧
+    visits.length = 2 ∧ chunks.length = 2 ∧ visits.map Invocation.ordinal = [0, 1] ∧
     (visits.map Invocation.ordinal).Nodup ∧ ChunksAlign visits chunks ∧
     chunks.flatten = [.begin 0, .write 0 0, .write 0 1, .publish 0,
       .begin 1, .write 1 0, .write 1 1, .publish 1] ∧
@@ -48,6 +64,29 @@ theorem aggregate_declaration_nonempty : ∃ mapped visits chunks continuation,
   have shape : ValueAggregate expression operands := .fixedArray (.arr .unit 2) operands 0 rfl
   obtain ⟨mapped, visits, chunks, continuation, replay, children, ordered, once, aligned, sourceEvents, finalEq⟩ :=
     aggregate_declaration_sourceEvents 39 config environment [4, 0] 0 expression operands 0 .initial .initial shape occurrence supported
+  obtain ⟨other, otherVisits, otherReplay, _, _, _, valueEq, _⟩ :=
+    Goose.Proofs.ConstructionGhostSourceAggregate.aggregate_fuelReplay 39 config environment [4, 0, 0]
+      expression operands .initial shape supported
+  have mappedEq : other = mapped := otherReplay.execute.symm.trans replay.execute
+  rw [mappedEq] at valueEq
+  have actualValue : ∃ after, evalValue 40 config environment expression .initial = .ok (.fixed #[.unit, .unit]) after := by
+    let after := Goose.Proofs.Exit.stepState (evalValue 40 config environment expression .initial)
+    refine ⟨after, ?_⟩
+    simp only [after, config, environment, descriptor, expression, operands, operand, implementation, context, bytes]
+    unfold evalValue
+    cbv
+    unfold evalValue
+    cbv
+    unfold evalValue
+    cbv
+  obtain ⟨after, actualValue⟩ := actualValue
+  rw [valueEq] at actualValue
+  have complete : visits.length = 2 := by
+    cases mapped with
+    | ok values state => simpa [operands] using replay_success_length replay ⟨values, state, rfl⟩
+    | stop reason state => simp [Goose.Proofs.ConstructionGhostSourceAggregate.aggregateResult] at actualValue
+    | escape address carriers state => simp [Goose.Proofs.ConstructionGhostSourceAggregate.aggregateResult] at actualValue
+    | jump target kind state => simp [Goose.Proofs.ConstructionGhostSourceAggregate.aggregateResult] at actualValue
   have actual : (Goose.Proofs.Exit.stepState (evalValue 40 config environment expression .initial)).construction.events =
       [.begin 0, .write 0 0, .write 0 1, .publish 0, .begin 1, .write 1 0, .write 1 1, .publish 1] := by
     simp only [config, environment, descriptor, expression, operands, operand, implementation, context, bytes]
@@ -61,7 +100,14 @@ theorem aggregate_declaration_nonempty : ∃ mapped visits chunks continuation,
   have events : chunks.flatten = [.begin 0, .write 0 0, .write 0 1, .publish 0,
       .begin 1, .write 1 0, .write 1 1, .publish 1] := by
     simpa [ExecutionState.initial, ConstructionState.initial] using sourceEvents.symm
-  refine ⟨mapped, visits, chunks, continuation, replay, ?_, once, aligned, events, ?_⟩
+  have chunkCount : chunks.length = 2 := by
+    have equal := aligned_length aligned
+    omega
+  have ordinals : visits.map Invocation.ordinal = [0, 1] := by
+    have actual := replay.ordinals
+    rw [complete] at actual
+    exact actual
+  refine ⟨mapped, visits, chunks, continuation, replay, ?_, complete, chunkCount, ordinals, once, aligned, events, ?_⟩
   · simpa using children
   · simpa [ExecutionState.initial, ConstructionState.initial] using finalEq
 
