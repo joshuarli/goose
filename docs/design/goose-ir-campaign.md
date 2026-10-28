@@ -1,10 +1,18 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** paused 2026-10-26 at the owner's request after winddown and cleanup. All campaign workers stopped. Performance qualification and the three universal proof obligations remain open. Pushes remain unauthorized.
-**Branch:** `goose-ir`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
+**Status:** resumed. Performance qualification and the three universal proof obligations remain open. Pushes remain unauthorized.
+**Branch:** `goose-ir`. The branch was rebased onto local `master` at `b7885160`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
-## Resume handoff (2026-10-26)
+## Current proof work
+
+The demand-prefix proofs cover supported scalar and short-circuit expressions, global clears, and assignments to local or global places. Mixed blocks carry accepted frames through scope entry and exit. They cover successful prefixes and non-timeout stops, with no loop context in the block stop proofs. Assignment values in mixed blocks include literals, arithmetic, comparisons, and short-circuit expressions. Direct read assignments have a separate proof requiring the value type to be a valid reference target.
+
+Construction work connects actual byte-owner allocation timeouts to accepted worlds, including the first global initializer and the checked head of a statement sequence. General construction preservation, abnormal exits, loops, calls, returns, and whole-function cursor reconstruction remain open. These results do not close `TH-CON-01`, `TH-EXIT-01`, `TH-LOWER-03`, or their gates. The current assumptions and limits are recorded in `semantics/coverage.json`.
+
+Scoped proof closures use pinned Lean 4.35.0 and the allowed axioms. The adjacent `lean4` checkout is at `origin/master` revision `f4856ef9`, with stage1 built separately. Comprehensive corpora, full Lean and native qualification, five-kernel replay, and final performance qualification remain manual-only named workloads under the owner's existing instruction. No performance budget or release gate is waived.
+
+## Historical resume handoff (2026-10-26)
 
 **Resume:** “Resume the paused Goose IR campaign from this handoff; reread current instructions and finish the remaining accepted-execution proofs.” First run `git status --short --branch`. On an authorized resume, cancel campaign closeout if still active, reread the applicable skills, and perform the parent steering checkpoint before selecting work. Recreate selected worktrees under `.work/wt/` from their preserved branches. Do not automatically replay historical lane commits or repeat unchanged qualification.
 
