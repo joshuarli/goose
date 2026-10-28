@@ -5,7 +5,7 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound
 
-theorem accepted_generated_scalar_assignment_value_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+theorem accepted_generated_generic_value_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
     {owner : Nat} {before : LS}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
@@ -18,7 +18,11 @@ theorem accepted_generated_scalar_assignment_value_block_stopped {cfg : Cfg} {en
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
     (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
     (extended : ExtT (lowerBlock none [] true block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
-    (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts) {expression : Expr} (hasValue : block.value = some expression)
+    (bodyFamily : GeneratedStoppedSequencePrefixFamily
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before none [] true block block.stmts)
+    (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
+      execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts innerState = .ok flow after →
+      flow = .normal .unit) {expression : Expr} (hasValue : block.value = some expression)
     (valueForm : ControlPrefixExpression expression)
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
@@ -85,12 +89,6 @@ theorem accepted_generated_scalar_assignment_value_block_stopped {cfg : Cfg} {en
         · rw [bodyRoots]
       · apply input.loops.transport
         rw [bodyTyping]; exact source.same.loops
-    have bodyFamily : GeneratedStoppedSequencePrefixFamily
-        (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before none [] true block block.stmts := by
-      intro bodyState
-      exact (accepted_generated_scalar_assignment_statements_agreement
-        (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
-        selected before none [] true block fragment).2
     have bodyProgress := bodyFamily body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted
       (by rw [currentEq, enteredValues]; exact bounded) bodyDemand.operands bodyInput
       (by rw [currentEq]; exact generated_block_statements_extended extended) residual stopped nonTimeout
@@ -108,7 +106,7 @@ theorem accepted_generated_scalar_assignment_value_block_stopped {cfg : Cfg} {en
           rfl
         | ok flow final =>
           simp only [raw] at done
-          have normal := fragment.normal raw
+          have normal := normal raw
           subst flow
           simp [prepareLoopFlow, prepareReturn, pure_apply] at done
       apply StoppedValueBlockSuffix.aborted (fuel + 1)
@@ -127,7 +125,7 @@ theorem accepted_generated_scalar_assignment_value_block_stopped {cfg : Cfg} {en
             enteredState with
         | stop stop final => simp only [raw] at evaluated; cases evaluated
         | ok rawFlow rawState =>
-          have normal := fragment.normal raw
+          have normal := normal raw
           subst rawFlow
           simp only [raw] at evaluated
           have prepared : prepareLoopFlow { env with scopes := (block.scope, state.nextScope) :: env.scopes }
@@ -151,6 +149,33 @@ theorem accepted_generated_scalar_assignment_value_block_stopped {cfg : Cfg} {en
           bodyBounded bodyRealized extended valueFamily (DemandRuntimePrefix.next enterStep bodySteps) afterBody stopped nonTimeout
         have lengthEq : (consumed + 1) + remaining = taken := by omega
         simpa only [lengthEq] using suffix
+
+theorem accepted_generated_scalar_assignment_value_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
+    {owner : Nat} {before : LS}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block none [] true block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock none [] true block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts) {expression : Expr} (hasValue : block.value = some expression)
+    (valueForm : ControlPrefixExpression expression)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (stopped : DemandInstructionStop cx targetFuel reached stop after) (nonTimeout : stop ≠ .timeout) :
+    StoppedValueBlockSuffix source map required cx results before none initial start taken reached stop after := by
+  have bodyFamily : GeneratedStoppedSequencePrefixFamily
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before none [] true block block.stmts :=
+    (accepted_generated_scalar_assignment_statements_agreement
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) selected before none [] true block fragment).2
+  exact accepted_generated_generic_value_block_stopped source selected owned occurrence rows coverage admitted bounded realized input extended
+    bodyFamily (fun done => fragment.normal done) hasValue valueForm steps stopped nonTimeout
 
 #print axioms accepted_generated_scalar_assignment_value_block_stopped
 

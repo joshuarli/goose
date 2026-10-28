@@ -25,8 +25,31 @@ inductive GeneratedScalarAssignmentBlockPrefixDemand {cfg : Cfg} {env : Env} {bl
           { state with nextScope := state.nextScope + 1 }⟩ runtime) :
       GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime
 
-theorem accepted_generated_scalar_assignment_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
-    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts)
+inductive GeneratedGenericBlockPrefixDemand {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (map required : RetainedSsaMap) (before : LS) (loop : Option LoopCtx) (initial : GIR.Frame)
+    (cursor : ∀ {statement : Stmt} {innerState : St}, StmtSource cfg
+      { env with scopes := (block.scope, state.nextScope) :: env.scopes } statement innerState →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    (suffixCursor : DemandRuntimePoint → Prop) : DemandRuntimePoint → Prop
+  | emitted {runtime : DemandRuntimePoint}
+      (demanded : GeneratedClearBlockDemand source map required cx results before loop initial runtime) :
+      GeneratedGenericBlockPrefixDemand source selected map required before loop initial cursor suffixCursor runtime
+  | suffix {runtime : DemandRuntimePoint} (demanded : suffixCursor runtime) :
+      GeneratedGenericBlockPrefixDemand source selected map required before loop initial cursor suffixCursor runtime
+  | body {body : StmtsSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
+        block.stmts { state with nextScope := state.nextScope + 1 }} {start : Pt} {runtime : DemandRuntimePoint}
+      (canonical : GeneratedBlockBodyAt source body)
+      (demanded : GeneratedSequencePrefixCursor
+        cursor
+        map required cx results before loop [] block selected body
+        ⟨start, { initial with scopes := (block.scope, state.nextScope) :: initial.scopes },
+          { state with nextScope := state.nextScope + 1 }⟩ runtime) :
+      GeneratedGenericBlockPrefixDemand source selected map required before loop initial cursor suffixCursor runtime
+
+theorem accepted_generated_generic_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
     {before : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
@@ -39,19 +62,21 @@ theorem accepted_generated_scalar_assignment_block_prefix {cfg : Cfg} {env : Env
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
     (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
     (extended : ExtT (lowerBlock loop [] true block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (cursor : ∀ {statement : Stmt} {innerState : St}, StmtSource cfg
+      { env with scopes := (block.scope, state.nextScope) :: env.scopes } statement innerState →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    (bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before loop [] true block block.stmts cursor)
+    (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
+      execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts innerState = .ok flow after →
+      flow = .normal .unit)
     (suffixCursor : DemandRuntimePoint → Prop)
     (suffixFamily : GeneratedBlockSuffixPrefixFamily source selected map required before loop initial start suffixCursor)
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
     GeneratedBlockPrefixDecomposition source selected map required before loop initial start
-      (GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor) taken reached := by
+      (GeneratedGenericBlockPrefixDemand source selected map required before loop initial cursor suffixCursor) taken reached := by
   refine ⟨owned, coverage, ?_⟩
-  have bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
-      cx results selected before loop [] true block block.stmts
-      (@ScalarAssignmentStatementPrefixCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results) :=
-    (accepted_generated_scalar_assignment_statements_agreement (cfg := cfg)
-    (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) (cx := cx) (results := results)
-    selected before loop [] true block fragment).1
   have progress := accepted_generated_block_statements_prefix source selected owned occurrence rows coverage admitted bounded
     realized input extended _ bodyFamily steps
   rcases progress with ⟨_, _, entry⟩ | progressed
@@ -69,7 +94,7 @@ theorem accepted_generated_scalar_assignment_block_prefix {cfg : Cfg} {env : Env
               { state with nextScope := state.nextScope + 1 } with
           | stop stop final => simp only [raw] at evaluated; cases evaluated
           | ok rawFlow rawState =>
-            have normal := fragment.normal raw
+            have normal := normal raw
             subst rawFlow
             simp only [raw] at evaluated
             have prepared : prepareLoopFlow { env with scopes := (block.scope, state.nextScope) :: env.scopes }
@@ -101,6 +126,43 @@ theorem accepted_generated_scalar_assignment_block_prefix {cfg : Cfg} {env : Env
           | interior demanded => exact .interior (.suffix demanded)
           | complete suffixCount prefixSteps residual evaluated post =>
             exact .complete (by omega) prefixSteps residual evaluated post
+
+theorem accepted_generated_scalar_assignment_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block loop [] true block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock loop [] true block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (suffixCursor : DemandRuntimePoint → Prop)
+    (suffixFamily : GeneratedBlockSuffixPrefixFamily source selected map required before loop initial start suffixCursor)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
+    GeneratedBlockPrefixDecomposition source selected map required before loop initial start
+      (GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor) taken reached := by
+  have bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before loop [] true block block.stmts
+      (@ScalarAssignmentStatementPrefixCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results) :=
+    (accepted_generated_scalar_assignment_statements_agreement
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      selected before loop [] true block fragment).1
+  have result := accepted_generated_generic_block_prefix source selected owned occurrence rows coverage admitted bounded realized input extended
+    _ bodyFamily (fun done => fragment.normal done) suffixCursor suffixFamily steps
+  refine ⟨result.sourceOwner, result.coverage, ?_⟩
+  cases result.progress with
+  | interior demanded =>
+    cases demanded with
+    | emitted cursor => exact .interior (.emitted cursor)
+    | suffix cursor => exact .interior (.suffix cursor)
+    | body canonical cursor => exact .interior (.body canonical cursor)
+  | complete count executed residual evaluated post => exact .complete count executed residual evaluated post
 
 theorem accepted_generated_scalar_assignment_unit_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts)
