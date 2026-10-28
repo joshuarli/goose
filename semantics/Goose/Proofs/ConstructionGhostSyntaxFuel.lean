@@ -83,6 +83,10 @@ inductive ArgumentSyntax (config : EvalConfig) : List Param → List Arg → Pro
       (direct : ∀ environment destination, SupportedOperation config (.builder environment destination operand))
       (tail : ArgumentSyntax config parameters arguments) :
       ArgumentSyntax config (⟨parameter, .byValue⟩ :: parameters) (.construct operand :: arguments)
+  | constructRecursive (parameter : Goose.Core.VarId) (parameters : List Param) (operand : Expr) (arguments : List Arg)
+      (child : ValueSyntax config operand) (builder : DeclarationBuilderSyntax config operand)
+      (tail : ArgumentSyntax config parameters arguments) :
+      ArgumentSyntax config (⟨parameter, .byValue⟩ :: parameters) (.construct operand :: arguments)
 
 inductive ViewSyntax (config : EvalConfig) : View → Prop
   | place (place : Place) (child : PlaceSyntax config place) : ViewSyntax config (.of place)
@@ -355,6 +359,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | construct parameter parameters operand arguments child direct tail =>
             exact .argumentConstruct fuel environment vars ⟨parameter, .byValue⟩ parameters operand arguments
               (previous.value environment operand child) (fun destination => .legacy fuel (direct environment destination))
+              (previous.arguments environment vars parameters arguments tail)
+        | constructRecursive parameter parameters operand arguments child builder tail =>
+            exact .argumentConstruct fuel environment vars ⟨parameter, .byValue⟩ parameters operand arguments
+              (previous.value environment operand child) (fun destination => previous.builder environment destination operand builder)
               (previous.arguments environment vars parameters arguments tail)
       · intro environment statement derivation
         cases derivation with
