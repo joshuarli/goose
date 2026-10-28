@@ -1,3 +1,5 @@
+import Goose.Proofs.ConstructionAcceptedCheckedModuleFromGlobals
+import Goose.Proofs.ConstructionAcceptedInitialGlobalsOutcome
 import Goose.Proofs.ConstructionAcceptedMixedAssignModule
 import Goose.Proofs.ConstructionByteModuleLowFuel
 
@@ -7,15 +9,62 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 
-def InitialGlobalsOutcome (fuel : Nat) (config : EvalConfig) : Prop :=
-  ∃ completed types live ambient regions,
-    let outcome := initGlobals fuel config (List.range config.module.globals.size) .initial
-    let after := Goose.Proofs.Exit.stepState outcome
-    completed ≤ config.module.globals.size ∧ AcceptedWorld config completed after ambient types live regions [] ∧
-    (match outcome with
-     | .ok _ _ => ambient = [] ∧ completed = config.module.globals.size ∧ regions = [] ∧ FutureGlobalsClear config completed after
-     | .stop stop _ => completed < config.module.globals.size ∧ runModule fuel config .initial = .stop stop after
-     | .escape .. | .jump .. => False)
+theorem mixedAssign_checkedSequence (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (original : Context) (implementation : Impl)
+    (originalAt : config.module.contexts[config.module.entry]? = some original)
+    (implementationAt : config.module.impls[original.impl]? = some implementation)
+    (form : MixedAssignStatements implementation.body.stmts)
+    (owners : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ implementation.body.stmts →
+      (implementation.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
+    (scalarOwners : ∀ id expression origin, .letS id expression origin ∈ implementation.body.stmts →
+      AcceptedBinaryExpression expression → ∀ descriptor, implementation.vars[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool)
+    (localTargets : ∀ id expression origin, .assign (.var id) expression origin ∈ implementation.body.stmts →
+      ∀ descriptor, implementation.vars[id]? = some descriptor → (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool)
+    (globalTargets : ∀ id expression origin, .assign (.global id) expression origin ∈ implementation.body.stmts →
+      ∀ descriptor, config.module.globals[id]? = some descriptor → (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool)
+    (frame : ConstructionSourceFrame) (activation : RuntimeActivation) (before : ExecutionState)
+    (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (scopeInst : Nat)
+    (world : AcceptedWorld config frame.initialized before [.callChannels activation []] types live regions [])
+    (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation config.module.entry)
+    (impl : frame.source.impl = implementation)
+    (scopes : frame.interpretation.environment.scopes = (implementation.body.scope, scopeInst) :: activation.scopes)
+    (empty : activation.scopes = []) (position : SourcePosition accepted frame (.statements implementation.body.stmts))
+    (initialized : frame.initialized = config.module.globals.size) (limit : frame.typing.globalLimit ≤ config.module.globals.size)
+    (bounded : GlobalEffectTargetsBounded frame.rootCursor.eff config.module.globals.size) :
+    StatementWorldOutcome config accepted frame.initialized [.callChannels activation []] []
+      (execStmts fuel config frame.interpretation.environment implementation.body.stmts before) := by
+  obtain ⟨entry, entryImpl, entryAt, implAt, params, results⟩ := validated_entry config.module accepted.accepted
+  have sameEntry : entry = original := Option.some.inj (entryAt.symm.trans originalAt)
+  subst entry
+  have sameImpl : entryImpl = implementation := Option.some.inj (implAt.symm.trans implementationAt)
+  subst entryImpl
+  have unnamed : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ implementation.body.stmts →
+      (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none := by
+    intro declaration member
+    simp [impl, results]
+  have owners' : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ implementation.body.stmts →
+      (frame.source.impl.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)) := by simpa [impl] using owners
+  have scalarOwners' : ∀ id expression origin, .letS id expression origin ∈ implementation.body.stmts →
+      AcceptedBinaryExpression expression → ∀ descriptor, frame.source.impl.vars[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool := by simpa [impl] using scalarOwners
+  have localTargets' : ∀ id expression origin, .assign (.var id) expression origin ∈ implementation.body.stmts →
+      ∀ descriptor, frame.source.impl.vars[id]? = some descriptor → (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool := by
+    simpa [impl] using localTargets
+  obtain ⟨next, nextTypes, nextLive, nextRegions, initializedEq, extend, finalWorld, finalSource, flow⟩ :=
+    execStmts_mixedAssign_accepted_world form fuel config accepted frame config.module.entry before
+      [.callChannels activation []] types live regions [] world source phase position initialized limit bounded
+      owners' scalarOwners' localTargets' globalTargets unnamed
+  cases executed : execStmts fuel config frame.interpretation.environment implementation.body.stmts before with
+  | stop reason after =>
+    simp only [executed, Goose.Proofs.Exit.stepState] at finalWorld
+    simp only [StatementWorldOutcome, executed]
+    exact ⟨[.callChannels activation []], nextTypes, nextLive, nextRegions, initializedEq ▸ finalWorld⟩
+  | escape address carriers after | jump destination kind after => simp only [executed] at flow
+  | ok result after =>
+    simp only [executed, Goose.Proofs.Exit.stepState] at finalWorld finalSource flow
+    simp only [StatementWorldOutcome, executed]
+    exact ⟨flow, next, nextTypes, nextLive, nextRegions, initializedEq, initializedEq ▸ finalWorld, finalSource⟩
 
 theorem acceptedModuleFromGlobals_lowFuel (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (initial : InitialGlobalsOutcome fuel config)
@@ -23,21 +72,8 @@ theorem acceptedModuleFromGlobals_lowFuel (fuel : Nat) (config : EvalConfig) (ac
     ∃ stop after initialized ambient types live regions,
       runModule fuel config .initial = .stop stop after ∧
       AcceptedWorld config initialized after ambient types live regions [] := by
-  obtain ⟨completed, types, live, ambient, regions, bound, world, final⟩ := initial
-  cases globals : initGlobals fuel config (List.range config.module.globals.size) .initial with
-  | stop stop after =>
-    simp only [globals, Goose.Proofs.Exit.stepState] at world final
-    exact ⟨stop, after, completed, ambient, types, live, regions, final.2, world⟩
-  | ok value after =>
-    cases value
-    simp only [globals, Goose.Proofs.Exit.stepState] at world final
-    obtain ⟨ambientEq, completedEq, regionsEq, clear⟩ := final
-    subst ambient completed regions
-    obtain ⟨stopped, ambient, moduleStop, finalWorld⟩ :=
-      acceptedEntry_lowFuel_afterGlobals fuel config accepted after live world globals low
-    exact ⟨.timeout, stopped, config.module.globals.size, ambient, types, live, [], moduleStop, finalWorld⟩
-  | escape target carriers after | jump target kind after =>
-    simp only [globals] at final
+  exact acceptedCheckedModuleFromGlobals_lowFuel fuel config accepted initial low
+
 
 theorem acceptedModuleFromGlobals_noTail (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (original : Context) (implementation : Impl)
@@ -63,65 +99,8 @@ theorem acceptedModuleFromGlobals_noTail (fuel : Nat) (config : EvalConfig) (acc
     (∃ after initialized types live regions,
       runModule (fuel + 3) config .initial = .ok () after ∧
       AcceptedWorld config initialized after [] types live regions []) := by
-  obtain ⟨completed, initialTypes, initialLive, initialAmbient, initialRegions, bound, initialWorld, final⟩ := initial
-  cases initializedRun : initGlobals (fuel + 3) config (List.range config.module.globals.size) .initial with
-  | stop reason after =>
-    simp only [initializedRun, Goose.Proofs.Exit.stepState] at initialWorld final
-    exact Or.inl ⟨reason, after, completed, initialAmbient, initialTypes, initialLive, initialRegions, final.2, initialWorld⟩
-  | escape address carriers after | jump target kind after => simp only [initializedRun] at final
-  | ok value state =>
-    cases value
-    simp only [initializedRun, Goose.Proofs.Exit.stepState] at initialWorld final
-    obtain ⟨ambientEq, completedEq, regionsEq, clear⟩ := final
-    subst initialAmbient completed initialRegions
-    let live := initialLive
-    have world : AcceptedWorld config config.module.globals.size state [] initialTypes live [] [] := initialWorld
-    obtain ⟨frame, next, activation, types, nextLive, regions, channels, implEq, callStep, bodyResult⟩ :=
-      acceptedMixedAssignEntry_normal_scope fuel config accepted state live original implementation world
-        originalAt implementationAt form owners scalarOwners localTargets globalTargets tail
-    let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
-    let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
-    let entryFrame := entryStatementsFrame config frame activated.nextScope
-    have moduleStep : runModule (fuel + 3) config .initial =
-        (invokeCall (fuel + 3) config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 >>= fun carriers =>
-          publishCarriers 0 carriers) state := by
-      have results := validated_entry config.module accepted.accepted
-      obtain ⟨entry, impl, entryAt, implAt, params, results⟩ := results
-      have sameEntry : entry = original := Option.some.inj (entryAt.symm.trans originalAt)
-      subst entry
-      have sameImpl : impl = implementation := Option.some.inj (implAt.symm.trans implementationAt)
-      subst impl
-      simp only [runModule, initializedRun, bind, getImplementation, originalAt, implementationAt, results,
-        Array.toList_empty, channelsFor, List.mapM_nil, pure]
-    change (match execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before with
-      | .ok (.normal .unit) after => _ | .stop reason after => _ | _ => False) at bodyResult
-    cases outcome : execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before with
-    | escape address carriers after | jump target kind after => simp only [outcome] at bodyResult
-    | stop reason after =>
-      simp only [outcome] at bodyResult
-      obtain ⟨stopped, afterWorld⟩ := bodyResult
-      apply Or.inl
-      refine ⟨reason, after, next.initialized, [.callChannels activation []], types, nextLive, regions, ?_, afterWorld⟩
-      rw [moduleStep]
-      simp only [bind, callStep, finishActivation, stopped]
-    | ok flow after =>
-      simp only [outcome] at bodyResult
-      cases flow with
-      | breaking value | continuing => cases bodyResult
-      | normal value =>
-        cases value with
-        | unit =>
-          obtain ⟨done, afterWorld⟩ := bodyResult
-          let released := releaseScopeState activation frame.source.impl.body.scope activated.nextScope after
-          let finished := { released with activations := released.activations.filter (fun current => current.act != activation.act) }
-          have finishedWorld := afterWorld.finishEntry config next.initialized released activation types _ regions []
-          apply Or.inr
-          refine ⟨finished, next.initialized, types, _, regions, ?_, finishedWorld⟩
-          rw [moduleStep]
-          simp [bind, callStep, finishActivation, done, channels, finishChannels, landCarriersInto, deliverCarriers,
-            publishCarriers, liftConstruction, publishOperation, preflightPublication, ConstructionM.get,
-            bind, pure, Except.pure, Except.bind, finished, released, activated]
-        | _ => cases bodyResult
+  exact acceptedCheckedModuleFromGlobals_noTail fuel config accepted original implementation initial tail originalAt implementationAt
+    (mixedAssign_checkedSequence fuel config accepted original implementation originalAt implementationAt form owners scalarOwners localTargets globalTargets)
 
 
 theorem acceptedModuleFromGlobals_allFuel (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
@@ -145,23 +124,11 @@ theorem acceptedModuleFromGlobals_allFuel (fuel : Nat) (config : EvalConfig) (ac
     ∃ initialized ambient types live regions,
       AcceptedWorld config initialized (Goose.Proofs.Exit.stepState (runModule fuel config .initial)) ambient types live regions [] ∧
       (match runModule fuel config .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
-  by_cases low : fuel < 3
-  · obtain ⟨stop, after, initialized, ambient, types, live, regions, done, world⟩ :=
-      acceptedModuleFromGlobals_lowFuel fuel config accepted initial low
-    simp only [done, Goose.Proofs.Exit.stepState]
-    exact ⟨initialized, ambient, types, live, regions, world, trivial⟩
-  · obtain ⟨remaining, exactFuel⟩ : ∃ remaining, fuel = remaining + 3 := ⟨fuel - 3, by omega⟩
-    subst fuel
-    rcases acceptedModuleFromGlobals_noTail remaining config accepted original implementation initial
-        originalAt implementationAt form owners scalarOwners localTargets globalTargets tail with stopped | done
-    · obtain ⟨stop, after, initialized, ambient, types, live, regions, executed, world⟩ := stopped
-      simp only [executed, Goose.Proofs.Exit.stepState]
-      exact ⟨initialized, ambient, types, live, regions, world, trivial⟩
-    · obtain ⟨after, initialized, types, live, regions, executed, world⟩ := done
-      simp only [executed, Goose.Proofs.Exit.stepState]
-      exact ⟨initialized, [], types, live, regions, world, trivial⟩
+  exact acceptedCheckedModuleFromGlobals_allFuel fuel config accepted original implementation initial tail originalAt implementationAt
+    (fun sequenceFuel => mixedAssign_checkedSequence sequenceFuel config accepted original implementation originalAt implementationAt form owners scalarOwners localTargets globalTargets)
 
 
+#print axioms mixedAssign_checkedSequence
 #print axioms acceptedModuleFromGlobals_allFuel
 #print axioms acceptedModuleFromGlobals_noTail
 #print axioms acceptedModuleFromGlobals_lowFuel
