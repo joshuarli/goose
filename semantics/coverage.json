@@ -677,9 +677,9 @@
  },
  {
   "feature": "Accepted scalar value evaluation",
-  "statement": "At every fuel, checked integer literals, Boolean literals, initialized global reads, recursively nested Boolean negations, integer unary operations and conversions preserve the accepted world and source frame; every successful value satisfies its checked value invariant. Recursively nested binary operations and comparisons over that scalar and unary fragment also preserve these invariants. Numeric aborts and operand stops are included.",
+  "statement": "At every fuel, recursively composed checked integer and Boolean literals, initialized global reads, negations, integer unary operations, conversions, binary operations, comparisons and short-circuit Boolean operations preserve the accepted world and source frame; every successful value satisfies its checked value invariant. Numeric aborts, operand stops and skipped short-circuit operands are included.",
   "assumptions": "Accepted world and source frame, and a checked value expression.",
-  "limits": "Unary operations wrapping binary expressions, other places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "limits": "Other places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; Goose/Proofs/ConstructionAcceptedNotComplete.lean; Goose/Proofs/ConstructionAcceptedNumericComplete.lean; Goose/Proofs/ConstructionAcceptedBinaryComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
@@ -698,8 +698,8 @@
  },
  {
   "feature": "Accepted byte-owner declaration sequences",
-  "statement": "At every fuel and outcome, an actual sequence of checked unnamed byte-owner declarations preserves an accepted world and source frame while extending root types for completed declarations. Successful sequences return normally; escape and jump outcomes are impossible. For a validated module whose globals are byte owners and whose entry statements consist of such declarations, the result applies to its actual entry-body statement execution after successful global initialization.",
-  "assumptions": "Accepted source frame, world and statement-sequence position, implementation phase, checked byte-owner declarations and unnamed results. The entry case derives these from the validated module, successful global initialization and its declared entry body and local types.",
+  "statement": "At every fuel and outcome, an actual sequence of checked unnamed byte-owner declarations preserves an accepted world and source frame while extending root types for completed declarations. Successful sequences return normally; escape and jump outcomes are impossible. For a validated module whose globals are byte owners and whose entry statements consist of such declarations, actual startup either stops during initialization in an accepted world or reaches the entry-body statement execution with this outcome invariant.",
+  "assumptions": "Accepted source frame, world and statement-sequence position, implementation phase, checked byte-owner declarations and unnamed results. The entry case derives these from the validated module and its declared entry body and local types, with sufficient call and checker fuel.",
   "limits": "This covers sequences consisting entirely of byte-owner declarations. The general evaluator induction and other statements remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionByteBatchComplete.lean; Goose/Proofs/ConstructionByteEntryFrameComplete.lean; Goose/Proofs/ConstructionByteEntryComplete.lean; Goose/Proofs/ConstructionByteGlobalEntryBody.lean; scoped Lean 4.35 closure and axiom checks."
  },
