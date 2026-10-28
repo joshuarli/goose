@@ -4695,4 +4695,133 @@ theorem openExitReplacement_destination_capabilities (id : DestinationId) :
     | split
     | intro value
 
+
+private def WriteEvents (id : DestinationId) (before : List ConstructionEvent) (state : ConstructionState) : Prop :=
+  ∃ suffix, state.events = before ++ suffix ∧ ∀ event ∈ suffix, ∃ index, event = .write id index
+
+private def PreservesWriteEvents (id : DestinationId) (before : List ConstructionEvent) (action : ConstructionM α) : Prop :=
+  ∀ state, WriteEvents id before state → WriteEvents id before (action state).finalState
+
+private theorem writeEvents_bind (id : DestinationId) (before : List ConstructionEvent)
+    (action : ConstructionM α) (next : α → ConstructionM β)
+    (first : PreservesWriteEvents id before action)
+    (rest : ∀ value, PreservesWriteEvents id before (next value)) :
+    PreservesWriteEvents id before (action >>= next) := by
+  intro state valid
+  have saved := first state valid
+  cases result : action state with
+  | ok value after =>
+    simp only [bind, result]
+    exact rest value after (by simpa only [result, ConstructionResult.finalState] using saved)
+  | fault reason after => simpa only [bind, result, ConstructionResult.finalState] using saved
+
+private theorem writeEvents_if (id : DestinationId) (before : List ConstructionEvent)
+    (condition : Prop) [Decidable condition] (yes no : ConstructionM α)
+    (first : PreservesWriteEvents id before yes) (second : PreservesWriteEvents id before no) :
+    PreservesWriteEvents id before (if condition then yes else no) := by
+  by_cases selected : condition <;> simp only [selected, ↓reduceIte, first, second]
+
+private theorem writeEvents_lookupDestination (id target : DestinationId) (before : List ConstructionEvent) :
+    PreservesWriteEvents id before (lookupDestination target) := by
+  intro state valid
+  simp only [lookupDestination, ConstructionM.get, bind]
+  cases state.destinations[target]? <;> exact valid
+
+private theorem writeEvents_lookupStorage (id : DestinationId) (before : List ConstructionEvent) (target : StorageId) :
+    PreservesWriteEvents id before (lookupStorage target) := by
+  intro state valid
+  simp only [lookupStorage, ConstructionM.get, bind]
+  cases state.storage[target]? <;> exact valid
+
+private theorem writeEvents_replaceDestination (id target : DestinationId) (before : List ConstructionEvent) (destination : PendingDestination) :
+    PreservesWriteEvents id before (replaceDestination target destination) := by
+  intro state valid
+  simp only [replaceDestination, ConstructionM.get, bind]
+  split <;> exact valid
+
+private theorem writeEvents_replaceStorage (id : DestinationId) (before : List ConstructionEvent) (target : StorageId) (storage : ReceivingStorage) :
+    PreservesWriteEvents id before (replaceStorage target storage) := by
+  intro state valid
+  simp only [replaceStorage, ConstructionM.get, bind]
+  split <;> exact valid
+
+private theorem writeEvents_writableDestination (id target : DestinationId) (before : List ConstructionEvent) :
+    PreservesWriteEvents id before (writableDestination target) := by
+  apply writeEvents_bind id before (lookupDestination target)
+  · exact writeEvents_lookupDestination id target before
+  · intro destination
+    apply writeEvents_bind id before ConstructionM.get
+    · exact fun _ valid => valid
+    · intro state current valid
+      dsimp only
+      split <;> exact valid
+
+private theorem writeEvents_emit (id : DestinationId) (before : List ConstructionEvent) (index : Nat) :
+    PreservesWriteEvents id before (emit (.write id index)) := by
+  intro state valid
+  obtain ⟨suffix, equal, writes⟩ := valid
+  refine ⟨suffix ++ [.write id index], ?_, ?_⟩
+  · simp only [emit, ConstructionM.get, ConstructionM.set, bind, ConstructionResult.finalState, equal, List.append_assoc]
+  · intro event member
+    simp only [List.mem_append, List.mem_singleton] at member
+    rcases member with member | rfl
+    · exact writes event member
+    · exact ⟨index, rfl⟩
+
+theorem writeElement_write_events (id : DestinationId) (bytes : ByteArray) (state : ConstructionState) :
+    ∃ suffix, (writeElement id bytes state).finalState.events = state.events ++ suffix ∧
+      ∀ event ∈ suffix, ∃ index, event = .write id index := by
+  have preserved : PreservesWriteEvents id state.events (writeElement id bytes) := by
+    unfold writeElement
+    repeat' first
+      | with_reducible exact fun _ valid => valid
+      | with_reducible exact writeEvents_writableDestination _ _ _
+      | with_reducible exact writeEvents_lookupDestination _ _ _
+      | with_reducible exact writeEvents_lookupStorage _ _ _
+      | with_reducible exact writeEvents_replaceDestination _ _ _ _
+      | with_reducible exact writeEvents_replaceStorage _ _ _ _
+      | with_reducible exact writeEvents_emit _ _ _
+      | assumption
+      | dsimp only
+      | with_reducible apply writeEvents_bind
+      | with_reducible apply writeEvents_if
+      | split
+      | intro value
+  exact preserved state ⟨[], by simp, by simp⟩
+
+
+private theorem finishDestination_writeEvents (id target : DestinationId) (state : ConstructionState) :
+    ∃ suffix, (finishDestination target state).finalState.events = state.events ++ suffix ∧
+      ∀ event ∈ suffix, ∃ index, event = .write id index := by
+  have preserved : PreservesWriteEvents id state.events (finishDestination target) := by
+    unfold finishDestination
+    repeat' first
+      | with_reducible exact fun _ valid => valid
+      | with_reducible exact writeEvents_writableDestination _ _ _
+      | with_reducible exact writeEvents_lookupDestination _ _ _
+      | with_reducible exact writeEvents_lookupStorage _ _ _
+      | with_reducible exact writeEvents_replaceDestination _ _ _ _
+      | with_reducible exact writeEvents_replaceStorage _ _ _ _
+      | assumption
+      | dsimp only
+      | with_reducible apply writeEvents_bind
+      | with_reducible apply writeEvents_if
+      | split
+      | intro value
+  exact preserved state ⟨[], by simp, by simp⟩
+
+theorem finishDestination_events_unchanged (target : DestinationId) (state : ConstructionState) :
+    (finishDestination target state).finalState.events = state.events := by
+  obtain ⟨first, firstEq, firstWrites⟩ := finishDestination_writeEvents 0 target state
+  obtain ⟨second, secondEq, secondWrites⟩ := finishDestination_writeEvents 1 target state
+  have same : first = second := List.append_cancel_left (firstEq.symm.trans secondEq)
+  subst second
+  cases first with
+  | nil => simpa using firstEq
+  | cons event rest =>
+    obtain ⟨a, aEq⟩ := firstWrites event (by simp)
+    obtain ⟨b, bEq⟩ := secondWrites event (by simp)
+    rw [aEq] at bEq
+    cases bEq
+
 end Goose.Construct
