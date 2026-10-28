@@ -33,7 +33,7 @@ theorem acceptedByteGlobalsEntryBody (fuel : Nat) (config : EvalConfig) (accepte
       invokeCall (fuel + 3) config environment config.module.entry [] [] 0 initialized =
         (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
           deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
-      frame.source.impl = implementation ∧ next.initialized = entryFrame.initialized ∧
+      frame.source.impl = implementation ∧ frame.interpretation.environment = activation ∧ next.initialized = entryFrame.initialized ∧
       RootTypesExtend (declaredRootTypes config.module) types ∧
       AcceptedWorld config next.initialized after [.callChannels activation []] types live regions [] ∧
       AcceptedFrame config accepted next after types ∧
@@ -54,7 +54,7 @@ theorem acceptedByteGlobalsEntryBody (fuel : Nat) (config : EvalConfig) (accepte
     entryByteStatements_accepted_world fuel config accepted frame activation activated before declarations entryLive
       world source position phase results (by simpa only [implementationEq] using body)
       (by simpa only [implementationEq] using owners) checkFuel
-  exact ⟨frame, next, activation, types, live, regions, moduleStep, callStep, implementationEq, initializedEq, extended,
+  exact ⟨frame, next, activation, types, live, regions, moduleStep, callStep, implementationEq, environmentEq, initializedEq, extended,
     finalWorld, finalSource, finalFlow⟩
 
 theorem acceptedByteGlobalsEntryBodyOrStop (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
@@ -85,7 +85,7 @@ theorem acceptedByteGlobalsEntryBodyOrStop (fuel : Nat) (config : EvalConfig) (a
       invokeCall (fuel + 3) config environment config.module.entry [] [] 0 initialized =
         (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
           deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
-      frame.source.impl = implementation ∧ next.initialized = entryFrame.initialized ∧
+      frame.source.impl = implementation ∧ frame.interpretation.environment = activation ∧ next.initialized = entryFrame.initialized ∧
       RootTypesExtend (declaredRootTypes config.module) types ∧
       AcceptedWorld config next.initialized after [.callChannels activation []] types live regions [] ∧
       AcceptedFrame config accepted next after types ∧
@@ -93,12 +93,12 @@ theorem acceptedByteGlobalsEntryBodyOrStop (fuel : Nat) (config : EvalConfig) (a
   rcases acceptedByteGlobalsEntryOrStop fuel config accepted globals with stopped | entry
   · exact Or.inl stopped
   · obtain ⟨initialized, frame, activation, live, initializedRun, rest⟩ := entry
-    obtain ⟨bodyFrame, next, bodyActivation, types, bodyLive, regions, moduleStep, callStep, implementationEq,
+    obtain ⟨bodyFrame, next, bodyActivation, types, bodyLive, regions, moduleStep, callStep, implementationEq, environmentEq,
       initializedEq, extended, finalWorld, finalSource, finalFlow⟩ :=
       acceptedByteGlobalsEntryBody fuel config accepted initialized declarations original implementation globals initializedRun
         originalAt implementationAt body owners checkFuel
     exact Or.inr ⟨initialized, bodyFrame, next, bodyActivation, types, bodyLive, regions, initializedRun, moduleStep,
-      callStep, implementationEq, initializedEq, extended, finalWorld, finalSource, finalFlow⟩
+      callStep, implementationEq, environmentEq, initializedEq, extended, finalWorld, finalSource, finalFlow⟩
 
 #print axioms acceptedByteGlobalsEntryBody
 #print axioms acceptedByteGlobalsEntryBodyOrStop
