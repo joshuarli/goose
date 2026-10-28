@@ -32,6 +32,25 @@ theorem materializeProducer_source_ghost (fuel : Nat) (config : EvalConfig)
   | ok value state => cases value <;> rfl
   | stop | escape | jump => rfl
 
+theorem nonfixedDeclaration_materialized_stop (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (expression : Expr)
+    (origin : Goose.Core.OriginId) (before ready stopped : ExecutionState)
+    (descriptor : LocalVar) (root : Goose.Core.RootInst) (implementation : Impl) (count : Nat)
+    (reason : Goose.Core.Stop)
+    (found : environment.vars[localVar]? = some descriptor)
+    (nonfixed : descriptor.ty.nonfixed = true)
+    (rootResult : rootOf environment localVar before = .ok root ready)
+    (implementationFound : config.module.impls[environment.implementation]? = some implementation)
+    (notNamed : (implementation.results.toList.zipIdx.find? fun (result, _) =>
+      result.namedLocal == some localVar) = none)
+    (known : ordinaryProducerCount? fuel ⟨config.module, environment.vars⟩ expression = some count)
+    (source : evalValue fuel config environment expression ready = .stop reason stopped) :
+    execStmt (fuel + 1) config environment (.letS localVar expression origin) before =
+      .stop reason stopped := by
+  simp only [execStmt, found, bind, rootResult, nonfixed, ↓reduceIte, implementationFound, notNamed,
+    Option.isNone_none, materializeProducer, known, source, pure]
+
+#print axioms nonfixedDeclaration_materialized_stop
 private def witnessConfig : EvalConfig := ⟨.release, ⟨#[], #[], #[], #[], #[], 0, #[], #[], #[]⟩⟩
 private def witnessEnvironment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
 private def witnessExpression : Expr := .blockE
@@ -52,6 +71,27 @@ theorem materializationWitness_sideEffect :
   · refine ⟨stepState (witnessRun .initial), ?_, ?_⟩ <;>
       unfold witnessRun witnessConfig witnessEnvironment witnessExpression stepState <;> cbv
 
+private def declarationConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[], #[⟨"entry", #[], #[], #[⟨"x", .varr (.int .i64), .immutable, 0, 0⟩],
+    .mk 0 [] none, .unknown⟩], #[], 0, #[], #[], #[]⟩⟩
+private def declarationEnvironment : RuntimeActivation := ⟨0, 4,
+  #[⟨"x", .varr (.int .i64), .immutable, 0, 0⟩], [(0, 1)], []⟩
+private def stoppedExpression : Expr := .blockE
+  (.mk 1 [.print [.text "before"] 0, .abort "stop" 0]
+    (some (.arrLit (.arr (.int .i64) 2) [.lit .i64 7, .lit .i64 8] 0))) 0
+
+theorem nonfixedDeclaration_stopWitness :
+    ordinaryProducerCount? 39 ⟨declarationConfig.module, declarationEnvironment.vars⟩ stoppedExpression = some 2 ∧
+    ∃ state, execStmt 40 declarationConfig declarationEnvironment (.letS 0 stoppedExpression 0) .initial =
+      .stop (.abort .userAbort 0) state ∧
+      state.construction.stdout.data.toList = [98, 101, 102, 111, 114, 101, 10] := by
+  constructor
+  · unfold declarationConfig declarationEnvironment stoppedExpression; cbv
+  · refine ⟨stepState (execStmt 40 declarationConfig declarationEnvironment
+        (.letS 0 stoppedExpression 0) .initial), ?_, ?_⟩ <;>
+      unfold stepState declarationConfig declarationEnvironment stoppedExpression <;> cbv
+
+#print axioms nonfixedDeclaration_stopWitness
 #print axioms materializationWitness_sideEffect
 #print axioms materializeProducer_none
 #print axioms materializeProducer_source_ghost
