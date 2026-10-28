@@ -13,6 +13,7 @@ inductive SourceOperation : Type → Type
   | block (environment : RuntimeActivation) (block : Block) : SourceOperation Flow
   | activationBody (activation : RuntimeActivation) (block : Block) : SourceOperation (List Carrier)
   | activation (activation : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
+  | call (environment : RuntimeActivation) (context : Goose.Core.ContextId) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
   | producer (environment : RuntimeActivation) (expression : Expr) : SourceOperation (List Carrier)
 
 def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
@@ -22,6 +23,7 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .block environment block => execBlock fuel config environment [] [] block
   | .activationBody activation block => execActivationBody fuel config activation [] block
   | .activation activation block origin => enterActivation fuel config activation [] block origin
+  | .call environment context origin => invokeCall fuel config environment context [] [] origin
   | .producer environment expression => evalProduce fuel config environment [] expression
 
 def conditionalResult (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
@@ -85,6 +87,51 @@ theorem activationEnter_source (fuel : Nat) (config : EvalConfig) (activation : 
   simp only [enterActivation, activationEnterResult]
   cases config.module.impls[activation.implementation]? <;> rfl
 
+theorem emptyCall_enter (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl) (origin : Goose.Core.OriginId)
+    (before : ExecutionState) (contextFound : config.module.contexts[contextId]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (parametersEmpty : implementation.params = #[]) (resultsEmpty : implementation.results = #[])
+    (depth : before.activations.length < Goose.Core.maxCallDepth) :
+    let activation : RuntimeActivation := ⟨context.impl, before.nextAct, implementation.vars, [], []⟩
+    let activated := { before with nextAct := before.nextAct + 1, activations := activation :: before.activations }
+    invokeCall (fuel + 2) config environment contextId [] [] origin before =
+      (enterActivation (fuel + 1) config activation [] implementation.body origin >>= fun carriers =>
+        deliverCarriers (fuel + 1) config.layout [] carriers origin) activated := by
+  simp only [invokeCall, getImplementation, contextFound, implementationFound, resultsEmpty, parametersEmpty,
+    Array.size_empty, Array.toList_empty, List.length_nil, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte,
+    List.zip_nil_left, List.mapM_nil, evalArguments, freshAct, EvalM.get, EvalM.set, bind, pure,
+    List.map_nil, List.zip_nil_left, Nat.not_le.mpr depth]
+
+theorem emptyCall_depth (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl) (origin : Goose.Core.OriginId)
+    (before : ExecutionState) (contextFound : config.module.contexts[contextId]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (parametersEmpty : implementation.params = #[]) (resultsEmpty : implementation.results = #[])
+    (depth : Goose.Core.maxCallDepth ≤ before.activations.length) :
+    invokeCall (fuel + 2) config environment contextId [] [] origin before = .stop .timeout before := by
+  simp only [invokeCall, getImplementation, contextFound, implementationFound, resultsEmpty, parametersEmpty,
+    Array.size_empty, Array.toList_empty, List.length_nil, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte,
+    List.zip_nil_left, List.mapM_nil, evalArguments, EvalM.get, bind, pure, depth, if_true,
+    Goose.Construct.timeout, EvalM.stop]
+
+theorem emptyCall_one (config : EvalConfig) (environment : RuntimeActivation)
+    (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl) (origin : Goose.Core.OriginId)
+    (before : ExecutionState) (contextFound : config.module.contexts[contextId]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (resultsEmpty : implementation.results = #[]) :
+    invokeCall 1 config environment contextId [] [] origin before = .stop .timeout before := by
+  simp only [invokeCall, getImplementation, contextFound, implementationFound, resultsEmpty,
+    Array.size_empty, Array.toList_empty, List.length_nil, bne_self_eq_false, Bool.false_eq_true, ↓reduceIte,
+    List.zip_nil_left, List.mapM_nil, evalArguments, bind, pure, Goose.Construct.timeout, EvalM.stop]
+
+def callDeliveryResult (fuel : Nat) (config : EvalConfig) (origin : Goose.Core.OriginId) :
+    ExecutionStep (List Carrier) → ExecutionStep (List Carrier)
+  | .ok carriers state => deliverCarriers fuel config.layout [] carriers origin state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
   | timeout (path : List Nat) (operation : SourceOperation α) (before : ExecutionState) :
@@ -137,6 +184,31 @@ inductive SourceHistory (config : EvalConfig) :
           (execActivationBody fuel config activation [] block before)) :
       SourceHistory config (fuel + 1) path (.activation activation block origin) before
         (activationEnterResult fuel config activation block origin before)
+  | callOne {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
+      {origin : Goose.Core.OriginId} {before : ExecutionState} {context : Context} {implementation : Impl}
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (resultsEmpty : implementation.results = #[]) :
+      SourceHistory config 1 path (.call environment contextId origin) before (.stop .timeout before)
+  | callDepth {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
+      {origin : Goose.Core.OriginId} {before : ExecutionState} {context : Context} {implementation : Impl}
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (parametersEmpty : implementation.params = #[]) (resultsEmpty : implementation.results = #[])
+      (depth : Goose.Core.maxCallDepth ≤ before.activations.length) :
+      SourceHistory config (fuel + 2) path (.call environment contextId origin) before (.stop .timeout before)
+  | callEnter {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
+      {origin : Goose.Core.OriginId} {before : ExecutionState} {context : Context} {implementation : Impl}
+      {outcome : ExecutionStep (List Carrier)}
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (parametersEmpty : implementation.params = #[]) (resultsEmpty : implementation.results = #[])
+      (depth : before.activations.length < Goose.Core.maxCallDepth)
+      (child : SourceHistory config (fuel + 1) (path ++ [0])
+        (.activation ⟨context.impl, before.nextAct, implementation.vars, [], []⟩ implementation.body origin)
+        { before with nextAct := before.nextAct + 1, activations := (⟨context.impl, before.nextAct, implementation.vars, [], []⟩ : RuntimeActivation) :: before.activations } outcome) :
+      SourceHistory config (fuel + 2) path (.call environment contextId origin) before
+        (callDeliveryResult (fuel + 1) config origin outcome)
   | expression {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -160,7 +232,7 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
@@ -193,6 +265,17 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   | @activation fuel path activation block origin before body ihBody =>
       simp only [execute]
       exact activationEnter_source fuel config activation block origin before
+  | callOne contextFound implementationFound resultsEmpty =>
+      exact emptyCall_one _ _ _ _ _ _ _ contextFound implementationFound resultsEmpty
+  | callDepth contextFound implementationFound parametersEmpty resultsEmpty depth =>
+      exact emptyCall_depth _ _ _ _ _ _ _ _ contextFound implementationFound parametersEmpty resultsEmpty depth
+  | @callEnter fuel path environment contextId origin before context implementation outcome contextFound
+      implementationFound parametersEmpty resultsEmpty depth child ih =>
+      simp only [execute] at ih ⊢
+      rw [emptyCall_enter fuel config environment contextId context implementation origin before
+        contextFound implementationFound parametersEmpty resultsEmpty depth]
+      simp only [bind, ih, callDeliveryResult]
+      cases outcome <;> rfl
   | @expression fuel path environment operand origin before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [execStmt, bind, ih, expressionStatementResult]
@@ -275,6 +358,14 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (origin : Goose.Core.OriginId)
       (body : ∀ environment, SupportedOperation config (.statements environment statements)) :
       SupportedOperation config (.activation activation (.mk scope statements none) origin)
+  | call (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (origin : Goose.Core.OriginId)
+      (context : Context) (implementation : Impl)
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (parametersEmpty : implementation.params = #[]) (resultsEmpty : implementation.results = #[])
+      (body : ∀ act, SupportedOperation config
+        (.activation ⟨context.impl, act, implementation.vars, [], []⟩ implementation.body origin)) :
+      SupportedOperation config (.call environment contextId origin)
   | producer (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
       SupportedOperation config (.producer environment expression)
 
@@ -283,7 +374,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -369,6 +460,35 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute]
           rw [activationEnter_source]
           exact .activation body
+      | call environment contextId origin context implementation contextFound implementationFound parametersEmpty resultsEmpty body =>
+          cases fuel with
+          | zero =>
+              simpa only [execute, emptyCall_one config environment contextId context implementation origin before
+                contextFound implementationFound resultsEmpty] using
+                (SourceHistory.callOne contextFound implementationFound resultsEmpty :
+                  SourceHistory config 1 path (.call environment contextId origin) before _)
+          | succ fuel =>
+              by_cases depth : before.activations.length < Goose.Core.maxCallDepth
+              · let activation : RuntimeActivation := ⟨context.impl, before.nextAct, implementation.vars, [], []⟩
+                let activated := { before with nextAct := before.nextAct + 1, activations := activation :: before.activations }
+                have child := ih (.activation activation implementation.body origin) (path ++ [0]) activated (body before.nextAct)
+                have actual := emptyCall_enter fuel config environment contextId context implementation origin before
+                  contextFound implementationFound parametersEmpty resultsEmpty depth
+                simp only [execute] at child ⊢
+                rw [actual]
+                have delivered : (enterActivation (fuel + 1) config activation [] implementation.body origin >>= fun carriers =>
+                    deliverCarriers (fuel + 1) config.layout [] carriers origin) activated =
+                    callDeliveryResult (fuel + 1) config origin
+                      (enterActivation (fuel + 1) config activation [] implementation.body origin activated) := by
+                  simp only [bind, callDeliveryResult]
+                  cases enterActivation (fuel + 1) config activation [] implementation.body origin activated <;> rfl
+                rw [delivered]
+                exact SourceHistory.callEnter contextFound implementationFound parametersEmpty resultsEmpty depth child
+              · have full : Goose.Core.maxCallDepth ≤ before.activations.length := Nat.le_of_not_gt depth
+                simpa only [execute, emptyCall_depth fuel config environment contextId context implementation origin before
+                  contextFound implementationFound parametersEmpty resultsEmpty full] using
+                  (SourceHistory.callDepth contextFound implementationFound parametersEmpty resultsEmpty full :
+                    SourceHistory config (fuel + 2) path (.call environment contextId origin) before _)
       | producer environment supported =>
           exact ProducerHistory.toSource (producerHistory_exists (fuel + 1) config environment path _ before supported)
 
@@ -473,12 +593,54 @@ theorem witness_activationEntry : ∃ after,
     rw [actual] at history
     exact history
 
+private def callWitnessConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[], #[⟨"callee", #[], #[], #[],
+    .mk 0 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none, .unknown⟩],
+    #[⟨0, "callee", [], [], []⟩], 0, #[], #[], #[]⟩⟩
+private def callWitnessContext : Context := ⟨0, "callee", [], [], []⟩
+private def callWitnessImplementation : Impl := ⟨"callee", #[], #[], #[],
+  .mk 0 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none, .unknown⟩
+
+theorem witness_call : ∃ after,
+    invokeCall 40 callWitnessConfig witnessEnvironment 0 [] [] 0 .initial = .ok [] after ∧
+    SourceHistory callWitnessConfig 40 [] (.call witnessEnvironment 0 0) .initial (.ok [] after) := by
+  have bodySupported : ∀ environment, SupportedOperation callWitnessConfig
+      (.statements environment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
+    intro environment
+    exact .sequence environment (.expression environment 0 (.value environment
+      (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
+  have supported : SupportedOperation callWitnessConfig (.call witnessEnvironment 0 0) := by
+    apply SupportedOperation.call witnessEnvironment 0 0 callWitnessContext callWitnessImplementation
+    · rfl
+    · rfl
+    · rfl
+    · rfl
+    · intro act
+      exact .activation _ 0 _ 0 bodySupported
+  have history := history_exists 40 callWitnessConfig (.call witnessEnvironment 0 0) [] .initial supported
+  refine ⟨witnessState (invokeCall 40 callWitnessConfig witnessEnvironment 0 [] [] 0 .initial), ?_, ?_⟩
+  · unfold callWitnessConfig witnessEnvironment witnessState
+    cbv
+  · have actual : invokeCall 40 callWitnessConfig witnessEnvironment 0 [] [] 0 .initial =
+        .ok [] (witnessState (invokeCall 40 callWitnessConfig witnessEnvironment 0 [] [] 0 .initial)) := by
+      unfold callWitnessConfig witnessEnvironment witnessState
+      cbv
+    change SourceHistory callWitnessConfig 40 [] (.call witnessEnvironment 0 0) .initial
+      (invokeCall 40 callWitnessConfig witnessEnvironment 0 [] [] 0 .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_call
+
 #print axioms witness_activationEntry
 
 #print axioms witness_activationBody
 
 #print axioms witness_nestedFill
 
+#print axioms emptyCall_enter
+#print axioms emptyCall_depth
+#print axioms emptyCall_one
 #print axioms activationEnter_source
 #print axioms activationBody_source
 #print axioms history_exists
