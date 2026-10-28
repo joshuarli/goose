@@ -10,6 +10,10 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | timeout (operation : SourceOperation α) : FuelSupport config 0 operation
   | legacy (fuel : Nat) {operation : SourceOperation α} (supported : SupportedOperation config operation) :
       FuelSupport config fuel operation
+  | aggregate (fuel : Nat) (environment : RuntimeActivation) (expression : Expr) (operands : List Expr)
+      (shape : ValueAggregate expression operands)
+      (children : ∀ operand ∈ operands, FuelSupport config fuel (.value environment operand)) :
+      FuelSupport config (fuel + 1) (.value environment expression)
   | unary (fuel : Nat) (environment : RuntimeActivation) (operation : Goose.Core.UnOp) (operand : Expr) (origin : Goose.Core.OriginId)
       (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.value environment (.un operation operand origin))
@@ -203,6 +207,17 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
   | succ fuel ih =>
       cases supported with
       | legacy fuel supported => exact history_exists (fuel + 1) config _ path before supported
+      | aggregate _ environment expression operands shape childrenSupported =>
+          refine .aggregate fuel path environment expression operands before shape ?_
+          intro outcome visits replay visit member
+          have inMapped : visit.operand ∈ visits.map Goose.Proofs.ConstructionInvocationReplay.Invocation.operand := List.mem_map_of_mem member
+          rw [replay.sourceOrder] at inMapped
+          have inOperands : visit.operand ∈ operands := List.mem_of_mem_take inMapped
+          have child := ih (.value environment visit.operand) (path ++ [visit.ordinal]) visit.before
+            (childrenSupported visit.operand inOperands)
+          simp only [execute] at child
+          rw [← Goose.Proofs.ConstructionGhostInvocation.visit_executes replay visit member]
+          exact child
       | unary _ environment operation operand origin childSupported =>
           exact .unary (ih (.value environment operand) (path ++ [0]) before childSupported)
       | conversion _ environment kind target operand origin childSupported =>

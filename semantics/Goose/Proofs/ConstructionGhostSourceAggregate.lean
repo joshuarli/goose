@@ -1,7 +1,7 @@
-import Goose.Proofs.ConstructionGhostSourceMutual
+import Goose.Proofs.ConstructionGhostSourceFuel
 
 namespace Goose.Proofs.ConstructionGhostSourceAggregate
-open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual
+open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInvocation
 
 def aggregateResult (expression : Expr) : ExecutionStep (List Value) → ExecutionStep Value
@@ -13,10 +13,10 @@ def aggregateResult (expression : Expr) : ExecutionStep (List Value) → Executi
   | .escape address carriers state => .escape address carriers state
   | .jump target kind state => .jump target kind state
 
-theorem aggregate_replay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+theorem aggregate_fuelReplay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (path : List Nat) (expression : Expr) (operands : List Expr) (before : ExecutionState)
     (shape : ValueAggregate expression operands)
-    (supported : ∀ operand ∈ operands, SupportedOperation config (.value environment operand)) :
+    (supported : ∀ operand ∈ operands, FuelSupport config fuel (.value environment operand)) :
     ∃ mapped visits,
       OperandReplay (evalValue fuel config environment) 0 operands [] before mapped visits ∧
       (∀ visit ∈ visits, SourceHistory config fuel (path ++ [visit.ordinal])
@@ -38,16 +38,32 @@ theorem aggregate_replay (fuel : Nat) (config : EvalConfig) (environment : Runti
         exact ⟨mapped, visits, replay, by cases mapped <;> simpa [aggregateResult] using source⟩
   obtain ⟨mapped, visits, replay, execution⟩ := execution
   refine ⟨mapped, visits, replay, ?_, replay.sourceOrder, replay.once, execution,
-    history_exists (fuel + 1) config _ path before (.aggregate environment expression operands shape supported)⟩
+    fuelHistory_exists (fuel + 1) config _ path before (.aggregate fuel environment expression operands shape supported)⟩
   intro visit member
   have mappedMember : visit.operand ∈ visits.map Invocation.operand := List.mem_map_of_mem member
   rw [replay.sourceOrder] at mappedMember
   have operandMember : visit.operand ∈ operands := List.mem_of_mem_take mappedMember
-  have child := history_exists fuel config (.value environment visit.operand) (path ++ [visit.ordinal]) visit.before
+  have child := fuelHistory_exists fuel config (.value environment visit.operand) (path ++ [visit.ordinal]) visit.before
     (supported visit.operand operandMember)
   simp only [execute] at child
   rw [← visit_executes replay visit member]
   exact child
+
+theorem aggregate_replay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (expression : Expr) (operands : List Expr) (before : ExecutionState)
+    (shape : ValueAggregate expression operands)
+    (supported : ∀ operand ∈ operands, SupportedOperation config (.value environment operand)) :
+    ∃ mapped visits,
+      OperandReplay (evalValue fuel config environment) 0 operands [] before mapped visits ∧
+      (∀ visit ∈ visits, SourceHistory config fuel (path ++ [visit.ordinal])
+        (.value environment visit.operand) visit.before visit.outcome) ∧
+      visits.map Invocation.operand = operands.take visits.length ∧
+      (visits.map Invocation.ordinal).Nodup ∧
+      evalValue (fuel + 1) config environment expression before = aggregateResult expression mapped ∧
+      SourceHistory config (fuel + 1) path (.value environment expression) before
+        (evalValue (fuel + 1) config environment expression before) :=
+  aggregate_fuelReplay fuel config environment path expression operands before shape
+    (fun operand member => .legacy fuel (supported operand member))
 
 private def witnessContext : Context := ⟨0, "source", [], [], []⟩
 private def witnessImplementation : Impl := ⟨"source", #[], #[], #[], .mk 0 [.print [.text "x"] 0] none, .unknown⟩
@@ -93,5 +109,6 @@ theorem witness_aggregateSourceOrder : ∃ mapped visits state,
 
 #print axioms witness_aggregateSourceOrder
 
+#print axioms aggregate_fuelReplay
 #print axioms aggregate_replay
 end Goose.Proofs.ConstructionGhostSourceAggregate

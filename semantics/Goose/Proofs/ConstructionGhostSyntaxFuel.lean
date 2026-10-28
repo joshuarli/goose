@@ -8,6 +8,8 @@ mutual
 inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | base {expression : Expr} (supported : Goose.Proofs.ConstructionGhostSourceTransition.SupportedValue expression) :
       ValueSyntax config expression
+  | aggregate (expression : Expr) (operands : List Expr) (shape : ValueAggregate expression operands)
+      (children : ∀ operand ∈ operands, ValueSyntax config operand) : ValueSyntax config expression
   | unary (operation : Goose.Core.UnOp) (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
       ValueSyntax config (.un operation operand origin)
   | conversion (kind : Goose.Core.ConvKind) (target : Ty) (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
@@ -202,6 +204,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
       · intro environment expression derivation
         cases derivation with
         | base supported => exact .legacy (fuel + 1) (.value environment supported)
+        | aggregate expression operands shape children =>
+            exact .aggregate fuel environment expression operands shape
+              (fun operand member => previous.value environment operand (children operand member))
         | unary operation operand origin child => exact .unary fuel environment operation operand origin (previous.value environment operand child)
         | conversion kind target operand origin child => exact .conversion fuel environment kind target operand origin (previous.value environment operand child)
         | negation operand child => exact .negation fuel environment operand (previous.value environment operand child)
