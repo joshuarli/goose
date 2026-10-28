@@ -37,6 +37,7 @@ theorem acceptedRegisterTwoParameterCallBody (config : EvalConfig) (accepted : A
       freshAct state = .ok activation.act { state with nextAct := state.nextAct + 1 } ∧
       freshScope activated = .ok activated.nextScope { activated with nextScope := activated.nextScope + 1 } ∧
       bindAll activation.act state.nextScope [(first.var, firstValue), (second.var, secondValue)] scopeState = .ok () after ∧
+      RootTypesExtend types afterTypes ∧
       AcceptedWorld config config.module.globals.size after (.callChannels activation [] :: ambient) afterTypes
         (fun other => other = rootSecond ∨ other = rootFirst ∨ live other) regions pending ∧
       AcceptedFrame config accepted (entryStatementsFrame config frame state.nextScope) after afterTypes ∧
@@ -70,7 +71,7 @@ theorem acceptedRegisterTwoParameterCallBody (config : EvalConfig) (accepted : A
     simpa [advanceLocalFrame, parameterScopeFrame, ← compatible.sourceVariables, sameImpl] using secondDeclared
   have scopedWorld := scopeWorld
   rw [sameImpl] at scopedWorld scopeSource
-  obtain ⟨after, bound, afterWorld, afterSource⟩ := bindAll_two_freshScalars_accepted scopedWorld scopeSource
+  obtain ⟨after, bound, extended, afterWorld, afterSource⟩ := bindAll_two_freshScalars_accepted scopedWorld scopeSource
     0 1 firstDescriptor secondDescriptor state.nextScope firstValue secondValue
     (by simp [parameterScopeFrame, cursor]) (by simp [parameterScopeFrame, counter]) typedFirst (resolved 0 first firstAt firstId)
     firstScalar firstRepresented firstPointers
@@ -99,8 +100,9 @@ theorem acceptedRegisterTwoParameterCallBody (config : EvalConfig) (accepted : A
     have position := SourcePosition.instantiate statementsPosition
       (frame.interpretation.enterScope frame.source.impl.body.scope state.nextScope) frame.initialized
     simpa [entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, sameImpl] using position
-  refine ⟨frame, activation, after, sameImpl, initialized, phase, environment, act, scopes, channels, freshActStep, freshScopeStep, ?_, ?_, ?_, position⟩
+  refine ⟨frame, activation, after, sameImpl, initialized, phase, environment, act, scopes, channels, freshActStep, freshScopeStep, ?_, ?_, ?_, ?_, position⟩
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment, firstId, secondId, scopeState] using bound
+  · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment] using extended
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment, initialized] using afterWorld
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment] using finalSource'
 

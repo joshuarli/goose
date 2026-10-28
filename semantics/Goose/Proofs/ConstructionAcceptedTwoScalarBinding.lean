@@ -46,6 +46,9 @@ theorem bindAll_two_freshScalars_accepted {config : EvalConfig} {accepted : Acce
     (secondPointers : PointerTypedValue types secondDescriptor.ty secondValue) :
     ∃ after,
       bindAll frame.interpretation.environment.act scope [(first, firstValue), (second, secondValue)] before = .ok () after ∧
+      RootTypesExtend types (registerRootType
+        (registerRootType types (.local frame.interpretation.environment.act scope first) firstDescriptor.ty)
+        (.local frame.interpretation.environment.act scope second) secondDescriptor.ty) ∧
       AcceptedWorld config frame.initialized after ambient
         (registerRootType (registerRootType types (.local frame.interpretation.environment.act scope first) firstDescriptor.ty)
           (.local frame.interpretation.environment.act scope second) secondDescriptor.ty)
@@ -60,12 +63,14 @@ theorem bindAll_two_freshScalars_accepted {config : EvalConfig} {accepted : Acce
   have nextPointers := secondPointers.types_extend types _ extended secondDescriptor.ty secondValue
   have secondAtMiddle := rootOf_transfer frame.interpretation second before middle
     (.local frame.interpretation.environment.act scope second) secondResolved
-  obtain ⟨after, secondBound, _, afterWorld, afterSource⟩ := bindAll_freshScalar_accepted (frame := advanceLocalFrame frame first) middleWorld middleSource
+  obtain ⟨after, secondBound, extendedSecond, afterWorld, afterSource⟩ := bindAll_freshScalar_accepted (frame := advanceLocalFrame frame first) middleWorld middleSource
     second secondDescriptor scope secondValue secondRootOrder secondTypingOrder secondDeclared
     (by simpa [advanceLocalFrame] using secondAtMiddle) secondScalar secondRepresented nextPointers
-  refine ⟨after, ?_, ?_, ?_⟩
+  refine ⟨after, ?_, ?_, ?_, ?_⟩
   · apply bindAll_two_of_single _ _ _ _ _ _ _ middle _ firstBound
     simpa [advanceLocalFrame] using secondBound
+  · intro root ty present
+    exact extendedSecond root ty (extended root ty present)
   · simpa [advanceLocalFrame] using afterWorld
   · simpa [advanceLocalFrame] using afterSource
 
