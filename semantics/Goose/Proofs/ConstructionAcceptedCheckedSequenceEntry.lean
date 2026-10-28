@@ -8,8 +8,8 @@ open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionRepresentation
 
 theorem acceptedEntry_checkedSequenceWithScopes (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (state : ExecutionState) (live : Goose.Core.RootInst → Prop) (original : Context) (implementation : Impl)
-    (world : AcceptedWorld config config.module.globals.size state [] (declaredRootTypes config.module) live [] [])
+    (state : ExecutionState) (live : Goose.Core.RootInst → Prop) {initialTypes : RootTypes} (original : Context) (implementation : Impl)
+    (world : AcceptedWorld config config.module.globals.size state [] initialTypes live [] [])
     (originalAt : config.module.contexts[config.module.entry]? = some original)
     (implementationAt : config.module.impls[original.impl]? = some implementation)
     (sequence : ∀ (frame : ConstructionSourceFrame) (activation : RuntimeActivation) (before : ExecutionState)
@@ -37,7 +37,7 @@ theorem acceptedEntry_checkedSequenceWithScopes (fuel : Nat) (config : EvalConfi
         (execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before) := by
   obtain ⟨frame, activation, initialEq, environmentEq, act, scopes, channels, freshActed, freshScope, frameWorld, source,
     position, phase, parameters, results, entry, entryAt, implAt, implId, vars⟩ :=
-    acceptedEntryPushedStatements_withInitialized config accepted state [] (declaredRootTypes config.module) live [] [] world
+    acceptedEntryPushedStatements_withInitialized config accepted state [] initialTypes live [] [] world
   have entryEq : entry = original := Option.some.inj (entryAt.symm.trans originalAt)
   subst entry
   have implementationEq : frame.source.impl = implementation := Option.some.inj (implAt.symm.trans implementationAt)
@@ -72,7 +72,7 @@ theorem acceptedEntry_checkedSequenceWithScopes (fuel : Nat) (config : EvalConfi
   let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
   let entryFrame := entryStatementsFrame config frame activated.nextScope
   let full := entryFrame
-  let types := declaredRootTypes config.module
+  let types := initialTypes
   have fullSource : AcceptedFrame config accepted full before types := source
   have fullWorld : AcceptedWorld config full.initialized before [.callChannels activation []] types live [] [] := frameWorld
   have initialized : full.initialized = config.module.globals.size := by
@@ -95,8 +95,8 @@ theorem acceptedEntry_checkedSequenceWithScopes (fuel : Nat) (config : EvalConfi
   simpa [full, entryFrame, activated, before, implementationEq] using outcome
 
 theorem acceptedEntry_checkedSequence (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (state : ExecutionState) (live : Goose.Core.RootInst → Prop) (original : Context) (implementation : Impl)
-    (world : AcceptedWorld config config.module.globals.size state [] (declaredRootTypes config.module) live [] [])
+    (state : ExecutionState) (live : Goose.Core.RootInst → Prop) {initialTypes : RootTypes} (original : Context) (implementation : Impl)
+    (world : AcceptedWorld config config.module.globals.size state [] initialTypes live [] [])
     (originalAt : config.module.contexts[config.module.entry]? = some original)
     (implementationAt : config.module.impls[original.impl]? = some implementation)
     (sequence : ∀ (frame : ConstructionSourceFrame) (activation : RuntimeActivation) (before : ExecutionState)
