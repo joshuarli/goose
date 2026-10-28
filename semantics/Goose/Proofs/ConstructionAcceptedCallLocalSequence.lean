@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedCallLocalPrefix
+import Goose.Proofs.ConstructionAcceptedCallLocalSuffix
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -52,78 +52,27 @@ theorem execStmts_callLocal_scalarTail (fuel checkFuel : Nat) (config : EvalConf
        | .ok flow _ => nextAmbient = ambient ∧ flow = .normal .unit ∧ SourcePosition accepted next (.statements []) ∧
            ScalarLocalReplay frame next (.letS id (.call target [] callOrigin) statementOrigin :: rest)
        | .stop .. => True | .escape .. | .jump .. => False) := by
-  obtain ⟨_, _, allRoots, _, rootedAll⟩ := position.checked accepted frame _
-  obtain ⟨middleRoots, headRooted, tailRooted⟩ := rpStmts_cons rootedAll
-  have headAvailable : ∀ after, rpStmt frame.source (.letS id (.call target [] callOrigin) statementOrigin) frame.rootCursor = .ok ((), after) →
-      GlobalEffectsAvailable frame.interpretation frame.initialized after.eff := by
-    intro after rooted
-    have same : after = middleRoots := (Prod.mk.inj (Except.ok.inj (rooted.symm.trans headRooted))).2
-    subst after
-    have included := rpStmts_effectTargetsIncluded tailRooted
-    intro target member global rooted
-    exact available allRoots rootedAll target (included member) global rooted
-  have headOutcome := execStmt_recursiveRegisterCallLocal_prefix fuel checkFuel config accepted frame state ambient types live regions pending
+  apply execStmts_callLocal_fromSuffix fuel checkFuel config accepted frame state ambient types live regions pending
     id statementOrigin target callOrigin rest context callee ty scope scopeInst outerScopes world source contextAt calleeAt parameters results
-    scalarTy localScalar nesting position headAvailable scopes frontier frontierClock frontierAct invoked
-  cases head : execStmt fuel config frame.interpretation.environment (.letS id (.call target [] callOrigin) statementOrigin) state with
-  | stop reason after =>
-    simp only [head] at headOutcome
-    obtain ⟨nextAmbient, nextTypes, nextLive, extend, finalWorld, finalSource, acts, scopeClocks, observed⟩ := headOutcome
-    simp only [execStmts, bind, head, Goose.Proofs.Exit.stepState]
-    exact ⟨frame, nextTypes, nextLive, nextAmbient, rfl, extend, acts, scopeClocks, finalWorld, finalSource, observed, trivial⟩
-  | escape address carriers after | jump destination kind after => simp only [head] at headOutcome
-  | ok flow middle =>
-    simp only [head] at headOutcome
-    obtain ⟨normal, nextTypes, nextLive, extend, middleWorld, ⟨rootsAfter, middleRooted, middleTyped, cursor,
-      middleSource, middlePosition⟩, acts, scopeClocks, observed⟩ := headOutcome
-    subst flow
-    have sameRoots : rootsAfter = middleRoots := (Prod.mk.inj (Except.ok.inj (middleRooted.symm.trans headRooted))).2
-    let nextFrame := { advanceLocalFrame { frame with typingFuel := checkFuel + 2 } id with rootCursor := rootsAfter }
-    have remainingAvailable : ∀ final, rpStmts nextFrame.source rest nextFrame.rootCursor = .ok ((), final) →
-        GlobalEffectsAvailable nextFrame.interpretation nextFrame.initialized final.eff := by
-      intro final checked
-      have equal : final = allRoots := by
-        have checked' : rpStmts frame.source rest middleRoots = .ok ((), final) := by
-          simpa [nextFrame, advanceLocalFrame, sameRoots] using checked
-        exact (Prod.mk.inj (Except.ok.inj (checked'.symm.trans tailRooted))).2
-      subst final
-      simpa [nextFrame, advanceLocalFrame] using available allRoots rootedAll
-    have remainingScalar : ∀ id expression origin, .letS id expression origin ∈ rest →
-        ∀ descriptor, nextFrame.source.impl.vars[id]? = some descriptor →
-          (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool := by
-      intro id expression origin member descriptor found
-      exact tailScalar id expression origin member descriptor found
-    obtain ⟨finalFrame, finalTypes, finalLive, initializedEq, finalExtended, finalActs, finalScopes, finalWorld, finalSource, finalObserved, finalFlow⟩ :=
-      execStmts_scalarLocal_prefix_observed tailForm frontier fuel config accepted nextFrame contextId middle ambient nextTypes nextLive regions pending
-        (by simpa [nextFrame, advanceLocalFrame] using frontierAct) middleWorld middleSource
-        (by simpa [nextFrame, advanceLocalFrame] using phase) middlePosition remainingAvailable remainingScalar
-    simp only [execStmts, bind, head] at finalFlow finalActs finalScopes finalWorld finalSource finalObserved ⊢
-    cases tailRun : execStmts fuel config nextFrame.interpretation.environment rest middle with
-    | stop reason after =>
-      have tailRun' : execStmts fuel config frame.interpretation.environment rest middle = .stop reason after := by
-        simpa [nextFrame, advanceLocalFrame] using tailRun
-      simp only [tailRun, tailRun'] at finalFlow finalActs finalScopes finalWorld finalSource finalObserved ⊢
-      exact ⟨finalFrame, finalTypes, finalLive, ambient, initializedEq,
-        (fun root ty found => finalExtended root ty (extend root ty found)), finalActs ▸ acts, finalScopes ▸ scopeClocks,
-        finalWorld, finalSource, observed.trans (Nat.le_refl _) finalObserved, trivial⟩
-    | escape address carriers after | jump target kind after => simp [tailRun] at finalFlow
-    | ok result after =>
-      have tailRun' : execStmts fuel config frame.interpretation.environment rest middle = .ok result after := by
-        simpa [nextFrame, advanceLocalFrame] using tailRun
-      simp only [tailRun, tailRun'] at finalFlow finalActs finalScopes finalWorld finalSource finalObserved ⊢
-      obtain ⟨normal, finalPosition, replay⟩ := finalFlow
-      refine ⟨finalFrame, finalTypes, finalLive, ambient, initializedEq,
-        (fun root ty found => finalExtended root ty (extend root ty found)), finalActs ▸ acts, finalScopes ▸ scopeClocks,
-        finalWorld, finalSource, observed.trans (Nat.le_refl _) finalObserved, rfl, normal, finalPosition, ?_⟩
-      obtain ⟨typedRest, rootedRest, sourceSame, interpretationSame⟩ := replay
-      refine ⟨?_, ?_, ?_, ?_⟩
-      · rw [nesting]
-        simp only [typeStatements, bind, StateT.bind, middleTyped, Except.bind]
-        simpa [nextFrame, advanceLocalFrame] using typedRest
-      · simp only [rpStmts, bind, StateT.bind, middleRooted, Except.bind]
-        simpa [nextFrame, advanceLocalFrame] using rootedRest
-      · simpa [nextFrame, advanceLocalFrame] using sourceSame
-      · simpa [nextFrame, advanceLocalFrame] using interpretationSame
+    scalarTy localScalar nesting position available scopes frontier frontierClock frontierAct invoked
+  intro rootsAfter middle nextTypes nextLive nextFrame middleWorld middleSource middlePosition remainingAvailable
+  have remainingScalar : ∀ id expression origin, .letS id expression origin ∈ rest →
+      ∀ descriptor, nextFrame.source.impl.vars[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool := by
+    intro id expression origin member descriptor found
+    apply tailScalar id expression origin member descriptor
+    simpa [nextFrame, advanceLocalFrame] using found
+  obtain ⟨finalFrame, finalTypes, finalLive, initializedEq, finalExtended, finalActs, finalScopes,
+    finalWorld, finalSource, finalObserved, finalFlow⟩ :=
+    execStmts_scalarLocal_prefix_observed tailForm frontier fuel config accepted nextFrame contextId middle ambient nextTypes nextLive regions pending
+      (by simpa [nextFrame, advanceLocalFrame] using frontierAct) middleWorld middleSource
+      (by simpa [nextFrame, advanceLocalFrame] using phase) middlePosition remainingAvailable remainingScalar
+  refine ⟨finalFrame, finalTypes, finalLive, ambient, initializedEq, finalExtended, Nat.le_of_eq finalActs.symm,
+    Nat.le_of_eq finalScopes.symm, finalWorld, finalSource, finalObserved, ?_⟩
+  cases run : execStmts fuel config nextFrame.interpretation.environment rest middle with
+  | ok flow after => simp only [run] at finalFlow ⊢; exact ⟨trivial, finalFlow⟩
+  | stop reason after => simp only [run] at finalFlow ⊢
+  | escape address carriers after | jump target kind after => simp only [run] at finalFlow
 
 #print axioms execStmts_callLocal_scalarTail
 end Goose.Proofs.ConstructionAcceptedExecution
