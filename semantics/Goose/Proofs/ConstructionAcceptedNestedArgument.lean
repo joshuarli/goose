@@ -25,6 +25,11 @@ def NestedArgumentSafe (config : EvalConfig) (frame : ConstructionSourceFrame) (
     (∀ descriptor, config.module.globals[id]? = some descriptor →
       (∃ scalarTy, descriptor.ty = .int scalarTy) ∨ descriptor.ty = .bool)
 
+inductive NestedEffectfulArguments : List Expr → Prop
+  | nil : NestedEffectfulArguments []
+  | cons {expression : Expr} {rest : List Expr} (form : NestedEffectfulArgument expression)
+      (tail : NestedEffectfulArguments rest) : NestedEffectfulArguments (expression :: rest)
+
 theorem checkedNestedEffectfulArgument (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (state : ExecutionState) (types : RootTypes) (ambient : OwnershipAmbient)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
