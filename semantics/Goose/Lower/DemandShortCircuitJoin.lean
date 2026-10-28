@@ -2,7 +2,7 @@ import Goose.Lower.DemandGeneratedShortCircuit
 
 namespace Goose.Lower
 
-open Goose.Core Goose.GIR Goose.Core.Sound
+open Goose.Core Goose.GIR Goose.Core.Sound Goose.Proofs.Fuel
 
 theorem shortCircuit_join_builder {isAnd : Bool} {x : ValueId} {rhs : B ValueId} {le : LEnv} {before : LS}
     {result : ValueId} {built : LS} {point : Pt} {blocks : Array GIR.Block}
@@ -136,6 +136,85 @@ theorem accepted_shortCircuit_skip_boundary {cfg : Cfg} {env : Env} {a b : Expr}
     ExpressionDemandBoundary.of_result result admitted bounded realized whole
   rw [nextEq, frameEq, stateEq, joinEq, parameterEq]
   exact ⟨done, final⟩
+
+theorem accepted_shortCircuit_right_boundary {cfg : Cfg} {env : Env} {a b : Expr} {state middle after : St}
+    (isAnd : Bool) (source : ExprSource cfg env (if isAnd then .and a b else .or a b) state)
+    (left : ExprSource cfg env a state) (right : ExprSource cfg env b middle)
+    {leftFuel rightFuel : Nat} {value : Bool}
+    (leftDone : evalExpr leftFuel cfg env a state = .ok (.bool isAnd) middle)
+    (rightDone : evalExpr rightFuel cfg env b middle = .ok (.bool value) after)
+    {cx : FnCtx} {le : LEnv} {before : LS} {initial leftFrame rightFrame : GIR.Frame} {leftPoint rightPoint start : Pt}
+    {map : RetainedSsaMap} (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size)
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (leftBoundary : ExpressionDemandBoundary left map cx before initial (lowerExpr a le before).2
+      (lowerExpr a le before).1 (.bool isAnd) middle leftPoint leftFrame)
+    (rightBoundary : ExpressionDemandBoundary right map cx (demandShortCircuitRightBefore isAnd a le before) leftFrame
+      (lowerExpr b le (demandShortCircuitRightBefore isAnd a le before)).2
+      (lowerExpr b le (demandShortCircuitRightBefore isAnd a le before)).1 (.bool value) after rightPoint rightFrame)
+    (extended : ExtT (lowerExpr (if isAnd then .and a b else .or a b) le before).2 cx.fn.blocks)
+    {next : Pt} {nextFrame : GIR.Frame} {nextState : St}
+    (actual : Evidence.RuntimeStep cx.cfg cx.fn rightPoint rightFrame after next nextFrame nextState) :
+    ∃ fuel, evalExpr fuel cfg env (if isAnd then .and a b else .or a b) state = .ok (.bool value) nextState ∧
+      ExpressionDemandBoundary source map cx before initial
+        (lowerExpr (if isAnd then .and a b else .or a b) le before).2
+        (lowerExpr (if isAnd then .and a b else .or a b) le before).1 (.bool value) nextState next nextFrame := by
+  let first := lowerExpr a le before
+  let fork := demandShortCircuitFork isAnd a le before
+  let rightBefore := demandShortCircuitRightBefore isAnd a le before
+  let rightBuilt := lowerExpr b le rightBefore
+  let built := lowerExpr (if isAnd then .and a b else .or a b) le before
+  have run : shortCircuit isAnd first.1 (lowerExpr b) le first.2 = built := by cases isAnd <;> rfl
+  have ⟨resultEq, atJoin, stackEq, valsBound⟩ :=
+    shortCircuit_join_builder run leftBoundary.post.pp extended (advB_lowerExpr b)
+  have forkExtended := generated_shortCircuit_fork_extended (right := b) leftBoundary.post.pp extended
+  have jumpExtended := generated_shortCircuit_jump_extended (right := b) leftBoundary.post.pp extended
+  have ⟨rhsEq, joinEq, parameterEq, valsEq, forkStack, forkCurrent, instruction, rhsAt, joinAt⟩ :=
+    scFork_facts (show scFork isAnd first.1 le first.2 = (fork.1, fork.2) from rfl) leftBoundary.post.pp forkExtended
+  have cell := rightBoundary.post.has (rightBuilt.1, .val (.bool value)) (by simp [rightBuilt, rightBefore])
+  obtain ⟨stepFuel, actualStep⟩ := runtimeStep_demandInstructionStep actual
+  have expected := shortCircuit_join_step (state := after)
+    (show scFork isAnd first.1 le first.2 = (fork.1, fork.2) from rfl)
+    leftBoundary.post.pp forkExtended rightBoundary.post.pp jumpExtended cell stepFuel
+  have same := actualStep.deterministic expected
+  have nextEq := congrArg DemandRuntimePoint.point same
+  have frameEq := congrArg DemandRuntimePoint.frame same
+  have stateEq := congrArg DemandRuntimePoint.state same
+  dsimp only at nextEq frameEq stateEq
+  have rhsAdv := advB_lowerExpr b le rightBefore rightBuilt.1 rightBuilt.2 rfl
+  have small : first.2.vals.size ≤ rightBefore.vals.size := by
+    change first.2.vals.size ≤ fork.2.vals.size
+    rw [valsEq]
+    omega
+  have sameBefore : Same first.2.vals.size leftFrame rightFrame := rightBoundary.post.same.mono small
+  have related : Rel cfg env cx rightFrame first.2 := rightBoundary.post.rel.stack_eq (by
+    rw [rhsAdv.stack]
+    exact forkStack.symm)
+  change first.2.vals.size < built.2.vals.size at valsBound
+  have piece : Post cfg env cx first.2 leftFrame built.2
+      (rightFrame.set first.2.vals.size (.val (.bool value))) (first.2.blocks.size + 1, 0)
+      [(built.1, .val (.bool value))] := by
+    rw [resultEq]
+    exact Post.join sameBefore related (Nat.le_refl _) valsBound (Nat.le_of_lt valsBound) stackEq atJoin
+  have whole : Post cfg env cx before initial built.2
+      (rightFrame.set first.2.vals.size (.val (.bool value))) (first.2.blocks.size + 1, 0)
+      [(built.1, .val (.bool value))] := (leftBoundary.post.comp piece).sub (by simp)
+  let fuel := max leftFuel rightFuel
+  have leftDone' : evalExpr fuel cfg env a state = .ok (.bool isAnd) middle :=
+    ((monoAll leftFuel fuel (by dsimp [fuel]; exact Nat.le_max_left _ _)).expr cfg env a state).1 _ _ leftDone
+  have rightDone' : evalExpr fuel cfg env b middle = .ok (.bool value) after :=
+    ((monoAll rightFuel fuel (by dsimp [fuel]; exact Nat.le_max_right _ _)).expr cfg env b middle).1 _ _ rightDone
+  have done : evalExpr (fuel + 1) cfg env (if isAnd then .and a b else .or a b) state =
+      .ok (.bool value) after := by
+    cases isAnd <;> simp [evalExpr, leftDone', rightDone', bind_apply, Core.expectBool, pure_apply]
+  have result := source.result (fuel + 1) (.bool value) done
+  have final : ExpressionDemandBoundary source map cx before initial built.2 built.1 (.bool value)
+      after (first.2.blocks.size + 1, 0) (rightFrame.set first.2.vals.size (.val (.bool value))) :=
+    ExpressionDemandBoundary.of_result result admitted bounded realized whole
+  rw [nextEq, frameEq, stateEq, joinEq, parameterEq]
+  exact ⟨fuel + 1, done, final⟩
+
+#print axioms accepted_shortCircuit_right_boundary
 
 #print axioms accepted_shortCircuit_skip_boundary
 

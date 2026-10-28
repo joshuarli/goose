@@ -514,12 +514,12 @@
   "evidence": "Goose/Lower/DemandGeneratedShortCircuitPrefix.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
-  "feature": "Generated short-circuit skip completion",
+  "feature": "Generated short-circuit branch completion",
   "label": "model-proved",
-  "theorem": "Goose.Lower.shortCircuit_join_builder; Goose.Lower.accepted_shortCircuit_skip_boundary",
-  "statement": "The generated short-circuit join retains its result slot, stack and program point. When the accepted left operand causes a skip, the actual target branch reaches a complete source expression boundary with the same Boolean result and retained demand.",
-  "assumptions": "Accepted source and completed left-operand boundary, realized and bounded retained map, builder extension, and an actual successful target branch.",
-  "limits": "Right-operand completion, whole-expression prefix composition and stopping prefixes remain open. This component does not close TH-LOWER-03.",
+  "theorem": "Goose.Lower.shortCircuit_join_builder; Goose.Lower.accepted_shortCircuit_skip_boundary; Goose.Lower.accepted_shortCircuit_right_boundary",
+  "statement": "The generated short-circuit join retains its result slot, stack and program point. A skipped branch or a completed right operand followed by its actual target jump reaches a complete source expression boundary with the same Boolean result and retained demand.",
+  "assumptions": "Accepted source and completed operand boundaries, realized and bounded retained map, builder extension, and an actual successful target branch or jump. The right case assumes the right operand starts with the left boundary frame.",
+  "limits": "Right-operand interior prefixes, branch-to-operand composition, whole-expression prefix composition and stopping prefixes remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandShortCircuitJoin.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
