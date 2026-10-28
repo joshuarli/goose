@@ -35,9 +35,11 @@ theorem callLocalCycle_graph : RegisterCallGraphWithCallLocals callLocalCycleCon
       simp [callLocalCycleConfig, callLocalCycleModule] at implementationAt
       subst implementation
       apply Or.inr
-      refine ⟨_, 0, 0, 1, 0, 0, [], .read (.var 0), ⟨1, "cycle", [], [[]], []⟩,
-        callLocalCycleHelper, rfl, rfl, .nil, ?_, ?_, ?_, rfl, rfl, rfl, rfl⟩
+      refine ⟨_, 0, 0, 1, 0, 0, [], [], .read (.var 0), ⟨1, "cycle", [], [[]], []⟩,
+        callLocalCycleHelper, rfl, rfl, .nil, .nil, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl⟩
       · repeat constructor
+      · intro id expression origin member
+        cases member
       · intro descriptor found
         simp [callLocalCycleHelper] at found
         subst descriptor

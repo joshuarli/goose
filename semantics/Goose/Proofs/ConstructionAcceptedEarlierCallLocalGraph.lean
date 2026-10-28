@@ -13,10 +13,12 @@ def RegisterCallGraphWithCallLocals (config : EvalConfig) (ty : Ty) : Prop :=
     config.module.impls[context.impl]? = some implementation → implementation.params = #[] →
     implementation.results = #[⟨ty, .register, none⟩] →
     RegisterCalleeFormWithLocals config ty implementation ∨
-      ∃ summary scope id innerTarget callOrigin statementOrigin rest expression innerContext innerCallee,
+      ∃ summary scope id innerTarget callOrigin statementOrigin leading rest expression innerContext innerCallee,
         implementation.summary = .known summary ∧
-        implementation.body = ⟨scope, .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩ ∧
-        ScalarLocalStatements rest ∧ AcceptedBinaryExpression expression ∧
+        implementation.body = ⟨scope, leading ++ .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩ ∧
+        ScalarLocalStatements leading ∧ ScalarLocalStatements rest ∧ AcceptedBinaryExpression expression ∧
+        (∀ id expression origin, .letS id expression origin ∈ leading → ∀ descriptor,
+          implementation.vars[id]? = some descriptor → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool) ∧
         (∀ descriptor, implementation.vars[id]? = some descriptor → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool) ∧
         (∀ id expression origin, .letS id expression origin ∈ rest → ∀ descriptor,
           implementation.vars[id]? = some descriptor → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool) ∧
@@ -155,8 +157,8 @@ theorem invokeCall_recursive_register_callLocal_earlier (fuel : Nat) (config : E
   
             exact invokeCall_register_compose_earlier fuel config caller.initialized caller.interpretation.environment state ambient types live regions pending
               state.nextAct target context implementation ty origin world source.futureGlobals contextAt implementationAt parameters results bodySafe
-    · obtain ⟨summary, scope, id, innerTarget, callOrigin, statementOrigin, rest, expression, innerContext, innerCallee,
-        known, body, restForm, tailForm, scalarLocal, scalarRest, innerContextAt, innerCalleeAt, innerParameters, innerResults⟩ := callLocal
+    · obtain ⟨summary, scope, id, innerTarget, callOrigin, statementOrigin, leading, rest, expression, innerContext, innerCallee,
+        known, body, leadingForm, restForm, tailForm, scalarLeading, scalarLocal, scalarRest, innerContextAt, innerCalleeAt, innerParameters, innerResults⟩ := callLocal
       cases fuel with
       | zero =>
         simp only [invokeCall, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
@@ -177,11 +179,16 @@ theorem invokeCall_recursive_register_callLocal_earlier (fuel : Nat) (config : E
               target context implementation ty source world contextAt implementationAt parameters
           have scopeEmpty : frame.interpretation.environment.scopes = [] := by rw [interpretation]; rfl
           have channelEq : frame.interpretation.environment.channels = [.register ty] := by rw [interpretation]; rfl
-          have bodyEq : frame.source.impl.body = ⟨scope, .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩ := by simpa [impl] using body
-          have bodyPosition : SourcePosition accepted frame (.block ⟨scope, .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩) := by simpa [bodyEq] using position
+          have bodyEq : frame.source.impl.body = ⟨scope, leading ++ .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩ := by simpa [impl] using body
+          have bodyPosition : SourcePosition accepted frame (.block ⟨scope, leading ++ .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩) := by simpa [bodyEq] using position
           have effectAvailable := checked.zeroArgument_calleeFrame_effects accepted caller frame target context implementation activation origin
             ty roots typingAfter rootsAfter source.compatible frameSource.compatible contextAt implementationAt parameters summary known
             phase impl interpretation initialized frameBody
+          have leadingScalar : ∀ id expression origin, .letS id expression origin ∈ leading → ∀ descriptor,
+              frame.source.impl.vars[id]? = some descriptor → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool := by
+            intro id expression origin member descriptor present
+            apply scalarLeading id expression origin member descriptor
+            simpa [impl] using present
           have localScalar : ∀ descriptor, frame.source.impl.vars[id]? = some descriptor →
               (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool := by
             intro descriptor present
@@ -196,17 +203,17 @@ theorem invokeCall_recursive_register_callLocal_earlier (fuel : Nat) (config : E
           obtain ⟨bodyDeclared, validatedType⟩ := validated_scalarRegister_body_typing config.module context.impl implementation
             accepted.accepted implementationAt ty results scalar tailPresent
           have actualType : ∃ declared, typeBlock frame.typingFuel frame.typing
-              ⟨scope, .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩ frame.typingCounter = .ok ([ty], declared) := by
+              ⟨scope, leading ++ .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩ frame.typingCounter = .ok ([ty], declared) := by
             refine ⟨bodyDeclared, ?_⟩
             conv => lhs; rw [← frameBody]
             simpa [implementationBodyFrame, impl, body, parameters] using validatedType
           have actualParameters : frame.source.impl.params = #[] := by simpa [impl] using parameters
           have sameEnvironment : frame.interpretation.environment = activation := by rw [interpretation]; rfl
           obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopeClocks, bodyWorld, bodyClear, observed, bodyResult⟩ :=
-            execActivationBody_callLocal_scalarTail fuel config accepted frame target pushed (.callChannels activation [] :: ambient)
-              types live regions pending state.nextAct scope id innerTarget callOrigin statementOrigin rest expression ty innerContext innerCallee
+            execActivationBody_callLocal_withPrefix fuel config accepted frame target pushed (.callChannels activation [] :: ambient)
+              types live regions pending state.nextAct scope id innerTarget callOrigin statementOrigin leading rest expression ty innerContext innerCallee
               frameWorld frameSource phase actualParameters scopeEmpty cursor frameBody bodyEq (by rw [interpretation]; exact Nat.le_refl _)
-              (by simp [pushed]) channelEq bodyPosition tailForm restForm localScalar restScalar actualType (by simpa [bodyEq] using effectAvailable)
+              (by simp [pushed]) channelEq bodyPosition tailForm leadingForm restForm leadingScalar localScalar restScalar actualType (by simpa [bodyEq] using effectAvailable)
               innerContextAt innerCalleeAt innerParameters innerResults scalar (by
                 intro callFuel lower nextFrame before currentTypes currentLive roots typingAfter rootsAfter currentWorld currentSource checked
                 obtain ⟨nt, nl, na, ext, ac, sc, w, cl, obs, res⟩ := ih callFuel (by omega) nextFrame before
@@ -231,7 +238,7 @@ theorem invokeCall_recursive_register_callLocal_earlier (fuel : Nat) (config : E
             · simpa only [sameEnvironment, body] using observed
             · cases execution : execActivationBody fuel config activation [] implementation.body pushed with
               | ok carriers after =>
-                have execution' : execActivationBody fuel config activation [] ⟨scope, .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩ pushed = .ok carriers after := by simpa [body] using execution
+                have execution' : execActivationBody fuel config activation [] ⟨scope, leading ++ .letS id (.call innerTarget [] callOrigin) statementOrigin :: rest, some expression⟩ pushed = .ok carriers after := by simpa [body] using execution
                 simp only [sameEnvironment, execution'] at bodyResult
                 simpa [execution] using bodyResult
               | stop reason after => simp [execution]
