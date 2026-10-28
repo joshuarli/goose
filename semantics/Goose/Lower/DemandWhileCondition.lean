@@ -52,6 +52,11 @@ theorem generated_while_condition_extended {le : LEnv} {header : BlockId} {befor
   rw [← same]
   exact conditionExtended
 
+theorem demandWhileHeaderBefore_ext (le : LEnv) (before : LS) :
+    before.Ext (demandWhileHeaderBefore le before) := by
+  unfold demandWhileHeaderBefore
+  exact (advB_newBlock0 le before _ _ rfl).ext.trans (advB_emitTerm _ le _ _ _ rfl).ext
+
 theorem accepted_generated_while_initial_condition {cfg : Cfg} {env : Env} {condition : Expr} {body : Core.Block}
     {origin : OriginId} {state : St} (source : StmtSource cfg env (.while condition body origin) state)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before after : LS} {loop : Option LoopCtx}
@@ -84,8 +89,7 @@ theorem accepted_generated_while_initial_condition {cfg : Cfg} {env : Env} {cond
     simpa only [RetainedSsaMap.Realizes, canonical.world] using realized
   have headerExtension : before.Ext headerState := by
     rw [headerEq]
-    unfold demandWhileHeaderBefore
-    exact (advB_newBlock0 (lowerEnv cfg.mod env.vars results) before _ _ rfl).ext.trans (advB_emitTerm _ (lowerEnv cfg.mod env.vars results) _ _ _ rfl).ext
+    exact demandWhileHeaderBefore_ext _ _
   have childInput : GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv headerState frame (header, 0) := by
     have childMetadata : SourceResults child.typingEnv child.rootsEnv results := by
       simpa only [typing, roots] using input.metadata

@@ -5,28 +5,34 @@ namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 
 theorem accepted_generated_while_scalar_call_prefix_family {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
-    {root : DemandNode} {owner : Nat}
+    {root : DemandNode} {owner : Nat} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
     (condition : Expr) (body : Core.Block) (origin : OriginId)
     (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
       { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
     (noValue : body.value = none)
-    (family : GeneratedExpressionPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected none condition (@GeneratedControlProgressCursor cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩)) :
-    ReachableStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected none (.while condition body origin)
+    (family : GeneratedExpressionPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop condition (@GeneratedControlProgressCursor cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩)) :
+    ReachableStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop (.while condition body origin)
       (@WhileCallStatementCursor cfg env caller results root owner selected) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended callerStart taken reached steps
   let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩
   refine ⟨owned, coverage, ?_⟩
-  have lowered : lowerStmt none (.while condition body origin) (lowerEnv cfg.mod env.vars results) before =
-      ((), (lowerStmt none (.while condition body origin) (lowerEnv cfg.mod env.vars results) before).2) := by
-    generalize run : lowerStmt none (.while condition body origin) (lowerEnv cfg.mod env.vars results) before = output
+  have lowered : lowerStmt loop (.while condition body origin) (lowerEnv cfg.mod env.vars results) before =
+      ((), (lowerStmt loop (.while condition body origin) (lowerEnv cfg.mod env.vars results) before).2) := by
+    generalize run : lowerStmt loop (.while condition body origin) (lowerEnv cfg.mod env.vars results) before = output
     cases output with
     | mk returned builder => cases returned; rfl
   obtain ⟨header, headerState, loopRun, headerId, headerEq, headerTarget, headerPost, headerGenerated, headerStep⟩ :=
     generated_while_header_entry lowered input.atPoint extended input.related input.generated
-  have headerInput : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv headerState initial (header, 0) :=
-    ⟨input.metadata, input.loops, headerPost.pp, headerPost.rel, input.moduleEq, input.resultsEq,
-      input.depth, trivial, trivial, headerGenerated, trivial⟩
+  have headerExtension : before.Ext headerState := by
+    rw [headerEq]
+    exact demandWhileHeaderBefore_ext _ _
+  have headerInput : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv headerState initial (header, 0) := by
+    cases loop with
+    | none => exact ⟨input.metadata, input.loops, headerPost.pp, headerPost.rel, input.moduleEq, input.resultsEq,
+        input.depth, trivial, trivial, headerGenerated, trivial⟩
+    | some context => exact ⟨input.metadata, input.loops, headerPost.pp, headerPost.rel, input.moduleEq, input.resultsEq,
+        input.depth, input.targets, input.counter.afterPost headerPost, headerGenerated, input.frames.mono headerExtension⟩
   have headerBounded := bounded.mono headerPost.mono
   have headerRealized : map.Realizes cfg.mod source.world env ⟨(header, 0), initial, state⟩ := by
     simpa only [RetainedSsaMap.Realizes] using realized
@@ -46,7 +52,7 @@ theorem accepted_generated_while_scalar_call_prefix_family {cfg : Cfg} {env : En
       · omega
       · exact .next first executed
       · exact suffix
-      · simp [bind_apply, sourceDone, prepareLoopFlow, prepareReturn, pure_apply]
+      · cases loop <;> simp [bind_apply, sourceDone, prepareLoopFlow, prepareReturn, prepareLoopExit, pure_apply]
       · exact .normal (headerPost.comp finalPost) (source.result sourceFuel _ sourceDone) finalBounded finalRealized
 
 
