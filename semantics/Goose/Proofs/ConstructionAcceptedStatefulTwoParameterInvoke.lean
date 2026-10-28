@@ -1,6 +1,8 @@
 import Goose.Proofs.ConstructionAcceptedStatefulTwoParameterBody
 import Goose.Proofs.ConstructionAcceptedRegisterResultBody
 import Goose.Proofs.ConstructionAcceptedFreshActivation
+import Goose.Proofs.ConstructionAcceptedTwoParameterObservation
+import Goose.Proofs.ConstructionAcceptedUnusedScope
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -8,7 +10,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionRepresentation
 
-theorem statefulTwoParameter_call_world {config : EvalConfig} {accepted : AcceptedModule config}
+theorem statefulTwoParameter_call_worldWithCallerFrame {config : EvalConfig} {accepted : AcceptedModule config}
     (fuel checkFuel : Nat) (frame : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient)
     (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (contextId callOrigin : Nat) (context : Context) (callee : Impl) (first second : Param)
@@ -47,7 +49,8 @@ theorem statefulTwoParameter_call_world {config : EvalConfig} {accepted : Accept
         AcceptedWorld config config.module.globals.size after nextAmbient nextTypes nextLive nextRegions pending
     | .ok carriers after => ∃ value nextTypes nextLive nextRegions, carriers = [.register value] ∧
         ValueRepresentation resultTy value ∧ RootTypesExtend types nextTypes ∧
-        AcceptedWorld config config.module.globals.size after ambient nextTypes nextLive nextRegions pending
+        AcceptedWorld config config.module.globals.size after ambient nextTypes nextLive nextRegions pending ∧
+        AcceptedFrame config accepted frame after nextTypes
     | _ => False := by
   cases fuel with
   | zero =>
@@ -55,7 +58,7 @@ theorem statefulTwoParameter_call_world {config : EvalConfig} {accepted : Accept
     exact ⟨ambient, types, live, regions, (fun _ _ found => found), initialized ▸ world⟩
   | succ fuel =>
     obtain ⟨rightFrame, sameInterpretation, sameInitialized, arguments⟩ :=
-      evalArguments_statefulTwoParameter_body fuel checkFuel frame state ambient types live regions pending contextId callOrigin context callee
+      evalArguments_statefulTwoParameter_bodyWithCallerFrame fuel checkFuel frame state ambient types live regions pending contextId callOrigin context callee
         first second firstDescriptor secondDescriptor scope id origin blockOrigin expression intTy literal right resultTy form rightForm
         world source contextAt calleeAt parameters firstMode secondMode firstDeclared secondDeclared firstScalar secondScalar
         initialized fresh absent nesting position globalScalar
@@ -68,7 +71,7 @@ theorem statefulTwoParameter_call_world {config : EvalConfig} {accepted : Accept
       exact ⟨ambient, types, (fun _ _ found => found), live, regions, initialized ▸ arguments.1⟩
     | ok values argumentState =>
       simp only [evaluated, Goose.Proofs.Exit.stepState] at arguments
-      obtain ⟨argumentWorld, callerSource, firstValue, secondValue, valuesEq, helperFrame, activation, boundState,
+      obtain ⟨argumentWorld, callerSource, originalSource, firstValue, secondValue, valuesEq, helperFrame, activation, boundState,
         helperEq, helperInitialized, phase, environment, act, scopes, channels, freshActStep, freshScopeStep,
         bound, boundExtended, boundWorld, boundSource, bodyPosition⟩ := arguments
       subst values
@@ -85,7 +88,7 @@ theorem statefulTwoParameter_call_world {config : EvalConfig} {accepted : Accept
               simp [evalArguments, expressionStep, bind, timeout, EvalM.stop] at evaluated
           | succ fuel =>
             let pushed := { argumentState with nextAct := argumentState.nextAct + 1, activations := activation :: argumentState.activations }
-            have bodyResult := mixedLocal_registerResultBody_world fuel config accepted helperFrame activation
+            have bodyResult := mixedLocal_registerResultBody_observedWorld fuel config accepted helperFrame activation
               [(first.var, firstValue), (second.var, secondValue)] pushed boundState ambient
               (registerRootType (registerRootType types (.local activation.act argumentState.nextScope 0) firstDescriptor.ty)
                 (.local activation.act argumentState.nextScope 1) secondDescriptor.ty)
@@ -133,14 +136,90 @@ theorem statefulTwoParameter_call_world {config : EvalConfig} {accepted : Accept
                 (fun root ty found => bodyExtended root ty (boundExtended root ty found)), finalWorld⟩
             | ok carriers after =>
               simp only [body] at bodyResult
-              obtain ⟨returned, nextTypes, nextLive, nextRegions, equal, represented, bodyExtended, bodyProtected, finalWorld⟩ := bodyResult
+              obtain ⟨returned, nextTypes, nextLive, nextRegions, equal, represented, bodyExtended, bodyProtected, finalWorld, bodyCounters, bodyObserved⟩ := bodyResult
               subst carriers
               have outer := (initialized ▸ argumentWorld).freshActivationOutside config config.module.globals.size argumentState ambient types live regions pending
               have outer' : OwnershipAmbient.withoutActivation activation.act ambient = ambient := by simpa [act] using outer
               have finished := finalWorld.finishEmptyCall config config.module.globals.size after activation ambient nextTypes nextLive nextRegions pending outer'
+              have bindingObserved := bindAll_two_observations activation.act argumentState.nextScope first.var second.var firstValue secondValue
+                (ownershipResultScopeState activation callee.body.scope pushed) boundState (by simpa [pushed] using bound)
+              have protectedTypes : ∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local argumentState.nextAct scope id) → nextTypes root = types root := by
+                intro root outside
+                have unchanged := bodyProtected root (by simpa [act] using outside)
+                have firstDifferent := outside argumentState.nextScope 0
+                have secondDifferent := outside argumentState.nextScope 1
+                simpa [registerRootType, act, firstDifferent, secondDifferent] using unchanged
+              have counters : argumentState.nextAct ≤ after.nextAct ∧ argumentState.nextScope ≤ after.nextScope := by
+                simp only [pushed, ownershipResultScopeState] at bindingObserved
+                omega
+              have observations : ∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local argumentState.nextAct scope id) →
+                  after.objects.lookup root = argumentState.objects.lookup root ∧ after.objectOrdinals.lookup root = argumentState.objectOrdinals.lookup root := by
+                intro root outside
+                have bodyOutside := bodyObserved root (by simpa [act] using outside)
+                have bindOutside := bindingObserved.2.2 root (by simpa [act] using outside argumentState.nextScope first.var)
+                  (by simpa [act] using outside argumentState.nextScope second.var)
+                exact ⟨bodyOutside.1.trans (by simpa [pushed, ownershipResultScopeState] using bindOutside.1),
+                  bodyOutside.2.trans (by simpa [pushed, ownershipResultScopeState] using bindOutside.2)⟩
+              have callerAfter := originalSource.afterFreshActivation counters.1 counters.2
+                (fun root outside => (observations root outside).1) (fun root outside => (observations root outside).2) protectedTypes
+              have callerFinished := callerAfter.withActivations (after.activations.filter (fun current => current.act != activation.act))
               simp [bind, finishActivation, body, finishChannels, landCarriersInto, deliverCarriers, pure, channels]
               exact ⟨returned, rfl, represented, nextTypes,
-                (fun root ty found => bodyExtended root ty (boundExtended root ty found)), nextLive, nextRegions, finished⟩
+                (fun root ty found => bodyExtended root ty (boundExtended root ty found)), ⟨nextLive, nextRegions, finished⟩, callerFinished⟩
 
+theorem statefulTwoParameter_call_world {config : EvalConfig} {accepted : AcceptedModule config}
+    (fuel checkFuel : Nat) (frame : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient)
+    (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (contextId callOrigin : Nat) (context : Context) (callee : Impl) (first second : Param)
+    (firstDescriptor secondDescriptor : LocalVar) (scope id origin blockOrigin : Nat) (expression : Expr)
+    (intTy : Goose.Core.IntTy) (literal : Int) (right : Expr) (resultTy : Ty) (resultExpression : Expr)
+    (form : AcceptedBinaryExpression expression) (rightForm : AcceptedBinaryExpression right)
+    (world : AcceptedWorld config frame.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame state types)
+    (contextAt : config.module.contexts[contextId]? = some context)
+    (calleeAt : config.module.impls[context.impl]? = some callee)
+    (parameters : callee.params = #[first, second])
+    (firstMode : first.mode = .byValue) (secondMode : second.mode = .byValue)
+    (firstDeclared : callee.vars[0]? = some firstDescriptor) (secondDeclared : callee.vars[1]? = some secondDescriptor)
+    (firstScalar : (∃ t, firstDescriptor.ty = .int t) ∨ firstDescriptor.ty = .bool)
+    (secondScalar : (∃ t, secondDescriptor.ty = .int t) ∨ secondDescriptor.ty = .bool)
+    (results : callee.results = #[⟨resultTy, .register, none⟩])
+    (resultScalar : (∃ t, resultTy = .int t) ∨ resultTy = .bool)
+    (bodyForm : MixedLocalStatements callee.body.stmts) (tail : callee.body.value = some resultExpression)
+    (resultForm : AcceptedBinaryExpression resultExpression)
+    (owners : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ callee.body.stmts →
+      (callee.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
+    (scalarOwners : ∀ localId value localOrigin, .letS localId value localOrigin ∈ callee.body.stmts →
+      AcceptedBinaryExpression value → ∀ localDesc, callee.vars[localId]? = some localDesc →
+        (∃ t, localDesc.ty = .int t) ∨ localDesc.ty = .bool)
+    (initialized : frame.initialized = config.module.globals.size)
+    (fresh : ∀ entry ∈ frame.interpretation.environment.scopes, entry.1 ≠ scope)
+    (absent : ∀ descriptor ∈ frame.interpretation.environment.vars.toList, descriptor.scope ≠ scope)
+    (nesting : frame.typingFuel = checkFuel + 6)
+    (position : SourcePosition accepted frame (.expression (.call contextId
+      [.byVal (.blockE ⟨scope, [.assign (.global id) expression origin], some (.lit intTy literal)⟩ blockOrigin), .byVal right] callOrigin)))
+    (globalScalar : ∀ descriptor, config.module.globals[id]? = some descriptor →
+      (∃ scalarTy, descriptor.ty = .int scalarTy) ∨ descriptor.ty = .bool) :
+    match invokeCall fuel config frame.interpretation.environment contextId
+      [.byVal (.blockE ⟨scope, [.assign (.global id) expression origin], some (.lit intTy literal)⟩ blockOrigin), .byVal right] [.register resultTy] callOrigin state with
+    | .stop _ after => ∃ nextAmbient nextTypes nextLive nextRegions, RootTypesExtend types nextTypes ∧
+        AcceptedWorld config config.module.globals.size after nextAmbient nextTypes nextLive nextRegions pending
+    | .ok carriers after => ∃ value nextTypes nextLive nextRegions, carriers = [.register value] ∧
+        ValueRepresentation resultTy value ∧ RootTypesExtend types nextTypes ∧
+        AcceptedWorld config config.module.globals.size after ambient nextTypes nextLive nextRegions pending
+    | _ => False := by
+  have result := statefulTwoParameter_call_worldWithCallerFrame fuel checkFuel frame state ambient types live regions pending
+    contextId callOrigin context callee first second firstDescriptor secondDescriptor scope id origin blockOrigin expression intTy literal right
+    resultTy resultExpression form rightForm world source contextAt calleeAt parameters firstMode secondMode firstDeclared secondDeclared
+    firstScalar secondScalar results resultScalar bodyForm tail resultForm owners scalarOwners initialized fresh absent nesting position globalScalar
+  cases step : invokeCall fuel config frame.interpretation.environment contextId
+      [.byVal (.blockE ⟨scope, [.assign (.global id) expression origin], some (.lit intTy literal)⟩ blockOrigin), .byVal right] [.register resultTy] callOrigin state with
+  | stop reason after | escape address carriers after | jump target kind after => simpa [step] using result
+  | ok carriers after =>
+    simp only [step] at result ⊢
+    obtain ⟨value, nextTypes, nextLive, nextRegions, same, represented, extended, world, caller⟩ := result
+    exact ⟨value, nextTypes, nextLive, nextRegions, same, represented, extended, world⟩
+
+#print axioms statefulTwoParameter_call_worldWithCallerFrame
 #print axioms statefulTwoParameter_call_world
 end Goose.Proofs.ConstructionAcceptedExecution
