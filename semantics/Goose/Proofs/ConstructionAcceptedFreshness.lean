@@ -59,10 +59,10 @@ theorem carrierReady_construction_frame (before after : ExecutionState)
       (receivingReady_construction_frame before after construction selected source ready)
   | pendingNamed token incoming selected snapshot ticket =>
     exact .pendingNamed token incoming selected snapshot (by simpa only [construction] using ticket)
-private theorem acceptedWorld_clockFrame (config : EvalConfig) (initialized : Nat)
-    (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+theorem acceptedWorld_clockFrame (config : EvalConfig) (initialized : Nat)
+    (before after : ExecutionState) {beforeAmbient : OwnershipAmbient} (ambient : OwnershipAmbient) (types : RootTypes)
     (liveRoots : Goose.Core.RootInst → Prop) {regions : List ReceivingRegion} {pending : List PendingCarrierFrame}
-    (world : AcceptedWorld config initialized before ambient types liveRoots regions pending)
+    (world : AcceptedWorld config initialized before beforeAmbient types liveRoots regions pending)
     (ownership : OwnershipExecutionContext after ambient)
     (construction : after.construction = before.construction) (objects : after.objects = before.objects)
     (identities : after.objectOrdinals = before.objectOrdinals)

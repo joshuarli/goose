@@ -517,11 +517,11 @@
  {
   "feature": "Accepted entry statement frame",
   "label": "model-proved",
-  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryStatementsFrame; Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryFreshStatements; Goose.Proofs.ConstructionAcceptedExecution.acceptedZeroGlobalEntryStatements",
-  "statement": "Fresh entry activation and body-scope allocation preserve the accepted world and produce an accepted frame with a checked source position for the implementation's statement list. For a module without globals, the actual global-initialization action and the initial accepted world establish this state from the initial execution state.",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryStatementsFrame; Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryFreshStatements; Goose.Proofs.ConstructionAcceptedExecution.acceptedZeroGlobalEntryStatements; Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryPushedStatements",
+  "statement": "Fresh entry activation and body-scope allocation preserve the accepted world and produce an accepted frame with a checked source position for the implementation's statement list. For a module without globals, the actual global-initialization action and the initial accepted world establish this state from the initial execution state. The validated entry activation and its call-channel ownership frame also preserve the world through the actual runtime activation push and result-scope state update.",
   "assumptions": "The module is accepted. The general entry lemma assumes global initialization has reached an accepted world with the complete global prefix; the initial-state case assumes the module has no globals. The scoped-frame lemma uses the canonical entry frame with no parameters or active scopes.",
-  "limits": "The proof does not derive the general world from global initialization or connect the frame to the complete entry call and subsequent evaluation. It does not discharge TH-CON-01.",
-  "evidence": "ConstructionRootCorrespondenceAcceptedEntryState.lean, ConstructionAcceptedEntryScope.lean and ConstructionAcceptedEntryStartup.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "The proof does not derive the general world from global initialization or extract the frame from the complete entry call and subsequent evaluation. It does not discharge TH-CON-01.",
+  "evidence": "ConstructionRootCorrespondenceAcceptedEntryState.lean, ConstructionAcceptedEntryScope.lean, ConstructionAcceptedEntryStartup.lean, ConstructionAcceptedEntryActivation.lean and ConstructionAcceptedEntryCall.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Uninitialized local types at fresh scope entry",
