@@ -611,4 +611,53 @@ theorem typeStatement_byteOwner_counter (fuel : Nat) (env next : TypingEnv) (id 
       change Except.error _ = Except.ok _ at checked
       cases checked
 
+theorem typeArguments_scalar_operand (fuel : Nat) (environment : TypingEnv) (callee : Impl)
+    (parameter : Param) (descriptor : LocalVar) (expression : Expr) (before after : Nat)
+    (mode : parameter.mode = .byValue) (declared : callee.vars[parameter.var]? = some descriptor)
+    (checked : typeArguments (fuel + 1) environment callee [parameter] [.byVal expression] before = .ok ((), after)) :
+    ∃ ty middle, typeExpr fuel (ordinary environment) expression before = .ok ([ty], middle) ∧
+      ty.passesTo descriptor.ty = true := by
+  simp only [typeArguments, declared, mode, bind, StateT.bind] at checked
+  cases nonfixed : descriptor.ty.nonfixed with
+  | true =>
+    simp only [nonfixed] at checked
+    change Except.error _ = Except.ok _ at checked
+    cases checked
+  | false =>
+    simp only [nonfixed] at checked
+    change (typeExpr fuel (ordinary environment) expression before).bind _ = _ at checked
+    cases operand : typeExpr fuel (ordinary environment) expression before with
+    | error failure => simp only [operand, Except.bind] at checked; cases checked
+    | ok result =>
+      obtain ⟨tys, middle⟩ := result
+      simp only [operand, Except.bind] at checked
+      cases tys with
+      | nil => change Except.error _ = Except.ok _ at checked; cases checked
+      | cons ty tail =>
+        cases tail with
+        | cons other rest => change Except.error _ = Except.ok _ at checked; cases checked
+        | nil =>
+          cases passes : ty.passesTo descriptor.ty with
+          | false =>
+            simp [one, require, fail, passes, pure, StateT.pure, Except.pure] at checked
+            change Except.error _ = Except.ok _ at checked
+            cases checked
+          | true => exact ⟨ty, middle, rfl, passes⟩
+
+
+theorem typeExpr_call_arguments (fuel : Nat) (environment : TypingEnv) (contextId : Nat)
+    (context : Context) (callee : Impl) (arguments : List Arg) (origin : Nat) (before after : Nat) (types : List Ty)
+    (contextAt : environment.module.contexts[contextId]? = some context)
+    (implementationAt : environment.module.impls[context.impl]? = some callee)
+    (checked : typeExpr (fuel + 1) environment (.call contextId arguments origin) before = .ok (types, after)) :
+    ∃ middle, typeArguments fuel environment callee callee.params.toList arguments before = .ok ((), middle) := by
+  simp only [typeExpr, contextAt, implementationAt, bind, StateT.bind] at checked
+  change (typeArguments fuel environment callee callee.params.toList arguments before).bind _ = _ at checked
+  cases argumentsChecked : typeArguments fuel environment callee callee.params.toList arguments before with
+  | error failure => simp only [argumentsChecked, Except.bind] at checked; cases checked
+  | ok result =>
+    obtain ⟨result, middle⟩ := result
+    cases result
+    exact ⟨middle, rfl⟩
+
 end Goose.Construct
