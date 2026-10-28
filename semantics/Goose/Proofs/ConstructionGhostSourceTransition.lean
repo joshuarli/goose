@@ -7,6 +7,9 @@ inductive SupportedValue : Expr → Prop
   | integer (ty : Goose.Core.IntTy) (value : Int) : SupportedValue (.lit ty value)
   | boolean (value : Bool) : SupportedValue (.bool value)
   | negation {operand : Expr} : SupportedValue operand → SupportedValue (.not operand)
+  | fill (element : Ty) (count : Nat) (origin : Goose.Core.OriginId) {operand : Expr} :
+      (Ty.arr element count).nonfixed = false → SupportedValue operand →
+      SupportedValue (.fill (.arr element count) operand origin)
 
 inductive SupportedStatement : Stmt → Prop
   | expression {operand : Expr} (origin : Goose.Core.OriginId) :
@@ -14,6 +17,12 @@ inductive SupportedStatement : Stmt → Prop
 
 def negationResult : ExecutionStep Value → ExecutionStep Value
   | .ok value state => (do pure (Value.bool (!(← expectBool value)))) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+def fillResult (count : Nat) : ExecutionStep Value → ExecutionStep Value
+  | .ok value state => .ok (.fixed (Array.replicate count value)) state
   | .stop reason state => .stop reason state
   | .escape address carriers state => .escape address carriers state
   | .jump target kind state => .jump target kind state
@@ -36,6 +45,13 @@ inductive ValueHistory (config : EvalConfig) (environment : RuntimeActivation) :
       (child : ValueHistory config environment fuel (path ++ [0]) operand before outcome) :
       ValueHistory config environment (fuel + 1) path (.not operand) before (negationResult outcome)
 
+  | fill {fuel : Nat} {path : List Nat} {element : Ty} {count : Nat}
+      {operand : Expr} {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
+      (fixed : (Ty.arr element count).nonfixed = false)
+      (child : ValueHistory config environment fuel (path ++ [0]) operand before outcome) :
+      ValueHistory config environment (fuel + 1) path (.fill (.arr element count) operand origin) before
+        (fillResult count outcome)
+
 inductive StatementHistory (config : EvalConfig) (environment : RuntimeActivation) :
     Nat → List Nat → Stmt → ExecutionState → ExecutionStep Flow → Prop
   | timeout (path : List Nat) (statement : Stmt) (before : ExecutionState) :
@@ -53,6 +69,9 @@ theorem ValueHistory.sound (history : ValueHistory config environment fuel path 
   | boolean => simp [evalValue, pure]
   | @negation fuel path operand before outcome child ih =>
       simp only [evalValue, bind, ih, negationResult]
+      cases outcome <;> rfl
+  | @fill fuel path element count operand origin before outcome fixed child ih =>
+      simp only [evalValue, fixed, Bool.false_eq_true, ↓reduceIte, bind, ih, fillResult]
       cases outcome <;> rfl
 
 theorem StatementHistory.sound (history : StatementHistory config environment fuel path statement before outcome) :
@@ -81,6 +100,14 @@ theorem valueHistory_exists (fuel : Nat) (config : EvalConfig) (environment : Ru
             cases evalValue fuel config environment operand before <;> rfl
           rw [actual]
           exact .negation child
+      | @fill element count origin operand fixed operandSupported =>
+          have child := ih (path ++ [0]) operand before operandSupported
+          have actual : evalValue (fuel + 1) config environment (.fill (.arr element count) operand origin) before =
+              fillResult count (evalValue fuel config environment operand before) := by
+            simp only [evalValue, fixed, Bool.false_eq_true, ↓reduceIte, bind, fillResult]
+            cases evalValue fuel config environment operand before <;> rfl
+          rw [actual]
+          exact .fill fixed child
 
 theorem statementHistory_exists (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (path : List Nat) (statement : Stmt) (before : ExecutionState) (supported : SupportedStatement statement) :
@@ -166,6 +193,50 @@ theorem statementSequenceHistory_exists (fuel : Nat) (config : EvalConfig) (envi
           rw [actual]
           exact .next head tail
 
+
+def discardValue : ExecutionStep Value → ExecutionStep (List Carrier)
+  | .ok _ state => .ok [] state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+inductive ProducerHistory (config : EvalConfig) (environment : RuntimeActivation) :
+    Nat → List Nat → Expr → ExecutionState → ExecutionStep (List Carrier) → Prop
+  | timeout (path : List Nat) (expression : Expr) (before : ExecutionState) :
+      ProducerHistory config environment 0 path expression before (.stop .timeout before)
+  | discard {fuel : Nat} {path : List Nat} {expression : Expr} {before : ExecutionState}
+      {outcome : ExecutionStep Value} (supported : SupportedValue expression)
+      (child : ValueHistory config environment fuel (path ++ [0]) expression before outcome) :
+      ProducerHistory config environment (fuel + 1) path expression before (discardValue outcome)
+
+theorem emptyProducer_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (expression : Expr) (before : ExecutionState) (supported : SupportedValue expression) :
+    evalProduce (fuel + 1) config environment [] expression before =
+      discardValue (evalValue fuel config environment expression before) := by
+  cases supported <;> simp only [evalProduce, List.mapM, List.mapM.loop, List.reverse_nil, bind, pure, discardValue]
+  all_goals cases evalValue fuel config environment _ before <;> rfl
+
+theorem ProducerHistory.sound
+    (history : ProducerHistory config environment fuel path expression before outcome) :
+    evalProduce fuel config environment [] expression before = outcome := by
+  cases history with
+  | timeout => simp [evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | @discard fuel path expression before outcome supported child =>
+      rw [emptyProducer_source fuel config environment expression before supported, child.sound]
+
+theorem producerHistory_exists (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (expression : Expr) (before : ExecutionState) (supported : SupportedValue expression) :
+    ProducerHistory config environment fuel path expression before (evalProduce fuel config environment [] expression before) := by
+  cases fuel with
+  | zero => simpa [evalProduce, Goose.Construct.timeout, EvalM.stop] using
+      (ProducerHistory.timeout path expression before : ProducerHistory config environment 0 path expression before _)
+  | succ fuel =>
+      rw [emptyProducer_source fuel config environment expression before supported]
+      exact .discard supported (valueHistory_exists fuel config environment (path ++ [0]) expression before supported)
+
+#print axioms ProducerHistory.sound
+#print axioms producerHistory_exists
+
 private def witnessConfig : EvalConfig := ⟨.release, ⟨#[], #[], #[], #[], #[], 0, #[], #[], #[]⟩⟩
 private def witnessEnvironment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
 private def witnessStatements : List Stmt :=
@@ -188,6 +259,21 @@ theorem witness_terminalSequence :
     cbv
   rw [actual] at history
   exact history
+
+theorem witness_fillProducer :
+    ProducerHistory witnessConfig witnessEnvironment 20 []
+      (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) .initial (.ok [] .initial) := by
+  have supported : SupportedValue (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) :=
+    .fill (.int .i64) 3 0 rfl (.integer .i64 7)
+  have history := producerHistory_exists 20 witnessConfig witnessEnvironment [] _ .initial supported
+  have actual : evalProduce 20 witnessConfig witnessEnvironment []
+      (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) .initial = .ok [] .initial := by
+    unfold witnessConfig witnessEnvironment
+    cbv
+  rw [actual] at history
+  exact history
+
+#print axioms witness_fillProducer
 
 #print axioms witness_terminalSequence
 
