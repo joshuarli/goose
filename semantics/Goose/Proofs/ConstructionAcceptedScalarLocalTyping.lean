@@ -27,7 +27,7 @@ theorem typeStatement_scalarLocal_initializer (fuel : Nat) (environment next : T
     (typed : typeStatement (fuel + 1) environment (.letS id expression origin) before = .ok (next, after)) :
     ∃ descriptor ty typingAfter, environment.variables[id]? = some descriptor ∧ id = before ∧
       typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] } expression (before + 1) = .ok ([ty], typingAfter) ∧
-      ty.passesTo descriptor.ty = true := by
+      ty.passesTo descriptor.ty = true ∧ after = typingAfter := by
   obtain ⟨descriptor, declared, scope, order⟩ := typeStatement_let_descriptor fuel environment next id expression origin before after typed
   subst id
   simp only [typeStatement, bind, StateT.bind] at typed
@@ -56,7 +56,11 @@ theorem typeStatement_scalarLocal_initializer (fuel : Nat) (environment next : T
     refine ⟨descriptor, ty, typingAfter, declared, rfl, expressionTyped, ?_⟩
     unfold_scalar_typing_helpers
     cases passing : ty.passesTo descriptor.ty with
-    | true => rfl
+    | true =>
+      refine ⟨rfl, ?_⟩
+      simp only [pure, StateT.pure, Except.pure, passing, ↓reduceIte] at remaining
+      cases remaining
+      rfl
     | false =>
       simp only [pure, StateT.pure, Except.pure, passing, Bool.false_eq_true, ↓reduceIte] at remaining
       change Except.error _ = Except.ok _ at remaining
@@ -75,7 +79,7 @@ theorem checkedValue_scalarLocal_initializer (fuel : Nat) (config : EvalConfig) 
       frame.typing.variables[id]? = some descriptor ∧ ty.passesTo descriptor.ty = true ∧
       CheckedValue (letInitializerFrame frame id fuel) expression ty roots expressionTypingAfter expressionRootsAfter ∧
       AcceptedFrame config accepted (letInitializerFrame frame id fuel) state types := by
-  obtain ⟨descriptor, ty, expressionTypingAfter, declared, typingOrder, expressionTyped, passing⟩ :=
+  obtain ⟨descriptor, ty, expressionTypingAfter, declared, typingOrder, expressionTyped, passing, sameCounter⟩ :=
     typeStatement_scalarLocal_initializer fuel frame.typing next id expression origin frame.typingCounter typingAfter form typed
   obtain ⟨rootOrder, roots, expressionRootsAfter, expressionRooted, included⟩ := rpStmt_letS_initializer rooted
   have initializer := source.letInitializer id fuel descriptor rootOrder typingOrder declared
