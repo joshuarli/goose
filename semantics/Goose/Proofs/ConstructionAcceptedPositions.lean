@@ -125,10 +125,23 @@ def letInitializerFrame (frame : ConstructionSourceFrame) (id fuel : Nat) : Cons
     source := { frame.source with initializing := id :: frame.source.initializing }
     rootCursor := { frame.rootCursor with nextVar := frame.rootCursor.nextVar + 1 } }
 
+def valueBlockExpressionFrame (frame : ConstructionSourceFrame) (scope fuel : Nat) (expected : List Ty) : ConstructionSourceFrame :=
+  { frame with
+    typing := { frame.typing with valueBreakTarget := some ⟨expected, frame.typing.use, frame.typing.request, frame.typing.resultRequests⟩ }
+    source := { frame.source with valueBlock := some scope }
+    typingFuel := fuel
+    rootCursor := { frame.rootCursor with valueBreakRoots := [] } }
+
 inductive DirectSourceChild : ConstructionSourceFrame → SourceAction → ConstructionSourceFrame → SourceAction → Prop
   | notOperand (frame : ConstructionSourceFrame) (expression : Expr) (fuel : Nat)
       (nesting : frame.typingFuel = fuel + 1) :
       DirectSourceChild frame (.expression (.not expression)) (ordinaryOperandFrame frame fuel) (.expression expression)
+  | valueBlockExpression (frame : ConstructionSourceFrame) (scope fuel origin : Nat)
+      (statements : List Stmt) (tail : Expr) (expected : List Ty)
+      (nesting : frame.typingFuel = fuel + 1)
+      (query : blockResultTypes? fuel ⟨frame.typing.module, frame.typing.variables⟩ ⟨scope, statements, some tail⟩ = some expected) :
+      DirectSourceChild frame (.expression (.blockE ⟨scope, statements, some tail⟩ origin))
+        (valueBlockExpressionFrame frame scope fuel expected) (.block ⟨scope, statements, some tail⟩)
   | blockStatements (frame : ConstructionSourceFrame) (scope fuel : Nat) (statements : List Stmt) (tail : Option Expr)
       (nesting : frame.typingFuel = fuel + 1) :
       DirectSourceChild frame (.block (.mk scope statements tail))
