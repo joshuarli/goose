@@ -420,6 +420,13 @@
   "evidence": "Goose/Proofs/{Construct,Exit}.lean; Goose/Construct guard modules pass on merged source; registered axiom audit."
  },
  {
+  "feature": "Scoped nonlocal return selection",
+  "statement": "An actual block whose first statement returns from a nonlocal target selects the nearest matching activation and releases its enclosing scope without changing construction state.",
+  "assumptions": "Successful block binding, target selection and return-channel completion.",
+  "limits": "Handler landing, channel ownership validity, intervening call scopes and general statement positions remain open. This component does not close TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ExitExecutionBlockNonlocal.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted construction value representation fragment",
   "label": "model-proved",
   "theorem": "Goose.Construct.validated_implementation_typing; Goose.Proofs.ConstructionRepresentation.fixedInitializer_evaluation; Goose.Proofs.ConstructionRepresentation.accepted_integerArray_callValue",
@@ -620,6 +627,13 @@
   "evidence": "Goose/Proofs/ConstructionAcceptedByteGlobalTimeout.lean; Goose/Proofs/ConstructionByteGlobalLocal.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Byte-owner write stop preservation",
+  "statement": "If the actual byte-writing loop stops after any number of writes, its terminal state retains the accepted world and source frame, including protection for the fresh receiving region.",
+  "assumptions": "Accepted world and source frame before allocation, fresh direct destination frame, open destination, valid ownership state and current destination at loop entry.",
+  "limits": "This covers stops in the byte-writing loop. Destination allocation, finishing, publication and other construction forms need separate stop preservation. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionByteWriteStopped.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Expression-statement sequence stop reflection",
   "label": "model-proved",
   "theorem": "Goose.Lower.accepted_generated_expression_statement_stopped_family; Goose.Lower.accepted_generated_stopped_sequence_cons; Goose.Lower.accepted_generated_expression_statements_stopped",
@@ -754,10 +768,10 @@
  },
  {
   "feature": "Mixed scalar assignment statement agreement",
-  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, global clears and assignments whose values include literals, local or global reads, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
+  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, local or global clears and assignments whose values include literals, local or global reads, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
   "assumptions": "Accepted source and generated sequence, related builder, admitted bounded realized retained map, generated rows and builder extension. Direct read assignments require a reference-target type proof, derivable from the local or global declaration.",
   "limits": "Assignment destinations and direct-read sources are local or global places; other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandScalarAssignmentExpressions.lean; Goose/Lower/DemandScalarAssignmentStatementAgreement.lean; Goose/Lower/DemandReadAssignmentTyping.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Lower/DemandScalarAssignmentExpressions.lean; Goose/Lower/DemandScalarAssignmentStatementAgreement.lean; Goose/Lower/DemandScalarClear.lean; Goose/Lower/DemandReadAssignmentTyping.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Mixed scalar assignment block agreement",

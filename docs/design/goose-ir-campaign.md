@@ -6,7 +6,7 @@
 
 ## Current proof work
 
-The demand-prefix proofs cover supported scalar and short-circuit expressions, global clears, and assignments to local or global places. Mixed blocks carry accepted frames through scope entry and exit. They cover successful prefixes and non-timeout stops, with no loop context in the block stop proofs. Assignment values include literals, arithmetic, comparisons, short-circuit expressions, and direct reads. Direct reads require the value type to be a valid reference target.
+The demand-prefix proofs cover supported scalar and short-circuit expressions, local or global clears, and assignments to local or global places. Mixed blocks carry accepted frames through scope entry and exit. They cover successful prefixes and non-timeout stops, with no loop context in the block stop proofs. Assignment values include literals, arithmetic, comparisons, short-circuit expressions, and direct reads. Direct reads require the value type to be a valid reference target.
 
 Construction work connects actual byte-owner allocation timeouts to accepted worlds, including the first global initializer and the checked head of a statement sequence. General construction preservation, abnormal exits, loops, calls, returns, and whole-function cursor reconstruction remain open. These results do not close `TH-CON-01`, `TH-EXIT-01`, `TH-LOWER-03`, or their gates. The current assumptions and limits are recorded in `semantics/coverage.json`.
 
