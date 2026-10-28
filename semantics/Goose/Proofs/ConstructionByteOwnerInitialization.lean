@@ -121,10 +121,11 @@ private theorem byteOwner_build (fuel : Nat) (config : EvalConfig)
     ∃ events, buildExpr (fuel + 1) config environment 0 (.bytes byteOwnerType data 0)
         (byteOwnerRuntime (byteOwnerState ByteArray.empty (.open 0) 0 data.length [.begin 0])) =
       .ok () (byteOwnerRuntime (byteOwnerState ⟨data.toArray⟩ (.built (⟨data.toArray⟩ : ByteArray).size)
-        0 data.length events)) := by
-  obtain ⟨events, loop, _⟩ := byteOwner_writeLoop_direct data ByteArray.empty data.length [.begin 0]
+        0 data.length events)) ∧
+      ∃ suffix, events = [.begin 0] ++ suffix ∧ ∀ event ∈ suffix, ∃ index, event = .write 0 index := by
+  obtain ⟨events, loop, suffix, equal, writes⟩ := byteOwner_writeLoop_direct data ByteArray.empty data.length [.begin 0]
   simp only [ByteArray.empty_append, ByteArray.size_empty, bind, pure] at loop
-  refine ⟨events, ?_⟩
+  refine ⟨events, ?_, suffix, equal, writes⟩
   simp only [buildExpr, liftConstruction, byteOwnerRuntime, byteOwner_renew, bind]
   change protectDestination 0 0
     (do
@@ -154,19 +155,57 @@ private theorem byteOwner_runtimePublish (raw : ByteArray) (total : Nat)
   simp only [publishCarriers, List.mapM_cons, List.mapM_nil, bind, pure, liftConstruction,
     List.filterMap_cons, List.filterMap_nil, id, byteOwnerRuntime, byteOwner_publish]
 
-private theorem byteOwner_construct (fuel : Nat) (data : List UInt8) (profile : Goose.Core.NumProfile) :
+theorem byteOwner_construct_direct (fuel : Nat) (data : List UInt8) (profile : Goose.Core.NumProfile) :
     ∃ events, constructLocal ⟨byteOwnerModule data, #[]⟩ 0 byteOwnerType 0 (.bytes byteOwnerType data 0)
       (fun destination => buildExpr (fuel + 1) ⟨profile, byteOwnerModule data⟩ ⟨0, 0, #[], [], []⟩ destination
         (.bytes byteOwnerType data 0)) (byteOwnerRuntime .initial) =
     .ok (.completed 0) (byteOwnerRuntime (byteOwnerState ⟨data.toArray⟩
-      (.published (⟨data.toArray⟩ : ByteArray).size) (⟨data.toArray⟩ : ByteArray).size data.length events)) := by
-  obtain ⟨events, built⟩ := byteOwner_build fuel ⟨profile, byteOwnerModule data⟩ ⟨0, 0, #[], [], []⟩ data
-  refine ⟨events ++ [.publish 0], ?_⟩
-  simp only [constructLocal, producerCount?, literalCount, byteOwner_allocate, bind,
-    built, byteOwner_completed, byteOwner_runtimePublish, pure]
+      (.published (⟨data.toArray⟩ : ByteArray).size) (⟨data.toArray⟩ : ByteArray).size data.length events)) ∧
+      ∃ writes, events = [.begin 0] ++ writes ++ [.publish 0] ∧
+        ∀ event ∈ writes, ∃ index, event = .write 0 index := by
+  obtain ⟨events, built, writes, equal, onlyWrites⟩ := byteOwner_build fuel ⟨profile, byteOwnerModule data⟩ ⟨0, 0, #[], [], []⟩ data
+  refine ⟨events ++ [.publish 0], ?_, writes, ?_, onlyWrites⟩
+  · simp only [constructLocal, producerCount?, literalCount, byteOwner_allocate, bind,
+      built, byteOwner_completed, byteOwner_runtimePublish, pure]
+  · rw [equal]
 
 private def byteOwnerStored (count : Nat) : StoredValue :=
   ⟨0, 0, byteOwnerType, count, some 0, none, [], count⟩
+
+theorem byteOwner_evalValue_direct (fuel : Nat) (data : List UInt8) (profile : Goose.Core.NumProfile) :
+    ∃ state writes, evalValue (fuel + 2) ⟨profile, byteOwnerModule data⟩ ⟨0, 0, #[], [], []⟩
+        (.bytes byteOwnerType data 0) (byteOwnerRuntime .initial) =
+      .ok (.stored (byteOwnerStored (⟨data.toArray⟩ : ByteArray).size)) state ∧
+      state.construction.events = [.begin 0] ++ writes ++ [.publish 0] ∧
+      ∀ event ∈ writes, ∃ index, event = .write 0 index := by
+  obtain ⟨events, constructed, writes, equal, onlyWrites⟩ := byteOwner_construct_direct fuel data profile
+  refine ⟨byteOwnerRuntime (byteOwnerState ⟨data.toArray⟩
+    (.published (⟨data.toArray⟩ : ByteArray).size) (⟨data.toArray⟩ : ByteArray).size data.length events),
+    writes, ?_, ?_, onlyWrites⟩
+  · simp only [evalValue, byteOwnerType, Ty.nonfixed, ↓reduceIte]
+    change ((constructLocal ⟨byteOwnerModule data, #[]⟩ 0 byteOwnerType 0 (.bytes byteOwnerType data 0)
+      (fun destination => buildExpr (fuel + 1) ⟨profile, byteOwnerModule data⟩ ⟨0, 0, #[], [], []⟩ destination
+        (.bytes byteOwnerType data 0)) >>= carrierValue) (byteOwnerRuntime .initial)) = _
+    simp only [bind, constructed]
+    simp only [carrierValue, storedDestination, getDestination, EvalM.get, bind,
+      byteOwnerRuntime, byteOwnerState, Array.getElem?_singleton, progressCount, pure]
+    rfl
+  · exact equal
+
+theorem byteOwner_evalValue_timeout (data : List UInt8) (profile : Goose.Core.NumProfile) :
+    evalValue 0 ⟨profile, byteOwnerModule data⟩ ⟨0, 0, #[], [], []⟩
+      (.bytes byteOwnerType data 0) (byteOwnerRuntime .initial) =
+        .stop .timeout (byteOwnerRuntime .initial) ∧
+    evalValue 1 ⟨profile, byteOwnerModule data⟩ ⟨0, 0, #[], [], []⟩
+      (.bytes byteOwnerType data 0) (byteOwnerRuntime .initial) =
+        .stop .timeout (byteOwnerRuntime (byteOwnerState ByteArray.empty (.open 0) 0 data.length [.begin 0])) := by
+  constructor
+  · simp only [evalValue, timeout, EvalM.stop]
+  · simp only [evalValue, byteOwnerType, Ty.nonfixed, ↓reduceIte]
+    change ((constructLocal ⟨byteOwnerModule data, #[]⟩ 0 byteOwnerType 0 (.bytes byteOwnerType data 0)
+      (fun destination => buildExpr 0 ⟨profile, byteOwnerModule data⟩ ⟨0, 0, #[], [], []⟩ destination
+        (.bytes byteOwnerType data 0)) >>= carrierValue) (byteOwnerRuntime .initial)) = _
+    simp only [constructLocal, producerCount?, literalCount, byteOwner_allocate, bind, buildExpr, timeout, EvalM.stop]
 
 private def byteOwnerGlobalState (raw : ByteArray) (total : Nat)
     (events : List Goose.Core.ConstructionEvent) : ExecutionState :=
@@ -177,7 +216,7 @@ private def byteOwnerGlobalState (raw : ByteArray) (total : Nat)
 private theorem byteOwner_initGlobals (fuel : Nat) (data : List UInt8) (profile : Goose.Core.NumProfile) :
     ∃ events, initGlobals (fuel + 1) ⟨profile, byteOwnerModule data⟩ [0] .initial =
       .ok () (byteOwnerGlobalState ⟨data.toArray⟩ data.length events) := by
-  obtain ⟨events, constructed⟩ := byteOwner_construct fuel data profile
+  obtain ⟨events, constructed, _⟩ := byteOwner_construct_direct fuel data profile
   refine ⟨events, ?_⟩
   simp only [initGlobals, byteOwnerModule, Array.getElem?_singleton, byteOwnerType,
     Ty.nonfixed, freshAct, EvalM.get, EvalM.set, bind, pure, materializeProducer,
@@ -312,6 +351,9 @@ theorem accepted_byteOwner_allocation (fuel : Nat) (data : List UInt8) (profile 
   exact newDestination_existing_storage_separate _ owner ty request origin knownCount _ after id 0
     ⟨⟨data.toArray⟩, (⟨data.toArray⟩ : ByteArray).size⟩ rfl evaluated
 
+#print axioms byteOwner_construct_direct
+#print axioms byteOwner_evalValue_direct
+#print axioms byteOwner_evalValue_timeout
 #print axioms byteOwnerModule_accepted
 #print axioms accepted_byteOwner_initialization
 #print axioms accepted_byteOwner_allocation
