@@ -39,9 +39,11 @@ theorem byteBody_finish_world_observed (fuel deliveryFuel : Nat) (config : EvalC
       AcceptedWorld config initialized after (.returned [.completed id] :: ambient) types live regions
         [⟨[.construct id], [.completed id]⟩] ∧
       after.objects = middle.objects ∧ after.objectOrdinals = middle.objectOrdinals ∧
-      after.nextAct = middle.nextAct ∧ after.nextScope = middle.nextScope := by
-  obtain ⟨built, produced, builtWorld, outer, normalized⟩ :=
-    withCompletion_byteReceiver_normalized_observed_world fuel config initialized
+      after.nextAct = middle.nextAct ∧ after.nextScope = middle.nextScope ∧
+      (∀ storageId, ready.destination.backing = .direct storageId →
+        Nonempty (BuiltByteReceiver config.layout after id storageId bytes.length)) := by
+  obtain ⟨built, produced, builtWorld, outer, normalized, geometry⟩ :=
+    withCompletion_byteReceiver_geometry_world fuel config initialized
       { activation with scopes := (scope, before.nextScope) :: activation.scopes } id bytes origin middle
       (.callChannels activation [] :: ambient) types live regions world history noRetained ready packed adaptation receiver request current fits mutable cutoff covered
   let released := releaseScopeState activation scope before.nextScope built
@@ -61,13 +63,17 @@ theorem byteBody_finish_world_observed (fuel deliveryFuel : Nat) (config : EvalC
   obtain ⟨finish, finalWorld⟩ := finishConstructSelfCall_world deliveryFuel config initialized activation id (.varr (.int .u8)) origin
     _ before released ambient types live regions [⟨[.construct id], [.completed id]⟩] channels done releasedWorld releasedValid
   have releasedObjects := releaseScope_withoutDeclarations_objects built activation scope before.nextScope absent
-  refine ⟨_, finish, finalWorld, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, finish, finalWorld, ?_, ?_, ?_, ?_, ?_⟩
   · have same : built.objects = middle.objects := by simpa only using congrArg ExecutionState.objects outer
     exact releasedObjects.1.trans same
   · have same : built.objectOrdinals = middle.objectOrdinals := by simpa only using congrArg ExecutionState.objectOrdinals outer
     exact releasedObjects.2.trans same
   · simpa only [released, releaseScopeState] using congrArg ExecutionState.nextAct outer
   · simpa only [released, releaseScopeState] using congrArg ExecutionState.nextScope outer
+  · intro storageId direct
+    obtain ⟨facts⟩ := geometry storageId physical direct
+    exact ⟨BuiltByteReceiver.of_construction_eq (before := built)
+      (after := { released with activations := released.activations.filter (fun current => current.act != activation.act) }) rfl facts⟩
 
 theorem byteBody_finish_world_delivery (fuel deliveryFuel : Nat) (config : EvalConfig) (initialized : Nat)
     (activation : RuntimeActivation) (scope id : Nat) (bytes : List UInt8) (origin : OriginId)
@@ -94,7 +100,7 @@ theorem byteBody_finish_world_delivery (fuel deliveryFuel : Nat) (config : EvalC
         deliverCarriers deliveryFuel config.layout [.construct id] carriers origin) before = .ok [.completed id] after ∧
       AcceptedWorld config initialized after (.returned [.completed id] :: ambient) types live regions
         [⟨[.construct id], [.completed id]⟩] := by
-  obtain ⟨after, done, finalWorld, objects, ordinals, acts, scopes⟩ := byteBody_finish_world_observed fuel deliveryFuel config initialized
+  obtain ⟨after, done, finalWorld, objects, ordinals, acts, scopes, geometry⟩ := byteBody_finish_world_observed fuel deliveryFuel config initialized
     activation scope id bytes origin before boundState middle ambient types live regions channels bound normal absent world history noRetained
     ready packed adaptation receiver request physical current fits mutable cutoff covered
   exact ⟨after, done, finalWorld⟩
@@ -151,7 +157,9 @@ theorem byteBody_finish_from_activation_observed (fuel deliveryFuel : Nat) (conf
       AcceptedWorld config initialized after (.returned [.completed id] :: ambient) types live regions
         [⟨[.construct id], [.completed id]⟩] ∧
       after.objects = before.objects ∧ after.objectOrdinals = before.objectOrdinals ∧
-      after.nextAct = before.nextAct ∧ after.nextScope = before.nextScope + 1 := by
+      after.nextAct = before.nextAct ∧ after.nextScope = before.nextScope + 1 ∧
+      (∀ storageId, ready.destination.backing = .direct storageId →
+        Nonempty (BuiltByteReceiver config.layout after id storageId bytes.length)) := by
   let scopeState := ownershipResultScopeState activation scope before
   have scopedWorld := acceptedWorld_resultScope config initialized before (.callChannels activation [] :: ambient)
     types live regions [] activation scope world
@@ -160,10 +168,10 @@ theorem byteBody_finish_from_activation_observed (fuel deliveryFuel : Nat) (conf
       [] scopeState = .ok (.normal .unit) scopeState := by simp [execStmts, pure]
   let scopeReady : OpenDestinationBacking config.layout scopeState id (.varr (.int .u8)) 0 :=
     { ready with present := ready.present, bytes := ready.bytes }
-  obtain ⟨after, done, finalWorld, objects, ordinals, acts, scopes⟩ := byteBody_finish_world_observed fuel deliveryFuel config initialized
+  obtain ⟨after, done, finalWorld, objects, ordinals, acts, scopes, geometry⟩ := byteBody_finish_world_observed fuel deliveryFuel config initialized
     activation scope id bytes origin before scopeState scopeState ambient types live regions channels bound normal absent scopedWorld
     history noRetained scopeReady packed adaptation receiver request physical current fits mutable cutoff covered
-  exact ⟨after, done, finalWorld, objects, ordinals, acts, scopes⟩
+  exact ⟨after, done, finalWorld, objects, ordinals, acts, scopes, geometry⟩
 
 theorem byteBody_finish_from_activation_delivery (fuel deliveryFuel : Nat) (config : EvalConfig) (initialized : Nat)
     (activation : RuntimeActivation) (scope id : Nat) (bytes : List UInt8) (origin : OriginId)
@@ -187,7 +195,7 @@ theorem byteBody_finish_from_activation_delivery (fuel deliveryFuel : Nat) (conf
         deliverCarriers deliveryFuel config.layout [.construct id] carriers origin) before = .ok [.completed id] after ∧
       AcceptedWorld config initialized after (.returned [.completed id] :: ambient) types live regions
         [⟨[.construct id], [.completed id]⟩] := by
-  obtain ⟨after, done, finalWorld, objects, ordinals, acts, scopes⟩ := byteBody_finish_from_activation_observed fuel deliveryFuel config initialized
+  obtain ⟨after, done, finalWorld, objects, ordinals, acts, scopes, geometry⟩ := byteBody_finish_from_activation_observed fuel deliveryFuel config initialized
     activation scope id bytes origin before ambient types live regions channels absent world history noRetained ready packed adaptation
     receiver request physical current fits mutable cutoff covered
   exact ⟨after, done, finalWorld⟩

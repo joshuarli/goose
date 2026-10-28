@@ -32,7 +32,8 @@ theorem fresh_byteInvoke_observed (fuel : Nat) (config : EvalConfig) (initialize
         AcceptedWorld config initialized after (.returned carriers :: ambient) types live [freshReceivingRegion before id]
           [⟨[.construct id], carriers⟩] ∧
         after.objects = before.objects ∧ after.objectOrdinals = before.objectOrdinals ∧
-        after.nextAct = before.nextAct + 1 ∧ after.nextScope = before.nextScope + 1
+        after.nextAct = before.nextAct + 1 ∧ after.nextScope = before.nextScope + 1 ∧
+        Nonempty (BuiltByteReceiver config.layout after id before.construction.storage.size bytes.length)
     | _ => False := by
   obtain ⟨ready⟩ := newDestination_initial_backing config.layout caller.act (.varr (.int .u8)) .value allocationOrigin
     knownCount before allocated id (.int .u8) rfl created
@@ -89,7 +90,7 @@ theorem fresh_byteInvoke_observed (fuel : Nat) (config : EvalConfig) (initialize
           cases fuel with
           | zero => simpa only [low.2.2.2.2.1] using ⟨_, low.2.2.2.2.2.2.2⟩
           | succ fuel =>
-            obtain ⟨after, executed, finalWorld, objects, ordinals, acts, scopes⟩ := invokeByteReceiver_success_observed fuel config initialized caller contextId id scope bytes origin
+            obtain ⟨after, executed, finalWorld, objects, ordinals, acts, scopes, geometry⟩ := invokeByteReceiver_success_observed fuel config initialized caller contextId id scope bytes origin
               context helper allocated ambient types live [freshReceivingRegion before id] allocatedWorld contextAt helperAt parameters results body absent
               allocatedHistory noRetained noTickets ready packed adaptation receiver request physical current fits mutable cutoff covered allocatedDepth
             have outerObjects : allocated.objects = before.objects := by simpa only using congrArg ExecutionState.objects freshFrame.outer
@@ -98,7 +99,7 @@ theorem fresh_byteInvoke_observed (fuel : Nat) (config : EvalConfig) (initialize
             have outerScopes : allocated.nextScope = before.nextScope := by simpa only using congrArg ExecutionState.nextScope freshFrame.outer
             simp only [executed]
             exact ⟨trivial, finalWorld, objects.trans outerObjects, ordinals.trans outerOrdinals,
-              by simpa only [outerActs] using acts, by simpa only [outerScopes] using scopes⟩
+              by simpa only [outerActs] using acts, by simpa only [outerScopes] using scopes, geometry _ backing⟩
 
 theorem fresh_byteInvoke_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (caller : RuntimeActivation) (contextId scope : Nat) (bytes : List UInt8) (allocationOrigin origin : OriginId)

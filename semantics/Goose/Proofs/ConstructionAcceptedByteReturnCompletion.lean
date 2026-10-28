@@ -11,7 +11,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ExitExecution
 
-theorem completion_byteReceiver_normalized_observed_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+theorem completion_byteReceiver_geometry_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (environment : RuntimeActivation) (id : Nat) (bytes : List UInt8) (origin : OriginId)
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : RootInst → Prop) (regions : List ReceivingRegion)
@@ -37,7 +37,9 @@ theorem completion_byteReceiver_normalized_observed_world (fuel : Nat) (config :
       (∀ carrier ∈ [.completed id], CarrierResultBacking config.layout after carrier) ∧
       after = { before with construction := after.construction } ∧
       (ready.destination.capability.layout = .varr (.int .u8) →
-        Nonempty (NormalizedCompletedCarrier after (.varr (.int .u8)) id)) := by
+        Nonempty (NormalizedCompletedCarrier after (.varr (.int .u8)) id)) ∧
+      (∀ storageId, ready.destination.capability.layout = .varr (.int .u8) →
+        ready.destination.backing = .direct storageId → Nonempty (BuiltByteReceiver config.layout after id storageId bytes.length)) := by
   let token := before.construction.exitReservations.size
   let waited := { before with construction := { before.construction with
     exitReservations := before.construction.exitReservations.push (.waiting id) } }
@@ -94,9 +96,46 @@ theorem completion_byteReceiver_normalized_observed_world (fuel : Nat) (config :
     intro physical
     exact packed_byte_build_normalized fuel config environment id bytes origin prepared after preparedWorld.ownership.source
       preparedReady packed request receiver adaptation physical preparedCurrent fits built
-  exact ⟨after, action.trans produced, result, ticket, targetReady, targetBacked, outer, normalized⟩
+  have geometry : ∀ storageId, ready.destination.capability.layout = .varr (.int .u8) →
+      ready.destination.backing = .direct storageId → Nonempty (BuiltByteReceiver config.layout after id storageId bytes.length) := by
+    intro storageId physical direct
+    exact packed_byte_build_receiver fuel config environment id storageId bytes origin prepared after preparedWorld.ownership.source
+      preparedReady packed request receiver adaptation physical direct preparedCurrent fits built
+  exact ⟨after, action.trans produced, result, ticket, targetReady, targetBacked, outer, normalized, geometry⟩
 
 
+
+theorem completion_byteReceiver_normalized_observed_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (environment : RuntimeActivation) (id : Nat) (bytes : List UInt8) (origin : OriginId)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion)
+    (world : AcceptedWorld config initialized before ambient types live regions [])
+    (history : ReservationReferencesBounded before.construction ambient)
+    (noRetained : completedCarrierIds ambient.retained = [])
+    (ready : OpenDestinationBacking config.layout before id (.varr (.int .u8)) 0)
+    (packed : ready.destination.layout = .packed) (adaptation : ready.destination.adaptation = none)
+    (receiver : ready.destination.use = .receiver) (request : ready.destination.capability.request = .value)
+    (current : destinationCurrent before.construction id = .ok id) (fits : bytes.length < 2 ^ 32)
+    (mutable : ∀ region ∈ regions, id ∈ region.mutableDestinations)
+    (cutoff : ∀ region ∈ regions, region.limit ready.destination.storage ≤ ready.destination.capability.start)
+    (covered : ∀ root, live root → ∃ region ∈ regions, ¬ region.mutableRoots root) :
+    let token := before.construction.exitReservations.size
+    let waited := { before with construction := { before.construction with
+      exitReservations := before.construction.exitReservations.push (.waiting id) } }
+    ∃ after,
+      evalProduce (fuel + 2) config environment [.completion token] (.bytes (.varr (.int .u8)) bytes origin) waited =
+        .ok [.completed id] after ∧
+      AcceptedWorld config initialized after (.exitChannels [token] [] [.completed id] :: ambient) types live regions [] ∧
+      after.construction.exitReservations[token]? = some (.active .fresh id id ready.destination) ∧
+      CarriersLandingReady after [.construct id] [.completed id] ∧
+      (∀ carrier ∈ [.completed id], CarrierResultBacking config.layout after carrier) ∧
+      after = { before with construction := after.construction } ∧
+      (ready.destination.capability.layout = .varr (.int .u8) →
+        Nonempty (NormalizedCompletedCarrier after (.varr (.int .u8)) id)) := by
+  obtain ⟨after, produced, result, ticket, targetReady, targetBacked, outer, normalized, geometry⟩ :=
+    completion_byteReceiver_geometry_world fuel config initialized environment id bytes origin before ambient types live regions
+      world history noRetained ready packed adaptation receiver request current fits mutable cutoff covered
+  exact ⟨after, produced, result, ticket, targetReady, targetBacked, outer, normalized⟩
 
 theorem completion_byteReceiver_observed_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (environment : RuntimeActivation) (id : Nat) (bytes : List UInt8) (origin : OriginId)
@@ -159,5 +198,6 @@ theorem completion_byteReceiver_world (fuel : Nat) (config : EvalConfig) (initia
 
 #print axioms completion_byteReceiver_world
 #print axioms completion_byteReceiver_observed_world
+#print axioms completion_byteReceiver_geometry_world
 #print axioms completion_byteReceiver_normalized_observed_world
 end Goose.Proofs.ConstructionAcceptedExecution

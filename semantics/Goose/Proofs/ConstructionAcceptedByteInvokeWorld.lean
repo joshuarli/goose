@@ -37,7 +37,9 @@ theorem invokeByteReceiver_success_observed (fuel : Nat) (config : EvalConfig) (
       AcceptedWorld config initialized after (.returned [.completed id] :: ambient) types live regions
         [⟨[.construct id], [.completed id]⟩] ∧
       after.objects = state.objects ∧ after.objectOrdinals = state.objectOrdinals ∧
-      after.nextAct = state.nextAct + 1 ∧ after.nextScope = state.nextScope + 1 := by
+      after.nextAct = state.nextAct + 1 ∧ after.nextScope = state.nextScope + 1 ∧
+      (∀ storageId, ready.destination.backing = .direct storageId →
+        Nonempty (BuiltByteReceiver config.layout after id storageId bytes.length)) := by
   let activation : RuntimeActivation := ⟨context.impl, state.nextAct, helper.vars, [], [.construct id]⟩
   let pushed := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
   have pushedWorld : AcceptedWorld config initialized pushed (.callChannels activation [] :: ambient) types live regions [] :=
@@ -53,12 +55,12 @@ theorem invokeByteReceiver_success_observed (fuel : Nat) (config : EvalConfig) (
     simpa [OwnershipAmbient.retained, OwnershipAmbientFrame.carriers] using noRetained
   let pushedReady : OpenDestinationBacking config.layout pushed id (.varr (.int .u8)) 0 :=
     { ready with present := ready.present, bytes := ready.bytes }
-  obtain ⟨after, done, finalWorld, objects, ordinals, acts, scopes⟩ := byteBody_finish_from_activation_observed fuel (fuel + 4) config initialized activation scope id bytes origin
+  obtain ⟨after, done, finalWorld, objects, ordinals, acts, scopes, geometry⟩ := byteBody_finish_from_activation_observed fuel (fuel + 4) config initialized activation scope id bytes origin
     pushed ambient types live regions rfl absent pushedWorld pushedHistory pushedRetained pushedReady packed adaptation receiver request
     physical current fits mutable cutoff covered
   have invoked := invokeByteReceiver_body fuel config environment contextId id origin context helper state
     contextAt helperAt parameters results ready receiver current depth
-  refine ⟨after, ?_, finalWorld, objects, ordinals, acts, scopes⟩
+  refine ⟨after, ?_, finalWorld, objects, ordinals, acts, scopes, geometry⟩
   rw [body] at invoked
   exact invoked.trans done
 
@@ -88,7 +90,7 @@ theorem invokeByteReceiver_success_world (fuel : Nat) (config : EvalConfig) (ini
     ∃ after, invokeCall (fuel + 5) config environment contextId [] [.construct id] origin state = .ok [.completed id] after ∧
       AcceptedWorld config initialized after (.returned [.completed id] :: ambient) types live regions
         [⟨[.construct id], [.completed id]⟩] := by
-  obtain ⟨after, executed, finalWorld, objects, ordinals, acts, scopes⟩ := invokeByteReceiver_success_observed fuel config initialized
+  obtain ⟨after, executed, finalWorld, objects, ordinals, acts, scopes, geometry⟩ := invokeByteReceiver_success_observed fuel config initialized
     environment contextId id scope bytes origin context helper state ambient types live regions world contextAt helperAt parameters results body
     absent history noRetained noTickets ready packed adaptation receiver request physical current fits mutable cutoff covered depth
   exact ⟨after, executed, finalWorld⟩
