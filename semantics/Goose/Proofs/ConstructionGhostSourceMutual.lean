@@ -702,6 +702,20 @@ inductive SourceHistory (config : EvalConfig) :
       SourceHistory config (fuel + 1) path
         (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments)) before
         (evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.byRef mutability place :: arguments) before)
+  | ifStatement {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {condition : Expr}
+      {yes : Block} {no : Option Block} {origin : Goose.Core.OriginId} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment condition) before
+        (evalValue fuel config environment condition before))
+      (yesChild : ∀ value middle ready, evalValue fuel config environment condition before = .ok value middle →
+        expectBool value middle = .ok true ready →
+        SourceHistory config fuel (path ++ [1]) (.block environment yes) ready
+          (execBlock fuel config environment [] [] yes ready))
+      (noChild : ∀ value middle ready block, evalValue fuel config environment condition before = .ok value middle →
+        expectBool value middle = .ok false ready → no = some block →
+        SourceHistory config fuel (path ++ [2]) (.block environment block) ready
+          (execBlock fuel config environment [] [] block ready)) :
+      SourceHistory config (fuel + 1) path (.statement environment (.ifS condition yes no origin)) before
+        (execStmt (fuel + 1) config environment (.ifS condition yes no origin) before)
   | expression {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -802,7 +816,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   | expressionBound | localPlace | globalPlace | dereferencePlace | fieldPlace | elementPlace | placeView | valueView |
     readValue | referenceValue | lengthValue | popValue | sliceValue => rfl
   | printArgumentText => simp [execute, evalPrintArg, pure]
-  | printArgumentExpression | printArgumentView | printArguments | printText => rfl
+  | printArgumentExpression | printArgumentView | printArguments | printText | ifStatement => rfl
   | builderBytes => rfl
   | @fixedElement fuel path environment parent element operand before outcome fixed child ih =>
       simp only [execute] at ih ⊢
@@ -914,6 +928,11 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
   | expression (environment : RuntimeActivation) {operand : Expr} (origin : Goose.Core.OriginId)
       (supported : SupportedOperation config (.value environment operand)) :
       SupportedOperation config (.statement environment (.expr operand origin))
+  | ifStatement (environment : RuntimeActivation) (condition : Expr) (yes : Block) (no : Option Block)
+      (origin : Goose.Core.OriginId) (child : SupportedOperation config (.value environment condition))
+      (yesChild : SupportedOperation config (.block environment yes))
+      (noChild : ∀ block, no = some block → SupportedOperation config (.block environment block)) :
+      SupportedOperation config (.statement environment (.ifS condition yes no origin))
   | empty (environment : RuntimeActivation) : SupportedOperation config (.statements environment [])
   | sequence (environment : RuntimeActivation) {statement : Stmt} {rest : List Stmt}
       (head : SupportedOperation config (.statement environment statement))
@@ -1165,6 +1184,12 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute]
           rw [actual]
           exact .expression child
+      | ifStatement environment condition yes no origin childSupported yesSupported noSupported =>
+          refine .ifStatement (ih (.value environment condition) (path ++ [0]) before childSupported) ?_ ?_
+          · intro value middle ready result checked
+            exact ih (.block environment yes) (path ++ [1]) ready yesSupported
+          · intro value middle ready block result checked selected
+            exact ih (.block environment block) (path ++ [2]) ready (noSupported block selected)
       | empty environment => simpa [execute, execStmts, pure] using
           (SourceHistory.done fuel path environment before :
             SourceHistory config (fuel + 1) path (.statements environment []) before _)
@@ -1930,6 +1955,43 @@ theorem witness_sliceBoundCall : ∃ after,
     exact history
 
 #print axioms witness_sliceBoundCall
+
+private def conditionalStatementWitness : Stmt := .ifS (.bool true)
+  (.mk 0 [.expr (.fill (.arr .unit 3) (.call 0 [] 0) 0) 0] none) none 0
+
+theorem witness_conditionalStatement : ∃ after,
+    execStmt 40 sideEffectConfig witnessEnvironment conditionalStatementWitness .initial = .ok (.normal .unit) after ∧
+    after.construction.stdout.data.toList = [120, 10] ∧
+    SourceHistory sideEffectConfig 40 [] (.statement witnessEnvironment conditionalStatementWitness) .initial
+      (.ok (.normal .unit) after) := by
+  have supported : SupportedOperation sideEffectConfig (.statement witnessEnvironment conditionalStatementWitness) := by
+    unfold conditionalStatementWitness
+    apply SupportedOperation.ifStatement
+    · exact .value _ (.boolean true)
+    · apply SupportedOperation.block
+      intro environment
+      have source : SupportedOperation sideEffectConfig (.value environment (.call 0 [] 0)) :=
+        .valueCall environment 0 0 sideEffectContext sideEffectImplementation rfl rfl rfl (sideEffectCallee_supported environment)
+      exact .sequence environment (.expression environment 0 (.fill environment .unit 3 0 (.call 0 [] 0) rfl source))
+        (.empty environment)
+    · intro block impossible
+      cases impossible
+  have history := history_exists 40 sideEffectConfig (.statement witnessEnvironment conditionalStatementWitness) [] .initial supported
+  refine ⟨witnessState (execStmt 40 sideEffectConfig witnessEnvironment conditionalStatementWitness .initial), ?_, ?_, ?_⟩
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment conditionalStatementWitness
+    cbv
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment conditionalStatementWitness
+    cbv
+  · have actual : execStmt 40 sideEffectConfig witnessEnvironment conditionalStatementWitness .initial =
+        .ok (.normal .unit) (witnessState (execStmt 40 sideEffectConfig witnessEnvironment conditionalStatementWitness .initial)) := by
+      unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment conditionalStatementWitness
+      cbv
+    change SourceHistory sideEffectConfig 40 [] (.statement witnessEnvironment conditionalStatementWitness) .initial
+      (execStmt 40 sideEffectConfig witnessEnvironment conditionalStatementWitness .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_conditionalStatement
 
 #print axioms witness_fillSourceOnce
 
