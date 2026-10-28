@@ -5,6 +5,63 @@ namespace Goose.Proofs.ConstructionActivationCounterGlobals
 open Goose.Construct Goose.Proofs.ConstructionActivationCounter
 open Goose.Proofs.ConstructionGhostGlobalStep Goose.Proofs.ConstructionGhostGlobalReplay
 
+def globalInitializerTail (fuel : Nat) (config : EvalConfig) (global : Goose.Core.GlobalId)
+    (descriptor : Global) (act : Goose.Core.ActId) : EvalM Unit := do
+  let environment : RuntimeActivation := ⟨0, act, #[], [], []⟩
+  let value ← if descriptor.ty.nonfixed then
+    let materialized ← materializeProducer fuel ⟨config.module, environment.vars⟩ descriptor.init
+      (evalValue fuel config environment descriptor.init)
+    let carrier ← match materialized with
+      | some values => do
+          let destination ← materializedDestination fuel config.layout act descriptor.ty descriptor.org values.size (.fixed values)
+          publishCarriers descriptor.org [.completed destination]
+          pure (.completed destination)
+      | none =>
+          constructLocal ⟨config.module, environment.vars⟩ act descriptor.ty descriptor.org descriptor.init
+            (fun destination => buildExpr fuel config environment destination descriptor.init)
+    carrierValue carrier
+  else evalValue fuel config environment descriptor.init
+  bindRoot (.global global) value
+
+theorem counter_globalInitializerTail (fuel : Nat) (config : EvalConfig) (global : Goose.Core.GlobalId)
+    (descriptor : Global) (act : Goose.Core.ActId) (previous : EvaluationPreservesActivationCounter fuel config) :
+    PreservesActivationCounter (globalInitializerTail fuel config global descriptor act) := by
+  unfold globalInitializerTail
+  split
+  · apply counter_bind
+    · apply counter_materializeProducer
+      exact previous.value ⟨0, act, #[], [], []⟩ descriptor.init
+    · intro materialized
+      cases materialized with
+      | none =>
+        apply counter_bind
+        · apply counter_constructLocal
+          intro destination
+          exact previous.build ⟨0, act, #[], [], []⟩ destination descriptor.init
+        · intro carrier
+          apply counter_bind
+          · exact counter_stateQuery _ (Goose.Proofs.ExitExecution.stateQuery_carrierValue carrier)
+          · intro value
+            exact counter_bindRoot (.global global) value
+      | some values =>
+        apply counter_bind
+        · exact counter_materializedDestination _ _ _ _ _ _ _
+        · intro destination
+          apply counter_bind
+          · exact counter_publishCarriers _ _
+          · intro ignored
+            apply counter_bind
+            · exact counter_pure _
+            · intro carrier
+              apply counter_bind
+              · exact counter_stateQuery _ (Goose.Proofs.ExitExecution.stateQuery_carrierValue carrier)
+              · intro value
+                exact counter_bindRoot (.global global) value
+  · apply counter_bind
+    · exact previous.value ⟨0, act, #[], [], []⟩ descriptor.init
+    · intro value
+      exact counter_bindRoot (.global global) value
+
 theorem counter_globalInitializer (fuel : Nat) (config : EvalConfig) (global : Goose.Core.GlobalId)
     (previous : EvaluationPreservesActivationCounter fuel config) :
     PreservesActivationCounter (globalInitializer fuel config global) := by
@@ -12,43 +69,8 @@ theorem counter_globalInitializer (fuel : Nat) (config : EvalConfig) (global : G
   | none => simpa [globalInitializer, found] using counter_fault Goose.Core.FaultKind.unbound
   | some descriptor =>
     simp only [globalInitializer, found]
-    apply counter_bind
-    · exact counter_freshAct
-    · intro act
-      split
-      · apply counter_bind
-        · apply counter_materializeProducer
-          exact previous.value ⟨0, act, #[], [], []⟩ descriptor.init
-        · intro materialized
-          cases materialized with
-          | none =>
-            apply counter_bind
-            · apply counter_constructLocal
-              intro destination
-              exact previous.build ⟨0, act, #[], [], []⟩ destination descriptor.init
-            · intro carrier
-              apply counter_bind
-              · exact counter_stateQuery _ (Goose.Proofs.ExitExecution.stateQuery_carrierValue carrier)
-              · intro value
-                exact counter_bindRoot (.global global) value
-          | some values =>
-            apply counter_bind
-            · exact counter_materializedDestination _ _ _ _ _ _ _
-            · intro destination
-              apply counter_bind
-              · exact counter_publishCarriers _ _
-              · intro ignored
-                apply counter_bind
-                · exact counter_pure _
-                · intro carrier
-                  apply counter_bind
-                  · exact counter_stateQuery _ (Goose.Proofs.ExitExecution.stateQuery_carrierValue carrier)
-                  · intro value
-                    exact counter_bindRoot (.global global) value
-      · apply counter_bind
-        · exact previous.value ⟨0, act, #[], [], []⟩ descriptor.init
-        · intro value
-          exact counter_bindRoot (.global global) value
+    change PreservesActivationCounter (freshAct >>= globalInitializerTail fuel config global descriptor)
+    exact counter_bind freshAct _ counter_freshAct (fun act => counter_globalInitializerTail fuel config global descriptor act previous)
 
 #print axioms counter_globalInitializer
 theorem counter_fixedGlobal (fuel : Nat) (config : EvalConfig) (global : Goose.Core.GlobalId)
