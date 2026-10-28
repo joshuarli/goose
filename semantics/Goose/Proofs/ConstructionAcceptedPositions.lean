@@ -136,6 +136,10 @@ inductive DirectSourceChild : ConstructionSourceFrame → SourceAction → Const
   | notOperand (frame : ConstructionSourceFrame) (expression : Expr) (fuel : Nat)
       (nesting : frame.typingFuel = fuel + 1) :
       DirectSourceChild frame (.expression (.not expression)) (ordinaryOperandFrame frame fuel) (.expression expression)
+  | callFirstByValue (frame : ConstructionSourceFrame) (contextId origin fuel : Nat) (left right : Expr)
+      (nesting : frame.typingFuel = fuel + 3) :
+      DirectSourceChild frame (.expression (.call contextId [.byVal left, .byVal right] origin))
+        (ordinaryOperandFrame frame (fuel + 1)) (.expression left)
   | valueBlockExpression (frame : ConstructionSourceFrame) (scope fuel origin : Nat)
       (statements : List Stmt) (tail : Expr) (expected : List Ty)
       (nesting : frame.typingFuel = fuel + 1)
