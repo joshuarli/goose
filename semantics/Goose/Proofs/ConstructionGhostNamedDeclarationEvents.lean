@@ -88,9 +88,10 @@ def NamedVisitSourceEvents (config : EvalConfig) (environment : RuntimeActivatio
     EventPrefix (Goose.Proofs.Exit.stepState (buildExpr sourceFuel config environment destination expression buildReady)).construction.events
       (Goose.Proofs.Exit.stepState visit.outcome).construction.events
 
-theorem statementReplay_namedSourceEvents
+theorem statementReplay_namedSourceEvents_guarded
     (replay : StatementReplay config environment fuel offset statements before outcome visits)
-    (supported : ∀ sourceFuel localVar expression origin, .letS localVar expression origin ∈ statements → ∀ destination,
+    (supported : ∀ sourceFuel localVar expression origin descriptor, .letS localVar expression origin ∈ statements →
+      environment.vars[localVar]? = some descriptor → descriptor.ty.nonfixed = true → ∀ destination,
       FuelSupport config sourceFuel (.builder environment destination expression)) :
     NamedVisitSourceEvents config environment visits := by
   intro visit member sourceFuel localVar expression origin rootReady selectedReady destinationReady renewedReady buildReady
@@ -104,8 +105,18 @@ theorem statementReplay_namedSourceEvents
   exact namedDeclaration_visit_sourceEvents replay visit member sourceFuel localVar expression origin rootReady selectedReady
     destinationReady renewedReady buildReady descriptor root implementation result index incoming selected destination pending
     visitFuel visitStatement found nonfixed rootResult implementationFound named channelFound selectedResult pendingResult valueRequest
-    renewedResult prepared (supported sourceFuel localVar expression origin inStatements destination)
+    renewedResult prepared (supported sourceFuel localVar expression origin descriptor inStatements found nonfixed destination)
 
+theorem statementReplay_namedSourceEvents
+    (replay : StatementReplay config environment fuel offset statements before outcome visits)
+    (supported : ∀ sourceFuel localVar expression origin, .letS localVar expression origin ∈ statements → ∀ destination,
+      FuelSupport config sourceFuel (.builder environment destination expression)) :
+    NamedVisitSourceEvents config environment visits :=
+  statementReplay_namedSourceEvents_guarded replay
+    (fun sourceFuel localVar expression origin descriptor member found nonfixed destination =>
+      supported sourceFuel localVar expression origin member destination)
+
+#print axioms statementReplay_namedSourceEvents_guarded
 #print axioms statementReplay_namedSourceEvents
 #print axioms namedDeclarationAfterBuild_sourcePrefix
 #print axioms namedDeclaration_visit_sourceEvents
