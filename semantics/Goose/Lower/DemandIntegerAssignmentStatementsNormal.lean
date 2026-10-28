@@ -1,11 +1,11 @@
-import Goose.Lower.DemandAssignmentStatementAgreement
+import Goose.Lower.DemandIntegerAssignmentStatementAgreement
 import Goose.Lower.DemandStoppedBlockStatements
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound
 
-theorem AssignmentStatements.normal {statements : List Stmt} (fragment : AssignmentStatements statements)
+theorem IntegerAssignmentStatements.normal {statements : List Stmt} (fragment : IntegerAssignmentStatements statements)
     {cfg : Cfg} {env : Env} {fuel : Nat} {state after : St} {flow : Flow}
     (done : execStmts fuel cfg env statements state = .ok flow after) : flow = .normal .unit := by
   induction fragment generalizing fuel state after with
@@ -46,12 +46,12 @@ theorem AssignmentStatements.normal {statements : List Stmt} (fragment : Assignm
         simp only [head] at done
         exact ih done
 
-  | @assignment place form type number origin rest tail ih =>
+  | @assignment place form expression value origin rest tail ih =>
     cases fuel with
     | zero => simp [execStmts, timeout, M.stop] at done
     | succ fuel =>
       simp only [execStmts, bind_apply] at done
-      cases head : execStmt fuel cfg env (.assign place (.lit type number) origin) state with
+      cases head : execStmt fuel cfg env (.assign place expression origin) state with
       | stop stop final => simp only [head] at done; cases done
       | ok headFlow middle =>
         have normal : headFlow = .normal .unit := by
@@ -63,7 +63,7 @@ theorem AssignmentStatements.normal {statements : List Stmt} (fragment : Assignm
             | stop stop final => simp only [placed] at head; cases head
             | ok location addressed =>
               simp only [placed] at head
-              cases evaluated : evalExpr fuel cfg env (.lit type number) addressed with
+              cases evaluated : evalExpr fuel cfg env expression addressed with
               | stop stop final => simp only [evaluated] at head; cases head
               | ok value valued =>
                 simp only [evaluated] at head
@@ -77,6 +77,6 @@ theorem AssignmentStatements.normal {statements : List Stmt} (fragment : Assignm
         simp only [head] at done
         exact ih done
 
-#print axioms AssignmentStatements.normal
+#print axioms IntegerAssignmentStatements.normal
 
 end Goose.Lower

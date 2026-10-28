@@ -739,20 +739,6 @@
   "evidence": "Goose/Lower/DemandScalarPlaceAddress.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
-  "feature": "Generated scalar literal assignment prefix",
-  "statement": "Every successful target prefix of an accepted assignment of an integer literal to a local or global scalar place either retains the original demand map at an intermediate point or completes the matching source statement.",
-  "assumptions": "Accepted source and generated assignment occurrence, related builder, admitted bounded realized retained map, generated rows and builder extension.",
-  "limits": "The right-hand side is an integer literal and the destination is a local or global scalar place. General assignment traversal remains open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandScalarAssignmentPrefix.lean; scoped Lean 4.35 closure and axiom checks."
- },
- {
-  "feature": "Generated scalar literal assignment non-timeout stops",
-  "statement": "A non-timeout target stop after a successful prefix of an accepted scalar literal assignment either matches a source stop or follows the completed source statement.",
-  "assumptions": "Accepted source and generated assignment occurrence, related builder, admitted bounded realized retained map, generated rows and builder extension.",
-  "limits": "The right-hand side is an integer literal and the destination is a local or global scalar place. Timeout and general assignment traversal remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandScalarAssignmentStopped.lean; scoped Lean 4.35 closure and axiom checks."
- },
- {
   "feature": "Generated integer assignment with compositional value proof",
   "statement": "Successful prefixes and non-timeout stops of an assignment to a local or global integer place compose with a supplied value-expression proof, including a value stop before the store.",
   "assumptions": "Accepted assignment source, integer-typed value, generated rows, related builder, admitted bounded realized retained map, builder extension, and successful-prefix or stopped-prefix family for the value expression.",
@@ -767,18 +753,11 @@
   "evidence": "Goose/Lower/DemandIntegerAssignmentExpressions.lean; Goose/Lower/DemandIntegerAssignmentStatementAgreement.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
-  "feature": "Mixed scalar assignment statement agreement",
-  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing scalar literal assignments, global clears and supported scalar and short-circuit expression statements, with retained aliases realized at intermediate points.",
-  "assumptions": "Accepted source and generated sequence, related builder, admitted bounded realized retained map, generated rows and builder extension.",
-  "limits": "Assignments have integer literal values and local or global scalar destinations; expression statements use the supported control fragment. Timeout, other statements and whole-function traversal remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandAssignmentStatementAgreement.lean; scoped Lean 4.35 closure and axiom checks."
- },
- {
-  "feature": "Mixed scalar assignment unit block agreement",
-  "statement": "Successful generated prefixes and non-timeout stops agree with source execution through scope entry, mixed statement sequences and scope exit for blocks containing scalar literal assignments, including a supported final scalar or short-circuit expression. Intermediate successful prefixes preserve the accepted frame.",
+  "feature": "Mixed integer assignment block agreement",
+  "statement": "Successful generated prefixes and non-timeout stops agree with source execution through scope entry, mixed statement sequences and scope exit for blocks containing supported integer assignments, including a supported final scalar or short-circuit expression. Intermediate successful prefixes preserve the accepted frame.",
   "assumptions": "Accepted block source, generated block and statement rows, related builder, admitted bounded realized retained map and builder extension.",
-  "limits": "No loop context in the stop theorems; assignments have integer literal values and local or global scalar destinations. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandAssignmentBlockPrefix.lean; Goose/Lower/DemandStoppedAssignmentUnitBlock.lean; Goose/Lower/DemandAssignmentValueBlockPrefix.lean; Goose/Lower/DemandStoppedAssignmentValueBlock.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "No loop context in the stop theorems; assignments use supported integer expressions and local or global scalar destinations. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandIntegerAssignmentBlockPrefix.lean; Goose/Lower/DemandStoppedIntegerAssignmentUnitBlock.lean; Goose/Lower/DemandIntegerAssignmentValueBlockPrefix.lean; Goose/Lower/DemandStoppedIntegerAssignmentValueBlock.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted Core short-circuit control demand transfer",
