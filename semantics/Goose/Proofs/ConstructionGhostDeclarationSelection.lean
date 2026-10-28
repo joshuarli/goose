@@ -224,6 +224,40 @@ theorem declaration_occurrence_or_terminal (fuel : Nat) (config : EvalConfig) (e
                   exact nonfixed_occurrence_or_terminal fuel config environment localVar expression origin before rootReady descriptor root implementation
                     found fixed rootResult implemented
 
+theorem declaration_history_or_earlyTerminal (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState) (path : List Nat)
+    (history : SourceHistory config (fuel + 1) path (.statement environment (.letS localVar expression origin)) before
+      (execStmt (fuel + 1) config environment (.letS localVar expression origin) before)) :
+    (∃ destination ready, DeclarationOccurrence fuel config environment localVar expression origin before destination ready ∧
+      (∀ other otherReady, DeclarationOccurrence fuel config environment localVar expression origin before other otherReady →
+        destination = other ∧ ready = otherReady) ∧
+      match destination with
+      | none => SourceHistory config fuel (path ++ [0]) (.value environment expression) ready
+          (evalValue fuel config environment expression ready) ∧
+          Goose.Proofs.ConstructionExecution.EventPrefix
+            (Goose.Proofs.Exit.stepState (evalValue fuel config environment expression ready)).construction.events
+            (Goose.Proofs.Exit.stepState (execStmt (fuel + 1) config environment (.letS localVar expression origin) before)).construction.events
+      | some destination => SourceHistory config fuel (path ++ [0]) (.builder environment destination expression) ready
+          (buildExpr fuel config environment destination expression ready) ∧
+          Goose.Proofs.ConstructionExecution.EventPrefix
+            (Goose.Proofs.Exit.stepState (buildExpr fuel config environment destination expression ready)).construction.events
+            (Goose.Proofs.Exit.stepState (execStmt (fuel + 1) config environment (.letS localVar expression origin) before)).construction.events) ∨
+    ((∃ terminal : DeclarationTerminal, execStmt (fuel + 1) config environment (.letS localVar expression origin) before = terminal.step) ∧
+      ¬ ∃ destination ready, DeclarationOccurrence fuel config environment localVar expression origin before destination ready) := by
+  classical
+  by_cases reached : ∃ destination ready, DeclarationOccurrence fuel config environment localVar expression origin before destination ready
+  · obtain ⟨destination, ready, occurrence⟩ := reached
+    left
+    refine ⟨destination, ready, occurrence, ?_, ?_⟩
+    · intro other otherReady otherOccurrence
+      exact DeclarationOccurrence.unique occurrence otherOccurrence
+    · exact Goose.Proofs.ConstructionGhostDeclarationOccurrenceEvents.DeclarationOccurrence.historyAndEvents occurrence history
+  · right
+    refine ⟨?_, reached⟩
+    rcases declaration_occurrence_or_terminal fuel config environment localVar expression origin before with occurrence | terminal
+    · exact False.elim (reached occurrence)
+    · exact terminal
+
 theorem declaration_history_or_terminal (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState) (path : List Nat)
     (history : SourceHistory config (fuel + 1) path (.statement environment (.letS localVar expression origin)) before
@@ -243,14 +277,11 @@ theorem declaration_history_or_terminal (fuel : Nat) (config : EvalConfig) (envi
             (Goose.Proofs.Exit.stepState (buildExpr fuel config environment destination expression ready)).construction.events
             (Goose.Proofs.Exit.stepState (execStmt (fuel + 1) config environment (.letS localVar expression origin) before)).construction.events) ∨
     (∃ terminal : DeclarationTerminal, execStmt (fuel + 1) config environment (.letS localVar expression origin) before = terminal.step) := by
-  rcases declaration_occurrence_or_terminal fuel config environment localVar expression origin before with ⟨destination, ready, occurrence⟩ | terminal
-  · left
-    refine ⟨destination, ready, occurrence, ?_, ?_⟩
-    · intro other otherReady otherOccurrence
-      exact DeclarationOccurrence.unique occurrence otherOccurrence
-    · exact Goose.Proofs.ConstructionGhostDeclarationOccurrenceEvents.DeclarationOccurrence.historyAndEvents occurrence history
-  · exact Or.inr terminal
+  rcases declaration_history_or_earlyTerminal fuel config environment localVar expression origin before path history with reached | terminal
+  · exact Or.inl reached
+  · exact Or.inr terminal.1
 
+#print axioms declaration_history_or_earlyTerminal
 #print axioms declaration_history_or_terminal
 #print axioms declaration_occurrence_or_terminal
 #print axioms nonfixed_occurrence_or_terminal
