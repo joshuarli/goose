@@ -56,6 +56,27 @@ def NestedCallLoopCursor {cfg : Cfg} (caller : Func) (results : List Ty) {root :
         NestedCallLoopCursor caller results depth innerLoop innerSelected innerSource innerBefore innerBuilt innerInitial innerStart innerMap innerRequired innerRuntime)
       loop selected source before built initial start map required runtime
 
+theorem NestedCallLoopCursor.succ {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
+    {root : DemandNode} {owner : Nat} {loop : Option LoopCtx} (depth : Nat)
+    {selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner}
+    {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+    {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+    (cursor : NestedCallLoopCursor caller results depth loop selected source before built initial start map required runtime) :
+    NestedCallLoopCursor caller results (depth + 1) loop selected source before built initial start map required runtime := by
+  induction depth generalizing env loop statement state before built initial start map required runtime with
+  | zero => exact .mixed cursor
+  | succ depth ih =>
+    cases cursor with
+    | mixed cursor => exact .mixed cursor
+    | existing cursor => exact .existing cursor
+    | body iterations active world child fuel conditionCanonical evaluated branch canonical demanded =>
+      apply NestedCallLoopCursorStep.body iterations active world child fuel conditionCanonical evaluated branch canonical
+      apply demanded.mapCursor
+      intro statement innerState source before built initial start map required runtime cursor
+      exact ih cursor
+
+#print axioms NestedCallLoopCursor.succ
+
 theorem NestedCallLoopCursor.excludes_maximal_terminal {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
     {root : DemandNode} {owner : Nat} {loop : Option LoopCtx} (depth : Nat)
     {selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner}
