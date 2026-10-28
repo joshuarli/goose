@@ -124,6 +124,17 @@ theorem evaluator_fixed_history_coverage (fuel : Nat) (config : EvalConfig) (sha
   have floor := evaluator_ticket_floor fuel config shape action actual state valid.1
   exact ⟨floor.1, reservationReferencesBounded_mono state.construction _ ambient floor.2 valid.2.1, valid.2.2⟩
 
+theorem runModule_fixed_history_coverage (fuel : Nat) (config : EvalConfig)
+    (state : ExecutionState) (ambient : OwnershipAmbient) (pending : List PendingCarrierFrame)
+    (valid : EvaluationHistoryLifecycle state ambient pending) :
+    EvaluationHistoryLifecycle (Goose.Proofs.Exit.stepState (runModule fuel config state)) ambient pending := by
+  letI := ticketFloorPrimitives state.construction.exitReservations.size
+  letI := ticketFloorReservations state.construction.exitReservations.size
+  have floor := runModule_preservesConstructionInvariant
+    (predicate := TicketFloorLifecycle state.construction.exitReservations.size) fuel config state ⟨valid.1, Nat.le_refl _⟩
+  exact ⟨floor.1, reservationReferencesBounded_mono state.construction _ ambient floor.2 valid.2.1, valid.2.2⟩
+
+#print axioms runModule_fixed_history_coverage
 #print axioms preservation_implies_ticket_growth
 #print axioms evaluator_ticket_floor
 #print axioms evaluator_fixed_history_coverage
