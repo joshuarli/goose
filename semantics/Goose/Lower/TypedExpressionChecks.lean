@@ -410,7 +410,7 @@ theorem field_owner_source (artifact : ArtifactProfile) (profile : NumProfile)
     (global := ⟨"field", .bool, .mutable, .read (.field (.global 0) 0), 0⟩)
     accepted rfl (field_prefix artifact profile accepted).invariant
   obtain ⟨field, hfieldTyping, hfieldRoots, _⟩ := source.readChild
-  obtain ⟨owner, hownerTyping, hownerRoots⟩ := field.fieldChild 0
+  obtain ⟨owner, hownerTyping, hownerRoots, _, _⟩ := field.fieldChild 0
   have ht := owner.typed
   rw [hownerTyping, hfieldTyping, htyping] at ht
   simp only [tyPlace] at ht

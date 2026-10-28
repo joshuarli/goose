@@ -950,7 +950,8 @@ theorem ExprSource.popChild {cfg : Cfg} {env : Env} {place : Place} {state : St}
 theorem PlaceSource.fieldChild {cfg : Cfg} {env : Env} {place : Place} {state : St}
     (index : Nat) (source : PlaceSource cfg env (.field place index) state) :
     ∃ child : PlaceSource cfg env place state, child.typingEnv = source.typingEnv ∧
-      child.rootsEnv = source.rootsEnv := by
+      child.rootsEnv = source.rootsEnv ∧ child.path = source.path ++ [0] ∧
+      child.world = source.world := by
   have ht := source.typed
   have hr := source.rooted
   simp only [tyPlace] at ht
@@ -989,7 +990,7 @@ theorem PlaceSource.fieldChild {cfg : Cfg} {env : Env} {place : Place} {state : 
     typingEnd := finish, ty := ty, mutable := mutable, contents := contents, rootsStart := source.rootsStart, rootsEnd := source.rootsEnd,
     roots := source.roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, rfl, rfl⟩
   · exact ec.child_activeMatches rfl 0 (.place place) .place rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.place place) .place rfl
@@ -2914,7 +2915,7 @@ theorem typedPlaceClaim_field {n : Nat} {cfg : Cfg} {results : List Ty} {place :
     (hp : TypedPlaceClaim n cfg results place) (index : Nat) :
     TypedPlaceClaim (n + 1) cfg results (.field place index) := by
   intro env state source hmetadata ls ls' r pt cx fr hlow hpp hext hrel hgir hresults hgenerated
-  obtain ⟨child, htyping, hroots⟩ := source.fieldChild index
+  obtain ⟨child, htyping, hroots, _, _⟩ := source.fieldChild index
   have hchildMetadata : SourceResults child.typingEnv child.rootsEnv results := by
     rw [htyping, hroots]
     exact hmetadata

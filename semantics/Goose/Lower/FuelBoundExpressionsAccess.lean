@@ -207,7 +207,7 @@ theorem typedPlaceFuelBound_field {sourceFuel fuel : Nat} {cfg : Cfg} {results :
     (child : TypedPlaceFuelBound sourceFuel fuel cfg results place) (index : Nat) :
     TypedPlaceFuelBound (sourceFuel + 1) fuel cfg results (.field place index) := by
   intro env state source metadata ls after id pt cx fr lowering point extension rel moduleEq resultsEq generated
-  obtain ⟨childSource, typing, roots⟩ := source.fieldChild index
+  obtain ⟨childSource, typing, roots, _, _⟩ := source.fieldChild index
   have childMetadata : SourceResults childSource.typingEnv childSource.rootsEnv results := by
     rw [typing, roots]
     exact metadata
