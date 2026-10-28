@@ -34,6 +34,46 @@ theorem globalReplay_visitLower {fuel : Nat} {config : EvalConfig} {offset : Nat
     subst visit
     exact Nat.le_refl _
 
+theorem globalReplay_resultLower {fuel : Nat} {config : EvalConfig} {offset : Nat}
+    {globals : List Goose.Core.GlobalId} {accumulator : List Unit} {before : ExecutionState}
+    {outcome : ExecutionStep (List Unit)} {visits : List (Invocation Goose.Core.GlobalId Unit)}
+    (replay : OperandReplay (globalInitializer fuel config) offset globals accumulator before outcome visits) :
+    before.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct := by
+  induction replay with
+  | done => exact Nat.le_refl _
+  | @next offset global rest accumulator before middle value outcome visits head tail ih =>
+    have bound := counter_globalInitializer fuel config global (evaluation_preservesActivationCounter fuel config) before
+    simp only [head, Goose.Proofs.Exit.stepState] at bound
+    exact Nat.le_trans bound ih
+  | @stopped offset global rest accumulator before after reason head =>
+    have bound := counter_globalInitializer fuel config global (evaluation_preservesActivationCounter fuel config) before
+    simpa only [head, Goose.Proofs.Exit.stepState] using bound
+  | @escaped offset global rest accumulator before after address carriers head =>
+    have bound := counter_globalInitializer fuel config global (evaluation_preservesActivationCounter fuel config) before
+    simpa only [head, Goose.Proofs.Exit.stepState] using bound
+  | @jumped offset global rest accumulator before after target kind head =>
+    have bound := counter_globalInitializer fuel config global (evaluation_preservesActivationCounter fuel config) before
+    simpa only [head, Goose.Proofs.Exit.stepState] using bound
+
+theorem globalReplay_visitUpper {fuel : Nat} {config : EvalConfig} {offset : Nat}
+    {globals : List Goose.Core.GlobalId} {accumulator : List Unit} {before : ExecutionState}
+    {outcome : ExecutionStep (List Unit)} {visits : List (Invocation Goose.Core.GlobalId Unit)}
+    (replay : OperandReplay (globalInitializer fuel config) offset globals accumulator before outcome visits)
+    (visit : Invocation Goose.Core.GlobalId Unit) (member : visit ∈ visits) :
+    (Goose.Proofs.Exit.stepState visit.outcome).nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct := by
+  induction replay with
+  | done => simp at member
+  | next head tail ih =>
+    simp only [List.mem_cons] at member
+    rcases member with same | later
+    · subst visit; exact globalReplay_resultLower tail
+    · exact ih later
+  | stopped | escaped | jumped =>
+    simp only [List.mem_singleton] at member
+    subst visit
+    exact Nat.le_refl _
+
+#print axioms globalReplay_visitUpper
 theorem globalReplay_uniqueActivations {fuel : Nat} {config : EvalConfig} {offset : Nat}
     {globals : List Goose.Core.GlobalId} {accumulator : List Unit} {before : ExecutionState}
     {outcome : ExecutionStep (List Unit)} {visits : List (Invocation Goose.Core.GlobalId Unit)}
@@ -88,6 +128,29 @@ theorem runModule_globalActivationHistory (fuel : Nat) (config : EvalConfig) (be
   · simp only [runModule, bind, execution, moduleAfterGlobals, afterGlobals]
     cases outcome <;> rfl
 
+theorem completedGlobals_activationBounds (fuel : Nat) (config : EvalConfig) (before initialized : ExecutionState)
+    (completed : initGlobals fuel config (List.range config.module.globals.size) before = .ok () initialized) :
+    ∃ outcome visits,
+      OperandReplay (globalInitializer fuel config) 0 (List.range config.module.globals.size) [] before outcome visits ∧
+      (visits.map fun visit => visit.before.nextAct).Nodup ∧
+      ∀ visit ∈ visits, visit.before.nextAct < initialized.nextAct := by
+  obtain ⟨outcome, visits, replay, ordered, once, execution⟩ :=
+    initGlobals_replay fuel config (List.range config.module.globals.size) before
+  refine ⟨outcome, visits, replay, globalReplay_uniqueActivations replay, ?_⟩
+  rw [completed] at execution
+  have finalState : Goose.Proofs.Exit.stepState outcome = initialized := by
+    cases outcome <;> simp_all [discardGlobalValues, Goose.Proofs.Exit.stepState]
+  intro visit member
+  have visited : visit.operand ∈ visits.map Invocation.operand := List.mem_map.mpr ⟨visit, member, rfl⟩
+  rw [ordered] at visited
+  have input : visit.operand ∈ List.range config.module.globals.size := List.mem_of_mem_take visited
+  have bound : visit.operand < config.module.globals.size := List.mem_range.mp input
+  have strict := globalReplay_visitAllocates replay visit member config.module.globals[visit.operand] (by simp [bound])
+  have upper := globalReplay_visitUpper replay visit member
+  rw [finalState] at upper
+  exact Nat.lt_of_lt_of_le strict upper
+
+#print axioms completedGlobals_activationBounds
 #print axioms runModule_globalActivationHistory
 #print axioms globalReplay_visitLower
 #print axioms globalReplay_uniqueActivations
