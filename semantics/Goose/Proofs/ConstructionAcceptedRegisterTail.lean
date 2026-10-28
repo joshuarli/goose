@@ -34,7 +34,7 @@ theorem completion_register_scalar {expression : Expr} (form : AcceptedBinaryExp
       (do let value ← evalValue fuel config environment expression; pure [Carrier.register value]) state := by
   have produced := evalProduce_register_scalar form fuel config environment state ty
   cases evaluated : evalValue fuel config environment expression state <;>
-    simp [withCompletionChannels, materializeOwnedCarriers, bind, pure, produced, evaluated]
+    simp [withCompletionChannels, completionChannelSetup, materializeOwnedCarriers, bind, pure, produced, evaluated]
 
 theorem execActivationBody_register_scalar_tail {expression : Expr} (form : AcceptedBinaryExpression expression)
     (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt)
