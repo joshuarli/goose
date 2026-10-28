@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionByteGlobalEntryBody
+import Goose.Proofs.ConstructionExecutionProtocolLifecycle
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 
@@ -59,7 +60,8 @@ theorem acceptedByteModule_stopped_or_body_complete (fuel : Nat) (config : EvalC
     (checkFuel : declarations.length ≤ 4094) :
     (∃ stop after initialized ambient types live regions,
       runModule (fuel + 3) config .initial = .stop stop after ∧
-      AcceptedWorld config initialized after ambient types live regions []) ∨
+      AcceptedWorld config initialized after ambient types live regions [] ∧
+      DestinationTraceProtocol after.construction) ∨
     ∃ (initialized : ExecutionState) (frame next : ConstructionSourceFrame) (activation : RuntimeActivation)
       (after : ExecutionState) (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion),
       let environment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
@@ -76,7 +78,9 @@ theorem acceptedByteModule_stopped_or_body_complete (fuel : Nat) (config : EvalC
   rcases acceptedByteGlobalsEntryBodyOrStop fuel config accepted declarations original implementation globals
       originalAt implementationAt body owners checkFuel with stopped | entry
   · obtain ⟨stop, after, initialized, live, regions, moduleStop, bound, world⟩ := stopped
-    exact Or.inl ⟨stop, after, initialized, [], declaredRootTypes config.module, live, regions, moduleStop, world⟩
+    have protocol := Goose.Proofs.ConstructionExecutionProtocol.runModule_destination_trace_protocol (fuel + 3) config
+    simp only [moduleStop, Goose.Proofs.Exit.stepState] at protocol
+    exact Or.inl ⟨stop, after, initialized, [], declaredRootTypes config.module, live, regions, moduleStop, world, protocol⟩
   · obtain ⟨initialized, frame, next, activation, types, live, regions, initializedRun, moduleStep, callStep,
       implementationEq, environmentEq, initializedEq, extended, world, source, flow⟩ := entry
     let activated := { initialized with nextAct := initialized.nextAct + 1, activations := activation :: initialized.activations }
@@ -94,7 +98,9 @@ theorem acceptedByteModule_stopped_or_body_complete (fuel : Nat) (config : EvalC
       have moduleStop := byteEntry_statements_stopped_module fuel config initialized frame activation after stop
         environmentEq moduleStep callStep outcome
       simp only [outcome, Goose.Proofs.Exit.stepState] at world
-      exact Or.inl ⟨stop, after, next.initialized, [.callChannels activation []], types, live, regions, moduleStop, world⟩
+      have protocol := Goose.Proofs.ConstructionExecutionProtocol.runModule_destination_trace_protocol (fuel + 3) config
+      simp only [moduleStop, Goose.Proofs.Exit.stepState] at protocol
+      exact Or.inl ⟨stop, after, next.initialized, [.callChannels activation []], types, live, regions, moduleStop, world, protocol⟩
     | ok result after =>
       simp only [outcome] at flow
       subst result
