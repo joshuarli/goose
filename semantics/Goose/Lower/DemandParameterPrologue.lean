@@ -2,13 +2,14 @@ import Goose.Lower.DemandParameterPrefix
 import Goose.Lower.TypedCall
 import Goose.Evidence.Execution
 import Goose.Lower.DemandRuntimePrefix
+import Goose.Lower.DemandCallEffectPrefix
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 open Goose.Proofs.Lower (extT_finish bodyTail)
 
-theorem initSlots_trace {cfg : Cfg} {env : Env} {cx : FnCtx} {scope : ScopeId} {instanceId : ScopeInst}
+theorem initSlots_effects {cfg : Cfg} {env : Env} {cx : FnCtx} {scope : ScopeId} {instanceId : ScopeInst}
     (scopes : env.scopes.head? = some (scope, instanceId)) :
     ∀ (pre : List (SlotId × ValueId × OriginId)) (values : List (VarId × Val))
       {le : LEnv} {before after : LS} {result : Unit} {point : Pt} {frame : GIR.Frame} (state : St),
@@ -16,19 +17,19 @@ theorem initSlots_trace {cfg : Cfg} {env : Env} {cx : FnCtx} {scope : ScopeId} {
       initSlots pre le before = (result, after) → before.pp = some point → ExtT after cx.fn.blocks →
       Rel cfg env cx frame before → PreRel frame pre values →
       ∀ count, count ≤ values.length →
-        DemandRuntimePrefix cx count ⟨point, frame, state⟩
+        DemandEffectPrefix cx count ⟨point, frame, state⟩
           ⟨(point.1, point.2 + count), frame,
             { state with store := preStore env.act instanceId (values.take count) state.store }⟩
   | [], [], le, before, after, result, point, frame, state, _, _, _, _, _, _, count, bound => by
     have zero : count = 0 := by simpa using bound
     subst count
-    simpa only [List.take_zero, preStore, Nat.add_zero] using (DemandRuntimePrefix.zero ⟨point, frame, state⟩)
+    simpa only [List.take_zero, preStore, Nat.add_zero] using (DemandEffectPrefix.zero ⟨point, frame, state⟩)
   | (slot, id, origin) :: rest, (varId, value) :: values,
       le, before, after, result, point, frame, state, declared, lowered, atPoint, extension,
       related, ⟨sameId, cell, restCells⟩, count, bound => by
     subst varId
     cases count with
-    | zero => simpa only [List.take_zero, preStore, Nat.add_zero] using (DemandRuntimePrefix.zero ⟨point, frame, state⟩)
+    | zero => simpa only [List.take_zero, preStore, Nat.add_zero] using (DemandEffectPrefix.zero ⟨point, frame, state⟩)
     | succ count =>
       simp only [initSlots, bind_eq] at lowered
       obtain ⟨firstResult, middle, first, remaining⟩ := lowered
@@ -43,17 +44,31 @@ theorem initSlots_trace {cfg : Cfg} {env : Env} {cx : FnCtx} {scope : ScopeId} {
       have effect : execEff cx.fn frame (.slotInit slot id (some origin)) =
           bindRoot (.local env.act instanceId slot) value >>= fun _ => pure frame := by
         simp only [execEff, slotRoot_eq related slot, root, getVal_of cell, pure_bind]
-      have step : RuntimeStep cx.cfg cx.fn point frame state (point.1, point.2 + 1) frame
-          { state with store := state.store.introduce (.local env.act instanceId slot) value } := by
-        apply RuntimeStep.effect instruction
+      have execution : execEff cx.fn frame (.slotInit slot id (some origin)) state =
+          .ok frame { state with store := state.store.introduce (.local env.act instanceId slot) value } := by
         rw [effect]
         rfl
-      have further := initSlots_trace scopes rest values { state with store := state.store.introduce (.local env.act instanceId slot) value }
+      have further := initSlots_effects scopes rest values { state with store := state.store.introduce (.local env.act instanceId slot) value }
         (fun cell member => declared cell (List.mem_cons_of_mem _ member)) remaining nextPoint extension
         (related.stack_eq sameStack) restCells count (by simpa using bound)
-      simpa only [List.take_succ_cons, preStore, Nat.add_assoc, Nat.add_comm 1 count] using DemandRuntimePrefix.next step further
+      simpa only [List.take_succ_cons, preStore, Nat.add_assoc, Nat.add_comm 1 count] using DemandEffectPrefix.next instruction execution further
   | [], _ :: _, _, _, _, _, _, _, _, _, _, _, _, _, impossible, _, _ => impossible.elim
   | _ :: _, [], _, _, _, _, _, _, _, _, _, _, _, _, impossible, _, _ => impossible.elim
+
+
+theorem initSlots_trace {cfg : Cfg} {env : Env} {cx : FnCtx} {scope : ScopeId} {instanceId : ScopeInst}
+    (scopes : env.scopes.head? = some (scope, instanceId)) :
+    ∀ (pre : List (SlotId × ValueId × OriginId)) (values : List (VarId × Val))
+      {le : LEnv} {before after : LS} {result : Unit} {point : Pt} {frame : GIR.Frame} (state : St),
+      (∀ cell ∈ pre, ∃ localVar, env.vars[cell.1]? = some localVar ∧ localVar.scope = scope) →
+      initSlots pre le before = (result, after) → before.pp = some point → ExtT after cx.fn.blocks →
+      Rel cfg env cx frame before → PreRel frame pre values →
+      ∀ count, count ≤ values.length →
+        DemandRuntimePrefix cx count ⟨point, frame, state⟩
+          ⟨(point.1, point.2 + count), frame,
+            { state with store := preStore env.act instanceId (values.take count) state.store }⟩ := by
+  intro pre values le before after result point frame state declared lowered atPoint extension related cells count bound
+  exact (initSlots_effects scopes pre values state declared lowered atPoint extension related cells count bound).runtime
 
 
 private theorem initSlots_points {cfg : Cfg} {env : Env} {cx : FnCtx} {scope : ScopeId} {instanceId : ScopeInst}
@@ -70,7 +85,7 @@ private theorem initSlots_points {cfg : Cfg} {env : Env} {cx : FnCtx} {scope : S
   intro pre values le before after result point frame state declared lowered atPoint extension related cells reached count bound
   exact (initSlots_trace scopes pre values state declared lowered atPoint extension related cells count bound).reachable reached
 
-theorem accepted_block_parameter_prologue_trace {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
+theorem accepted_block_parameter_prologue_effects {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
     {block : Core.Block} {state : St} (source : BlockSource cfg env pre block state)
     {cx : FnCtx} {before after : LS} {result : ValueId} {point : Pt} {frame : GIR.Frame}
     {loop : Option LoopCtx} {bindings : List (SlotId × ValueId × OriginId)} {want : Bool} {results : List Ty}
@@ -78,7 +93,7 @@ theorem accepted_block_parameter_prologue_trace {cfg : Cfg} {env : Env} {pre : L
     (atPoint : before.pp = some point) (extension : ExtT after cx.fn.blocks)
     (related : Rel cfg env cx frame before) (cells : PreRel frame bindings pre)
     (count : Nat) (bound : count ≤ pre.length) :
-    DemandRuntimePrefix cx (count + 1) ⟨point, frame, state⟩
+    DemandEffectPrefix cx (count + 1) ⟨point, frame, state⟩
       ⟨(point.1, point.2 + 1 + count), { frame with scopes := (block.scope, state.nextScope) :: frame.scopes },
         { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope (pre.take count) state.store }⟩ := by
   cases block with
@@ -93,19 +108,34 @@ theorem accepted_block_parameter_prologue_trace {cfg : Cfg} {env : Env} {pre : L
     have enterExtension := slotsExtension.of_adv (advB_initSlots bindings _ _ _ _ slotsLowered)
     obtain ⟨_, stack, nextPoint, instruction⟩ := emitEffect_facts enterLowered atPoint enterExtension
     let inner : GIR.Frame := { frame with scopes := (scope, state.nextScope) :: frame.scopes }
-    have enterStep : RuntimeStep cx.cfg cx.fn point frame state (point.1, point.2 + 1) inner
-        { state with nextScope := state.nextScope + 1 } := RuntimeStep.effect instruction rfl
+    have enterRun : execEff cx.fn frame (.enter scope) state = .ok inner { state with nextScope := state.nextScope + 1 } := rfl
     have innerRelated : Rel cfg { env with scopes := (scope, state.nextScope) :: env.scopes }
         cx inner { entered with stack := scope :: entered.stack } := by
       exact ⟨related.prof, related.slots, related.act, by simp [inner, related.scopes], related.depth,
         by simp [stack, related.stack]⟩
-    have tail := initSlots_trace (cfg := cfg)
+    have tail := initSlots_effects (cfg := cfg)
       (env := { env with scopes := (scope, state.nextScope) :: env.scopes })
       (frame := inner) rfl bindings pre { state with nextScope := state.nextScope + 1 }
       (source.preScopes cells) slotsLowered nextPoint slotsExtension innerRelated (PreRel.ext (fr := frame) (fr' := inner) rfl cells)
       count bound
-    simpa [inner, Core.Block.scope] using DemandRuntimePrefix.next enterStep tail
+    simpa [inner, Core.Block.scope] using DemandEffectPrefix.next instruction enterRun tail
 
+
+theorem accepted_block_parameter_prologue_trace {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
+    {block : Core.Block} {state : St} (source : BlockSource cfg env pre block state)
+    {cx : FnCtx} {before after : LS} {result : ValueId} {point : Pt} {frame : GIR.Frame}
+    {loop : Option LoopCtx} {bindings : List (SlotId × ValueId × OriginId)} {want : Bool} {results : List Ty}
+    (lowered : lowerBlock loop bindings want block (lowerEnv cfg.mod env.vars results) before = (result, after))
+    (atPoint : before.pp = some point) (extension : ExtT after cx.fn.blocks)
+    (related : Rel cfg env cx frame before) (cells : PreRel frame bindings pre)
+    (count : Nat) (bound : count ≤ pre.length) :
+    DemandRuntimePrefix cx (count + 1) ⟨point, frame, state⟩
+      ⟨(point.1, point.2 + 1 + count), { frame with scopes := (block.scope, state.nextScope) :: frame.scopes },
+        { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope (pre.take count) state.store }⟩ := by
+  exact (accepted_block_parameter_prologue_effects source lowered atPoint extension related cells count bound).runtime
+
+#print axioms initSlots_effects
+#print axioms accepted_block_parameter_prologue_effects
 #print axioms initSlots_trace
 #print axioms accepted_block_parameter_prologue_trace
 
