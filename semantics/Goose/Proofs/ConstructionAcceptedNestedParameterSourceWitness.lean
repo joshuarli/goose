@@ -1,6 +1,8 @@
 import Goose.Proofs.ConstructionAcceptedNestedParameterSource
 import Goose.Proofs.ConstructionAcceptedNestedGlobal
 import Goose.Proofs.ConstructionAcceptedSingleScalarGlobal
+import Goose.Proofs.ConstructionAcceptedNestedIdentityCalls
+import Goose.Proofs.ConstructionAcceptedModuleFromGlobals
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -45,6 +47,45 @@ theorem nestedParameter_checkedRoots :
     (by rfl) (by rfl) (by simp [frame, scalarGlobalInitializerFrame, NoParameterAccess, Eff.accessTargets]) checked.provenance
   exact ⟨names, roots, typingAfter, rootsAfter, checked, facts⟩
 
+theorem nestedParameter_identityForm : NestedIdentityExpression nestedParameterConfig .i64 nestedParameterExpression := by
+  unfold nestedParameterExpression
+  apply NestedIdentityExpression.call 1 0 ⟨1, "identity", [], [[]], []⟩ nestedParameterHelper ⟨0, .byValue⟩
+    ⟨"value", .int .i64, .immutable, 0, 0⟩ (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl)
+  apply NestedIdentityExpression.call 1 0 ⟨1, "identity", [], [[]], []⟩ nestedParameterHelper ⟨0, .byValue⟩
+    ⟨"value", .int .i64, .immutable, 0, 0⟩ (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl)
+  exact .scalar (.numeric (.scalar (.scalar (.integer .i64 7))))
+
+private def nestedParameterObservation : Option Int :=
+  match runModule 50 nestedParameterConfig .initial with
+  | .ok () state => match state.objects.lookup (.global 0) with
+    | some (.int .i64 value) => some value
+    | _ => none
+  | _ => none
+
+theorem nestedParameter_result : nestedParameterObservation = some 7 := by decide +kernel
+
+theorem nestedParameter_module_allFuel (fuel : Nat) :
+    ∃ initialized ambient types live regions,
+      AcceptedWorld nestedParameterConfig initialized (Goose.Proofs.Exit.stepState (runModule fuel nestedParameterConfig .initial)) ambient types live regions [] ∧
+      (match runModule fuel nestedParameterConfig .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  let accepted := acceptedModule nestedParameterConfig nestedParameter_validated
+  have initial : InitialGlobalsOutcome fuel nestedParameterConfig := by
+    apply singleScalarInitialGlobalsOutcome fuel nestedParameterConfig accepted nestedParameterGlobal (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩)
+    intro names roots typingAfter rootsAfter frame activated world source checked
+    obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, finalSource, clear, observed, result⟩ :=
+      evalValue_nestedIdentity nestedParameter_identityForm fuel accepted frame activated [] (declaredRootTypes nestedParameterModule)
+        (fun _ => False) [] [] world source roots typingAfter rootsAfter checked
+    exact ⟨nextTypes, nextLive, nextAmbient, extend, finalWorld, clear, result⟩
+  apply acceptedModuleFromGlobals_allFuel fuel nestedParameterConfig accepted ⟨0, "entry", [], [], []⟩ nestedParameterEntry initial (by rfl) (by rfl)
+  · exact .nil
+  · simp [nestedParameterEntry, Block.stmts]
+  · simp [nestedParameterEntry, Block.stmts]
+  · simp [nestedParameterEntry, Block.stmts]
+  · simp [nestedParameterEntry, Block.stmts]
+  · rfl
+
+#print axioms nestedParameter_module_allFuel
+#print axioms nestedParameter_result
 #print axioms nestedParameter_checkedRoots
 #print axioms nestedParameter_validated
 end Goose.Proofs.ConstructionAcceptedExecution
