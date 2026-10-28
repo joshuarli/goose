@@ -8,7 +8,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 
-theorem acceptedRegisterParameterCallBody_partial (config : EvalConfig) (accepted : AcceptedModule config)
+theorem acceptedRegisterParameterCallBody_partial_withSource (config : EvalConfig) (accepted : AcceptedModule config)
     (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (contextId : Nat) (original : Context) (implementation : Impl) (parameter : Param) (descriptor : LocalVar) (value : Value) (resultTy : Ty)
@@ -34,6 +34,9 @@ theorem acceptedRegisterParameterCallBody_partial (config : EvalConfig) (accepte
         (registerRootType types root descriptor.ty) (fun other => other = root ∨ live other) regions pending ∧
       AcceptedFrame config accepted (entryStatementsFrame config frame state.nextScope) after
         (registerRootType types root descriptor.ty) ∧
+      activation.implementation = original.impl ∧ activation.vars = implementation.vars ∧
+      SourceFrameCompatible accepted frame ∧
+      SourcePosition accepted (implementationBodyFrame config frame) (.block implementation.body) ∧
       SourcePosition accepted (entryStatementsFrame config frame state.nextScope) (.statements implementation.body.stmts) := by
   obtain ⟨frame, activation, initialized, environment, act, scopes, channels, freshActStep, freshScopeStep,
       scopeWorld, scopeSource, aligned, compatible, sameImpl, phase, visible, counter, cursor, activationImpl, activationVars⟩ :=
@@ -81,11 +84,49 @@ theorem acceptedRegisterParameterCallBody_partial (config : EvalConfig) (accepte
     have position := SourcePosition.instantiate statementsPosition
       (frame.interpretation.enterScope frame.source.impl.body.scope state.nextScope) frame.initialized
     simpa [entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, sameImpl] using position
-  refine ⟨frame, activation, after, sameImpl, initialized, phase, environment, act, scopes, channels, freshActStep, freshScopeStep, ?_, ?_, ?_, ?_, position⟩
+  have bodyPosition' : SourcePosition accepted (implementationBodyFrame config frame) (.block implementation.body) := by
+    simpa [sameImpl] using bodyPosition
+  refine ⟨frame, activation, after, sameImpl, initialized, phase, environment, act, scopes, channels, freshActStep, freshScopeStep, ?_, ?_, ?_, ?_, activationImpl, activationVars, compatible, bodyPosition', position⟩
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment, parameterId, scopeState] using bound
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment] using extended
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment, initialized] using afterWorld
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment] using finalSource
 
+
+theorem acceptedRegisterParameterCallBody_partial (config : EvalConfig) (accepted : AcceptedModule config)
+    (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (contextId : Nat) (original : Context) (implementation : Impl) (parameter : Param) (descriptor : LocalVar) (value : Value) (resultTy : Ty)
+    (originalAt : config.module.contexts[contextId]? = some original)
+    (implementationAt : config.module.impls[original.impl]? = some implementation)
+    (parameters : implementation.params = #[parameter])
+    (declared : implementation.vars[0]? = some descriptor)
+    (scalar : (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool)
+    (represented : ValueRepresentation descriptor.ty value) (pointers : PointerTypedValue types descriptor.ty value)
+    (world : AcceptedWorld config caller.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted caller state types) :
+    ∃ (frame : ConstructionSourceFrame) (activation : RuntimeActivation) (after : ExecutionState),
+      let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
+      let scopeState := ownershipResultScopeState activation implementation.body.scope activated
+      let root := Goose.Core.RootInst.local activation.act state.nextScope 0
+      frame.source.impl = implementation ∧ frame.initialized = caller.initialized ∧ frame.phase = .implementation contextId ∧ frame.interpretation.environment = activation ∧
+      activation.act = state.nextAct ∧ activation.scopes = [] ∧ activation.channels = [.register resultTy] ∧
+      freshAct state = .ok activation.act { state with nextAct := state.nextAct + 1 } ∧
+      freshScope activated = .ok activated.nextScope { activated with nextScope := activated.nextScope + 1 } ∧
+      bindAll activation.act state.nextScope [(parameter.var, value)] scopeState = .ok () after ∧
+      RootTypesExtend types (registerRootType types root descriptor.ty) ∧
+      AcceptedWorld config caller.initialized after (.callChannels activation [] :: ambient)
+        (registerRootType types root descriptor.ty) (fun other => other = root ∨ live other) regions pending ∧
+      AcceptedFrame config accepted (entryStatementsFrame config frame state.nextScope) after
+        (registerRootType types root descriptor.ty) ∧
+      SourcePosition accepted (entryStatementsFrame config frame state.nextScope) (.statements implementation.body.stmts) := by
+  obtain ⟨frame, activation, after, impl, initialized, phase, environment, act, scopes, channels, freshActStep,
+    freshScopeStep, bound, extended, afterWorld, afterSource, activationImpl, activationVars, compatible, bodyPosition, position⟩ :=
+    acceptedRegisterParameterCallBody_partial_withSource config accepted caller state ambient types live regions pending contextId original
+      implementation parameter descriptor value resultTy originalAt implementationAt parameters declared scalar represented pointers world source
+  exact ⟨frame, activation, after, impl, initialized, phase, environment, act, scopes, channels, freshActStep,
+    freshScopeStep, bound, extended, afterWorld, afterSource, position⟩
+
+#print axioms acceptedRegisterParameterCallBody_partial_withSource
 #print axioms acceptedRegisterParameterCallBody_partial
 end Goose.Proofs.ConstructionAcceptedExecution
