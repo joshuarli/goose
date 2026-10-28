@@ -4,6 +4,35 @@ namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
 open Goose.Lower.Validation.ReplacementContentFlowSource
 
+theorem generated_call_argument_extended {cfg : Cfg} {env : Env} {context : ContextId}
+    {arguments : List Arg} {origin : OriginId} {index : Nat} {argument : Arg}
+    (found : arguments[index]? = some argument) {cx : FnCtx} {results : List Ty} {before : LS}
+    (extended : ExtT (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks) :
+    ExtT (lowerArg argument (lowerEnv cfg.mod env.vars results)
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).2 cx.fn.blocks := by
+  let le := lowerEnv cfg.mod env.vars results
+  let stage := (lowerArgs (arguments.take index) le before).2
+  obtain ⟨ids, middle, after, argsRun, definition, tail⟩ := lowerExpr_call_split
+    (show lowerExpr (.call context arguments origin) le before =
+      ((lowerExpr (.call context arguments origin) le before).1, (lowerExpr (.call context arguments origin) le before).2) from rfl)
+  have afterExtended : ExtT after cx.fn.blocks := by
+    rcases tail with ⟨_, term⟩ | ⟨_, rfl⟩
+    · exact extended.of_adv (adv_emitTerm term)
+    · exact extended
+  have middleExtended := afterExtended.of_adv (adv_emitDef definition)
+  have argsExtended : ExtT (lowerArgs arguments le before).2 cx.fn.blocks := by
+    rw [argsRun]
+    exact middleExtended
+  obtain ⟨earlier, later, split, length, _, _, advance⟩ := lowerArgs_argument_checkpoint found le before
+  have earlierEq : arguments.take index = earlier := by
+    rw [split, ← length]
+    simp
+  have argExtended : ExtT (lowerArg argument le stage).2 cx.fn.blocks := by
+    dsimp [stage]
+    rw [earlierEq]
+    exact argsExtended.of_adv advance
+  exact argExtended
+
 theorem accepted_generated_call_reference_address {cfg : Cfg} {env : Env} {initialState state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
     (source : ExprSource cfg env (.call context arguments origin) initialState)
@@ -47,25 +76,7 @@ theorem accepted_generated_call_reference_address {cfg : Cfg} {env : Env} {initi
     simpa only [roots, path] using inherited
   let le := lowerEnv cfg.mod env.vars results
   let stage := (lowerArgs (arguments.take index) le before).2
-  obtain ⟨ids, middle, after, argsRun, definition, tail⟩ := lowerExpr_call_split
-    (show lowerExpr (.call context arguments origin) le before =
-      ((lowerExpr (.call context arguments origin) le before).1, (lowerExpr (.call context arguments origin) le before).2) from rfl)
-  have afterExtended : ExtT after cx.fn.blocks := by
-    rcases tail with ⟨_, term⟩ | ⟨_, rfl⟩
-    · exact extended.of_adv (adv_emitTerm term)
-    · exact extended
-  have middleExtended := afterExtended.of_adv (adv_emitDef definition)
-  have argsExtended : ExtT (lowerArgs arguments le before).2 cx.fn.blocks := by
-    rw [argsRun]
-    exact middleExtended
-  obtain ⟨earlier, later, split, length, _, _, advance⟩ := lowerArgs_argument_checkpoint found le before
-  have earlierEq : arguments.take index = earlier := by
-    rw [split, ← length]
-    simp
-  have argExtended : ExtT (lowerArg (.byRef mutability place) le stage).2 cx.fn.blocks := by
-    dsimp [stage]
-    rw [earlierEq]
-    exact argsExtended.of_adv advance
+  have argExtended := generated_call_argument_extended found extended
   have argEq : (lowerArg (.byRef mutability place) le stage).2 =
       (borrowTo mutability (lowerPlace place le stage).1 le (lowerPlace place le stage).2).2 := by
     simp [lowerArg, bind_run]

@@ -5,7 +5,7 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound
 
-private theorem accepted_assignment_scalar_place_roots {cfg : Cfg} {env : Env} {state : St} {place : Place}
+theorem accepted_assignment_scalar_place_roots {cfg : Cfg} {env : Env} {state : St} {place : Place}
     (destination : PlaceSource cfg env place state) (form : ScalarReadPlace place) :
     destination.rootsEnv.access.placeRoots place = .ok destination.roots := by
   cases form with
@@ -22,6 +22,34 @@ private theorem accepted_assignment_scalar_place_roots {cfg : Cfg} {env : Env} {
     have shape : destination.roots = [.local slot] := (congrArg Prod.fst (Except.ok.inj rooted)).symm
     simp [AccessEnv.placeRoots, shape, pure] <;> rfl
 
+theorem PlaceSource.operandAlias {cfg : Cfg} {env : Env} {state after : St} {place : Place}
+    (destination : PlaceSource cfg env place state) {path : List Nat}
+    (placeRoots : destination.rootsEnv.access.placeRoots place = .ok destination.roots)
+    (target : destination.ty.refTarget = true)
+    {fuel : Nat} {location : Loc} (placed : evalPlace fuel cfg env place state = .ok location after) :
+    ∃ alias : RetainedAlias,
+      destination.rootsEnv.access.aliasPlace path place = .ok [alias] ∧
+      AliasAt cfg.mod destination.world env after.store alias (.ref location) := by
+  have result := destination.result fuel location placed
+  have valid := result.typed
+  have locationType : HasTy cfg.mod destination.world.G after.store (.ref location) (.ref .mutable destination.ty) := by
+    rcases valid with valid | invalid | invalid
+    · exact ⟨location, rfl, Or.inl valid⟩
+    · obtain ⟨_, _, _, _, _, _, _, _, _, impossible, _⟩ := invalid
+      cases typeEq : destination.ty <;> simp_all [Ty.refTarget, Ty.isRefLike]
+    · obtain ⟨_, _, _, _, _, _, _, _, _, impossible, _⟩ := invalid
+      cases typeEq : destination.ty <;> simp_all [Ty.refTarget]
+  have lookup := tyPlace_accessType (destination.frame.mod_t.trans destination.frame.mod_p.symm)
+    (destination.frame.vars_t.trans destination.frame.vars_p.symm) destination.typed
+  let alias : RetainedAlias := ⟨.ref .mutable destination.ty, destination.roots, .operand path⟩
+  refine ⟨alias, ?_, locationType, ?_⟩
+  · cases owner : destination.ty.ownerElem?.isSome <;>
+      simp [AccessEnv.aliasPlace, lookup, placeRoots, Ty.interiorTarget?, owner, alias] <;> rfl
+  · intro root target
+    have rootEq : location.root = root := target
+    rw [← rootEq]
+    exact result.rooted
+
 theorem accepted_assignment_destination_alias {cfg : Cfg} {env : Env} {state after : St}
     {place : Place} {value : Expr} {origin : OriginId}
     (source : StmtSource cfg env (.assign place value origin) state)
@@ -33,28 +61,9 @@ theorem accepted_assignment_destination_alias {cfg : Cfg} {env : Env} {state aft
     ∃ alias : RetainedAlias,
       source.rootsEnv.access.aliasPlace (source.path ++ [0]) place = .ok [alias] ∧
       AliasAt cfg.mod source.world env after.store alias (.ref location) := by
-  have result := destination.result fuel location placed
-  have valid := result.typed
-  rw [destinationType] at valid
-  have locationType : HasTy cfg.mod destination.world.G after.store (.ref location) (.ref .mutable type) := by
-    rcases valid with valid | invalid | invalid
-    · exact ⟨location, rfl, Or.inl valid⟩
-    · obtain ⟨_, _, _, _, _, _, _, _, _, impossible, _⟩ := invalid
-      cases type <;> simp_all [Ty.refTarget, Ty.isRefLike]
-    · obtain ⟨_, _, _, _, _, _, _, _, _, impossible, _⟩ := invalid
-      cases type <;> simp_all [Ty.refTarget]
-  have lookup := tyPlace_accessType (destination.frame.mod_t.trans destination.frame.mod_p.symm)
-    (destination.frame.vars_t.trans destination.frame.vars_p.symm) destination.typed
-  rw [roots, destinationType] at lookup
-  let alias : RetainedAlias := ⟨.ref .mutable type, destination.roots, .operand (source.path ++ [0])⟩
-  refine ⟨alias, ?_, ?_, ?_⟩
-  · cases owner : type.ownerElem?.isSome <;>
-      simp [AccessEnv.aliasPlace, lookup, placeRoots, Ty.interiorTarget?, owner, alias] <;> rfl
-  · simpa only [world] using locationType
-  · intro root target
-    have rootEq : location.root = root := target
-    rw [← rootEq]
-    simpa only [world] using result.rooted
+  have result := destination.operandAlias (path := source.path ++ [0])
+    (by simpa only [roots] using placeRoots) (by simpa only [destinationType] using target) placed
+  simpa only [roots, world] using result
 
 
 theorem accepted_assignment_scalar_destination_alias {cfg : Cfg} {env : Env} {state after : St}
