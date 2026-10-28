@@ -8,62 +8,25 @@ theorem scalar_call_block_normal {cfg : Cfg} {env : Env} {block : Core.Block}
     {other : Env} (fragment : ReachableScalarCallStatements cfg other block.stmts) (noValue : block.value = none)
     {fuel : Nat} {state after : St} {flow : Flow}
     (done : execBlock fuel cfg env [] block state = .ok flow after) : flow = .normal .unit := by
-  cases fuel with
-  | zero => simp [execBlock, timeout, M.stop] at done
-  | succ fuel =>
-    cases block with
-    | mk scope statements value =>
-      simp only [Core.Block.value] at noValue
-      subst value
-      rw [execBlock_pre] at done
-      unfold prefixCoreBlock at done
-      obtain ⟨si, middle, _, rest⟩ := call_loop_bind_ok done
-      obtain ⟨_, bound, _, rest⟩ := call_loop_bind_ok rest
-      obtain ⟨bodyFlow, afterBody, bodyDone, rest⟩ := call_loop_bind_ok rest
-      have normal := fragment.normal_any_env bodyDone
-      subst bodyFlow
-      simp only [valueFlow, pure_bind] at rest
-      obtain ⟨_, final, _, rest⟩ := call_loop_bind_ok rest
-      simp only [pure_apply, Res.ok.injEq] at rest
-      exact rest.1.symm
+  apply call_block_normal_of_stmts ?_ noValue done
+  intro innerEnv fuel state after flow result
+  exact fragment.normal_any_env result
 
 theorem scalar_call_loop_normal {cfg : Cfg} {env : Env} {condition : Expr} {body : Core.Block}
     {other : Env} (fragment : ReachableScalarCallStatements cfg other body.stmts) (noValue : body.value = none)
     {fuel : Nat} {state after : St} {flow : Flow}
     (done : execWhile fuel cfg env condition body state = .ok flow after) : flow = .normal .unit := by
-  induction fuel generalizing state after flow with
-  | zero => simp [execWhile, timeout, M.stop] at done
-  | succ fuel ih =>
-    rw [execWhile] at done
-    obtain ⟨value, middle, _, rest⟩ := call_loop_bind_ok done
-    obtain ⟨choice, tested, _, rest⟩ := call_loop_bind_ok rest
-    cases choice with
-    | false => simpa [pure_apply] using (Res.ok.inj rest).1.symm
-    | true =>
-      obtain ⟨bodyFlow, bodyAfter, bodyDone, rest⟩ := call_loop_bind_ok rest
-      have normal := scalar_call_block_normal fragment noValue bodyDone
-      subst bodyFlow
-      exact ih rest
+  apply call_loop_normal_of_stmts ?_ noValue done
+  intro innerEnv fuel state after flow result
+  exact fragment.normal_any_env result
 
 theorem scalar_call_loop_statement_normal {cfg : Cfg} {env : Env} {condition : Expr} {body : Core.Block}
     {loopOrigin : OriginId} {other : Env} (fragment : ReachableScalarCallStatements cfg other body.stmts) (noValue : body.value = none)
     {fuel : Nat} {state after : St} {flow : Flow}
     (done : execStmts fuel cfg env [.while condition body loopOrigin] state = .ok flow after) : flow = .normal .unit := by
-  cases fuel with
-  | zero => simp [execStmts, timeout, M.stop] at done
-  | succ fuel =>
-    cases head : execStmt fuel cfg env (.while condition body loopOrigin) state with
-    | stop reason final => simp [execStmts, bind_apply, head] at done
-    | ok headFlow middle =>
-      cases fuel with
-      | zero => simp [execStmt, timeout, M.stop] at head
-      | succ fuel =>
-        simp only [execStmt] at head
-        have normal : headFlow = .normal .unit := scalar_call_loop_normal fragment noValue head
-        subst headFlow
-        simp [execStmts, execStmt, bind_apply, head, pure_apply] at done
-        exact done.1.symm
-
+  apply call_loop_statement_normal_of_stmts ?_ noValue done
+  intro innerEnv fuel state after flow result
+  exact fragment.normal_any_env result
 
 #print axioms scalar_call_block_normal
 #print axioms scalar_call_loop_normal
