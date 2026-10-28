@@ -1,7 +1,10 @@
 import Goose.Proofs.ConstructionGhostMaterialization
+import Goose.Proofs.ConstructionGhostElements
 
 namespace Goose.Proofs.ConstructionGhostNonfixedDeclaration
 open Goose.Construct Goose.Proofs.ConstructionGhostInvocation Goose.Proofs.ConstructionGhostMaterialization
+open Goose.Proofs.ConstructionGhostElements Goose.Proofs.ConstructionInvocationReplay
+open Goose.Proofs.ConstructionInitializerLoopReplay
 
 def declarationContinuation (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (descriptor : LocalVar) (root : Goose.Core.RootInst) (expression : Expr) (origin : Goose.Core.OriginId)
@@ -85,6 +88,74 @@ theorem nonfixedDeclaration_materialized (fuel : Nat) (config : EvalConfig)
   rw [nonfixedDeclaration_execution fuel config environment localVar expression origin before ready
     descriptor root implementation found nonfixed rootResult implementationFound notNamed, execution]
 
+def directDeclarationAfterBuild (descriptor : LocalVar) (root : Goose.Core.RootInst)
+    (origin : Goose.Core.OriginId) (destination : Goose.Core.DestinationId)
+    (built : ExecutionStep Unit) : ExecutionStep Flow :=
+  match built with
+  | .ok () state => (do
+      let destination ← completedReceivingDestination destination
+      publishCarriers origin [.completed destination]
+      let stored ← storedDestination destination
+      bindRoot root (.stored { stored with ty := descriptor.ty, object := none })
+      pure (Flow.normal .unit)) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+theorem directArrayDeclaration_ghost (fuel : Nat) (config : EvalConfig)
+    (environment : RuntimeActivation) (path : List Nat) (localVar : Goose.Core.VarId)
+    (ty : Ty) (operands : List Expr) (expressionOrigin origin : Goose.Core.OriginId)
+    (before ready buildReady prepared elementsReady : ExecutionState)
+    (descriptor : LocalVar) (root : Goose.Core.RootInst) (implementation : Impl)
+    (destination current : Goose.Core.DestinationId) (pending : PendingDestination) (element : Ty)
+    (found : environment.vars[localVar]? = some descriptor) (nonfixed : descriptor.ty.nonfixed = true)
+    (rootResult : rootOf environment localVar before = .ok root ready)
+    (implementationFound : config.module.impls[environment.implementation]? = some implementation)
+    (notNamed : (implementation.results.toList.zipIdx.find? fun (result, _) =>
+      result.namedLocal == some localVar) = none) (fixedElement : element.nonfixed = false)
+    (allocated : newDestination config.layout environment.act descriptor.ty .value origin none
+      (producerCount? ⟨config.module, environment.vars⟩ (.arrLit ty operands expressionOrigin)) ready =
+        .ok destination buildReady)
+    (renewed : liftConstruction expressionOrigin (renewReceivingDestination destination) buildReady = .ok current prepared)
+    (pendingFound : getDestination current prepared = .ok pending elementsReady)
+    (elementFound : elementType pending.capability.logicalType = some element) :
+    ∃ outcome visits,
+      OperandReplay (fun operand => buildElement (fuel + 1) config environment current element operand)
+        0 operands [] elementsReady outcome visits ∧
+      (∀ visit ∈ visits, FixedElementTree config environment current element (fuel + 1)
+        (visit.path (path ++ [0])) visit.operand visit.before visit.outcome) ∧
+      visits.map Invocation.operand = operands.take visits.length ∧
+      (visits.map Invocation.ordinal).Nodup ∧
+      execStmt (fuel + 3) config environment (.letS localVar (.arrLit ty operands expressionOrigin) origin) before =
+        directDeclarationAfterBuild descriptor root origin destination
+          (protectDestination expressionOrigin current (fun _ =>
+            match discardValues outcome with
+            | .ok _ state => receivingAction expressionOrigin current finishDestination state
+            | .stop reason state => .stop reason state
+            | .escape address carriers state => .escape address carriers state
+            | .jump target kind state => .jump target kind state) prepared) := by
+  obtain ⟨outcome, visits, replay, children, ordered, once, execution⟩ :=
+    arrayLiteral_fixedElements_ghost fuel config environment destination current ty operands expressionOrigin (path ++ [0])
+      buildReady prepared elementsReady pending element fixedElement renewed pendingFound elementFound
+  refine ⟨outcome, visits, replay, children, ordered, once, ?_⟩
+  rw [nonfixedDeclaration_direct (fuel + 2) config environment localVar (.arrLit ty operands expressionOrigin)
+    origin before ready descriptor root implementation found nonfixed rootResult implementationFound notNamed]
+  · have allocated' : newDestination config.layout environment.act descriptor.ty .value origin none
+        ((none : Option (Array Value)).map Array.size <|>
+          producerCount? ⟨config.module, environment.vars⟩ (.arrLit ty operands expressionOrigin)) ready =
+          .ok destination buildReady := by simpa using allocated
+    simp only [declarationContinuation, bind, pure, allocated']
+    rw [execution]
+    cases result : protectDestination expressionOrigin current (fun _ =>
+      match discardValues outcome with
+      | .ok _ state => receivingAction expressionOrigin current finishDestination state
+      | .stop reason state => .stop reason state
+      | .escape address carriers state => .escape address carriers state
+      | .jump target kind state => .jump target kind state) prepared <;>
+      simp [directDeclarationAfterBuild, result, bind, pure]
+  · simp [ordinaryProducerCount?, producerCount?, literalCount]
+
+#print axioms directArrayDeclaration_ghost
 private def witnessConfig : EvalConfig := ⟨.release,
   ⟨#[], #[], #[], #[⟨"entry", #[], #[], #[⟨"x", .varr (.int .i64), .immutable, 0, 0⟩],
     .mk 0 [] none, .unknown⟩], #[], 0, #[], #[], #[]⟩⟩
