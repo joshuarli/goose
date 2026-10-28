@@ -1,5 +1,6 @@
 import Goose.Proofs.ConstructionAcceptedScopeWorld
 import Goose.Proofs.ConstructionByteEntryFrameComplete
+import Goose.Proofs.ConstructionByteEntryStopped
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -35,10 +36,14 @@ theorem acceptedByteEntry_normal_scope (fuel : Nat) (config : EvalConfig) (accep
     (checkFuel : declarations.length ≤ 4094) :
     ∃ (frame next : ConstructionSourceFrame) (activation : RuntimeActivation)
       (types : RootTypes) (nextLive : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion),
-      let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
+        let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
       let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
       let entryFrame := entryStatementsFrame config frame activated.nextScope
       let outcome := execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before
+      activation.channels = [] ∧ frame.source.impl = implementation ∧
+      invokeCall (fuel + 3) config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 state =
+        (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
+          deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
       (match outcome with
       | .ok (.normal .unit) after =>
         execActivationBody (fuel + 1) config activation [] frame.source.impl.body activated =
@@ -47,7 +52,9 @@ theorem acceptedByteEntry_normal_scope (fuel : Nat) (config : EvalConfig) (accep
           [.callChannels activation []] types
           (fun root => nextLive root ∧ (Goose.Proofs.Exit.runtimeScopeRoots activation frame.source.impl.body.scope activated.nextScope).contains root = false)
           regions []
-      | .stop _ _ => True
+      | .stop reason after =>
+        execActivationBody (fuel + 1) config activation [] frame.source.impl.body activated = .stop reason after ∧
+        AcceptedWorld config next.initialized after [.callChannels activation []] types nextLive regions []
       | _ => False) := by
   obtain ⟨frame, activation, environmentEq, act, scopes, channels, freshActed, freshScope, frameWorld, source,
     position, phase, parameters, results, entry, entryAt, implAt, implId, vars⟩ :=
@@ -55,6 +62,33 @@ theorem acceptedByteEntry_normal_scope (fuel : Nat) (config : EvalConfig) (accep
   have entryEq : entry = original := Option.some.inj (entryAt.symm.trans originalAt)
   subst entry
   have implementationEq : frame.source.impl = implementation := Option.some.inj (implAt.symm.trans implementationAt)
+  have depth : state.activations.length < Goose.Core.maxCallDepth := by
+    have runtime := world.ownership.runtime.activations
+    cases active : state.activations with
+    | nil => simp [Goose.Core.maxCallDepth]
+    | cons head tail => simp [active, OwnershipAmbient.activations] at runtime
+  have canonical : activation = ⟨original.impl, state.nextAct, frame.source.impl.vars, [], []⟩ := by
+    cases activation with
+    | mk impl act' vars' scopes' channels' =>
+      simp only at implId act vars scopes channels
+      cases implId
+      cases act
+      cases vars
+      cases scopes
+      cases channels
+      rfl
+  have step := entryCallStep (fuel + 1) config ⟨0, 0, #[], [], []⟩ state original frame.source.impl originalAt implAt
+    parameters results depth
+  simp only [Nat.add_assoc] at step
+  rw [← canonical] at step
+  have lookup : config.module.impls[activation.implementation]? = some frame.source.impl := by
+    rw [implId]
+    exact implAt
+  have entryAction : enterActivation (fuel + 2) config activation [] frame.source.impl.body 0 =
+      finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) := by
+    funext current
+    simp only [enterActivation, lookup, results, Array.toList_empty, List.map_nil]
+  rw [entryAction] at step
   let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
   let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
   let entryFrame := entryStatementsFrame config frame activated.nextScope
@@ -67,11 +101,17 @@ theorem acceptedByteEntry_normal_scope (fuel : Nat) (config : EvalConfig) (accep
   change AcceptedWorld config next.initialized
     (Goose.Proofs.Exit.stepState (execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before))
     [.callChannels activation []] types nextLive regions [] at finalWorld
-  refine ⟨frame, next, activation, types, nextLive, regions, ?_⟩
+  refine ⟨frame, next, activation, types, nextLive, regions, channels, implementationEq, step, ?_⟩
   change (match execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before with
-    | .ok (.normal .unit) after => _ | .stop _ _ => True | _ => False)
+    | .ok (.normal .unit) after => _ | .stop reason after => _ | _ => False)
   cases outcome : execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before with
-  | stop reason after => trivial
+  | stop reason after =>
+    have stopped : execStmts fuel config
+      { activation with scopes := (frame.source.impl.body.scope, activated.nextScope) :: activation.scopes }
+      frame.source.impl.body.stmts before = .stop reason after := by
+      simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, RootInterpretation.enterScope, environmentEq] using outcome
+    exact ⟨execActivationBody_statements_stopped fuel config activation frame.source.impl.body activated after reason stopped,
+      by simpa only [outcome, Goose.Proofs.Exit.stepState] using finalWorld⟩
   | escape address carriers after | jump target kind after => simp only [outcome] at finalFlow
   | ok flow after =>
     simp only [outcome] at finalFlow
