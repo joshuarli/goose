@@ -488,6 +488,15 @@
   "evidence": "ConstructionAcceptedFreshness.lean, ConstructionAcceptedStaticBytes.lean and ConstructionAcceptedFreshnessChecks.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Receiver storage identity across completed carrier landing",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ExitExecution.CompletedCarrierLandingFrame.receiverStorage; Goose.Proofs.ExitExecution.landCarriersInto_construct_receiverStorage",
+  "statement": "Landing an actual completed carrier into its receiving channel leaves a source row whose receiver storage ID equals the receiving destination's pre-landing receiver storage ID, including replacement commits.",
+  "assumptions": "The ownership execution context, a backed completed carrier and the actual receiving-carrier landing readiness.",
+  "limits": "The result concerns the source row and storage identity; it does not establish every successor or evaluator invariant, or discharge TH-EXIT-01.",
+  "evidence": "ExitExecutionReceiverStorageLanding.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Receiver storage identity across construction source extensions",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionExecutionOwnership.OwnershipSourceExtension.receiverStorage; Goose.Proofs.ConstructionExecutionOwnership.constructionPrimitive_source_or_landing",
