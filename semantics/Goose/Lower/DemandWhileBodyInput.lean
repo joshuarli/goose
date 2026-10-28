@@ -9,10 +9,10 @@ theorem generated_while_body_input {cfg : Cfg} {env : Env} {condition : Expr} {b
     (child : ExprSource cfg env condition state) (branch : BlockSource cfg env [] body middle)
     (typing : branch.typingEnv = { source.typingEnv with loops := source.typingEnv.loops + 1 })
     (roots : branch.rootsEnv = source.rootsEnv)
-    {cx : FnCtx} {results : List Ty} {headerState forked bodyStart : LS}
+    {cx : FnCtx} {results : List Ty} {loop : Option LoopCtx} {headerState forked bodyStart : LS}
     {initial frame : GIR.Frame} {header : BlockId} {point : Pt} {map : RetainedSsaMap}
     {bodyBlock exitBlock : BlockId}
-    (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv headerState initial (header, 0))
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv headerState initial (header, 0))
     (headerTarget : ∃ block, cx.fn.blocks[header]? = some block ∧ block.params = [])
     (boundary : ExpressionDemandBoundary child map cx headerState initial
       (lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2

@@ -8,16 +8,16 @@ theorem accepted_generated_while_body_ready {cfg : Cfg} {env : Env} {condition :
     (child : ExprSource cfg env condition state)
     (canonical : source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
     {fuel : Nat} (evaluated : evalExpr fuel cfg env condition state = .ok (.bool true) middle)
-    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {cx : FnCtx} {results : List Ty} {loop : Option LoopCtx} {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (owned : GeneratedSourceOwner selected source.context) {before headerState forked bodyStart : LS}
     {header bodyBlock exitBlock : BlockId} {initial frame : GIR.Frame} {point : Pt}
-    (headerInput : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv headerState initial (header, 0))
+    (headerInput : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv headerState initial (header, 0))
     (headerTarget : ∃ block, cx.fn.blocks[header]? = some block ∧ block.params = [])
     (headerId : header = (newBlock [] (lowerEnv cfg.mod env.vars results) before).1.1)
     (headerEq : headerState = demandWhileHeaderBefore (lowerEnv cfg.mod env.vars results) before)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root source.path (.statement none (.while condition body origin)) before)
+      root source.path (.statement loop (.while condition body origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
     (admitted : map.Admitted cfg.mod.profile source.context.retained)
     (boundary : ExpressionDemandBoundary child map cx headerState initial

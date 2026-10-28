@@ -13,17 +13,17 @@ theorem accepted_generated_while_scalar_call_true_stopped {cfg : Cfg} {env : Env
     (fragment : ReachableScalarCallStatements cfg
       { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
     (noValue : body.value = none)
-    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {cx : FnCtx} {results : List Ty} {loop : Option LoopCtx} {root : DemandNode} {owner : Nat}
     (targetConfig : cx.cfg = ⟨cfg.profile, lower cfg.mod⟩)
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (owned : GeneratedSourceOwner selected source.context) {before headerState built : LS}
     {header : BlockId} {initial frame : GIR.Frame} {point : Pt}
-    (headerInput : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv headerState initial (header, 0))
+    (headerInput : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv headerState initial (header, 0))
     (headerTarget : ∃ block, cx.fn.blocks[header]? = some block ∧ block.params = [])
     (headerId : header = (newBlock [] (lowerEnv cfg.mod env.vars results) before).1.1)
     (headerEq : headerState = demandWhileHeaderBefore (lowerEnv cfg.mod env.vars results) before)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root source.path (.statement none (.while condition body origin)) before)
+      root source.path (.statement loop (.while condition body origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
     (headerBounded : map.Bounded headerState.vals.size)
     (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
@@ -47,13 +47,13 @@ theorem accepted_generated_while_scalar_call_true_stopped {cfg : Cfg} {env : Env
       DemandRuntimePrefix cx remaining current reached ∧
       next.typingEnv = source.typingEnv ∧ next.rootsEnv = source.rootsEnv ∧ next.world = source.world ∧
       next.observation = source.observation ∧ next.plans = source.plans ∧ next.path = source.path ∧ HEq next.context source.context ∧
-      GeneratedPrefixInput cfg env cx results none next.typingEnv next.rootsEnv headerState current.frame (header, 0) ∧
+      GeneratedPrefixInput cfg env cx results loop next.typingEnv next.rootsEnv headerState current.frame (header, 0) ∧
       Post cfg env cx headerState initial headerState current.frame (header, 0) [] ∧
       map.Bounded headerState.vals.size ∧ map.Realizes cfg.mod next.world env ⟨(header, 0), current.frame, current.state⟩ ∧
       current.point = (header, 0) ∧ GeneratedSourceOwner selected next.context ∧
       map.Admitted cfg.mod.profile next.context.retained ∧
       ∃ nextOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-        root next.path (.statement none (.while condition body origin)) before,
+        root next.path (.statement loop (.while condition body origin)) before,
         GeneratedDemandRows cfg.mod next.rootsEnv.access nextOccurrence required := by
   obtain ⟨bodyBlock, exitBlock, forked, bodyStart, bodyEnd, jumped, value, branch, canonicalBranch,
     forkRun, bodyEq, bodyRun, jumpRun, jumpExtended, branchStep, bodyPrefix, bodyStopped⟩ :=
@@ -71,11 +71,6 @@ theorem accepted_generated_while_scalar_call_true_stopped {cfg : Cfg} {env : Env
     · exact Or.inl stoppedSource
     · have normal := ended.normal
       subst flow
-      obtain ⟨next, typing, roots, world, observation, plans, path, context, input, bounded, realized, back⟩ :=
-        accepted_generated_while_reentry source branch canonicalBranch evaluated bodyDone headerInput headerTarget headerBounded
-          bodyRun jumpRun jumpExtended ended
-      obtain ⟨nextOwned, nextAdmitted, nextOccurrence, nextRows⟩ :=
-        generated_while_reentry_context source next roots plans path context selected owned occurrence rows admitted
       have forkExtended : ExtT forked cx.fn.blocks := by
         have bodyExtended := jumpExtended.of_adv (adv_emitTerm jumpRun)
         have startExtended := bodyExtended.of_adv (advB_lowerBlock _ [] false body _ _ _ _ bodyRun)
@@ -83,6 +78,11 @@ theorem accepted_generated_while_scalar_call_true_stopped {cfg : Cfg} {env : Env
         exact startExtended
       have post := generated_while_reentry_post branch headerInput.atPoint headerInput.related boundary.post
         forkRun forkExtended bodyEq bodyRun ended
+      obtain ⟨next, typing, roots, world, observation, plans, path, context, input, bounded, realized, back⟩ :=
+        accepted_generated_while_reentry source branch canonicalBranch evaluated bodyDone headerInput headerTarget headerBounded
+          bodyRun jumpRun jumpExtended ended (outerPost := by cases loop <;> simp_all)
+      obtain ⟨nextOwned, nextAdmitted, nextOccurrence, nextRows⟩ :=
+        generated_while_reentry_context source next roots plans path context selected owned occurrence rows admitted
       have iteration := WhileIterations.next evaluated bodyDone (Or.inl ⟨.unit, rfl⟩) (WhileIterations.zero current.state)
       have allIterations : WhileIterations cfg env condition body (count + 1) initialState current.state := by
         simpa using iterations.append iteration
