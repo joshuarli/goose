@@ -29,6 +29,8 @@ inductive SourceOperation : Type → Type
   | bound (environment : RuntimeActivation) (count : Nat) (defaultValue : Int) (bound : Bound) : SourceOperation Int
   | place (environment : RuntimeActivation) (place : Place) : SourceOperation Goose.Core.Loc
   | view (environment : RuntimeActivation) (view : View) : SourceOperation RuntimeView
+  | whileLoop (environment : RuntimeActivation) (condition : Expr) (body : Block) : SourceOperation Flow
+  | loopBody (environment : RuntimeActivation) (body : Block) : SourceOperation Flow
   | printArgument (environment : RuntimeActivation) (argument : PrintArg) : SourceOperation ByteArray
   | element (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty) (operand : Expr) : SourceOperation Unit
   | arguments (environment : RuntimeActivation) (vars : Array LocalVar) (parameters : List Param)
@@ -50,6 +52,8 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .bound environment count defaultValue bound => evalBound fuel config environment count defaultValue bound
   | .place environment place => evalPlace fuel config environment place
   | .view environment view => evalView fuel config environment view
+  | .whileLoop environment condition body => execWhile fuel config environment condition body
+  | .loopBody environment body => Goose.Construct.loopBody fuel config environment [] body
   | .printArgument environment argument => evalPrintArg fuel config environment argument
   | .element environment parent element operand => buildElement fuel config environment parent element operand
   | .arguments environment vars parameters arguments => evalArguments fuel config environment vars parameters arguments
@@ -327,6 +331,10 @@ theorem constructedArgument_direct_source (fuel : Nat) (config : EvalConfig) (en
 
 #print axioms constructedArgument_direct_source
 
+def loopStart (environment : RuntimeActivation) (before : ExecutionState) : ExecutionState :=
+  let target : BreakTarget := ⟨before.nextScope, environment.act, .loop, []⟩
+  { before with nextScope := before.nextScope + 1, breaks := target :: before.breaks }
+
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
   | timeout (path : List Nat) (operation : SourceOperation α) (before : ExecutionState) :
@@ -518,6 +526,34 @@ inductive SourceHistory (config : EvalConfig) :
         { before with nextAct := before.nextAct + 1, activations := (⟨context.impl, before.nextAct, implementation.vars, [], []⟩ : RuntimeActivation) :: before.activations } outcome) :
       SourceHistory config (fuel + 2) path (.call environment contextId origin) before
         (callDeliveryResult (fuel + 1) config origin outcome)
+  | whileLoop {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {condition : Expr} {body : Block}
+      {before : ExecutionState}
+      (conditionChild : SourceHistory config fuel (path ++ [0]) (.value environment condition) before
+        (evalValue fuel config environment condition before))
+      (bodyChild : ∀ value middle ready, evalValue fuel config environment condition before = .ok value middle →
+        expectBool value middle = .ok true ready →
+        SourceHistory config fuel (path ++ [1]) (.loopBody environment body) ready
+          (Goose.Construct.loopBody fuel config environment [] body ready))
+      (nextChild : ∀ value middle ready flow after, evalValue fuel config environment condition before = .ok value middle →
+        expectBool value middle = .ok true ready → Goose.Construct.loopBody fuel config environment [] body ready = .ok flow after →
+        (flow = .continuing ∨ ∃ value, flow = .normal value) →
+        SourceHistory config fuel (path ++ [2]) (.whileLoop environment condition body) after
+          (execWhile fuel config environment condition body after)) :
+      SourceHistory config (fuel + 1) path (.whileLoop environment condition body) before
+        (execWhile (fuel + 1) config environment condition body before)
+  | loopBody {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {body : Block} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.block environment body)
+        (loopStart environment before)
+        (execBlock fuel config environment [] [] body
+          (loopStart environment before))) :
+      SourceHistory config (fuel + 1) path (.loopBody environment body) before
+        (Goose.Construct.loopBody (fuel + 1) config environment [] body before)
+  | whileStatement {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {condition : Expr} {body : Block}
+      {origin : Goose.Core.OriginId} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.whileLoop environment condition body) before
+        (execWhile fuel config environment condition body before)) :
+      SourceHistory config (fuel + 1) path (.statement environment (.while condition body origin)) before
+        (execStmt (fuel + 1) config environment (.while condition body origin) before)
   | omittedBound (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (count : Nat)
       (defaultValue : Int) (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.bound environment count defaultValue .omitted) before (.ok defaultValue before)
@@ -739,7 +775,7 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
   | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical => rfl
   | @negation fuel path environment operand before outcome child ih =>
@@ -814,7 +850,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       cases outcome <;> rfl
   | omittedBound => simp [execute, evalBound, pure]
   | expressionBound | localPlace | globalPlace | dereferencePlace | fieldPlace | elementPlace | placeView | valueView |
-    readValue | referenceValue | lengthValue | popValue | sliceValue => rfl
+    readValue | referenceValue | lengthValue | popValue | sliceValue | whileLoop | loopBody | whileStatement => rfl
   | printArgumentText => simp [execute, evalPrintArg, pure]
   | printArgumentExpression | printArgumentView | printArguments | printText | ifStatement => rfl
   | builderBytes => rfl
@@ -994,6 +1030,16 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (body : ∀ act, SupportedOperation config
         (.activation ⟨context.impl, act, implementation.vars, [], []⟩ implementation.body origin)) :
       SupportedOperation config (.call environment contextId origin)
+  | whileLoop (environment : RuntimeActivation) (condition : Expr) (body : Block)
+      (conditionChild : SupportedOperation config (.value environment condition))
+      (bodyChild : SupportedOperation config (.block environment body)) :
+      SupportedOperation config (.whileLoop environment condition body)
+  | loopBody (environment : RuntimeActivation) (body : Block)
+      (child : SupportedOperation config (.block environment body)) :
+      SupportedOperation config (.loopBody environment body)
+  | whileStatement (environment : RuntimeActivation) (condition : Expr) (body : Block) (origin : Goose.Core.OriginId)
+      (child : SupportedOperation config (.whileLoop environment condition body)) :
+      SupportedOperation config (.statement environment (.while condition body origin))
   | omittedBound (environment : RuntimeActivation) (count : Nat) (defaultValue : Int) :
       SupportedOperation config (.bound environment count defaultValue .omitted)
   | expressionBound (environment : RuntimeActivation) (count : Nat) (defaultValue : Int) (operand : Expr) (fromEnd : Bool)
@@ -1092,7 +1138,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, evalPrintArg, buildExpr, buildElement, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -1316,6 +1362,18 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
                   contextFound implementationFound parametersEmpty resultsEmpty full] using
                   (SourceHistory.callDepth contextFound implementationFound parametersEmpty resultsEmpty full :
                     SourceHistory config (fuel + 2) path (.call environment contextId origin) before _)
+      | whileLoop environment condition body conditionSupported bodySupported =>
+          refine .whileLoop (ih (.value environment condition) (path ++ [0]) before conditionSupported) ?_ ?_
+          · intro value middle ready result checked
+            exact ih (.loopBody environment body) (path ++ [1]) ready (.loopBody environment body bodySupported)
+          · intro value middle ready flow after result checked loopResult continuing
+            exact ih (.whileLoop environment condition body) (path ++ [2]) after
+              (.whileLoop environment condition body conditionSupported bodySupported)
+      | loopBody environment body bodySupported =>
+          exact .loopBody (ih (.block environment body) (path ++ [0])
+            (loopStart environment before) bodySupported)
+      | whileStatement environment condition body origin childSupported =>
+          exact .whileStatement (ih (.whileLoop environment condition body) (path ++ [0]) before childSupported)
       | omittedBound environment count defaultValue =>
           simpa [execute, evalBound, pure] using (SourceHistory.omittedBound fuel path environment count defaultValue before)
       | expressionBound environment count defaultValue operand fromEnd child =>
@@ -1990,6 +2048,42 @@ theorem witness_conditionalStatement : ∃ after,
       (execStmt 40 sideEffectConfig witnessEnvironment conditionalStatementWitness .initial) at history
     rw [actual] at history
     exact history
+
+private def whileWitnessBody : Block := .mk 0 [.print [.text "x"] 0,
+  .expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none
+private def whileWitness : Stmt := .while (.bool true) whileWitnessBody 0
+
+theorem witness_whileInitializerTimeout : ∃ after,
+    execStmt 20 sideEffectConfig witnessEnvironment whileWitness .initial = .stop .timeout after ∧
+    0 < after.construction.stdout.data.size ∧
+    SourceHistory sideEffectConfig 20 [] (.statement witnessEnvironment whileWitness) .initial (.stop .timeout after) := by
+  have body : SupportedOperation sideEffectConfig (.block witnessEnvironment whileWitnessBody) := by
+    unfold whileWitnessBody
+    apply SupportedOperation.block
+    intro environment
+    exact .sequence environment (.printText environment "x" 0)
+      (.sequence environment (.expression environment 0 (.value environment
+        (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment))
+  have supported : SupportedOperation sideEffectConfig (.statement witnessEnvironment whileWitness) := by
+    unfold whileWitness
+    exact .whileStatement witnessEnvironment (.bool true) whileWitnessBody 0
+      (.whileLoop witnessEnvironment (.bool true) whileWitnessBody (.value witnessEnvironment (.boolean true)) body)
+  have history := history_exists 20 sideEffectConfig (.statement witnessEnvironment whileWitness) [] .initial supported
+  refine ⟨witnessState (execStmt 20 sideEffectConfig witnessEnvironment whileWitness .initial), ?_, ?_, ?_⟩
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment whileWitness whileWitnessBody
+    cbv
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment whileWitness whileWitnessBody
+    cbv
+  · have actual : execStmt 20 sideEffectConfig witnessEnvironment whileWitness .initial =
+        .stop .timeout (witnessState (execStmt 20 sideEffectConfig witnessEnvironment whileWitness .initial)) := by
+      unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment whileWitness whileWitnessBody
+      cbv
+    change SourceHistory sideEffectConfig 20 [] (.statement witnessEnvironment whileWitness) .initial
+      (execStmt 20 sideEffectConfig witnessEnvironment whileWitness .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_whileInitializerTimeout
 
 #print axioms witness_conditionalStatement
 
