@@ -45,7 +45,7 @@ theorem storedDestination_object_none (id : Nat) (state : ExecutionState) (store
 
 theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (environment : RuntimeActivation) (localVar : Nat) (descriptor : LocalVar) (implementation : Impl)
-    (bytes : List UInt8) (origin : Goose.Core.OriginId) (before after : ExecutionState) (root : Goose.Core.RootInst)
+    (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId) (before after : ExecutionState) (root : Goose.Core.RootInst)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
@@ -59,7 +59,7 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
     (freshType : ∀ act scope id, root = .local act scope id → act < before.nextAct ∧ scope < before.nextScope)
     (freshSynthetic : ∀ id, root = .global id → config.module.globals.size ≤ id →
       id < config.module.globals.size + before.nextScope)
-    (executed : execStmt (fuel + 2) config environment (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin) before =
+    (executed : execStmt (fuel + 2) config environment (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before =
       .ok (.normal .unit) after) :
     ∃ (stored : StoredValue) (published : ExecutionState), RootTypesExtend types (registerRootType types root (.varr (.int .u8))) ∧
       AcceptedWorld config initialized after ambient (registerRootType types root (.varr (.int .u8)))
@@ -76,7 +76,7 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
     cases executed
   | ok id allocated =>
     simp only [created] at executed
-    cases constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes origin) allocated with
+    cases constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes bytesOrigin) allocated with
     | stop reason state | escape reason carriers state | jump reason kind state =>
       simp only [constructed] at executed
       cases executed
@@ -106,7 +106,7 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
           (some bytes.length) initialized before allocated before.construction.destinations.size ambient types live regions pending world created
         have current := newDestination_current_self config initialized environment.act (.varr (.int .u8)) .value origin
           (some bytes.length) before allocated before.construction.destinations.size ambient types live regions pending world created
-        obtain ⟨builtFrame, _⟩ := buildExpr_byteOwner_freshFrame fuel config environment bytes origin before allocated built
+        obtain ⟨builtFrame, _⟩ := buildExpr_byteOwner_freshFrame fuel config environment bytes bytesOrigin before allocated built
           frame before.construction.storage.size 0 ready direct rfl packed request allocatedWorld.ownership.source.structural.1.1.1 current constructed
         have currentBuilt := frame.same_current builtFrame before.construction.destinations.size current
         obtain ⟨sameId, sameState⟩ := completedReceivingDestination_self before.construction.destinations.size built checked selected currentBuilt completed
@@ -119,12 +119,12 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
           cases result
           simp only [published] at executed
           obtain ⟨stored, boundState, sampled, bound, extended, finalWorld⟩ :=
-            allocated_published_byteOwner_bindWorld fuel config initialized environment bytes origin before allocated built final
+            allocated_published_byteOwner_bindWorld fuel config initialized environment bytes origin bytesOrigin before allocated built final
               before.construction.destinations.size root ambient types live regions pending world compatible conforms fresh freshType
               freshSynthetic created constructed published
           simp only [sampled] at executed
           obtain ⟨_, _, value, sampled', backed, identity, named, valueType⟩ :=
-            allocated_published_byteOwner_world fuel config initialized environment bytes origin before allocated built final
+            allocated_published_byteOwner_world fuel config initialized environment bytes origin bytesOrigin before allocated built final
               before.construction.destinations.size ambient types live regions pending world created constructed published
           have sameValue : stored = value := (ExecutionStep.ok.inj (sampled.symm.trans sampled')).1
           subst value

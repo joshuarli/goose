@@ -138,7 +138,7 @@ theorem publish_direct_packed_backing (layout : LayoutEnv) (origin : Goose.Core.
       · simpa [published, value, storedWrittenRun, packed] using interval
 
 theorem allocated_published_byteOwner_backing (fuel : Nat) (config : EvalConfig) (initialized : Nat)
-    (environment : RuntimeActivation) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (environment : RuntimeActivation) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
     (before allocated built final : ExecutionState) (id : Nat)
     (ambient : Goose.Proofs.ConstructionExecutionOwnership.OwnershipAmbient)
     (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion)
@@ -146,7 +146,7 @@ theorem allocated_published_byteOwner_backing (fuel : Nat) (config : EvalConfig)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
     (created : newDestination config.layout environment.act (.varr (.int .u8)) .value origin none (some bytes.length) before =
       .ok id allocated)
-    (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes origin) allocated =
+    (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes bytesOrigin) allocated =
       .ok () built)
     (published : publishCarriers origin [.completed id] built = .ok () final) :
     ∃ value, storedDestination id final = .ok value final ∧
@@ -164,7 +164,7 @@ theorem allocated_published_byteOwner_backing (fuel : Nat) (config : EvalConfig)
     (some bytes.length) before allocated id ambient types live regions pending world created
   have fits := newDestination_byteOwner_count_bound config.layout environment.act origin bytes.length before allocated id created
   obtain ⟨destination, storage, present, stored, packed', request', ty, direct, receiver, progress, interval⟩ :=
-    buildExpr_byteOwner_geometry fuel config environment bytes origin id 0 allocated built ready packed request
+    buildExpr_byteOwner_geometry fuel config environment bytes bytesOrigin id 0 allocated built ready packed request
       (by simpa using fits) allocatedWorld.ownership.source.structural.1.1.1 current constructed
   have direct' : destination.backing = .direct before.construction.storage.size := direct.trans backing
   have receiver' : destination.use = .receiver := receiver.trans use

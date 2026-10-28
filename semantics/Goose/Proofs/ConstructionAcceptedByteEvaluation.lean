@@ -86,7 +86,7 @@ theorem evalValue_byteOwner_world (fuel : Nat) (config : EvalConfig) (initialize
               cases result
               simp only [published, pure, carrierValue, bind] at executed
               obtain ⟨finalWorld, finalFrame, stored, sampled, backed, storage, named, valueType⟩ :=
-                allocated_published_byteOwner_world fuel config initialized environment bytes origin before allocated built final
+                allocated_published_byteOwner_world fuel config initialized environment bytes origin origin before allocated built final
                   before.construction.destinations.size ambient types live regions pending world created constructed published
               simp only [sampled, ExecutionStep.ok.injEq] at executed
               obtain ⟨sameValue, sameState⟩ := executed

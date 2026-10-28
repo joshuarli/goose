@@ -81,7 +81,7 @@ theorem evalValue_byteOwner_bindWorld (fuel : Nat) (config : EvalConfig) (initia
   exact ⟨stored, after, rfl, bound, extended, finalWorld⟩
 
 theorem allocated_published_byteOwner_bindWorld (fuel : Nat) (config : EvalConfig) (initialized : Nat)
-    (environment : RuntimeActivation) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (environment : RuntimeActivation) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
     (before allocated built published : ExecutionState) (id : Nat) (root : RootInst)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -94,7 +94,7 @@ theorem allocated_published_byteOwner_bindWorld (fuel : Nat) (config : EvalConfi
       id < config.module.globals.size + before.nextScope)
     (created : newDestination config.layout environment.act (.varr (.int .u8)) .value origin none (some bytes.length) before =
       .ok id allocated)
-    (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes origin) allocated =
+    (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes bytesOrigin) allocated =
       .ok () built)
     (completed : publishCarriers origin [.completed id] built = .ok () published) :
     ∃ stored after, storedDestination id published = .ok stored published ∧
@@ -104,7 +104,7 @@ theorem allocated_published_byteOwner_bindWorld (fuel : Nat) (config : EvalConfi
         (fun other => other = root ∨ live other)
         (regions.map (fun region => extendReceivingLimit region stored.storage (storageExtent published stored.storage))) pending := by
   obtain ⟨nextWorld, ⟨frame⟩, stored, sampled, backed, identity, named, valueType⟩ :=
-    allocated_published_byteOwner_world fuel config initialized environment bytes origin before allocated built published
+    allocated_published_byteOwner_world fuel config initialized environment bytes origin bytesOrigin before allocated built published
       id ambient types live regions pending world created constructed completed
   have freshId := newDestination_fresh_id config.layout environment.act (.varr (.int .u8)) .value origin
     (some bytes.length) before allocated id created

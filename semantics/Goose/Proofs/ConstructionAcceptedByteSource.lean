@@ -104,14 +104,14 @@ theorem publishCompleted_sourceState (origin : Goose.Core.OriginId) (id : Nat) (
     simpa only [result, ConstructionResult.finalState] using preserved
 
 theorem allocated_published_byteOwner_sourceState (fuel : Nat) (config : EvalConfig) (initialized : Nat)
-    (environment : RuntimeActivation) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (environment : RuntimeActivation) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
     (before allocated built final : ExecutionState) (id : Nat) (ambient : OwnershipAmbient)
     (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion)
     (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
     (created : newDestination config.layout environment.act (.varr (.int .u8)) .value origin none (some bytes.length) before =
       .ok id allocated)
-    (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes origin) allocated =
+    (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes bytesOrigin) allocated =
       .ok () built)
     (published : publishCarriers origin [.completed id] built = .ok () final) :
     OwnershipSourceState final.construction := by
@@ -121,7 +121,7 @@ theorem allocated_published_byteOwner_sourceState (fuel : Nat) (config : EvalCon
     (some bytes.length) before allocated id (.int .u8) rfl created
   have current := newDestination_current_self config initialized environment.act (.varr (.int .u8)) .value origin
     (some bytes.length) before allocated id ambient types live regions pending world created
-  have builtSource := buildExpr_bytes_sourceState fuel config environment id (.varr (.int .u8)) bytes origin
+  have builtSource := buildExpr_bytes_sourceState fuel config environment id (.varr (.int .u8)) bytes bytesOrigin
     allocated built ready.destination 0 allocatedWorld.ownership.source current ready.present ready.opened constructed
   exact publishCompleted_sourceState origin id built final builtSource published
 

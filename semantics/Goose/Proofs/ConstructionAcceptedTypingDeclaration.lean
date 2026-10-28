@@ -48,21 +48,21 @@ theorem typeStatement_let_environment (fuel : Nat) (env next : TypingEnv) (id : 
 
 theorem execStmt_typedScopedByteOwner_letWorld (fuel typeFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (context localVar scope scopeInst : Nat) (outer : List (Nat × Nat))
-    (bytes : List UInt8) (origin : Goose.Core.OriginId) (before after : ExecutionState)
+    (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId) (before after : ExecutionState)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
     (typingNext : TypingEnv) (typingAfter : Nat)
     (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
     (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation context)
-    (rootChecked : rpStmt frame.source (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+    (rootChecked : rpStmt frame.source (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
       frame.rootCursor = .ok ((), rootAfter))
-    (typed : typeStatement (typeFuel + 1) frame.typing (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+    (typed : typeStatement (typeFuel + 1) frame.typing (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
       frame.typingCounter = .ok (typingNext, typingAfter))
     (byteOwner : (frame.typing.variables[localVar]?).map (·.ty) = some (.varr (.int .u8)))
     (scopes : frame.interpretation.environment.scopes = (scope, scopeInst) :: outer)
     (unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some localVar)) = none)
     (executed : execStmt (fuel + 2) config frame.interpretation.environment
-      (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin) before = .ok (.normal .unit) after) :
+      (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .ok (.normal .unit) after) :
     ∃ (stored : StoredValue) (published : ExecutionState),
       RootTypesExtend types (registerRootType types (.local frame.interpretation.environment.act scopeInst localVar) (.varr (.int .u8))) ∧
       AcceptedWorld config frame.initialized after ambient
@@ -70,7 +70,7 @@ theorem execStmt_typedScopedByteOwner_letWorld (fuel typeFuel : Nat) (config : E
         (fun other => other = .local frame.interpretation.environment.act scopeInst localVar ∨ live other)
         (regions.map (fun region => extendReceivingLimit region stored.storage (storageExtent published stored.storage))) pending := by
   obtain ⟨descriptor, declared, localScope⟩ := typeStatement_let_descriptor typeFuel frame.typing typingNext localVar
-    (.bytes (.varr (.int .u8)) bytes origin) origin frame.typingCounter typingAfter typed
+    (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin frame.typingCounter typingAfter typed
   have descriptorType : descriptor.ty = .varr (.int .u8) := by
     simpa only [declared, Option.map_some, Option.some.injEq] using byteOwner
   have sourceScopes : frame.source.scopes = scope :: outer.map Prod.fst := by
@@ -82,24 +82,24 @@ theorem execStmt_typedScopedByteOwner_letWorld (fuel typeFuel : Nat) (config : E
     rw [source.compatible.variables]
     exact declared
   exact execStmt_scopedByteOwner_letWorld fuel config accepted frame context localVar scope scopeInst outer descriptor
-    bytes origin before after ambient types live regions pending rootAfter world source phase rootChecked
+    bytes origin bytesOrigin before after ambient types live regions pending rootAfter world source phase rootChecked
     runtimeDeclared descriptorType actualScope scopes unnamed executed
 
 theorem execStmt_typedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (frame : ConstructionSourceFrame) (context localVar : Nat) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (frame : ConstructionSourceFrame) (context localVar : Nat) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
     (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
     (typingNext : TypingEnv) (typingAfter : Nat)
     (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
     (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation context)
-    (rootChecked : rpStmt frame.source (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+    (rootChecked : rpStmt frame.source (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
       frame.rootCursor = .ok ((), rootAfter))
-    (typed : typeStatement frame.typingFuel frame.typing (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+    (typed : typeStatement frame.typingFuel frame.typing (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
       frame.typingCounter = .ok (typingNext, typingAfter))
     (byteOwner : (frame.typing.variables[localVar]?).map (·.ty) = some (.varr (.int .u8)))
     (unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some localVar)) = none)
     (executed : execStmt (fuel + 2) config frame.interpretation.environment
-      (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin) before = .ok (.normal .unit) after) :
+      (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .ok (.normal .unit) after) :
     ∃ (scopeInst : Nat) (stored : StoredValue) (published : ExecutionState),
       RootTypesExtend types (registerRootType types (.local frame.interpretation.environment.act scopeInst localVar) (.varr (.int .u8))) ∧
       AcceptedWorld config frame.initialized after ambient
@@ -124,24 +124,24 @@ theorem execStmt_typedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (acc
    | cons scopeEntry outer =>
     obtain ⟨scope, scopeInst⟩ := scopeEntry
     obtain ⟨stored, published, extended, preserved⟩ := execStmt_typedScopedByteOwner_letWorld fuel typeFuel config accepted frame
-      context localVar scope scopeInst outer bytes origin before after ambient types live regions pending rootAfter typingNext
+      context localVar scope scopeInst outer bytes origin bytesOrigin before after ambient types live regions pending rootAfter typingNext
       typingAfter world source phase rootChecked (by simpa only [fuelCase] using typed) byteOwner scopes unnamed executed
     exact ⟨scopeInst, stored, published, extended, preserved⟩
 
 theorem execStmt_entryByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (frame : ConstructionSourceFrame) (localVar : Nat) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (frame : ConstructionSourceFrame) (localVar : Nat) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
     (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
     (typingNext : TypingEnv) (typingAfter : Nat)
     (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
     (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation config.module.entry)
-    (rootChecked : rpStmt frame.source (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+    (rootChecked : rpStmt frame.source (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
       frame.rootCursor = .ok ((), rootAfter))
-    (typed : typeStatement frame.typingFuel frame.typing (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+    (typed : typeStatement frame.typingFuel frame.typing (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
       frame.typingCounter = .ok (typingNext, typingAfter))
     (byteOwner : (frame.typing.variables[localVar]?).map (·.ty) = some (.varr (.int .u8)))
     (executed : execStmt (fuel + 2) config frame.interpretation.environment
-      (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin) before = .ok (.normal .unit) after) :
+      (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .ok (.normal .unit) after) :
     ∃ (scopeInst : Nat) (stored : StoredValue) (published : ExecutionState),
       RootTypesExtend types (registerRootType types (.local frame.interpretation.environment.act scopeInst localVar) (.varr (.int .u8))) ∧
       AcceptedWorld config frame.initialized after ambient
@@ -158,7 +158,7 @@ theorem execStmt_entryByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (acc
   have sameImpl : frame.source.impl = implementation := Option.some.inj (actualImpl.symm.trans implFound)
   have unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some localVar)) = none := by
     simp only [sameImpl, resultsEmpty, Array.toList_empty, List.zipIdx_nil, List.find?_nil]
-  exact execStmt_typedByteOwner_letWorld fuel config accepted frame config.module.entry localVar bytes origin before after
+  exact execStmt_typedByteOwner_letWorld fuel config accepted frame config.module.entry localVar bytes origin bytesOrigin before after
     ambient types live regions pending rootAfter typingNext typingAfter world source phase rootChecked typed byteOwner unnamed executed
 
 #print axioms typeStatement_let_descriptor

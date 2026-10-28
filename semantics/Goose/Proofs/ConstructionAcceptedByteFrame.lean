@@ -260,7 +260,7 @@ theorem FreshDestinationFrame.publishPacked {before state after : ExecutionState
         exact frame.storage old prior found
 
 theorem allocated_published_byteOwner_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
-    (environment : RuntimeActivation) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (environment : RuntimeActivation) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
     (before allocated built final : ExecutionState) (id : Nat)
     (ambient : Goose.Proofs.ConstructionExecutionOwnership.OwnershipAmbient)
     (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion)
@@ -268,7 +268,7 @@ theorem allocated_published_byteOwner_world (fuel : Nat) (config : EvalConfig) (
     (world : AcceptedWorld config initialized before ambient types live regions pending)
     (created : newDestination config.layout environment.act (.varr (.int .u8)) .value origin none (some bytes.length) before =
       .ok id allocated)
-    (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes origin) allocated =
+    (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes bytesOrigin) allocated =
       .ok () built)
     (published : publishCarriers origin [.completed id] built = .ok () final) :
     AcceptedWorld config initialized final ambient types live regions pending ∧
@@ -294,13 +294,13 @@ theorem allocated_published_byteOwner_world (fuel : Nat) (config : EvalConfig) (
     (some bytes.length) initialized before allocated before.construction.destinations.size ambient types live regions pending world created
   have current := newDestination_current_self config initialized environment.act (.varr (.int .u8)) .value origin
     (some bytes.length) before allocated before.construction.destinations.size ambient types live regions pending world created
-  obtain ⟨builtFrame, builtDirect⟩ := buildExpr_byteOwner_freshFrame fuel config environment bytes origin before allocated built
+  obtain ⟨builtFrame, builtDirect⟩ := buildExpr_byteOwner_freshFrame fuel config environment bytes bytesOrigin before allocated built
     frame before.construction.storage.size 0 ready direct rfl packed request allocatedWorld.ownership.source.structural.1.1.1 current constructed
   have fits := newDestination_byteOwner_count_bound config.layout environment.act origin bytes.length before allocated
     before.construction.destinations.size created
   have readySame : ready.destination = frame.row := Option.some.inj (ready.present.symm.trans framePresent)
   obtain ⟨builtRow, storage, builtPresent, stored, builtPacked, _, _, _, _, builtProgress, interval⟩ :=
-    buildExpr_byteOwner_geometry fuel config environment bytes origin before.construction.destinations.size 0 allocated built ready
+    buildExpr_byteOwner_geometry fuel config environment bytes bytesOrigin before.construction.destinations.size 0 allocated built ready
       (by rw [readySame]; exact packed) (by rw [readySame]; exact request) (by simpa using fits)
       allocatedWorld.ownership.source.structural.1.1.1 current constructed
   have builtFramePresent : built.construction.destinations[before.construction.destinations.size]? = some builtFrame.row := by
@@ -309,10 +309,10 @@ theorem allocated_published_byteOwner_world (fuel : Nat) (config : EvalConfig) (
   subst builtRow
   obtain ⟨finalFrame⟩ := builtFrame.publishPacked origin before.construction.storage.size bytes.length builtDirect rfl
     (by simpa only [Nat.zero_add] using builtProgress) builtPacked published
-  have source := allocated_published_byteOwner_sourceState fuel config initialized environment bytes origin before allocated built final
+  have source := allocated_published_byteOwner_sourceState fuel config initialized environment bytes origin bytesOrigin before allocated built final
     before.construction.destinations.size ambient types live regions pending world created constructed published
   refine ⟨finalFrame.acceptedWorld config initialized ambient types live regions pending world source, ⟨finalFrame⟩, ?_⟩
-  exact allocated_published_byteOwner_backing fuel config initialized environment bytes origin before allocated built final
+  exact allocated_published_byteOwner_backing fuel config initialized environment bytes origin bytesOrigin before allocated built final
     before.construction.destinations.size ambient types live regions pending world created constructed published
 
 #print axioms FreshDestinationFrame.writeElement
