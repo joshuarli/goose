@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedAssignConditionalModule
+import Goose.Proofs.ConstructionAcceptedNestedSyntax
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -20,6 +21,14 @@ private def nestedConditionalModule : Module :=
     #[nestedConditionalEntry], #[⟨0, "entry", [], [], []⟩], 0, #[⟨0, 1, "assign"⟩], #[], #[]⟩
 
 private def nestedConditionalConfig : EvalConfig := ⟨.release, nestedConditionalModule⟩
+
+theorem nestedConditional_form : NestedScalarExpression nestedConditionalExpression := by
+  exact .conditional 0 (.scalar (.numeric (.scalar (.scalar (.boolean true)))))
+    (.block 0 [] _ .nil (.conditional 0 (.scalar (.numeric (.scalar (.scalar (.boolean true)))))
+      (.block 1 _ _ (.assign 0 (.lit .i64 7) 0 [] (.scalar (.numeric (.scalar (.scalar (.integer .i64 7))))) .nil)
+        (.scalar (.numeric (.scalar (.scalar (.globalRead 0))))))
+      (.block 2 [] _ .nil (.scalar (.numeric (.scalar (.scalar (.integer .i64 4))))))))
+    (.block 3 [] _ .nil (.scalar (.numeric (.scalar (.scalar (.integer .i64 5))))))
 
 theorem nestedConditional_validated : validate nestedConditionalModule = .ok () := by cbv
 
@@ -45,6 +54,7 @@ private def nestedConditionalTransition : Option (Int × Int) :=
 
 theorem nestedConditional_changesEarlierGlobal : nestedConditionalTransition = some (1, 7) := by decide +kernel
 
+#print axioms nestedConditional_form
 #print axioms nestedConditional_validated
 #print axioms nestedConditional_result
 #print axioms nestedConditional_changesEarlierGlobal

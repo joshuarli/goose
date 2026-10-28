@@ -100,6 +100,43 @@ theorem AcceptedFrame.enterEmptyScope {config : EvalConfig} {accepted : Accepted
   · simp [emptyChildScopeFrame, LocalRootCorrespondence, noVisible]
   · simp [emptyChildScopeFrame, ContentRootCorrespondence, noVisible]
 
+theorem AcceptedFrame.leaveEmptyChild {config : EvalConfig} {accepted : AcceptedModule config}
+    {frame : ConstructionSourceFrame} {before after : ExecutionState} {types : RootTypes}
+    (source : AcceptedFrame config accepted frame before types)
+    (emptyFrame : frame.interpretation.environment.vars = #[]) (scope scopeInst fuel : Nat)
+    (child : AcceptedFrame config accepted (emptyChildScopeFrame frame scope scopeInst fuel) after types) :
+    AcceptedFrame config accepted frame after types := by
+  have emptyTypes : frame.typing.variables = #[] := source.compatible.variables.symm.trans emptyFrame
+  have noVisible : frame.typing.visible = [] := by
+    have zeroCounter : frame.typingCounter = 0 := by
+      have bound := source.compatible.typingBound
+      simp only [emptyTypes, Array.size_empty] at bound
+      omega
+    have zeroRoots : frame.rootCursor.nextVar = 0 := by
+      have bound := source.compatible.declarations
+      omega
+    cases visible : frame.typing.visible with
+    | nil => rfl
+    | cons id rest =>
+      have bound := source.compatible.visible id (by simp [visible])
+      rw [zeroRoots] at bound
+      exact (Nat.not_lt_zero id bound).elim
+  refine ⟨source.compatible, ?_, ?_, source.initializingBefore, source.aliases, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa [RootFrontier, emptyChildScopeFrame, RootInterpretation.enterScope] using child.frontier
+  · intro entry member
+    apply child.scopeFrontier entry
+    simp [emptyChildScopeFrame, RootInterpretation.enterScope, member]
+  · simp [LocalRepresentations, noVisible]
+  · simp [noVisible]
+  · intro id condition root resolved
+    simp [rootOf, emptyFrame, fault, EvalM.stop] at resolved
+  · intro id condition root resolved
+    simp [rootOf, emptyFrame, fault, EvalM.stop] at resolved
+  · exact child.futureGlobals
+  · simp [LocalRootCorrespondence, noVisible]
+  · simp [ContentRootCorrespondence, noVisible]
+
+#print axioms AcceptedFrame.leaveEmptyChild
 #print axioms AcceptedFrame.enterEmptyScope
 #print axioms AcceptedFrame.releaseEmptyScope
 end Goose.Proofs.ConstructionAcceptedExecution
