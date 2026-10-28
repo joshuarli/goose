@@ -92,6 +92,10 @@ inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
       (placeSyntax : PlaceSyntax config place)
       (body : ∀ statement ∈ statements, StatementSyntax config statement) :
       StatementSyntax config (.forEach localVar index (.of place) byRef (.mk scope statements none) origin)
+  | rangeStatement (localVar : Goose.Core.VarId) (first last : Expr) (scope : Nat) (statements : List Stmt)
+      (origin : Goose.Core.OriginId) (firstSyntax : ValueSyntax config first) (lastSyntax : ValueSyntax config last)
+      (body : ∀ statement ∈ statements, StatementSyntax config statement) :
+      StatementSyntax config (.forRange localVar first last (.mk scope statements none) origin)
   | ifStatement (condition : Expr) (scope : Nat) (statements : List Stmt) (origin : Goose.Core.OriginId)
       (conditionSyntax : ValueSyntax config condition)
       (body : ∀ statement ∈ statements, StatementSyntax config statement) :
@@ -171,6 +175,9 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   eachLoop : ∀ environment localVar index byRef scope statements view current,
     (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.eachLoop environment localVar index byRef (.mk scope statements none) view current)
+  rangeLoop : ∀ environment localVar ty first last scope statements,
+    (∀ statement ∈ statements, StatementSyntax config statement) →
+    FuelSupport config fuel (.rangeLoop environment localVar ty first last (.mk scope statements none))
   activationBody : ∀ activation pre scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements none))
   activation : ∀ activation pre scope statements origin, (∀ statement ∈ statements, StatementSyntax config statement) →
@@ -300,6 +307,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
             exact .eachStatement fuel environment localVar index (.of place) byRef (.mk scope statements none) origin
               (previous.placeView environment place placeSyntax)
               (fun runtime => previous.eachLoop environment localVar index byRef scope statements runtime 0 body)
+        | rangeStatement localVar first last scope statements origin firstSyntax lastSyntax body =>
+            exact .rangeStatement fuel environment localVar first last (.mk scope statements none) origin
+              (previous.value environment first firstSyntax) (previous.value environment last lastSyntax)
+              (fun ty low high => previous.rangeLoop environment localVar ty low high scope statements body)
         | ifStatement condition scope statements origin conditionSyntax body =>
             exact .ifStatement fuel environment condition (.mk scope statements none) none origin
               (previous.value environment condition conditionSyntax) (previous.block environment scope statements body)
@@ -333,6 +344,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         exact .eachLoop fuel environment localVar index byRef (.mk scope statements none) view current
           (fun pre => previous.boundLoopBody environment pre scope statements derivation)
           (previous.eachLoop environment localVar index byRef scope statements view (current + 1) derivation)
+      · intro environment localVar ty first last scope statements derivation
+        exact .rangeLoop fuel environment localVar ty first last (.mk scope statements none)
+          (fun pre => previous.boundLoopBody environment pre scope statements derivation)
+          (previous.rangeLoop environment localVar ty (first + 1) last scope statements derivation)
       · intro activation pre scope statements derivation
         exact .boundActivationBody fuel activation pre scope statements (fun environment => previous.statements environment statements derivation)
       · intro activation pre scope statements origin derivation

@@ -84,6 +84,17 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (bodyChild : ∀ pre, FuelSupport config fuel (.loopBodyWith environment pre body))
       (next : FuelSupport config fuel (.eachLoop environment localVar index byRef body view (current + 1))) :
       FuelSupport config (fuel + 1) (.eachLoop environment localVar index byRef body view current)
+  | rangeLoop (fuel : Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (ty : Goose.Core.IntTy)
+      (first last : Int) (body : Block)
+      (bodyChild : ∀ pre, FuelSupport config fuel (.loopBodyWith environment pre body))
+      (next : FuelSupport config fuel (.rangeLoop environment localVar ty (first + 1) last body)) :
+      FuelSupport config (fuel + 1) (.rangeLoop environment localVar ty first last body)
+  | rangeStatement (fuel : Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId)
+      (first last : Expr) (body : Block) (origin : Goose.Core.OriginId)
+      (firstChild : FuelSupport config fuel (.value environment first))
+      (lastChild : FuelSupport config fuel (.value environment last))
+      (loopChild : ∀ ty low high, FuelSupport config fuel (.rangeLoop environment localVar ty low high body)) :
+      FuelSupport config (fuel + 1) (.statement environment (.forRange localVar first last body origin))
   | eachStatement (fuel : Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (index : Option Goose.Core.VarId)
       (view : View) (byRef : Bool) (body : Block) (origin : Goose.Core.OriginId)
       (viewChild : FuelSupport config fuel (.view environment view))
@@ -358,6 +369,18 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
             exact ih (.loopBodyWith environment pre body) (path ++ [0]) ready (bodySupported pre)
           · intro count countReady pre ready flow after counted inside selected result continuing
             exact ih (.eachLoop environment localVar index byRef body view (current + 1)) (path ++ [1]) after nextSupported
+      | rangeLoop _ environment localVar ty first last body bodySupported nextSupported =>
+          refine .rangeLoop ?_ ?_
+          · intro inside
+            exact ih (.loopBodyWith environment [(localVar, .int ty first)] body) (path ++ [0]) before (bodySupported _)
+          · intro flow after inside result continuing
+            exact ih (.rangeLoop environment localVar ty (first + 1) last body) (path ++ [1]) after nextSupported
+      | rangeStatement _ environment localVar first last body origin firstSupported lastSupported loopSupported =>
+          refine .rangeStatement (ih (.value environment first) (path ++ [0]) before firstSupported) ?_ ?_
+          · intro firstValue middle ty low ready firstResult checked
+            exact ih (.value environment last) (path ++ [1]) ready lastSupported
+          · intro firstValue middle ty low ready lastValue lastState otherTy high checked final firstResult checkedFirst lastResult checkedLast same
+            exact ih (.rangeLoop environment localVar ty low high body) (path ++ [2]) final (loopSupported ty low high)
       | eachStatement _ environment localVar index view byRef body origin viewSupported loopSupported =>
           refine .eachStatement (ih (.view environment view) (path ++ [0]) before viewSupported) ?_
           intro runtime ready result
