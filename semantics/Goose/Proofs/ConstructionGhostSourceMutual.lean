@@ -1,0 +1,320 @@
+import Goose.Proofs.ConstructionGhostSourceTransition
+import Goose.Proofs.ConstructionGhostBlock
+
+namespace Goose.Proofs.ConstructionGhostSourceMutual
+open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition
+open Goose.Proofs.ConstructionGhostBlock
+
+inductive SourceOperation : Type → Type
+  | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
+  | statement (environment : RuntimeActivation) (statement : Stmt) : SourceOperation Flow
+  | statements (environment : RuntimeActivation) (statements : List Stmt) : SourceOperation Flow
+  | block (environment : RuntimeActivation) (block : Block) : SourceOperation Flow
+  | producer (environment : RuntimeActivation) (expression : Expr) : SourceOperation (List Carrier)
+
+def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
+  | .value environment expression => evalValue fuel config environment expression
+  | .statement environment statement => execStmt fuel config environment statement
+  | .statements environment statements => execStmts fuel config environment statements
+  | .block environment block => execBlock fuel config environment [] [] block
+  | .producer environment expression => evalProduce fuel config environment [] expression
+
+def conditionalResult (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (yes no : Block) : ExecutionStep Value → ExecutionStep Value
+  | .ok value state => (do
+      let selected ← expectBool value
+      let flow ← execBlock fuel config environment [] [] (if selected then yes else no)
+      match flow with
+      | .normal value => pure value
+      | _ => fault .flow) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+inductive SourceHistory (config : EvalConfig) :
+    {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
+  | timeout (path : List Nat) (operation : SourceOperation α) (before : ExecutionState) :
+      SourceHistory config 0 path operation before (.stop .timeout before)
+  | integer (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (ty : Goose.Core.IntTy) (value : Int) (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.value environment (.lit ty value)) before (.ok (.int ty value) before)
+  | boolean (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (value : Bool) (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.value environment (.bool value)) before (.ok (.bool value) before)
+  | negation {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
+      {before : ExecutionState} {outcome : ExecutionStep Value}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
+      SourceHistory config (fuel + 1) path (.value environment (.not operand)) before (negationResult outcome)
+  | fill {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {element : Ty} {count : Nat}
+      {operand : Expr} {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
+      (fixed : (Ty.arr element count).nonfixed = false)
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
+      SourceHistory config (fuel + 1) path (.value environment (.fill (.arr element count) operand origin)) before
+        (fillResult count outcome)
+  | conditional {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {condition : Expr}
+      {yes no : Block} {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment condition) before outcome)
+      (branch : ∀ value middle selected ready, outcome = .ok value middle →
+        expectBool value middle = .ok selected ready →
+        SourceHistory config fuel (path ++ [if selected then 1 else 2])
+          (.block environment (if selected then yes else no)) ready
+          (execBlock fuel config environment [] [] (if selected then yes else no) ready)) :
+      SourceHistory config (fuel + 1) path (.value environment (.ifE condition yes no origin)) before
+        (conditionalResult fuel config environment yes no outcome)
+  | block {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {scope : Nat}
+      {statements : List Stmt} {before : ExecutionState} {outcome : ExecutionStep Flow}
+      (body : SourceHistory config fuel (path ++ [0])
+        (.statements { environment with scopes := (scope, before.nextScope) :: environment.scopes } statements)
+        { before with nextScope := before.nextScope + 1 } outcome) :
+      SourceHistory config (fuel + 1) path (.block environment (.mk scope statements none)) before
+        (withScope environment scope before.nextScope (fun _ => blockContinuation fuel config
+          { environment with scopes := (scope, before.nextScope) :: environment.scopes } [] none outcome)
+          { before with nextScope := before.nextScope + 1 })
+  | expression {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
+      {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
+      SourceHistory config (fuel + 1) path (.statement environment (.expr operand origin)) before
+        (expressionStatementResult outcome)
+  | done (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.statements environment []) before (.ok (.normal .unit) before)
+  | next {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {statement : Stmt} {rest : List Stmt}
+      {before : ExecutionState} {outcome : ExecutionStep Flow}
+      (head : SourceHistory config fuel (path ++ [0]) (.statement environment statement) before outcome)
+      (tail : ∀ value middle, outcome = .ok (.normal value) middle →
+        SourceHistory config fuel (path ++ [1]) (.statements environment rest) middle
+          (execStmts fuel config environment rest middle)) :
+      SourceHistory config (fuel + 1) path (.statements environment (statement :: rest)) before
+        (sequenceResult fuel config environment rest outcome)
+  | discard {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {expression : Expr}
+      {before : ExecutionState} {outcome : ExecutionStep Value} (supported : SupportedValue expression)
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment expression) before outcome) :
+      SourceHistory config (fuel + 1) path (.producer environment expression) before (discardValue outcome)
+
+theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
+    execute fuel config operation before = outcome := by
+  induction history with
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | integer | boolean => simp [execute, evalValue, pure]
+  | @negation fuel path environment operand before outcome child ih =>
+      simp only [execute] at ih ⊢
+      simp only [evalValue, bind, ih, negationResult]
+      cases outcome <;> rfl
+  | @fill fuel path environment element count operand origin before outcome fixed child ih =>
+      simp only [execute] at ih ⊢
+      simp only [evalValue, fixed, Bool.false_eq_true, ↓reduceIte, bind, ih, fillResult]
+      cases outcome <;> rfl
+  | @conditional fuel path environment condition yes no origin before outcome child branch ihChild ihBranch =>
+      simp only [execute] at ihChild ⊢
+      simp only [evalValue, bind, ihChild, conditionalResult]
+      cases outcome with
+      | ok value state =>
+          simp only
+          cases result : expectBool value state with
+          | ok selected ready => simp only [result]; cases selected <;> rfl
+          | stop | escape | jump => simp only [result]
+      | stop | escape | jump => rfl
+  | @block fuel path environment scope statements before outcome body ihBody =>
+      simp only [execute] at ihBody ⊢
+      have bound : bindAll environment.act before.nextScope [] { before with nextScope := before.nextScope + 1 } =
+          .ok () { before with nextScope := before.nextScope + 1 } := by simp [bindAll, bind, pure]
+      obtain ⟨actual, visits, replay, execution⟩ := execBlock_statementReplay fuel config environment [] [] scope
+        statements none before { before with nextScope := before.nextScope + 1 } bound
+      rw [execution, ← replay.sound, ihBody]
+  | @expression fuel path environment operand origin before outcome child ih =>
+      simp only [execute] at ih ⊢
+      simp only [execStmt, bind, ih, expressionStatementResult]
+      cases outcome <;> rfl
+  | done => simp [execute, execStmts, pure]
+  | @next fuel path environment statement rest before outcome head tail ihHead ihTail =>
+      simp only [execute] at ihHead ⊢
+      simp only [execStmts, bind, ihHead, sequenceResult]
+      cases outcome with
+      | ok flow state => cases flow <;> rfl
+      | stop | escape | jump => rfl
+  | @discard fuel path environment expression before outcome supported child ih =>
+      simp only [execute] at ih ⊢
+      rw [emptyProducer_source fuel config environment expression before supported, ih]
+
+theorem ValueHistory.toSource (history : ValueHistory config environment fuel path expression before outcome) :
+    SourceHistory config fuel path (.value environment expression) before outcome := by
+  induction history with
+  | timeout => exact .timeout _ _ _
+  | integer => exact .integer _ _ _ _ _ _
+  | boolean => exact .boolean _ _ _ _ _
+  | negation child ih => exact .negation ih
+  | fill fixed child ih => exact .fill fixed ih
+
+theorem StatementHistory.toSource (history : StatementHistory config environment fuel path statement before outcome) :
+    SourceHistory config fuel path (.statement environment statement) before outcome := by
+  cases history with
+  | timeout => exact .timeout _ _ _
+  | expression child => exact .expression (ValueHistory.toSource child)
+
+theorem StatementSequenceHistory.toSource
+    (history : StatementSequenceHistory config environment fuel path statements before outcome) :
+    SourceHistory config fuel path (.statements environment statements) before outcome := by
+  induction history with
+  | timeout => exact .timeout _ _ _
+  | done => exact .done _ _ _ _
+  | next head tail ih => exact .next (StatementHistory.toSource head) ih
+
+theorem ProducerHistory.toSource (history : ProducerHistory config environment fuel path expression before outcome) :
+    SourceHistory config fuel path (.producer environment expression) before outcome := by
+  cases history with
+  | timeout => exact .timeout _ _ _
+  | discard supported child => exact .discard supported (ValueHistory.toSource child)
+
+theorem value_exists (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (expression : Expr) (before : ExecutionState) (supported : SupportedValue expression) :
+    SourceHistory config fuel path (.value environment expression) before (evalValue fuel config environment expression before) :=
+  ValueHistory.toSource (valueHistory_exists fuel config environment path expression before supported)
+
+theorem statements_exist (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (statements : List Stmt) (before : ExecutionState)
+    (supported : ∀ statement ∈ statements, SupportedStatement statement) :
+    SourceHistory config fuel path (.statements environment statements) before
+      (execStmts fuel config environment statements before) :=
+  StatementSequenceHistory.toSource (statementSequenceHistory_exists fuel config environment path statements before supported)
+
+inductive SupportedOperation : {α : Type} → SourceOperation α → Prop
+  | value (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
+      SupportedOperation (.value environment expression)
+  | conditional (environment : RuntimeActivation) {condition : Expr} {yes no : Block} (origin : Goose.Core.OriginId)
+      (conditionSupported : SupportedOperation (.value environment condition))
+      (yesSupported : SupportedOperation (.block environment yes))
+      (noSupported : SupportedOperation (.block environment no)) :
+      SupportedOperation (.value environment (.ifE condition yes no origin))
+  | expression (environment : RuntimeActivation) {operand : Expr} (origin : Goose.Core.OriginId)
+      (supported : SupportedOperation (.value environment operand)) :
+      SupportedOperation (.statement environment (.expr operand origin))
+  | empty (environment : RuntimeActivation) : SupportedOperation (.statements environment [])
+  | sequence (environment : RuntimeActivation) {statement : Stmt} {rest : List Stmt}
+      (head : SupportedOperation (.statement environment statement))
+      (tail : SupportedOperation (.statements environment rest)) :
+      SupportedOperation (.statements environment (statement :: rest))
+  | block (environment : RuntimeActivation) (scope : Nat) (statements : List Stmt)
+      (body : ∀ scopedEnvironment, SupportedOperation (.statements scopedEnvironment statements)) :
+      SupportedOperation (.block environment (.mk scope statements none))
+  | producer (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
+      SupportedOperation (.producer environment expression)
+
+theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation : SourceOperation α)
+    (path : List Nat) (before : ExecutionState) (supported : SupportedOperation operation) :
+    SourceHistory config fuel path operation before (execute fuel config operation before) := by
+  induction fuel generalizing α operation path before with
+  | zero =>
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, evalProduce,
+        Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
+  | succ fuel ih =>
+      cases supported with
+      | value environment supported =>
+          exact value_exists (fuel + 1) config environment path _ before supported
+      | @conditional environment condition yes no origin conditionSupported yesSupported noSupported =>
+          have child := ih (.value environment condition) (path ++ [0]) before conditionSupported
+          have branch : ∀ value middle selected ready,
+              evalValue fuel config environment condition before = .ok value middle →
+              expectBool value middle = .ok selected ready →
+              SourceHistory config fuel (path ++ [if selected then 1 else 2])
+                (.block environment (if selected then yes else no)) ready
+                (execBlock fuel config environment [] [] (if selected then yes else no) ready) := by
+            intro value middle selected ready _ _
+            cases selected with
+            | false => exact ih (.block environment no) (path ++ [2]) ready noSupported
+            | true => exact ih (.block environment yes) (path ++ [1]) ready yesSupported
+          have actual : evalValue (fuel + 1) config environment (.ifE condition yes no origin) before =
+              conditionalResult fuel config environment yes no (evalValue fuel config environment condition before) := by
+            simp only [evalValue, bind, conditionalResult]
+            cases result : evalValue fuel config environment condition before with
+            | ok value state =>
+                simp only
+                cases check : expectBool value state with
+                | ok selected ready => simp only [check]; cases selected <;> rfl
+                | stop | escape | jump => simp only [check]
+            | stop | escape | jump => rfl
+          simp only [execute]
+          rw [actual]
+          exact .conditional child branch
+      | @expression environment operand origin supported =>
+          have child := ih (.value environment operand) (path ++ [0]) before supported
+          have actual : execStmt (fuel + 1) config environment (.expr operand origin) before =
+              expressionStatementResult (evalValue fuel config environment operand before) := by
+            simp only [execStmt, bind, expressionStatementResult]
+            cases evalValue fuel config environment operand before <;> rfl
+          simp only [execute]
+          rw [actual]
+          exact .expression child
+      | empty environment => simpa [execute, execStmts, pure] using
+          (SourceHistory.done fuel path environment before :
+            SourceHistory config (fuel + 1) path (.statements environment []) before _)
+      | @sequence environment statement rest headSupported tailSupported =>
+          have head := ih (.statement environment statement) (path ++ [0]) before headSupported
+          have tail : ∀ value middle, execStmt fuel config environment statement before = .ok (.normal value) middle →
+              SourceHistory config fuel (path ++ [1]) (.statements environment rest) middle
+                (execStmts fuel config environment rest middle) := by
+            intro value middle _
+            exact ih (.statements environment rest) (path ++ [1]) middle tailSupported
+          have actual : execStmts (fuel + 1) config environment (statement :: rest) before =
+              sequenceResult fuel config environment rest (execStmt fuel config environment statement before) := by
+            simp only [execStmts, bind, sequenceResult]
+            cases execStmt fuel config environment statement before with
+            | ok flow state => cases flow <;> rfl
+            | stop | escape | jump => rfl
+          simp only [execute]
+          rw [actual]
+          exact .next head tail
+      | block environment scope statements bodySupported =>
+          let scopedEnvironment := { environment with scopes := (scope, before.nextScope) :: environment.scopes }
+          let ready := { before with nextScope := before.nextScope + 1 }
+          have child := ih (.statements scopedEnvironment statements) (path ++ [0]) ready (bodySupported scopedEnvironment)
+          have bound : bindAll environment.act before.nextScope [] ready = .ok () ready := by simp [ready, bindAll, bind, pure]
+          obtain ⟨outcome, visits, replay, execution⟩ :=
+            execBlock_statementReplay fuel config environment [] [] scope statements none before ready bound
+          simp only [execute]
+          rw [execution, ← replay.sound]
+          exact .block child
+      | producer environment supported =>
+          exact ProducerHistory.toSource (producerHistory_exists (fuel + 1) config environment path _ before supported)
+
+private def witnessConfig : EvalConfig := ⟨.release, ⟨#[], #[], #[], #[], #[], 0, #[], #[], #[]⟩⟩
+private def witnessEnvironment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
+private def witnessExpression : Expr :=
+  .ifE (.bool true) (.mk 1 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none)
+    (.mk 2 [] none) 0
+private def witnessState : ExecutionStep α → ExecutionState
+  | .ok _ state | .stop _ state | .escape _ _ state | .jump _ _ state => state
+
+theorem witness_nestedFill : ∃ after,
+    evalValue 40 witnessConfig witnessEnvironment witnessExpression .initial = .ok .unit after ∧
+    SourceHistory witnessConfig 40 [] (.value witnessEnvironment witnessExpression) .initial (.ok .unit after) := by
+  have supported : SupportedOperation (.value witnessEnvironment witnessExpression) := by
+    unfold witnessExpression
+    apply SupportedOperation.conditional
+    · exact .value _ (.boolean true)
+    · apply SupportedOperation.block
+      intro environment
+      exact .sequence environment (.expression environment 0 (.value environment
+        (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
+    · exact .block _ _ _ (fun environment => .empty environment)
+  have history := history_exists 40 witnessConfig (.value witnessEnvironment witnessExpression) [] .initial supported
+  refine ⟨witnessState (evalValue 40 witnessConfig witnessEnvironment witnessExpression .initial), ?_, ?_⟩
+  · unfold witnessConfig witnessEnvironment witnessExpression witnessState
+    cbv
+  · have actual : evalValue 40 witnessConfig witnessEnvironment witnessExpression .initial =
+        .ok .unit (witnessState (evalValue 40 witnessConfig witnessEnvironment witnessExpression .initial)) := by
+      unfold witnessConfig witnessEnvironment witnessExpression witnessState
+      cbv
+    change SourceHistory witnessConfig 40 [] (.value witnessEnvironment witnessExpression) .initial
+      (evalValue 40 witnessConfig witnessEnvironment witnessExpression .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_nestedFill
+
+#print axioms history_exists
+
+#print axioms ValueHistory.toSource
+#print axioms StatementSequenceHistory.toSource
+#print axioms value_exists
+#print axioms statements_exist
+
+#print axioms SourceHistory.sound
+end Goose.Proofs.ConstructionGhostSourceMutual
