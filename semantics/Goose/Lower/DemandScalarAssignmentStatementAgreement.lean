@@ -83,25 +83,30 @@ inductive ScalarAssignmentStatements (cfg : Cfg) (env : Env) : List Stmt → Pro
       {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
       ScalarAssignmentStatements cfg env (.assign place (.read read) origin :: rest)
 
-theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+theorem accepted_generated_scalar_assignment_statements_prepend {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool)
-    (block : Core.Block) {statements : List Stmt} (fragment : ScalarAssignmentStatements cfg env statements) :
-    GeneratedSequencePrefixFamily cx results selected before loop bindings want block statements
-        (@ScalarAssignmentStatementPrefixCursor cfg env cx results) ∧
-      GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block statements := by
+    (block : Core.Block) {statements rest : List Stmt} (fragment : ScalarAssignmentStatements cfg env statements)
+    (cursor : ∀ {statement : Stmt} {state : St}, StmtSource cfg env statement state →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    (convert : ∀ {statement : Stmt} {state : St} (source : StmtSource cfg env statement state)
+      {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint},
+      ScalarAssignmentStatementPrefixCursor cx results source before built initial start map required runtime →
+        cursor source before built initial start map required runtime)
+    (tailFamily : GeneratedSequencePrefixFamily cx results selected before loop bindings want block rest cursor ∧
+      GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block rest) :
+    GeneratedSequencePrefixFamily cx results selected before loop bindings want block (statements ++ rest) cursor ∧
+      GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block (statements ++ rest) := by
   induction fragment with
-  | nil =>
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_nil selected before loop bindings want block _,
-      fun {state} => accepted_generated_stopped_sequence_nil selected before loop bindings want block⟩
+  | nil => simpa using tailFamily
   | clear global origin tail ih =>
     have head : GeneratedStatementPrefixFamily cx results selected loop (.clear (.global global) origin)
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
       apply GeneratedStatementPrefixFamily.mapCursor (accepted_generated_global_clear_prefix_family selected loop global origin)
       intro statement state source before built initial start map required runtime cursor
       exact .control (.clear cursor)
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_global_clear_stopped_family selected loop global origin) ih.2⟩
   | localClear slot origin tail ih =>
@@ -110,7 +115,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
       apply GeneratedStatementPrefixFamily.mapCursor (accepted_generated_scalar_clear_prefix_family selected loop (.slot slot) origin)
       intro statement state source before built initial start map required runtime cursor
       exact .scalarClear cursor
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_scalar_clear_stopped_family selected loop (.slot slot) origin) ih.2⟩
   | @expression expression origin form rest tail ih =>
@@ -121,7 +126,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
           (accepted_generated_control_prefix_family selected loop form))
       intro statement state source before built initial start map required runtime cursor
       exact .control (.expression cursor)
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_expression_statement_stopped_family selected loop expression origin
           (accepted_generated_read_stopped_expressions selected loop form.stopped)) ih.2⟩
@@ -135,7 +140,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
             · simp [integer, Ty.refTarget]) (accepted_generated_control_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .assignment cursor
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_scalar_assignment_stopped selected loop place form expression origin
           (fun source child _ => by
@@ -155,7 +160,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
           (accepted_generated_control_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .indexAssignment cursor
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_index_assignment_stopped selected loop owner (.scalar form) index expression indexOrigin origin
           (fun source child _ => by
@@ -176,7 +181,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
           (accepted_generated_control_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .indexAssignment cursor
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_index_assignment_stopped selected loop (.field owner field) (.field field form) index expression indexOrigin origin
           (fun source child _ => by
@@ -195,7 +200,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
             · simp [integer, Ty.refTarget]) (accepted_generated_control_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .fieldAssignment cursor
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_field_assignment_stopped selected loop owner index form expression origin
           (fun source child _ => by
@@ -211,7 +216,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
           (accepted_generated_control_prefix_family selected loop indexForm) (accepted_generated_read_prefix_family selected loop readable))
       intro statement state source before built initial start map required runtime cursor
       exact .indexAssignment cursor
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_index_assignment_stopped selected loop owner (.scalar form) index (.read read) indexOrigin origin target
           (accepted_generated_read_stopped_expressions selected loop indexForm.stopped)
@@ -225,7 +230,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
           (accepted_generated_control_prefix_family selected loop indexForm) (accepted_generated_read_prefix_family selected loop readable))
       intro statement state source before built initial start map required runtime cursor
       exact .indexAssignment cursor
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_index_assignment_stopped selected loop (.field owner field) (.field field form) index (.read read) indexOrigin origin target
           (accepted_generated_read_stopped_expressions selected loop indexForm.stopped)
@@ -239,7 +244,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
           (accepted_generated_read_prefix_family selected loop readable))
       intro statement state source before built initial start map required runtime cursor
       exact .fieldAssignment cursor
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_field_assignment_stopped selected loop owner index destination (.read read) origin target
           (accepted_generated_read_stopped_family selected loop readable)) ih.2⟩
@@ -251,9 +256,26 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
         (accepted_generated_read_assignment_prefix selected loop place destination read readable origin target)
       intro statement state source before built initial start map required runtime cursor
       exact .assignment cursor
-    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_read_assignment_stopped selected loop place destination read readable origin target) ih.2⟩
+
+theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool)
+    (block : Core.Block) {statements : List Stmt} (fragment : ScalarAssignmentStatements cfg env statements) :
+    GeneratedSequencePrefixFamily cx results selected before loop bindings want block statements
+        (@ScalarAssignmentStatementPrefixCursor cfg env cx results) ∧
+      GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block statements := by
+  have empty : GeneratedSequencePrefixFamily cx results selected before loop bindings want block []
+        (@ScalarAssignmentStatementPrefixCursor cfg env cx results) ∧
+      GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block [] :=
+    ⟨fun {state} => accepted_generated_sequence_prefix_nil selected before loop bindings want block _,
+      fun {state} => accepted_generated_stopped_sequence_nil selected before loop bindings want block⟩
+  simpa using accepted_generated_scalar_assignment_statements_prepend selected before loop bindings want block fragment _ (by
+    intro statement state source before built initial start map required runtime cursor
+    exact cursor) empty
 
 theorem ScalarAssignmentStatementPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
