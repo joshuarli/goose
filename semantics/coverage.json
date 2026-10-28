@@ -667,6 +667,15 @@
   "evidence": "Goose/Lower/DemandStoppedControlUnitBlock.lean and its stopped-body and suffix dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Mixed value-block demand prefixes",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_control_value_block_prefix; Goose.Lower.GeneratedBlockValuePrefixDemand.canonical_frame",
+  "statement": "Finite successful generated prefixes of a block with mixed expression statements and global clears carry canonical demand through its final scalar or short-circuit value expression and scope exit, or reach the completed source block boundary.",
+  "assumptions": "Accepted block source and generated occurrence, realized and bounded retained map, builder extension, no entry bindings, and the stated statement and value-expression fragments.",
+  "limits": "Stops in the final value, other statement and expression forms, calls and whole-module cursor reconstruction remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandControlValueBlockPrefix.lean and its expression, block and sequence dependencies; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
