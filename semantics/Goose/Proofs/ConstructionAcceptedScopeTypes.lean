@@ -73,9 +73,44 @@ theorem AcceptedFrame.registerLocal_preserves_other_uninitializedTypes
   simp only [registerRootType, rootsDifferent, ↓reduceIte]
   exact source.uninitializedTypes other uninitialized otherRoot otherResolved
 
+theorem AcceptedFrame.enterInitializer_order {config : EvalConfig} {accepted : AcceptedModule config}
+    {frame : ConstructionSourceFrame} {state : ExecutionState} {types : RootTypes}
+    (source : AcceptedFrame config accepted frame state types) (id : Nat) (ordered : id = frame.rootCursor.nextVar) :
+    ∀ other ∈ id :: frame.source.initializing, other < frame.rootCursor.nextVar + 1 := by
+  intro other member
+  rcases List.mem_cons.mp member with same | existing
+  · rw [same, ordered]
+    exact Nat.lt_succ_self _
+  · exact Nat.lt_trans (source.initializingBefore other existing) (Nat.lt_succ_self _)
+
+theorem AcceptedFrame.registerLocal_advance_uninitializedTypes
+    {config : EvalConfig} {accepted : AcceptedModule config}
+    {frame : ConstructionSourceFrame} {state : ExecutionState} {types : RootTypes}
+    (source : AcceptedFrame config accepted frame state types) (id other : Nat) (root otherRoot : Goose.Core.RootInst)
+    (ty : Ty) (ordered : id = frame.rootCursor.nextVar)
+    (uninitialized : frame.rootCursor.nextVar + 1 ≤ other ∨ other ∈ frame.source.initializing)
+    (resolved : rootOf frame.interpretation.environment id state = .ok root state)
+    (otherResolved : rootOf frame.interpretation.environment other state = .ok otherRoot state) :
+    registerRootType types root ty otherRoot = none := by
+  have different : other ≠ id := by
+    intro equal
+    subst other
+    rcases uninitialized with future | initializing
+    · omega
+    · have prior := source.initializingBefore id initializing
+      rw [ordered] at prior
+      exact (Nat.lt_irrefl _ prior).elim
+  have prior : frame.rootCursor.nextVar ≤ other ∨ other ∈ frame.source.initializing := by
+    rcases uninitialized with future | initializing
+    · exact Or.inl (Nat.le_trans (Nat.le_succ _) future)
+    · exact Or.inr initializing
+  exact source.registerLocal_preserves_other_uninitializedTypes id other root otherRoot ty different prior resolved otherResolved
+
 #print axioms AcceptedWorld.freshScope_localType
 #print axioms AcceptedWorld.enterScope_localType
 #print axioms AcceptedFrame.enterScope_uninitializedTypes
 #print axioms AcceptedFrame.registerLocal_preserves_other_uninitializedTypes
+#print axioms AcceptedFrame.enterInitializer_order
+#print axioms AcceptedFrame.registerLocal_advance_uninitializedTypes
 
 end Goose.Proofs.ConstructionAcceptedExecution

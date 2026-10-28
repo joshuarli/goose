@@ -12,7 +12,7 @@ theorem acceptedEntryFrame (config : EvalConfig) (accepted : AcceptedModule conf
       frame.typingFuel = 4096 ∧ frame.typingCounter = 0 ∧ frame.rootCursor = ⟨0, {}, []⟩ ∧
       frame.initialized = config.module.globals.size ∧
       frame.source.impl.params = #[] ∧ frame.source.impl.results = #[] ∧
-      frame.source.scopes = [] ∧ frame.interpretation.environment.scopes = [] ∧
+      frame.source.scopes = [] ∧ frame.source.initializing = [] ∧ frame.interpretation.environment.scopes = [] ∧
       frame.interpretation.environment.channels = [] ∧
       freshAct state = .ok frame.interpretation.environment.act { state with nextAct := state.nextAct + 1 } ∧
       SourceFrameCompatible accepted frame ∧ AliasComplete frame.interpretation frame.source.aliases ∧
@@ -103,7 +103,7 @@ theorem acceptedEntryFrame (config : EvalConfig) (accepted : AcceptedModule conf
       .ok (bodyTypes, typingAfter) := by
     simpa only [frame, typing, source, parametersEmpty, resultsEmpty, Array.size_empty,
       Array.toList_empty, List.map_nil, Array.isEmpty_empty, ite_true, List.range_zero] using bodyChecked
-  exact ⟨frame, rfl, rfl, rfl, rfl, rfl, rfl, parametersEmpty, resultsEmpty, rfl, rfl, rfl, rfl,
+  exact ⟨frame, rfl, rfl, rfl, rfl, rfl, rfl, parametersEmpty, resultsEmpty, rfl, rfl, rfl, rfl, rfl,
     compatible, aliases, frontier, locals, contents, bodyTypes, typingAfter, typed⟩
 
 end Goose.Proofs.ConstructionAcceptedExecution

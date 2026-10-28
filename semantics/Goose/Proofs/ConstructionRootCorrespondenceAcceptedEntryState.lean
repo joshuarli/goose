@@ -28,7 +28,7 @@ theorem acceptedEntryWorldFrame (config : EvalConfig) (accepted : AcceptedModule
       ∃ bodyTypes declared, typeBlock frame.typingFuel frame.typing frame.source.impl.body frame.typingCounter =
         .ok (bodyTypes, declared) := by
   obtain ⟨frame, phase, visible, fuel, counter, cursor, initialized, parametersEmpty, resultsEmpty,
-      sourceScopes, scopes, channels, allocated, compatible, aliases, frontier, direct, contents,
+      sourceScopes, initializing, scopes, channels, allocated, compatible, aliases, frontier, direct, contents,
       bodyTypes, declared, typed⟩ := acceptedEntryFrame config accepted state
   have framed : AcceptedFrame config accepted frame { state with nextAct := state.nextAct + 1 } types := {
     compatible := compatible
@@ -36,6 +36,10 @@ theorem acceptedEntryWorldFrame (config : EvalConfig) (accepted : AcceptedModule
     scopeFrontier := by
       intro entry member
       rw [scopes] at member
+      cases member
+    initializingBefore := by
+      intro id member
+      rw [initializing] at member
       cases member
     aliases := aliases
     locals := by

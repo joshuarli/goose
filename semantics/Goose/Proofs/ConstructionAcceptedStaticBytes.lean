@@ -25,7 +25,7 @@ theorem AcceptedFrame.freshSyntheticRoot {config : EvalConfig} {accepted : Accep
     (ordinals : after.objectOrdinals = before.objectOrdinals)
     (objects : ∀ root, root ≠ .global id → after.objects.lookup root = before.objects.lookup root) :
     AcceptedFrame config accepted frame after nextTypes := by
-  refine ⟨source.compatible, ?_, ?_, source.aliases, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨source.compatible, ?_, ?_, source.initializingBefore, source.aliases, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simpa only [acts] using source.frontier
   · intro entry member
     exact Nat.lt_of_lt_of_le (source.scopeFrontier entry member) scopes

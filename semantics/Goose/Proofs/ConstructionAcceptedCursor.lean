@@ -29,7 +29,7 @@ theorem ordinaryOperandFrame_accepted {config : EvalConfig} (accepted : Accepted
     (valid : AcceptedFrame config accepted frame state types) :
     AcceptedFrame config accepted (ordinaryOperandFrame frame fuel) state types :=
   ⟨ordinaryOperandFrame_compatible accepted frame fuel valid.compatible,
-    valid.frontier, valid.scopeFrontier, valid.aliases, valid.locals, valid.localTypes, valid.uninitializedLocals,
+    valid.frontier, valid.scopeFrontier, valid.initializingBefore, valid.aliases, valid.locals, valid.localTypes, valid.uninitializedLocals,
     valid.uninitializedTypes, valid.futureGlobals,
     valid.direct, valid.contents⟩
 
