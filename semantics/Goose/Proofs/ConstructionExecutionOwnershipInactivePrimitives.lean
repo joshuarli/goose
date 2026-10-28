@@ -649,7 +649,7 @@ private theorem stageDestination_ownership_rows (state : ConstructionState) (id 
                 | simp only [← progress, ← layout, ← known, ← use]
                   refine rows_mutable state id row _ present ?_ ?_ ?_
                   · rfl
-                  · simp [OwnershipLinkBacking, use]
+                  · simp [OwnershipLinkBacking, use, backing, DestinationBacking.receiverStorage]
                   · simp [ReservationStableProgress, progress]
               | simp only [reserveStorage, ConstructionM.get, ConstructionM.set, replaceDestination_result,
                   inside, ↓reduceIte, emit_result, bind, pure, ConstructionResult.finalState]
@@ -1676,7 +1676,7 @@ private theorem publish_commit_metadata (state : ConstructionState) (id : Destin
       cases stage <;> simp [destinationObservations, observeDestination, Ne.symm different]
   · refine forward_leaf state id destination _ present ?_ ?_ ?_ ?_
     · rfl
-    · simp [OwnershipLinkBacking, use]
+    · simp [OwnershipLinkBacking, use, DestinationBacking.receiverStorage]
     · simp [ReservationStableProgress, progress]
     · trivial
 

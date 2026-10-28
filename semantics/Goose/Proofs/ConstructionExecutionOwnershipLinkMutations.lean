@@ -151,7 +151,7 @@ theorem stageDestination_forwardLinks (state : ConstructionState) (id : Destinat
               | solve
                 | simp only [← progress, ← layout, ← known, ← use]
                   exact destinationForwardLinks_replace_sources state id row _ present rfl
-                    (by simp [OwnershipLinkBacking, use]) valid
+                    (by simp [OwnershipLinkBacking, use, backing, DestinationBacking.receiverStorage]) valid
                     (by simp [DestinationForwardLink, progress])
               | simp only [reserveStorage, ConstructionM.get, ConstructionM.set, replaceDestination_result,
                   inside, ↓reduceIte, emit_result, bind, pure, ConstructionResult.finalState]

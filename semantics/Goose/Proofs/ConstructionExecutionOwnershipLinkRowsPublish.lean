@@ -141,7 +141,7 @@ private theorem publish_commit_metadata (state : ConstructionState) (id : Destin
       cases stage <;> simp [destinationObservations, observeDestination, Ne.symm different]
   · refine ownershipForwardRowsFrame_replace_leaf state id destination _ present ?_ ?_ ?_ ?_
     · rfl
-    · simp [OwnershipLinkBacking, use]
+    · simp [OwnershipLinkBacking, use, DestinationBacking.receiverStorage]
     · simp [ReservationStableProgress, progress]
     · trivial
 

@@ -54,13 +54,21 @@ def ConstructionOwnershipLinks (state : ConstructionState) : Prop :=
 
 def OwnershipLinkBacking (before after : PendingDestination) : Prop :=
   match before.use with
-  | .receiver => True
+  | .receiver => after.backing.receiverStorage = before.backing.receiverStorage
   | .child _ => after.backing.receiverStorage = before.backing.receiverStorage
   | .replacement _ => after.backing = before.backing
 
 def OwnershipSourceExtension (before after : ConstructionState) : Prop :=
   ∀ (id : DestinationId) (row : PendingDestination), before.destinations[id]? = some row → ∃ current : PendingDestination,
     after.destinations[id]? = some current ∧ current.use = row.use ∧ OwnershipLinkBacking row current
+
+theorem OwnershipSourceExtension.receiverStorage (before after : ConstructionState)
+    (extension : OwnershipSourceExtension before after) (id : DestinationId) (row : PendingDestination)
+    (present : before.destinations[id]? = some row) (receiver : row.use = .receiver) :
+    ∃ current, after.destinations[id]? = some current ∧ current.use = .receiver ∧
+      current.backing.receiverStorage = row.backing.receiverStorage := by
+  obtain ⟨current, found, use, backing⟩ := extension id row present
+  exact ⟨current, found, use.trans receiver, by simpa only [OwnershipLinkBacking, receiver] using backing⟩
 
 theorem destinationForwardLink_sourceExtension (before after : ConstructionState)
     (extension : OwnershipSourceExtension before after) (id : DestinationId) (row : PendingDestination)

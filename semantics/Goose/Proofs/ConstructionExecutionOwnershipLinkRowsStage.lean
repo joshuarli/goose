@@ -37,7 +37,7 @@ theorem stageDestination_ownership_rows (state : ConstructionState) (id : Destin
                 | simp only [← progress, ← layout, ← known, ← use]
                   refine ownershipLinkRowsFrame_replace_mutable state id row _ present ?_ ?_ ?_
                   · rfl
-                  · simp [OwnershipLinkBacking, use]
+                  · simp [OwnershipLinkBacking, use, backing, DestinationBacking.receiverStorage]
                   · simp [ReservationStableProgress, progress]
               | simp only [reserveStorage, ConstructionM.get, ConstructionM.set, replaceDestination_result,
                   inside, ↓reduceIte, emit_result, bind, pure, ConstructionResult.finalState]

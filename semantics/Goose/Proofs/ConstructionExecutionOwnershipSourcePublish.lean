@@ -141,7 +141,7 @@ private theorem publish_commit_metadata (state : ConstructionState) (id : Destin
       cases stage <;> simp [destinationObservations, observeDestination, Ne.symm different]
   · refine ownershipSourceExtension_replace state id destination _ present ?_ ?_
     · rfl
-    · simp [OwnershipLinkBacking, use]
+    · simp [OwnershipLinkBacking, use, DestinationBacking.receiverStorage]
 
 set_option maxHeartbeats 2000000 in
 private theorem publicationStep_metadata (id : DestinationId) (state : ConstructionState)

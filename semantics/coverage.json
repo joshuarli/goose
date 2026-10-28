@@ -488,6 +488,15 @@
   "evidence": "ConstructionAcceptedFreshness.lean, ConstructionAcceptedStaticBytes.lean and ConstructionAcceptedFreshnessChecks.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Receiver storage identity across construction source extensions",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionExecutionOwnership.OwnershipSourceExtension.receiverStorage; Goose.Proofs.ConstructionExecutionOwnership.constructionPrimitive_source_or_landing",
+  "statement": "A receiver in an ownership source extension retains its receiver storage ID, including through staging and publication. The construction primitive family derives a source extension or identifies exit-replacement landing.",
+  "assumptions": "An ownership source extension or the construction primitive and its destination lifecycle invariant.",
+  "limits": "Exit-replacement landing is the explicit exception and must be followed through its successor relation. This does not by itself establish whole-evaluator ownership or TH-CON-01.",
+  "evidence": "ConstructionExecutionOwnershipLinks.lean and ConstructionExecutionOwnershipSourcePrimitives.lean; affected Lean 4.35 closures and axiom check."
+ },
+ {
   "feature": "Receiving-region limits for fresh stored owners",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.ReceivingProtection.extend_unrelated_storage; Goose.Proofs.ConstructionAcceptedExecution.newDestination_separate_from_regions; Goose.Proofs.ConstructionAcceptedExecution.newDestination_excludes_freshRegion; Goose.Proofs.ConstructionAcceptedExecution.bindRoot_freshStored_extendedWorld",
