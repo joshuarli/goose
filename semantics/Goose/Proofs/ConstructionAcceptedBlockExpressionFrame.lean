@@ -21,5 +21,15 @@ theorem AcceptedFrame.valueBlockExpression {config : EvalConfig} {accepted : Acc
     source.locals, source.localTypes, source.uninitializedLocals, source.uninitializedTypes,
     source.futureGlobals, source.direct, source.contents⟩
 
+theorem AcceptedFrame.leaveValueBlockExpression {config : EvalConfig} {accepted : AcceptedModule config}
+    {frame : ConstructionSourceFrame} {before after : ExecutionState} {types : RootTypes}
+    (source : AcceptedFrame config accepted frame before types) (scope fuel : Nat) (expected : List Ty)
+    (child : AcceptedFrame config accepted (valueBlockExpressionFrame frame scope fuel expected) after types) :
+    AcceptedFrame config accepted frame after types := by
+  exact ⟨source.compatible, child.frontier, child.scopeFrontier, child.initializingBefore, source.aliases,
+    child.locals, child.localTypes, child.uninitializedLocals, child.uninitializedTypes, child.futureGlobals,
+    child.direct, child.contents⟩
+
+#print axioms AcceptedFrame.leaveValueBlockExpression
 #print axioms AcceptedFrame.valueBlockExpression
 end Goose.Proofs.ConstructionAcceptedExecution
