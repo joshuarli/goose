@@ -147,8 +147,8 @@ theorem accepted_generated_call_mixed_prefix_cells_suffix {cfg : Cfg} {env : Env
         have childCanonical : (ArgSource.byRef mutability child (Or.inl target)).MatchesContext
             source.world source.typingEnv source.rootsEnv (callArgContext source.context index (.byRef mutability place) found) :=
           ⟨plans, path, world, typing, roots, childContext⟩
-        obtain ⟨location, length, point, frame, aliases, done, first, tail, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
-          accepted_generated_call_reference_complete source found child target childCanonical headForm occurrence rows tracked
+        obtain ⟨location, length, point, frame, aliases, done, traversal, first, tail, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
+          accepted_generated_call_reference_complete_demand source found child target childCanonical headForm occurrence rows tracked
             bounded realized input extended
         have executed := DemandRuntimePrefix.next ((first 0).runtime) tail
         rcases executed.compare steps with ⟨remaining, count, residual⟩ | ⟨remaining, count, suffix⟩
@@ -187,8 +187,9 @@ theorem accepted_generated_call_mixed_prefix_cells_suffix {cfg : Cfg} {env : Env
             simp [evalArg, bind_apply, placed, pure_apply] at same
             exact same
           subst actualLocation
+          have currentDemand := traversal.runtimePrefix_invariant (by omega) steps
           exact .interior (required := required)
-            (.referenceInterior found child target childCanonical placeEntry placeAddressed done executed count suffix)
+            (.referenceInterior found child target childCanonical placeEntry placeAddressed currentDemand done executed count suffix)
 
 theorem accepted_generated_call_mixed_prefix_cells {cfg : Cfg} {env : Env} {state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}

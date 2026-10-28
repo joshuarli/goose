@@ -50,6 +50,10 @@ inductive CallMixedPrefix {cfg : Cfg} {env : Env} {initialState : St}
         (prior ++ map.values) map.runs
         ⟨(start.point.1, start.point.2 + 1), start.frame.set (lowerPlace place (lowerEnv cfg.mod env.vars results)
           (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).1 (.val (.ref location)), start.state⟩)
+      (currentDemand : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
+          (prior ++ map.values) map.runs reached ∨
+        DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
+          (prior ++ map.values) map.runs reached)
       (evaluated : evalArg 2 cfg env (.byRef mutability place) start.state = .ok (.ref location) boundary.state)
       (expected : DemandRuntimePrefix cx length start boundary)
       (count : taken + remaining = length)
@@ -145,8 +149,8 @@ theorem accepted_generated_call_mixed_prefix_suffix {cfg : Cfg} {env : Env} {ini
         have childCanonical : (ArgSource.byRef mutability child (Or.inl target)).MatchesContext
             source.world source.typingEnv source.rootsEnv (callArgContext source.context index (.byRef mutability place) found) :=
           ⟨plans, path, world, typing, roots, childContext⟩
-        obtain ⟨location, length, point, frame, aliases, done, first, tail, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
-          accepted_generated_call_reference_complete source found child target childCanonical headForm occurrence rows tracked
+        obtain ⟨location, length, point, frame, aliases, done, traversal, first, tail, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
+          accepted_generated_call_reference_complete_demand source found child target childCanonical headForm occurrence rows tracked
             bounded realized input extended
         have executed := DemandRuntimePrefix.next ((first 0).runtime) tail
         rcases executed.compare steps with ⟨remaining, count, residual⟩ | ⟨remaining, count, suffix⟩
@@ -164,7 +168,8 @@ theorem accepted_generated_call_mixed_prefix_suffix {cfg : Cfg} {env : Env} {ini
             simp [evalArg, bind_apply, placed, pure_apply] at same
             exact same
           subst actualLocation
-          exact .referenceInterior found child target childCanonical placeEntry placeAddressed done executed count suffix
+          have currentDemand := traversal.runtimePrefix_invariant (by omega) steps
+          exact .referenceInterior found child target childCanonical placeEntry placeAddressed currentDemand done executed count suffix
 
 theorem accepted_generated_call_mixed_prefix {cfg : Cfg} {env : Env} {state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
