@@ -22,7 +22,6 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (world : AcceptedWorld config frame.initialized before ambient types live [] [])
     (source : AcceptedFrame config accepted frame before types) (empty : frame.interpretation.environment.vars = #[])
-    (globalLimit : frame.typing.globalLimit ≤ frame.initialized)
     (noParameters : ∀ parameter global, ¬ frame.interpretation.parameters parameter (.global global))
     (scalars : FlatGlobalsAreScalar config) (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
     (checked : CheckedValue frame expression ty roots typingAfter rootsAfter) :
@@ -46,7 +45,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
         let operandFrame := ordinaryOperandFrame frame checkFuel
         have operandSource := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
         have safe := nestedScalarExpression_complete operand fuel config accepted operandFrame before ambient types live world operandSource
-          empty globalLimit noParameters scalars (.int integer) operandRoots typingAfter operandAfter operandChecked
+          empty noParameters scalars (.int integer) operandRoots typingAfter operandAfter operandChecked
         have safe' : NestedValueOutcome config accepted frame ambient types live (.int integer)
             (evalValue fuel config frame.interpretation.environment expression before) :=
           safe.retarget config accepted frame operandFrame ambient types live (.int integer) before _ source empty rfl rfl
@@ -74,7 +73,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
         have sameRoot : rootMiddle.nextVar = frame.rootCursor.nextVar := by simpa [leftFrame, ordinaryOperandFrame] using leftFacts.2
         have leftSource := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
         have leftSafe := nestedScalarExpression_complete leftForm fuel config accepted leftFrame before ambient types live world leftSource
-          empty globalLimit noParameters scalars (.int integer) leftRoots middle rootMiddle leftChecked
+          empty noParameters scalars (.int integer) leftRoots middle rootMiddle leftChecked
         have leftSafe' : NestedValueOutcome config accepted frame ambient types live (.int integer)
             (evalValue fuel config frame.interpretation.environment left before) :=
           leftSafe.retarget config accepted frame leftFrame ambient types live (.int integer) before _ source empty rfl rfl
@@ -87,7 +86,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
             simpa [rightFrame, leftFrame, ordinaryOperandFrame, sameCounter] using
               (ordinaryOperandFrame_accepted accepted frame checkFuel state types currentSource).withRootCursor rootMiddle sameRoot
           have safe := nestedScalarExpression_complete rightForm fuel config accepted rightFrame state ambient types live currentWorld rightSource
-            empty globalLimit noParameters scalars (.int integer) rightRoots typingAfter rootFinal rightChecked
+            empty noParameters scalars (.int integer) rightRoots typingAfter rootFinal rightChecked
           exact safe.retarget config accepted frame rightFrame ambient types live (.int integer) state _ currentSource empty rfl rfl
         exact nestedValueBinary_compose fuel config accepted frame ambient types live integer operation left right origin before leftSafe' rightSafe
   | @conversion expression kind target origin operand =>
@@ -107,7 +106,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
         let operandFrame := ordinaryOperandFrame frame checkFuel
         have operandSource := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
         have safe := nestedScalarExpression_complete operand fuel config accepted operandFrame before ambient types live world operandSource
-          empty globalLimit noParameters scalars (.int integer) operandRoots typingAfter operandAfter operandChecked
+          empty noParameters scalars (.int integer) operandRoots typingAfter operandAfter operandChecked
         have safe' : NestedValueOutcome config accepted frame ambient types live (.int integer)
             (evalValue fuel config frame.interpretation.environment expression before) :=
           safe.retarget config accepted frame operandFrame ambient types live (.int integer) before _ source empty rfl rfl
@@ -135,7 +134,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
         have sameRoot : rootMiddle.nextVar = frame.rootCursor.nextVar := by simpa [leftFrame, ordinaryOperandFrame] using leftFacts.2
         have leftSource := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
         have leftSafe := nestedScalarExpression_complete leftForm fuel config accepted leftFrame before ambient types live world leftSource
-          empty globalLimit noParameters scalars operandTy leftRoots middle rootMiddle leftChecked
+          empty noParameters scalars operandTy leftRoots middle rootMiddle leftChecked
         have leftSafe' : NestedValueOutcome config accepted frame ambient types live operandTy
             (evalValue fuel config frame.interpretation.environment left before) :=
           leftSafe.retarget config accepted frame leftFrame ambient types live operandTy before _ source empty rfl rfl
@@ -148,7 +147,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
             simpa [rightFrame, leftFrame, ordinaryOperandFrame, sameCounter] using
               (ordinaryOperandFrame_accepted accepted frame checkFuel state types currentSource).withRootCursor rootMiddle sameRoot
           have safe := nestedScalarExpression_complete rightForm fuel config accepted rightFrame state ambient types live currentWorld rightSource
-            empty globalLimit noParameters scalars operandTy rightRoots typingAfter rootsAfter rightChecked
+            empty noParameters scalars operandTy rightRoots typingAfter rootsAfter rightChecked
           exact safe.retarget config accepted frame rightFrame ambient types live operandTy state _ currentSource empty rfl rfl
         exact nestedValueComparison_compose fuel config accepted frame ambient types live operandTy operandKind operation left right before leftSafe' rightSafe
   | @conjunction left right leftForm rightForm | @disjunction left right leftForm rightForm =>
@@ -177,7 +176,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
         have sameRoot : rootMiddle.nextVar = frame.rootCursor.nextVar := by simpa [leftFrame, ordinaryOperandFrame] using leftFacts.2
         have leftSource := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
         have leftSafe := nestedScalarExpression_complete leftForm fuel config accepted leftFrame before ambient types live world leftSource
-          empty globalLimit noParameters scalars .bool leftRoots middle rootMiddle leftChecked
+          empty noParameters scalars .bool leftRoots middle rootMiddle leftChecked
         have leftSafe' : NestedValueOutcome config accepted frame ambient types live .bool
             (evalValue fuel config frame.interpretation.environment left before) :=
           leftSafe.retarget config accepted frame leftFrame ambient types live .bool before _ source empty rfl rfl
@@ -190,7 +189,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
             simpa [rightFrame, leftFrame, ordinaryOperandFrame, sameCounter] using
               (ordinaryOperandFrame_accepted accepted frame checkFuel state types currentSource).withRootCursor rootMiddle sameRoot
           have safe := nestedScalarExpression_complete rightForm fuel config accepted rightFrame state ambient types live currentWorld rightSource
-            empty globalLimit noParameters scalars .bool rightRoots typingAfter rootsAfter rightChecked
+            empty noParameters scalars .bool rightRoots typingAfter rootsAfter rightChecked
           exact safe.retarget config accepted frame rightFrame ambient types live .bool state _ currentSource empty rfl rfl
         exact by
           first
@@ -237,7 +236,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
         subst yesTy noTy
         have conditionSource := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
         have conditionSafe := nestedScalarExpression_complete conditionForm fuel config accepted conditionFrame before ambient types live
-          world conditionSource empty globalLimit noParameters scalars .bool conditionRoots conditionTyping conditionCursor conditionChecked
+          world conditionSource empty noParameters scalars .bool conditionRoots conditionTyping conditionCursor conditionChecked
         have conditionSafe' : NestedValueOutcome config accepted frame ambient types live .bool
             (evalValue fuel config frame.interpretation.environment condition before) :=
           conditionSafe.retarget config accepted frame conditionFrame ambient types live .bool before _ source empty rfl rfl
@@ -249,7 +248,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
           have branchSource : AcceptedFrame config accepted yesFrame state types := by
             simpa [yesFrame, conditionCounter] using (currentSource.withRootCursor conditionCursor conditionRoot).withTypingFuel checkFuel
           have safe := nestedScalarBlock_complete yesForm fuel config accepted yesFrame state ambient types live currentWorld branchSource
-            empty globalLimit noParameters scalars ty yesTyping yesResult yesCursor yesChecked
+            empty noParameters scalars ty yesTyping yesResult yesCursor yesChecked
           exact safe.retarget config accepted frame yesFrame ambient types live ty state _ currentSource empty rfl rfl
         have noSafe : ∀ state, AcceptedWorld config frame.initialized state ambient types live [] [] →
             AcceptedFrame config accepted frame state types →
@@ -259,7 +258,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
           have branchSource : AcceptedFrame config accepted noFrame state types := by
             simpa [noFrame, yesCounter] using (currentSource.withRootCursor yesCursor yesRoot).withTypingFuel checkFuel
           have safe := nestedScalarBlock_complete noForm fuel config accepted noFrame state ambient types live currentWorld branchSource
-            empty globalLimit noParameters scalars ty noTyping noResult rootsAfter noChecked
+            empty noParameters scalars ty noTyping noResult rootsAfter noChecked
           exact safe.retarget config accepted frame noFrame ambient types live ty state _ currentSource empty rfl rfl
         exact nestedValueConditional_compose fuel config accepted frame ambient types live ty condition yes no origin before conditionSafe' yesSafe noSafe
 termination_by fuel
@@ -269,7 +268,6 @@ theorem nestedScalarBlock_complete {block : Block} (form : NestedScalarBlock blo
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (world : AcceptedWorld config frame.initialized before ambient types live [] [])
     (source : AcceptedFrame config accepted frame before types) (empty : frame.interpretation.environment.vars = #[])
-    (globalLimit : frame.typing.globalLimit ≤ frame.initialized)
     (noParameters : ∀ parameter global, ¬ frame.interpretation.parameters parameter (.global global))
     (scalars : FlatGlobalsAreScalar config) (ty : Ty) (typingAfter : Nat) (result : List RootRef × (Nat × Nat)) (rootsAfter : RState)
     (checked : CheckedConditionalBlock frame block [ty] typingAfter result rootsAfter) :
@@ -299,7 +297,7 @@ theorem nestedScalarBlock_complete {block : Block} (form : NestedScalarBlock blo
         have enteredWorld := (freshScope_acceptedWorld config frame.initialized before ambient types live world).2
         have enteredSource := source.enterEmptyScope empty scope checkFuel
         have statementsSafe := nestedScalarStatements_complete statementsForm fuel config accepted child entered ambient types live
-          enteredWorld enteredSource empty globalLimit noParameters scalars next typingMiddle rootsMiddle statementsTyped statementsRooted statementsAvailable
+          enteredWorld enteredSource empty noParameters scalars next typingMiddle rootsMiddle statementsTyped statementsRooted statementsAvailable
         have tailSafe : ∀ state, AcceptedWorld config frame.initialized state ambient types live [] [] →
             AcceptedFrame config accepted child state types →
             NestedValueOutcome config accepted child ambient types live ty (evalValue fuel config child.interpretation.environment tail state) := by
@@ -307,7 +305,7 @@ theorem nestedScalarBlock_complete {block : Block} (form : NestedScalarBlock blo
           have tailSource : AcceptedFrame config accepted tailFrame state types := by
             simpa [tailFrame, statementFacts.1, statementFacts.2.1] using currentSource.withRootCursor rootsMiddle statementFacts.2.2
           have safe := nestedScalarExpression_complete tailForm fuel config accepted tailFrame state ambient types live currentWorld tailSource
-            empty (by simpa [tailFrame, child, emptyChildScopeFrame, statementFacts.1] using globalLimit) noParameters scalars ty tailRoots typingAfter rootsAfter tailChecked
+            empty noParameters scalars ty tailRoots typingAfter rootsAfter tailChecked
           exact safe.retarget config accepted child tailFrame ambient types live ty state _ currentSource empty rfl rfl
         exact nestedBlock_compose fuel checkFuel config accepted frame ambient types live ty scope statements tail before source empty statementsSafe tailSafe
 termination_by fuel
@@ -317,7 +315,6 @@ theorem nestedScalarStatements_complete {statements : List Stmt} (form : NestedS
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (world : AcceptedWorld config frame.initialized before ambient types live [] [])
     (source : AcceptedFrame config accepted frame before types) (empty : frame.interpretation.environment.vars = #[])
-    (globalLimit : frame.typing.globalLimit ≤ frame.initialized)
     (noParameters : ∀ parameter global, ¬ frame.interpretation.parameters parameter (.global global))
     (scalars : FlatGlobalsAreScalar config) (next : TypingEnv) (typingAfter : Nat) (rootsAfter : RState)
     (typed : typeStatements frame.typingFuel frame.typing statements frame.typingCounter = .ok (next, typingAfter))
@@ -372,7 +369,7 @@ theorem nestedScalarStatements_complete {statements : List Stmt} (form : NestedS
               let operandFrame := ordinaryOperandFrame frame checkFuel
               have operandSource := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
               have safe := nestedScalarExpression_complete expressionForm fuel config accepted operandFrame before ambient types live world operandSource
-                empty globalLimit noParameters scalars ty operandRoots headCounter rootMiddle operandChecked
+                empty noParameters scalars ty operandRoots headCounter rootMiddle operandChecked
               have safe' : NestedValueOutcome config accepted frame ambient types live ty
                   (evalValue fuel config frame.interpretation.environment expression before) :=
                 safe.retarget config accepted frame operandFrame ambient types live ty before _ source empty rfl rfl
@@ -385,7 +382,7 @@ theorem nestedScalarStatements_complete {statements : List Stmt} (form : NestedS
             have tailSource : AcceptedFrame config accepted tailFrame state types := by
               simpa [tailFrame, sameEnv, sameCounter] using (currentSource.withRootCursor rootMiddle sameRoot).withTypingFuel (checkFuel + 1)
             have safe := nestedScalarStatements_complete tailForm fuel config accepted tailFrame state ambient types live currentWorld tailSource
-              empty (by simpa [tailFrame, sameEnv] using globalLimit) noParameters scalars next typingAfter rootsAfter tailTyped tailRooted available
+              empty noParameters scalars next typingAfter rootsAfter tailTyped tailRooted available
             exact safe.retarget config accepted frame tailFrame ambient types live state _ currentSource empty rfl rfl
           exact nestedStatements_cons_compose fuel config accepted frame ambient types live (.expr expression origin) rest before headSafe tailSafe
   | assign id expression origin rest expressionForm tailForm =>
@@ -414,7 +411,7 @@ theorem nestedScalarStatements_complete {statements : List Stmt} (form : NestedS
           have moduleDeclared : config.module.globals[id]? = some descriptor := by
             rw [← source.compatible.module]
             exact declared
-          have earlier : id < frame.initialized := by omega
+          have earlier : id < frame.initialized := nestedGlobalAssign_targetAvailable frame id expression origin rootMiddle headRooted headAvailable
           have cursor := nestedScalarExpression_cursors expressionForm checkFuel (scalarAssignmentOperandFrame frame checkFuel)
             descriptor.ty operandRoots operandCounter operandCursor rfl operandChecked
           have nextVar := rpStmt_directAssign_cursor frame.source (.global id) expression origin frame.rootCursor rootMiddle operandCursor
@@ -442,7 +439,7 @@ theorem nestedScalarStatements_complete {statements : List Stmt} (form : NestedS
                 have operandSource : AcceptedFrame config accepted operandFrame before types :=
                   (ordinaryOperandFrame_accepted accepted frame checkFuel before types source).withRootCursor _ rfl
                 have safe := nestedScalarExpression_complete expressionForm (fuel + 1) config accepted operandFrame before ambient types live
-                  world operandSource empty globalLimit noParameters scalars descriptor.ty operandRoots operandCounter operandCursor operandChecked
+                  world operandSource empty noParameters scalars descriptor.ty operandRoots operandCounter operandCursor operandChecked
                 have safe' : NestedValueOutcome config accepted frame ambient types live descriptor.ty
                     (evalValue (fuel + 1) config frame.interpretation.environment expression before) :=
                   safe.retarget config accepted frame operandFrame ambient types live descriptor.ty before _ source empty rfl rfl
@@ -456,7 +453,7 @@ theorem nestedScalarStatements_complete {statements : List Stmt} (form : NestedS
             have tailSource : AcceptedFrame config accepted tailFrame state types := by
               simpa [tailFrame, sameEnv, sameCounter] using (currentSource.withRootCursor rootMiddle sameRoot).withTypingFuel (checkFuel + 1)
             have safe := nestedScalarStatements_complete tailForm fuel config accepted tailFrame state ambient types live currentWorld tailSource
-              empty (by simpa [tailFrame, sameEnv] using globalLimit) noParameters scalars next typingAfter rootsAfter tailTyped tailRooted available
+              empty noParameters scalars next typingAfter rootsAfter tailTyped tailRooted available
             exact safe.retarget config accepted frame tailFrame ambient types live state _ currentSource empty rfl rfl
           exact nestedStatements_cons_compose fuel config accepted frame ambient types live (.assign (.global id) expression origin) rest before headSafe tailSafe
 termination_by fuel

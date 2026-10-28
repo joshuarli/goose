@@ -130,7 +130,7 @@ theorem initGlobals_nestedScalar_single (fuel id : Nat) (config : EvalConfig) (a
   have fixed : descriptor.ty.nonfixed = false := by
     rcases scalar with ⟨intTy, same⟩ | same <;> simp [same, Ty.nonfixed]
   have safe := nestedScalarExpression_complete form fuel config accepted frame activated ambient types live activeWorld frameSource
-    rfl (by simp [frame, scalarGlobalInitializerFrame]) (by simp [frame, scalarGlobalInitializerFrame, EntryInterpretation])
+    rfl (by simp [frame, scalarGlobalInitializerFrame, EntryInterpretation])
     scalars descriptor.ty roots typingAfter rootsAfter checked
   change NestedValueOutcome config accepted frame ambient types live descriptor.ty
     (evalValue fuel config environment descriptor.init activated) at safe

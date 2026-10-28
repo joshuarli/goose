@@ -89,6 +89,28 @@ theorem nestedAssign_operandEffects_included (environment : PEnv) (id : Nat) (ex
   · exact Or.inl (Or.inr ((nestedAssign_addTargets_members _ _ _).2 (Or.inr grows)))
   · exact Or.inr ((nestedAssign_addTargets_members _ _ _).2 (Or.inr shrinks))
 
+theorem nestedGlobalAssign_targetAvailable (frame : ConstructionSourceFrame) (id : Nat) (expression : Expr)
+    (origin : Nat) (rootsAfter : RState)
+    (rooted : rpStmt frame.source (.assign (.global id) expression origin) frame.rootCursor = .ok ((), rootsAfter))
+    (available : GlobalEffectsAvailable frame.interpretation frame.initialized rootsAfter.eff) :
+    id < frame.initialized := by
+  obtain ⟨roots, middle, operand⟩ := rpStmt_directAssign_operand frame.source (.global id) expression origin
+    frame.rootCursor rootsAfter (Or.inr ⟨id, rfl⟩) rooted
+  have access := rpStmt_directAssign_accessTargets frame.source (.global id) expression origin frame.rootCursor
+    rootsAfter middle roots (Or.inr ⟨id, rfl⟩) operand rooted
+  have member : Target.global id ∈ rootsAfter.eff.reads ++ rootsAfter.eff.writes ++ rootsAfter.eff.grows ++ rootsAfter.eff.shrinks := by
+    change Target.global id ∈ rootsAfter.eff.accessTargets
+    rw [access]
+    simp only [List.mem_append]
+    apply Or.inl
+    apply Or.inl
+    apply Or.inr
+    apply (nestedAssign_addTargets_members _ _ _).2
+    right
+    simp [scalarAssignmentRoots, rootsTargets, rootTarget]
+  exact available (.global id) member id rfl
+
+#print axioms nestedGlobalAssign_targetAvailable
 theorem checkedValue_nestedGlobalAssign_operand (fuel : Nat) (frame : ConstructionSourceFrame)
     (id : Nat) (expression : Expr) (origin : Nat) (form : NestedScalarExpression expression)
     (next : TypingEnv) (typingAfter : Nat) (rootsAfter : RState)
