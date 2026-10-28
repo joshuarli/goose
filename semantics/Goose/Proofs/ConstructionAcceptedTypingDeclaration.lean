@@ -75,7 +75,51 @@ theorem execStmt_typedScopedByteOwner_letWorld (fuel typeFuel : Nat) (config : E
     bytes origin before after ambient types live regions pending rootAfter world source phase rootChecked
     runtimeDeclared descriptorType actualScope scopes unnamed executed
 
+theorem execStmt_typedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (context localVar : Nat) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
+    (typingNext : TypingEnv) (typingAfter : Nat)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation context)
+    (rootChecked : rpStmt frame.source (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+      frame.rootCursor = .ok ((), rootAfter))
+    (typed : typeStatement frame.typingFuel frame.typing (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+      frame.typingCounter = .ok (typingNext, typingAfter))
+    (byteOwner : (frame.typing.variables[localVar]?).map (·.ty) = some (.varr (.int .u8)))
+    (unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some localVar)) = none)
+    (executed : execStmt (fuel + 2) config frame.interpretation.environment
+      (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin) before = .ok (.normal .unit) after) :
+    ∃ (scopeInst : Nat) (stored : StoredValue) (published : ExecutionState),
+      RootTypesExtend types (registerRootType types (.local frame.interpretation.environment.act scopeInst localVar) (.varr (.int .u8))) ∧
+      AcceptedWorld config frame.initialized after ambient
+        (registerRootType types (.local frame.interpretation.environment.act scopeInst localVar) (.varr (.int .u8)))
+        (fun other => other = .local frame.interpretation.environment.act scopeInst localVar ∨ live other)
+        (regions.map (fun region => extendReceivingLimit region stored.storage (storageExtent published stored.storage))) pending := by
+  cases fuelCase : frame.typingFuel with
+  | zero =>
+    rw [fuelCase] at typed
+    change Except.error _ = Except.ok _ at typed
+    cases typed
+  | succ typeFuel =>
+   cases scopes : frame.interpretation.environment.scopes with
+   | nil =>
+    have impossible := executed
+    simp only [execStmt] at impossible
+    cases declared : frame.interpretation.environment.vars[localVar]? with
+    | none => simp only [declared, fault, EvalM.stop] at impossible; cases impossible
+    | some descriptor =>
+      simp only [declared, rootOf, scopes, List.find?_nil, fault, EvalM.stop, bind] at impossible
+      cases impossible
+   | cons scopeEntry outer =>
+    obtain ⟨scope, scopeInst⟩ := scopeEntry
+    obtain ⟨stored, published, extended, preserved⟩ := execStmt_typedScopedByteOwner_letWorld fuel typeFuel config accepted frame
+      context localVar scope scopeInst outer bytes origin before after ambient types live regions pending rootAfter typingNext
+      typingAfter world source phase rootChecked (by simpa only [fuelCase] using typed) byteOwner scopes unnamed executed
+    exact ⟨scopeInst, stored, published, extended, preserved⟩
+
 #print axioms typeStatement_let_descriptor
 #print axioms execStmt_typedScopedByteOwner_letWorld
+#print axioms execStmt_typedByteOwner_letWorld
 
 end Goose.Proofs.ConstructionAcceptedExecution
