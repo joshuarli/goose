@@ -71,9 +71,11 @@ theorem execStmt_checkedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (a
     intro previous present
     rw [source.uninitializedTypes localVar uninitialized root resolved] at present
     cases present
-  exact execStmt_byteOwner_letWorld fuel config frame.initialized frame.interpretation.environment localVar descriptor
+  obtain ⟨stored, published, _, _, _, extended, preserved⟩ :=
+    execStmt_byteOwner_letWorld fuel config frame.initialized frame.interpretation.environment localVar descriptor
     implementation bytes origin bytesOrigin before after root ambient types live regions pending world declared ty implementationFound
     unnamed resolved compatible True.intro fresh freshType freshSynthetic executed
+  exact ⟨stored, published, extended, preserved⟩
 
 theorem execStmt_rootCheckedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (localVar : Nat) (descriptor : LocalVar) (implementation : Impl)
