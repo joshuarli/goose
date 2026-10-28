@@ -249,37 +249,37 @@ theorem statements_exist (fuel : Nat) (config : EvalConfig) (environment : Runti
       (execStmts fuel config environment statements before) :=
   StatementSequenceHistory.toSource (statementSequenceHistory_exists fuel config environment path statements before supported)
 
-inductive SupportedOperation : {α : Type} → SourceOperation α → Prop
+inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOperation α → Prop
   | value (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
-      SupportedOperation (.value environment expression)
+      SupportedOperation config (.value environment expression)
   | conditional (environment : RuntimeActivation) {condition : Expr} {yes no : Block} (origin : Goose.Core.OriginId)
-      (conditionSupported : SupportedOperation (.value environment condition))
-      (yesSupported : SupportedOperation (.block environment yes))
-      (noSupported : SupportedOperation (.block environment no)) :
-      SupportedOperation (.value environment (.ifE condition yes no origin))
+      (conditionSupported : SupportedOperation config (.value environment condition))
+      (yesSupported : SupportedOperation config (.block environment yes))
+      (noSupported : SupportedOperation config (.block environment no)) :
+      SupportedOperation config (.value environment (.ifE condition yes no origin))
   | expression (environment : RuntimeActivation) {operand : Expr} (origin : Goose.Core.OriginId)
-      (supported : SupportedOperation (.value environment operand)) :
-      SupportedOperation (.statement environment (.expr operand origin))
-  | empty (environment : RuntimeActivation) : SupportedOperation (.statements environment [])
+      (supported : SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.statement environment (.expr operand origin))
+  | empty (environment : RuntimeActivation) : SupportedOperation config (.statements environment [])
   | sequence (environment : RuntimeActivation) {statement : Stmt} {rest : List Stmt}
-      (head : SupportedOperation (.statement environment statement))
-      (tail : SupportedOperation (.statements environment rest)) :
-      SupportedOperation (.statements environment (statement :: rest))
+      (head : SupportedOperation config (.statement environment statement))
+      (tail : SupportedOperation config (.statements environment rest)) :
+      SupportedOperation config (.statements environment (statement :: rest))
   | block (environment : RuntimeActivation) (scope : Nat) (statements : List Stmt)
-      (body : ∀ scopedEnvironment, SupportedOperation (.statements scopedEnvironment statements)) :
-      SupportedOperation (.block environment (.mk scope statements none))
+      (body : ∀ scopedEnvironment, SupportedOperation config (.statements scopedEnvironment statements)) :
+      SupportedOperation config (.block environment (.mk scope statements none))
   | activationBody (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt)
-      (body : ∀ environment, SupportedOperation (.statements environment statements)) :
-      SupportedOperation (.activationBody activation (.mk scope statements none))
+      (body : ∀ environment, SupportedOperation config (.statements environment statements)) :
+      SupportedOperation config (.activationBody activation (.mk scope statements none))
   | activation (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt)
       (origin : Goose.Core.OriginId)
-      (body : ∀ environment, SupportedOperation (.statements environment statements)) :
-      SupportedOperation (.activation activation (.mk scope statements none) origin)
+      (body : ∀ environment, SupportedOperation config (.statements environment statements)) :
+      SupportedOperation config (.activation activation (.mk scope statements none) origin)
   | producer (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
-      SupportedOperation (.producer environment expression)
+      SupportedOperation config (.producer environment expression)
 
 theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation : SourceOperation α)
-    (path : List Nat) (before : ExecutionState) (supported : SupportedOperation operation) :
+    (path : List Nat) (before : ExecutionState) (supported : SupportedOperation config operation) :
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
@@ -383,7 +383,7 @@ private def witnessState : ExecutionStep α → ExecutionState
 theorem witness_nestedFill : ∃ after,
     evalValue 40 witnessConfig witnessEnvironment witnessExpression .initial = .ok .unit after ∧
     SourceHistory witnessConfig 40 [] (.value witnessEnvironment witnessExpression) .initial (.ok .unit after) := by
-  have supported : SupportedOperation (.value witnessEnvironment witnessExpression) := by
+  have supported : SupportedOperation witnessConfig (.value witnessEnvironment witnessExpression) := by
     unfold witnessExpression
     apply SupportedOperation.conditional
     · exact .value _ (.boolean true)
@@ -410,7 +410,7 @@ theorem witness_activationBody : ∃ after,
       .ok [] after ∧
     SourceHistory witnessConfig 40 [] (.activationBody witnessEnvironment (.mk 0 [.expr witnessExpression 0] none))
       .initial (.ok [] after) := by
-  have bodySupported : ∀ environment, SupportedOperation (.statements environment [.expr witnessExpression 0]) := by
+  have bodySupported : ∀ environment, SupportedOperation witnessConfig (.statements environment [.expr witnessExpression 0]) := by
     intro environment
     apply SupportedOperation.sequence
     · apply SupportedOperation.expression
@@ -451,12 +451,12 @@ theorem witness_activationEntry : ∃ after,
     enterActivation 40 activationWitnessConfig witnessEnvironment [] activationWitnessBlock 0 .initial = .ok [] after ∧
     SourceHistory activationWitnessConfig 40 [] (.activation witnessEnvironment activationWitnessBlock 0)
       .initial (.ok [] after) := by
-  have bodySupported : ∀ environment, SupportedOperation
+  have bodySupported : ∀ environment, SupportedOperation activationWitnessConfig
       (.statements environment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
     intro environment
     exact .sequence environment (.expression environment 0 (.value environment
       (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
-  have supported : SupportedOperation (.activation witnessEnvironment activationWitnessBlock 0) := by
+  have supported : SupportedOperation activationWitnessConfig (.activation witnessEnvironment activationWitnessBlock 0) := by
     unfold activationWitnessBlock
     exact .activation witnessEnvironment 0 _ 0 bodySupported
   have history := history_exists 40 activationWitnessConfig (.activation witnessEnvironment activationWitnessBlock 0)

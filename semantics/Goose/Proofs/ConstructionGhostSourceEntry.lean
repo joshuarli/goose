@@ -13,7 +13,7 @@ theorem entry_sourceHistory (fuel : Nat) (config : EvalConfig)
     (implementationFound : config.module.impls[context.impl]? = some implementation)
     (parametersEmpty : implementation.params = #[]) (resultsEmpty : implementation.results = #[])
     (body : implementation.body = .mk scope statements none)
-    (supported : ∀ environment, SupportedOperation (.statements environment statements)) :
+    (supported : ∀ environment, SupportedOperation config (.statements environment statements)) :
     let activation : RuntimeActivation := ⟨context.impl, 0, implementation.vars, [], []⟩
     let activated := { ExecutionState.initial with nextAct := 1, activations := [activation] }
     let ready := resultScopeStart activation scope activated
