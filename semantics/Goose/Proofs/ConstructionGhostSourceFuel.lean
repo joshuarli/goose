@@ -53,7 +53,7 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
   induction fuel generalizing α operation path before with
   | zero =>
       cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody,
-        enterActivation, invokeCall, evalArguments, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop] using
+        enterActivation, invokeCall, evalArguments, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop] using
         (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with

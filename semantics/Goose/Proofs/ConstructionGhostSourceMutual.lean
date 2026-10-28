@@ -24,6 +24,7 @@ inductive SourceOperation : Type → Type
   | callWith (environment : RuntimeActivation) (context : Goose.Core.ContextId) (arguments : List Arg)
       (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
   | builder (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (expression : Expr) : SourceOperation Unit
+  | printArgument (environment : RuntimeActivation) (argument : PrintArg) : SourceOperation ByteArray
   | element (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty) (operand : Expr) : SourceOperation Unit
   | arguments (environment : RuntimeActivation) (vars : Array LocalVar) (parameters : List Param)
       (arguments : List Arg) : SourceOperation (List Value)
@@ -41,6 +42,7 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .call environment context origin => invokeCall fuel config environment context [] [] origin
   | .callWith environment context arguments origin => invokeCall fuel config environment context arguments [] origin
   | .builder environment destination expression => buildExpr fuel config environment destination expression
+  | .printArgument environment argument => evalPrintArg fuel config environment argument
   | .element environment parent element operand => buildElement fuel config environment parent element operand
   | .arguments environment vars parameters arguments => evalArguments fuel config environment vars parameters arguments
   | .producer environment expression => evalProduce fuel config environment [] expression
@@ -476,6 +478,23 @@ inductive SourceHistory (config : EvalConfig) :
         { before with nextAct := before.nextAct + 1, activations := (⟨context.impl, before.nextAct, implementation.vars, [], []⟩ : RuntimeActivation) :: before.activations } outcome) :
       SourceHistory config (fuel + 2) path (.call environment contextId origin) before
         (callDeliveryResult (fuel + 1) config origin outcome)
+  | printArgumentText (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (text : String)
+      (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.printArgument environment (.text text)) before (.ok text.toUTF8 before)
+  | printArgumentExpression {fuel : Nat} {path : List Nat} {environment : RuntimeActivation}
+      {expression : Expr} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment expression) before
+        (evalValue fuel config environment expression before)) :
+      SourceHistory config (fuel + 1) path (.printArgument environment (.expr expression)) before
+        (evalPrintArg (fuel + 1) config environment (.expr expression) before)
+  | printArguments (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (arguments : List PrintArg)
+      (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (children : ∀ outcome visits,
+        OperandReplay (evalPrintArg fuel config environment) 0 arguments [] before outcome visits →
+        ∀ visit ∈ visits, SourceHistory config fuel (path ++ [visit.ordinal]) (.printArgument environment visit.operand)
+          visit.before visit.outcome) :
+      SourceHistory config (fuel + 1) path (.statement environment (.print arguments origin)) before
+        (execStmt (fuel + 1) config environment (.print arguments origin) before)
   | printText (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (text : String)
       (origin : Goose.Core.OriginId) (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.statement environment (.print [.text text] origin)) before
@@ -549,7 +568,7 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
   | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical => rfl
   | @negation fuel path environment operand before outcome child ih =>
@@ -622,7 +641,8 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
         contextFound implementationFound parametersEmpty resultsEmpty depth]
       simp only [bind, ih, callDeliveryResult]
       cases outcome <;> rfl
-  | printText => rfl
+  | printArgumentText => simp [execute, evalPrintArg, pure]
+  | printArgumentExpression | printArguments | printText => rfl
   | builderBytes => rfl
   | @fixedElement fuel path environment parent element operand before outcome fixed child ih =>
       simp only [execute] at ih ⊢
@@ -794,6 +814,14 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (body : ∀ act, SupportedOperation config
         (.activation ⟨context.impl, act, implementation.vars, [], []⟩ implementation.body origin)) :
       SupportedOperation config (.call environment contextId origin)
+  | printArgumentText (environment : RuntimeActivation) (text : String) :
+      SupportedOperation config (.printArgument environment (.text text))
+  | printArgumentExpression (environment : RuntimeActivation) (expression : Expr)
+      (child : SupportedOperation config (.value environment expression)) :
+      SupportedOperation config (.printArgument environment (.expr expression))
+  | printArguments (environment : RuntimeActivation) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
+      (children : ∀ argument ∈ arguments, SupportedOperation config (.printArgument environment argument)) :
+      SupportedOperation config (.statement environment (.print arguments origin))
   | printText (environment : RuntimeActivation) (text : String) (origin : Goose.Core.OriginId) :
       SupportedOperation config (.statement environment (.print [.text text] origin))
   | builderBytes (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (ty : Ty)
@@ -827,7 +855,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildExpr, buildElement, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalPrintArg, buildExpr, buildElement, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -1045,6 +1073,21 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
                   contextFound implementationFound parametersEmpty resultsEmpty full] using
                   (SourceHistory.callDepth contextFound implementationFound parametersEmpty resultsEmpty full :
                     SourceHistory config (fuel + 2) path (.call environment contextId origin) before _)
+      | printArgumentText environment text =>
+          simpa [execute, evalPrintArg, pure] using (SourceHistory.printArgumentText fuel path environment text before)
+      | printArgumentExpression environment expression childSupported =>
+          exact .printArgumentExpression (ih (.value environment expression) (path ++ [0]) before childSupported)
+      | printArguments environment arguments origin childrenSupported =>
+          refine .printArguments fuel path environment arguments origin before ?_
+          intro outcome visits replay visit member
+          have inMapped : visit.operand ∈ visits.map Invocation.operand := List.mem_map_of_mem member
+          rw [replay.sourceOrder] at inMapped
+          have inArguments : visit.operand ∈ arguments := List.mem_of_mem_take inMapped
+          have child := ih (.printArgument environment visit.operand) (path ++ [visit.ordinal]) visit.before
+            (childrenSupported visit.operand inArguments)
+          simp only [execute] at child
+          rw [← visit_executes replay visit member]
+          exact child
       | printText environment text origin => exact .printText fuel path environment text origin before
       | builderBytes environment destination ty bytes origin => exact .builderBytes fuel path environment destination ty bytes origin before
       | builderArray environment incoming ty operands origin elementsSupported =>
@@ -1529,6 +1572,38 @@ theorem witness_negationCall : ∃ after,
 
 #print axioms witness_comparisonCalls
 #print axioms witness_shortCircuitSkipsCall
+
+private def printWitnessArguments : List PrintArg := [.text "a", .expr (.call 0 [] 0), .text "b"]
+
+theorem witness_printArgumentCall : ∃ after,
+    execStmt 40 sideEffectConfig witnessEnvironment (.print printWitnessArguments 0) .initial = .ok (.normal .unit) after ∧
+    after.construction.stdout.data.toList = [120, 10, 97, 40, 41, 98, 10] ∧
+    SourceHistory sideEffectConfig 40 [] (.statement witnessEnvironment (.print printWitnessArguments 0)) .initial
+      (.ok (.normal .unit) after) := by
+  have supported : SupportedOperation sideEffectConfig (.statement witnessEnvironment (.print printWitnessArguments 0)) := by
+    apply SupportedOperation.printArguments
+    intro argument member
+    simp only [printWitnessArguments, List.mem_cons, List.not_mem_nil, or_false] at member
+    rcases member with rfl | rfl | rfl
+    · exact .printArgumentText witnessEnvironment "a"
+    · exact .printArgumentExpression witnessEnvironment (.call 0 [] 0) sideEffectValue_supported
+    · exact .printArgumentText witnessEnvironment "b"
+  have history := history_exists 40 sideEffectConfig (.statement witnessEnvironment (.print printWitnessArguments 0)) [] .initial supported
+  refine ⟨witnessState (execStmt 40 sideEffectConfig witnessEnvironment (.print printWitnessArguments 0) .initial), ?_, ?_, ?_⟩
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment printWitnessArguments
+    cbv
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment printWitnessArguments
+    cbv
+  · have actual : execStmt 40 sideEffectConfig witnessEnvironment (.print printWitnessArguments 0) .initial =
+        .ok (.normal .unit) (witnessState (execStmt 40 sideEffectConfig witnessEnvironment (.print printWitnessArguments 0) .initial)) := by
+      unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment printWitnessArguments
+      cbv
+    change SourceHistory sideEffectConfig 40 [] (.statement witnessEnvironment (.print printWitnessArguments 0)) .initial
+      (execStmt 40 sideEffectConfig witnessEnvironment (.print printWitnessArguments 0) .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_printArgumentCall
 
 #print axioms witness_fillSourceOnce
 
