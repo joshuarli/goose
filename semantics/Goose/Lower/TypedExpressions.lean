@@ -3010,13 +3010,13 @@ def ArgsSource.resultsMatch {n : Nat} {cfg : Cfg} {env : Env} :
 
 open Core.Sound
 def ArgSource.MatchesContext {cfg : Cfg} {env : Env} {state : St} {arg : Arg}
-    {plans : Array (Array DemandPoint)} {path : List Nat} (world : World)
+    {plans : Array (Array DemandPoint)} {path : List Nat} (world : World) (typing : TEnv) (roots : PEnv)
     (context : ArgContext cfg.mod plans path arg) (source : ArgSource cfg env state arg) : Prop :=
   match source, context with
   | .byVal child, .byVal argumentContext => child.plans = plans ∧ child.path = path ∧ child.world = world ∧
-      HEq child.context argumentContext
+      child.typingEnv = typing ∧ child.rootsEnv = roots ∧ HEq child.context argumentContext
   | .byRef _ child _, .byRef argumentContext => child.plans = plans ∧ child.path = path ∧ child.world = world ∧
-      HEq child.context argumentContext
+      child.typingEnv = typing ∧ child.rootsEnv = roots ∧ HEq child.context argumentContext
 
 def ArgsSource.CallChildren {n : Nat} {cfg : Cfg} {env : Env} {initial : St}
     {c : ContextId} {all : List Arg} {origin : OriginId}
@@ -3025,7 +3025,7 @@ def ArgsSource.CallChildren {n : Nat} {cfg : Cfg} {env : Env} {initial : St}
   | [], _, _, .nil _ => True
   | arg :: args, _, offset, .cons head rest =>
     ∃ found : all[offset]? = some arg,
-      head.MatchesContext root.world (callArgContext root.context offset arg found) ∧
+      head.MatchesContext root.world root.typingEnv root.rootsEnv (callArgContext root.context offset arg found) ∧
       ∀ value after done, (rest value after done).CallChildren root (offset + 1)
 
 open Core.Sound in
@@ -3044,7 +3044,7 @@ private theorem argSource_of_spec {cfg : Cfg} {env : Env} {expr : Expr} {initial
     (typed : ArgTy root.typingEnv arg tn ty tn') (rooted : ArgRp root.rootsEnv arg rst roots rst')
     (effects : EffLe rst'.eff root.world.E)
     (metadata : SourceResults root.typingEnv root.rootsEnv results) :
-    ∃ source : ArgSource cfg env state arg, source.resultsMatch results ∧ source.MatchesContext root.world ac := by
+    ∃ source : ArgSource cfg env state arg, source.resultsMatch results ∧ source.MatchesContext root.world root.typingEnv root.rootsEnv ac := by
   cases arg with
   | byVal expr =>
     cases ac with
@@ -3056,7 +3056,7 @@ private theorem argSource_of_spec {cfg : Cfg} {env : Env} {expr : Expr} {initial
         rootsStart := rst, rootsEnd := rst', roots := roots, active := active, access := access,
         protection := protection, observed := observed, classified := classified,
         permission := root.permission, frame := frame, typed := typed, rooted := rooted,
-        effects := effects }, metadata, ⟨rfl, rfl, rfl, HEq.rfl⟩⟩
+        effects := effects }, metadata, ⟨rfl, rfl, rfl, rfl, rfl, HEq.rfl⟩⟩
   | byRef mutability place =>
     cases ac with
     | byRef context =>
@@ -3068,7 +3068,7 @@ private theorem argSource_of_spec {cfg : Cfg} {env : Env} {expr : Expr} {initial
         mutable := caps.1, contents := caps.2, rootsStart := rst, rootsEnd := rst', roots := roots,
         active := active, access := access, protection := protection, observed := observed,
         classified := classified, permission := root.permission, frame := frame,
-        typed := typed, rooted := rooted, effects := effects } allowed, metadata, ⟨rfl, rfl, rfl, HEq.rfl⟩⟩
+        typed := typed, rooted := rooted, effects := effects } allowed, metadata, ⟨rfl, rfl, rfl, rfl, rfl, HEq.rfl⟩⟩
 
 open Core.Sound in
 private theorem typedArgsSource_suffix {n : Nat} {cfg : Cfg} {env : Env} {initial : St}

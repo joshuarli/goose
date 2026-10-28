@@ -44,9 +44,9 @@ theorem ArgSource.byVal_callChild {cfg : Cfg} {env : Env} {initial state : St}
     (root : ExprSource cfg env (.call context arguments origin) initial)
     {index : Nat} {expression : Expr} (found : arguments[index]? = some (.byVal expression))
     (child : ExprSource cfg env expression state)
-    (canonical : (ArgSource.byVal child).MatchesContext root.world (callArgContext root.context index (.byVal expression) found)) :
+    (canonical : (ArgSource.byVal child).MatchesContext root.world root.typingEnv root.rootsEnv (callArgContext root.context index (.byVal expression) found)) :
     root.ChildAt child index (by simp [DemandNode.child?, DemandNode.children, found]) := by
-  obtain ⟨plans, path, world, context⟩ := canonical
+  obtain ⟨plans, path, world, typing, roots, context⟩ := canonical
   have childContext : HEq child.context
       (root.context.child rfl index (.expression expression) .expression
         (by simp [DemandNode.child?, DemandNode.children, found]) (by trivial)) := by
@@ -56,6 +56,16 @@ theorem ArgSource.byVal_callChild {cfg : Cfg} {env : Env} {initial state : St}
   have retained := callArgContext_retained_subset root.context index (.byVal expression) found member
   have eq := demandContextRetainedEq plans path rfl childContext
   simpa only [callArgContext, ArgContext.retained, eq] using retained
+
+theorem ArgSource.byVal_callMetadata {cfg : Cfg} {env : Env} {initial state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (root : ExprSource cfg env (.call context arguments origin) initial)
+    {index : Nat} {expression : Expr} (found : arguments[index]? = some (.byVal expression))
+    (child : ExprSource cfg env expression state)
+    (canonical : (ArgSource.byVal child).MatchesContext root.world root.typingEnv root.rootsEnv
+      (callArgContext root.context index (.byVal expression) found)) :
+    child.typingEnv = root.typingEnv ∧ child.rootsEnv = root.rootsEnv := by
+  exact ⟨canonical.2.2.2.1, canonical.2.2.2.2.1⟩
 
 theorem ArgsSource.atFuel_callChildren {n k : Nat} {cfg : Cfg} {env : Env} {initial : St}
     {context : ContextId} {all : List Arg} {origin : OriginId}
@@ -95,6 +105,7 @@ theorem ArgsSource.afterHead_callChildren {n : Nat} {cfg : Cfg} {env : Env} {ini
 #print axioms GeneratedCallArgumentRows.lookup
 #print axioms ExprSource.callArgsCanonical
 #print axioms ArgSource.byVal_callChild
+#print axioms ArgSource.byVal_callMetadata
 #print axioms ArgsSource.atFuel_callChildren
 #print axioms ArgsSource.afterHead_callChildren
 end Goose.Lower
