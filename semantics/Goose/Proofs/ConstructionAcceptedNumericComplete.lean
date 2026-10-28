@@ -138,6 +138,108 @@ theorem checkedValue_conv_operand (frame : ConstructionSourceFrame) (fuel : Nat)
 
 #print axioms typeExpr_conv_operand
 #print axioms checkedValue_conv_operand
+theorem checkedExpressionEvaluation_unary (expression : Expr) (operation : Goose.Core.UnOp) (origin : Goose.Core.OriginId)
+    (operandComplete : CheckedExpressionEvaluation expression) : CheckedExpressionEvaluation (.un operation expression origin) := by
+  intro fuel config accepted frame state ambient types live regions pending world source ty roots typingAfter rootsAfter checked
+  cases typingFuel : frame.typingFuel with
+  | zero =>
+    have typing := checked.typing
+    rw [typingFuel] at typing
+    change Except.error _ = Except.ok _ at typing
+    cases typing
+  | succ n =>
+    obtain ⟨integer, operandRoots, operandAfter, sameTy, sameRoots, operandChecked⟩ :=
+      checkedValue_un_operand frame n operation expression origin ty roots typingAfter rootsAfter typingFuel checked
+    subst ty roots
+    let child := ordinaryOperandFrame frame n
+    have childSource := ordinaryOperandFrame_accepted accepted frame n state types source
+    cases fuel with
+    | zero => simp [evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState, world, source]
+    | succ fuel =>
+      have childResult := operandComplete fuel config accepted child state ambient types live regions pending world childSource (.int integer) operandRoots typingAfter operandAfter operandChecked
+      change Goose.Proofs.Exit.stepState (evalValue fuel config frame.interpretation.environment expression state) = state ∧
+        (∀ value after, evalValue fuel config frame.interpretation.environment expression state = .ok value after →
+          AcceptedValue config.layout types frame.interpretation after (.int integer) operandRoots value) ∧ _ at childResult
+      cases evaluated : evalValue fuel config frame.interpretation.environment expression state with
+      | stop reason after | escape reason carriers after | jump reason kind after =>
+        simp only [evaluated, Goose.Proofs.Exit.stepState] at childResult
+        have same := childResult.1
+        subst after
+        simp only [evalValue, evaluated, bind, Goose.Proofs.Exit.stepState, reduceCtorEq, true_and]
+        exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
+      | ok value after =>
+        have childAccepted := childResult.2.1 value after evaluated
+        simp only [evaluated, Goose.Proofs.Exit.stepState] at childResult
+        have same := childResult.1
+        subst after
+        cases represented : childAccepted.represented with
+        | integer _ number =>
+          cases result : Goose.Core.evalUn config.profile operation integer number with
+          | error reason =>
+            simp only [evalValue, evaluated, bind, expectInt, pure, result, abortAt, EvalM.stop,
+              Goose.Proofs.Exit.stepState, reduceCtorEq, true_and]
+            exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
+          | ok number =>
+            simp only [evalValue, evaluated, bind, expectInt, pure, result, Goose.Proofs.Exit.stepState,
+              ExecutionStep.ok.injEq, true_and]
+            refine ⟨?_, world, source⟩
+            intro output after same
+            obtain ⟨rfl, rfl⟩ := same
+            exact acceptedValue_integer config.layout types frame.interpretation state integer number
+        | stored => contradiction
+
+
+theorem checkedExpressionEvaluation_conversion (expression : Expr) (kind : Goose.Core.ConvKind) (target : Ty) (origin : Goose.Core.OriginId)
+    (operandComplete : CheckedExpressionEvaluation expression) : CheckedExpressionEvaluation (.conv kind target expression origin) := by
+  intro fuel config accepted frame state ambient types live regions pending world source ty roots typingAfter rootsAfter checked
+  cases typingFuel : frame.typingFuel with
+  | zero =>
+    have typing := checked.typing
+    rw [typingFuel] at typing
+    change Except.error _ = Except.ok _ at typing
+    cases typing
+  | succ n =>
+    obtain ⟨integer, targetInt, operandRoots, operandAfter, sameTarget, sameTy, sameRoots, operandChecked⟩ :=
+      checkedValue_conv_operand frame n kind target expression origin ty roots typingAfter rootsAfter typingFuel checked
+    subst target ty roots
+    let child := ordinaryOperandFrame frame n
+    have childSource := ordinaryOperandFrame_accepted accepted frame n state types source
+    cases fuel with
+    | zero => simp [evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState, world, source]
+    | succ fuel =>
+      have childResult := operandComplete fuel config accepted child state ambient types live regions pending world childSource (.int integer) operandRoots typingAfter operandAfter operandChecked
+      change Goose.Proofs.Exit.stepState (evalValue fuel config frame.interpretation.environment expression state) = state ∧
+        (∀ value after, evalValue fuel config frame.interpretation.environment expression state = .ok value after →
+          AcceptedValue config.layout types frame.interpretation after (.int integer) operandRoots value) ∧ _ at childResult
+      cases evaluated : evalValue fuel config frame.interpretation.environment expression state with
+      | stop reason after | escape reason carriers after | jump reason kind after =>
+        simp only [evaluated, Goose.Proofs.Exit.stepState] at childResult
+        have same := childResult.1
+        subst after
+        simp only [evalValue, evaluated, bind, Goose.Proofs.Exit.stepState, reduceCtorEq, true_and]
+        exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
+      | ok value after =>
+        have childAccepted := childResult.2.1 value after evaluated
+        simp only [evaluated, Goose.Proofs.Exit.stepState] at childResult
+        have same := childResult.1
+        subst after
+        cases represented : childAccepted.represented with
+        | integer _ number =>
+          cases result : Goose.Core.evalConv config.profile kind integer targetInt number with
+          | error reason =>
+            simp only [evalValue, evaluated, bind, expectInt, pure, result, abortAt, EvalM.stop,
+              Goose.Proofs.Exit.stepState, reduceCtorEq, true_and]
+            exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
+          | ok number =>
+            simp only [evalValue, evaluated, bind, expectInt, pure, result, Goose.Proofs.Exit.stepState,
+              ExecutionStep.ok.injEq, true_and]
+            refine ⟨?_, world, source⟩
+            intro output after same
+            obtain ⟨rfl, rfl⟩ := same
+            exact acceptedValue_integer config.layout types frame.interpretation state targetInt number
+        | stored => contradiction
+
+
 inductive AcceptedNumericExpression : Expr → Prop
   | scalar {expression : Expr} : AcceptedNotExpression expression → AcceptedNumericExpression expression
   | unary {expression : Expr} (operation : Goose.Core.UnOp) (origin : Goose.Core.OriginId) :
@@ -157,106 +259,25 @@ theorem evalValue_checked_numeric_complete {expression : Expr} (form : AcceptedN
       (∀ value after, outcome = .ok value after → AcceptedValue config.layout types frame.interpretation after ty roots value) ∧
       AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) ambient types live regions pending ∧
       AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState outcome) types := by
-  induction form generalizing fuel frame ty roots typingAfter rootsAfter with
+  induction form generalizing fuel config accepted frame state ambient types live regions pending ty roots typingAfter rootsAfter with
   | scalar form =>
     exact evalValue_checked_not_complete form fuel config accepted frame state ambient types live regions pending world source
       ty roots typingAfter rootsAfter checked
   | @unary expression operation origin form ih =>
-    cases typingFuel : frame.typingFuel with
-    | zero =>
-      have typing := checked.typing
-      rw [typingFuel] at typing
-      change Except.error _ = Except.ok _ at typing
-      cases typing
-    | succ n =>
-      obtain ⟨integer, operandRoots, operandAfter, sameTy, sameRoots, operandChecked⟩ :=
-        checkedValue_un_operand frame n operation expression origin ty roots typingAfter rootsAfter typingFuel checked
-      subst ty roots
-      let child := ordinaryOperandFrame frame n
-      have childSource := ordinaryOperandFrame_accepted accepted frame n state types source
-      cases fuel with
-      | zero => simp [evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState, world, source]
-      | succ fuel =>
-        have childResult := ih fuel child world childSource (.int integer) operandRoots typingAfter operandAfter operandChecked
-        change Goose.Proofs.Exit.stepState (evalValue fuel config frame.interpretation.environment expression state) = state ∧
-          (∀ value after, evalValue fuel config frame.interpretation.environment expression state = .ok value after →
-            AcceptedValue config.layout types frame.interpretation after (.int integer) operandRoots value) ∧ _ at childResult
-        cases evaluated : evalValue fuel config frame.interpretation.environment expression state with
-        | stop reason after | escape reason carriers after | jump reason kind after =>
-          simp only [evaluated, Goose.Proofs.Exit.stepState] at childResult
-          have same := childResult.1
-          subst after
-          simp only [evalValue, evaluated, bind, Goose.Proofs.Exit.stepState, reduceCtorEq, true_and]
-          exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
-        | ok value after =>
-          have childAccepted := childResult.2.1 value after evaluated
-          simp only [evaluated, Goose.Proofs.Exit.stepState] at childResult
-          have same := childResult.1
-          subst after
-          cases represented : childAccepted.represented with
-          | integer _ number =>
-            cases result : Goose.Core.evalUn config.profile operation integer number with
-            | error reason =>
-              simp only [evalValue, evaluated, bind, expectInt, pure, result, abortAt, EvalM.stop,
-                Goose.Proofs.Exit.stepState, reduceCtorEq, true_and]
-              exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
-            | ok number =>
-              simp only [evalValue, evaluated, bind, expectInt, pure, result, Goose.Proofs.Exit.stepState,
-                ExecutionStep.ok.injEq, true_and]
-              refine ⟨?_, world, source⟩
-              intro output after same
-              obtain ⟨rfl, rfl⟩ := same
-              exact acceptedValue_integer config.layout types frame.interpretation state integer number
-          | stored => contradiction
-
+    have operand : CheckedExpressionEvaluation expression := by
+      intro fuel config accepted frame state ambient types live regions pending world source ty roots typingAfter rootsAfter checked
+      exact ih fuel config accepted frame state ambient types live regions pending world source ty roots typingAfter rootsAfter checked
+    exact checkedExpressionEvaluation_unary expression operation origin operand fuel config accepted frame state ambient types live regions pending
+      world source ty roots typingAfter rootsAfter checked
   | @conversion expression kind target origin form ih =>
-    cases typingFuel : frame.typingFuel with
-    | zero =>
-      have typing := checked.typing
-      rw [typingFuel] at typing
-      change Except.error _ = Except.ok _ at typing
-      cases typing
-    | succ n =>
-      obtain ⟨integer, targetInt, operandRoots, operandAfter, sameTarget, sameTy, sameRoots, operandChecked⟩ :=
-        checkedValue_conv_operand frame n kind target expression origin ty roots typingAfter rootsAfter typingFuel checked
-      subst target ty roots
-      let child := ordinaryOperandFrame frame n
-      have childSource := ordinaryOperandFrame_accepted accepted frame n state types source
-      cases fuel with
-      | zero => simp [evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState, world, source]
-      | succ fuel =>
-        have childResult := ih fuel child world childSource (.int integer) operandRoots typingAfter operandAfter operandChecked
-        change Goose.Proofs.Exit.stepState (evalValue fuel config frame.interpretation.environment expression state) = state ∧
-          (∀ value after, evalValue fuel config frame.interpretation.environment expression state = .ok value after →
-            AcceptedValue config.layout types frame.interpretation after (.int integer) operandRoots value) ∧ _ at childResult
-        cases evaluated : evalValue fuel config frame.interpretation.environment expression state with
-        | stop reason after | escape reason carriers after | jump reason kind after =>
-          simp only [evaluated, Goose.Proofs.Exit.stepState] at childResult
-          have same := childResult.1
-          subst after
-          simp only [evalValue, evaluated, bind, Goose.Proofs.Exit.stepState, reduceCtorEq, true_and]
-          exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
-        | ok value after =>
-          have childAccepted := childResult.2.1 value after evaluated
-          simp only [evaluated, Goose.Proofs.Exit.stepState] at childResult
-          have same := childResult.1
-          subst after
-          cases represented : childAccepted.represented with
-          | integer _ number =>
-            cases result : Goose.Core.evalConv config.profile kind integer targetInt number with
-            | error reason =>
-              simp only [evalValue, evaluated, bind, expectInt, pure, result, abortAt, EvalM.stop,
-                Goose.Proofs.Exit.stepState, reduceCtorEq, true_and]
-              exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
-            | ok number =>
-              simp only [evalValue, evaluated, bind, expectInt, pure, result, Goose.Proofs.Exit.stepState,
-                ExecutionStep.ok.injEq, true_and]
-              refine ⟨?_, world, source⟩
-              intro output after same
-              obtain ⟨rfl, rfl⟩ := same
-              exact acceptedValue_integer config.layout types frame.interpretation state targetInt number
-          | stored => contradiction
+    have operand : CheckedExpressionEvaluation expression := by
+      intro fuel config accepted frame state ambient types live regions pending world source ty roots typingAfter rootsAfter checked
+      exact ih fuel config accepted frame state ambient types live regions pending world source ty roots typingAfter rootsAfter checked
+    exact checkedExpressionEvaluation_conversion expression kind target origin operand fuel config accepted frame state ambient types live regions pending
+      world source ty roots typingAfter rootsAfter checked
 
+#print axioms checkedExpressionEvaluation_unary
+#print axioms checkedExpressionEvaluation_conversion
 #print axioms evalValue_checked_numeric_complete
 #print axioms checkedValue_un_operand
 #print axioms typeExpr_un_operand

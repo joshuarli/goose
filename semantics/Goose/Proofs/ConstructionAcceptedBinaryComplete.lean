@@ -6,19 +6,6 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 
-private def CheckedEvaluation (expression : Expr) : Prop :=
-  ∀ (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (frame : ConstructionSourceFrame)
-    (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
-    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
-    (_world : AcceptedWorld config frame.initialized state ambient types live regions pending)
-    (_source : AcceptedFrame config accepted frame state types) (ty : Ty) (roots : List RootRef)
-    (typingAfter : Nat) (rootsAfter : RState), CheckedValue frame expression ty roots typingAfter rootsAfter →
-    let outcome := evalValue fuel config frame.interpretation.environment expression state
-    Goose.Proofs.Exit.stepState outcome = state ∧
-      (∀ value after, outcome = .ok value after → AcceptedValue config.layout types frame.interpretation after ty roots value) ∧
-      AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) ambient types live regions pending ∧
-      AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState outcome) types
-
 private def CheckedCursor (expression : Expr) : Prop :=
   ∀ (frame : ConstructionSourceFrame) (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState),
     CheckedValue frame expression ty roots typingAfter rootsAfter →
@@ -48,7 +35,7 @@ private theorem rightFrame_accepted {config : EvalConfig} (accepted : AcceptedMo
   · simpa only [cursor] using initial.uninitializedTypes
 
 private theorem binary_complete (operation : Goose.Core.BinOp) (left right : Expr)
-    (origin : Goose.Core.OriginId) (leftCursor : CheckedCursor left) (leftComplete : CheckedEvaluation left) (rightComplete : CheckedEvaluation right)
+    (origin : Goose.Core.OriginId) (leftCursor : CheckedCursor left) (leftComplete : CheckedExpressionEvaluation left) (rightComplete : CheckedExpressionEvaluation right)
     (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (frame : ConstructionSourceFrame)
     (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -130,7 +117,7 @@ private theorem binary_complete (operation : Goose.Core.BinOp) (left right : Exp
                 exact acceptedValue_integer config.layout types frame.interpretation state integer number
 
 private theorem comparison_complete (operation : Goose.Core.CmpOp) (left right : Expr)
-    (leftCursor : CheckedCursor left) (leftComplete : CheckedEvaluation left) (rightComplete : CheckedEvaluation right)
+    (leftCursor : CheckedCursor left) (leftComplete : CheckedExpressionEvaluation left) (rightComplete : CheckedExpressionEvaluation right)
     (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (frame : ConstructionSourceFrame)
     (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -225,6 +212,11 @@ inductive AcceptedBinaryExpression : Expr → Prop
       AcceptedBinaryExpression left → AcceptedBinaryExpression right → AcceptedBinaryExpression (.bin operation left right origin)
   | comparison {left right : Expr} (operation : Goose.Core.CmpOp) :
       AcceptedBinaryExpression left → AcceptedBinaryExpression right → AcceptedBinaryExpression (.cmp operation left right)
+  | not {expression : Expr} : AcceptedBinaryExpression expression → AcceptedBinaryExpression (.not expression)
+  | unary {expression : Expr} (operation : Goose.Core.UnOp) (origin : Goose.Core.OriginId) :
+      AcceptedBinaryExpression expression → AcceptedBinaryExpression (.un operation expression origin)
+  | conversion {expression : Expr} (kind : Goose.Core.ConvKind) (target : Ty) (origin : Goose.Core.OriginId) :
+      AcceptedBinaryExpression expression → AcceptedBinaryExpression (.conv kind target expression origin)
 
 private theorem bin_final_nextVar (frame : ConstructionSourceFrame) (operation : Goose.Core.BinOp) (left right : Expr)
     (origin : Goose.Core.OriginId) (roots leftRoots rightRoots : List RootRef) (after middle final : RState)
@@ -241,7 +233,7 @@ private theorem bin_final_nextVar (frame : ConstructionSourceFrame) (operation :
       cases checked; rfl
 
 private theorem binary_recursive {expression : Expr} (form : AcceptedBinaryExpression expression) :
-    CheckedCursor expression ∧ CheckedEvaluation expression := by
+    CheckedCursor expression ∧ CheckedExpressionEvaluation expression := by
   induction form with
   | numeric form =>
     refine ⟨?_, ?_⟩
@@ -277,6 +269,42 @@ private theorem binary_recursive {expression : Expr} (form : AcceptedBinaryExpre
         operandTy rightRoots typingAfter rootsAfter rightChecked
       exact ⟨rightCursor.1.trans leftCursor.1, rightCursor.2.trans leftCursor.2⟩
 
+  | @not expression operand ih =>
+    refine ⟨?_, checkedExpressionEvaluation_not expression ih.2⟩
+    intro frame ty roots typingAfter rootsAfter checked
+    cases depth : frame.typingFuel with
+    | zero => have typing := checked.typing; rw [depth] at typing; change Except.error _ = Except.ok _ at typing; cases typing
+    | succ fuel =>
+      obtain ⟨_, _, operandRoots, operandChecked⟩ := checkedValue_not_operand frame fuel expression ty roots typingAfter rootsAfter depth checked
+      exact ih.1 (ordinaryOperandFrame frame fuel) .bool operandRoots typingAfter rootsAfter operandChecked
+  | @unary expression operation origin operand ih =>
+    refine ⟨?_, checkedExpressionEvaluation_unary expression operation origin ih.2⟩
+    intro frame ty roots typingAfter rootsAfter checked
+    cases depth : frame.typingFuel with
+    | zero => have typing := checked.typing; rw [depth] at typing; change Except.error _ = Except.ok _ at typing; cases typing
+    | succ fuel =>
+      obtain ⟨integer, operandRoots, operandAfter, _, _, operandChecked⟩ :=
+        checkedValue_un_operand frame fuel operation expression origin ty roots typingAfter rootsAfter depth checked
+      obtain ⟨otherRoots, otherAfter, rooted, nextVar⟩ := rpExpr_un_nextVar frame.source operation expression origin
+        frame.rootCursor rootsAfter roots checked.provenance
+      have same := operandChecked.provenance.symm.trans rooted
+      cases same
+      have result := ih.1 (ordinaryOperandFrame frame fuel) (.int integer) operandRoots typingAfter operandAfter operandChecked
+      exact ⟨result.1, nextVar.trans result.2⟩
+  | @conversion expression kind target origin operand ih =>
+    refine ⟨?_, checkedExpressionEvaluation_conversion expression kind target origin ih.2⟩
+    intro frame ty roots typingAfter rootsAfter checked
+    cases depth : frame.typingFuel with
+    | zero => have typing := checked.typing; rw [depth] at typing; change Except.error _ = Except.ok _ at typing; cases typing
+    | succ fuel =>
+      obtain ⟨integer, _, operandRoots, operandAfter, _, _, _, operandChecked⟩ :=
+        checkedValue_conv_operand frame fuel kind target expression origin ty roots typingAfter rootsAfter depth checked
+      obtain ⟨otherRoots, otherAfter, rooted, nextVar⟩ := rpExpr_conv_nextVar frame.source kind target expression origin
+        frame.rootCursor rootsAfter roots checked.provenance
+      have same := operandChecked.provenance.symm.trans rooted
+      cases same
+      have result := ih.1 (ordinaryOperandFrame frame fuel) (.int integer) operandRoots typingAfter operandAfter operandChecked
+      exact ⟨result.1, nextVar.trans result.2⟩
 
 theorem evalValue_checked_binary_complete (operation : Goose.Core.BinOp) (left right : Expr)
     (origin : Goose.Core.OriginId) (leftForm : AcceptedNumericExpression left) (rightForm : AcceptedNumericExpression right)
