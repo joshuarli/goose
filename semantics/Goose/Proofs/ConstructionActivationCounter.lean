@@ -158,10 +158,143 @@ theorem counter_withScope (environment : RuntimeActivation) (scope scopeInst : N
       Goose.Proofs.Exit.stepState] using after
 
 #print axioms counter_withScope
+theorem counter_fault (reason : Goose.Core.FaultKind) : PreservesActivationCounter (fault (α := α) reason) :=
+  counter_stop _
+
+theorem counter_abortAt (reason : Goose.Core.AbortKind) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (abortAt (α := α) reason origin) := counter_stop _
+
+theorem counter_receivingDestination (id : Goose.Core.DestinationId) :
+    PreservesActivationCounter (receivingDestination id) := by
+  exact counter_lift _ _
+
+private def completionLanding (origin : Goose.Core.OriginId) (token : ExitReservationId)
+    (replacement : Goose.Core.DestinationId) : EvalM (ForInStep PUnit) := do
+  let some (.active _ _ selected _) := (← EvalM.get).construction.exitReservations[token]? | fault .flow
+  let receiving ← receivingDestination selected
+  if receiving != replacement then
+    liftConstruction origin (landExitReplacementInto receiving replacement)
+  pure (.yield PUnit.unit)
+
+private theorem counter_completionLanding (origin : Goose.Core.OriginId)
+    (token : ExitReservationId) (replacement : Goose.Core.DestinationId) :
+    PreservesActivationCounter (completionLanding origin token replacement) := by
+  unfold completionLanding
+  apply counter_bind
+  · exact counter_get
+  · intro state
+    cases found : state.construction.exitReservations[token]? with
+    | none => exact counter_fault .flow
+    | some reservation =>
+        cases reservation with
+        | waiting incoming => exact counter_fault .flow
+        | active role incoming selected snapshot =>
+            apply counter_bind
+            · exact counter_receivingDestination selected
+            · intro receiving
+              cases changed : (receiving != replacement) with
+              | false => simp; exact counter_pure _
+              | true =>
+                  simp
+                  apply counter_bind
+                  · exact counter_lift _ _
+                  · intro _; exact counter_pure _
+        | restored | released => exact counter_fault .flow
+
+theorem counter_landCarriersInto (origin : Goose.Core.OriginId) (channels : List Channel)
+    (carriers : List Carrier) : PreservesActivationCounter (landCarriersInto origin channels carriers) := by
+  unfold landCarriersInto
+  split
+  · exact counter_stop _
+  · simp only [bind]
+    apply counter_bind
+    · apply counter_listForIn
+      intro item _
+      cases item with
+      | mk channel carrier =>
+          simp only
+          cases channel with
+          | register ty =>
+              cases carrier with
+              | register value => exact counter_pure _
+              | completed id | pendingNamed _ => exact counter_stop _
+          | construct incoming =>
+              cases carrier with
+              | register value | pendingNamed _ => exact counter_stop _
+              | completed replacement =>
+                  simp only
+                  apply counter_bind
+                  · exact counter_receivingDestination incoming
+                  · intro current
+                    cases changed : (current != replacement) with
+                    | false =>
+                        simp
+                        exact counter_pure _
+                    | true =>
+                        simp
+                        apply counter_bind
+                        · exact counter_lift _ _
+                        · intro _; exact counter_pure _
+          | completion token =>
+              cases carrier with
+              | register value => exact counter_stop _
+              | pendingNamed pending =>
+                  cases mismatch : (token != pending) with
+                  | false => simp [mismatch]; exact counter_pure _
+                  | true => simp [mismatch]; exact counter_stop _
+              | completed replacement =>
+                  change PreservesActivationCounter (completionLanding origin token replacement)
+                  exact counter_completionLanding origin token replacement
+    · intro _; exact counter_pure _
+
+theorem counter_finishChannel (layout : LayoutEnv) (origin : Goose.Core.OriginId)
+    (carrier : Carrier) (result : Ty) : PreservesActivationCounter (finishChannel layout origin carrier result) := by
+  unfold finishChannel
+  cases carrier with
+  | register value => exact counter_pure _
+  | pendingNamed token => exact counter_stop _
+  | completed id =>
+      apply counter_bind
+      · exact counter_stateQuery _ (stateQuery_getDestination id)
+      · intro destination
+        simp only
+        split
+        · exact counter_lift _ _
+        · split <;> split
+          all_goals
+            first
+              | exact counter_lift _ _
+              | (apply counter_bind
+                 · exact counter_lift _ _
+                 · intro _
+                   apply counter_bind
+                   · exact counter_stateQuery _ (stateQuery_receivingLayout layout destination.capability.layout)
+                   · intro receiving
+                     apply counter_bind
+                     · exact counter_lift _ _
+                     · intro _; exact counter_lift _ _)
+
+theorem counter_finishChannels (layout : LayoutEnv) (channels : List Channel) (types : List Ty)
+    (carriers : List Carrier) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (finishChannels layout channels types carriers origin) := by
+  unfold finishChannels
+  apply counter_bind
+  · exact counter_landCarriersInto origin channels carriers
+  · intro _
+    split
+    · exact counter_stop _
+    · apply counter_bind
+      · apply counter_listForIn
+        intro item _
+        rcases item with ⟨carrier, result⟩
+        apply counter_bind
+        · exact counter_finishChannel layout origin carrier result
+        · intro _; exact counter_pure _
+      · intro _; exact counter_pure _
+
 theorem counter_finishActivation (layout : LayoutEnv) (activation : RuntimeActivation) (types : List Ty)
     (origin : Goose.Core.OriginId) (action : EvalM (List Carrier))
-    (preserved : PreservesActivationCounter action)
-    (finishPreserved : ∀ carriers, PreservesActivationCounter (finishChannels layout activation.channels types carriers origin)) :
+    (preserved : PreservesActivationCounter action) :
     PreservesActivationCounter (finishActivation layout activation types origin action) := by
   intro state
   have prior := preserved state
@@ -169,7 +302,7 @@ theorem counter_finishActivation (layout : LayoutEnv) (activation : RuntimeActiv
   | ok carriers final =>
     simp only [result, Goose.Proofs.Exit.stepState] at prior
     let trimmed : ExecutionState := { final with activations := final.activations.filter (fun current => current.act != activation.act) }
-    have after := finishPreserved carriers trimmed
+    have after := counter_finishChannels layout activation.channels types carriers origin trimmed
     cases finished : finishChannels layout activation.channels types carriers origin trimmed <;>
       simp only [finished, Goose.Proofs.Exit.stepState] at after <;>
       simpa [finishActivation, result, trimmed, finished, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
@@ -179,16 +312,43 @@ theorem counter_finishActivation (layout : LayoutEnv) (activation : RuntimeActiv
     simp only [result, Goose.Proofs.Exit.stepState] at prior
     by_cases caught : target.activation = activation.act
     · let trimmed : ExecutionState := { final with activations := final.activations.filter (fun current => current.act != activation.act) }
-      have after := finishPreserved carriers trimmed
+      have after := counter_finishChannels layout activation.channels types carriers origin trimmed
       cases finished : finishChannels layout activation.channels types carriers origin trimmed <;>
         simp only [finished, Goose.Proofs.Exit.stepState] at after <;>
         simpa [finishActivation, result, caught, trimmed, finished, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
     · simpa [finishActivation, result, caught, Goose.Proofs.Exit.stepState] using prior
 
 #print axioms counter_finishActivation
+theorem counter_cleanupDestination (origin : Goose.Core.OriginId)
+    (id : Goose.Core.DestinationId) (carriers : List Carrier) :
+    PreservesActivationCounter (cleanupDestination origin id carriers) := by
+  unfold cleanupDestination
+  apply counter_bind
+  · exact counter_stateQuery _ (stateQuery_getDestination id)
+  · intro destination
+    split
+    · exact counter_pure _
+    · apply counter_bind
+      · exact counter_get
+      · intro state
+        split
+        · exact counter_lift _ _
+        · split
+          · exact counter_pure _
+          · exact counter_lift _ _
+
+theorem counter_cleanupReceivingDestination (origin : Goose.Core.OriginId)
+    (incoming : Goose.Core.DestinationId) (carriers : List Carrier) :
+    PreservesActivationCounter (cleanupReceivingDestination origin incoming carriers) := by
+  unfold cleanupReceivingDestination
+  apply counter_bind
+  · exact counter_lift _ _
+  · intro current
+    exact counter_cleanupDestination origin current carriers
+
+#print axioms counter_cleanupReceivingDestination
 theorem counter_protectDestination (origin : Goose.Core.OriginId) (destination : Goose.Core.DestinationId)
-    (action : EvalM α) (preserved : PreservesActivationCounter action)
-    (cleanup : ∀ carriers, PreservesActivationCounter (cleanupReceivingDestination origin destination carriers)) :
+    (action : EvalM α) (preserved : PreservesActivationCounter action) :
     PreservesActivationCounter (protectDestination origin destination action) := by
   intro state
   have prior := preserved state
@@ -197,7 +357,7 @@ theorem counter_protectDestination (origin : Goose.Core.OriginId) (destination :
   | stop reason final => simpa [protectDestination, result, Goose.Proofs.Exit.stepState] using prior
   | escape target carriers final =>
     simp only [result, Goose.Proofs.Exit.stepState] at prior
-    have after := cleanup carriers final
+    have after := counter_cleanupReceivingDestination origin destination carriers final
     cases cleaned : cleanupReceivingDestination origin destination carriers final <;>
       simp only [cleaned, Goose.Proofs.Exit.stepState] at after <;>
       simpa [protectDestination, result, cleaned, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
@@ -205,12 +365,12 @@ theorem counter_protectDestination (origin : Goose.Core.OriginId) (destination :
     simp only [result, Goose.Proofs.Exit.stepState] at prior
     cases kind with
     | breakValue carriers =>
-      have after := cleanup carriers final
+      have after := counter_cleanupReceivingDestination origin destination carriers final
       cases cleaned : cleanupReceivingDestination origin destination carriers final <;>
         simp only [cleaned, Goose.Proofs.Exit.stepState] at after <;>
         simpa [protectDestination, result, cleaned, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
     | continueLoop =>
-      have after := cleanup [] final
+      have after := counter_cleanupReceivingDestination origin destination [] final
       cases cleaned : cleanupReceivingDestination origin destination [] final <;>
         simp only [cleaned, Goose.Proofs.Exit.stepState] at after <;>
         simpa [protectDestination, result, cleaned, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
@@ -279,12 +439,6 @@ theorem evalValue_cmp_counter (fuel : Nat) (config : EvalConfig)
 
 #print axioms evalValue_not_counter
 #print axioms evalValue_cmp_counter
-theorem counter_fault (reason : Goose.Core.FaultKind) : PreservesActivationCounter (fault (α := α) reason) :=
-  counter_stop _
-
-theorem counter_abortAt (reason : Goose.Core.AbortKind) (origin : Goose.Core.OriginId) :
-    PreservesActivationCounter (abortAt (α := α) reason origin) := counter_stop _
-
 theorem evalValue_un_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
     (operation : Goose.Core.UnOp) (expression : Expr) (origin : Goose.Core.OriginId) :
