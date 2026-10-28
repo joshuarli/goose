@@ -32,40 +32,70 @@ theorem GeneratedExpressionPrefixFamily.mapCursor {cfg : Cfg} {env : Env} {cx : 
   | interior demanded => exact .interior (convert source demanded)
   | complete count prefixSteps residual evaluated post => exact .complete count prefixSteps residual evaluated post
 
-theorem accepted_generated_global_read_prefix_family {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+inductive ScalarReadPlace : Place → Prop
+  | global (global : GlobalId) : ScalarReadPlace (.global global)
+  | slot (slot : VarId) : ScalarReadPlace (.var slot)
+
+theorem accepted_generated_read_prefix_family {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
-    (loop : Option LoopCtx) (global : GlobalId) :
-    GeneratedExpressionPrefixFamily cx results selected loop (.read (.global global))
+    (loop : Option LoopCtx) {place : Place} (form : ScalarReadPlace place) :
+    GeneratedExpressionPrefixFamily cx results selected loop (.read place)
       (@CanonicalExpressionPrefixCursor cfg env cx) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps
   let le := lowerEnv cfg.mod env.vars results
-  let addressed := lowerPlace (.global global) le before
-  let middle : DemandRuntimePoint := ⟨(start.1, start.2 + 1), initial.set addressed.1 (.val (.ref ⟨.global global, []⟩)), state⟩
+  let addressed := lowerPlace place le before
   obtain ⟨child, typing, roots, metadata⟩ := source.readChild
-  have childOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn le root child.path (.place (.global global)) before := by
+  have childOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn le root child.path (.place place) before := by
     rw [metadata.path]
     exact .first occurrence (.expressionPlace rfl)
   have childRows : GeneratedDemandRows cfg.mod child.rootsEnv.access childOccurrence required := by
     have inherited : GeneratedDemandRows cfg.mod source.rootsEnv.access (.first occurrence (.expressionPlace rfl)) required := .first (first := .expressionPlace rfl) rows
     simpa only [roots, metadata.path] using inherited
-  have site := GeneratedDemandInstruction.globalAddress_auto childOccurrence childRows input.atPoint
-    (generated_read_place_extended extended)
-  have post := (Post.def_leaf (Post.init input.related input.atPoint)
-    (show emitDef (.globalAddr global) le before = (addressed.1, addressed.2) from rfl)
-    (generated_read_place_extended extended) (.val (.ref ⟨.global global, []⟩))).1
-  have placed : evalPlace 1 cfg env (.global global) state = .ok ⟨.global global, []⟩ state := by
-    simp only [evalPlace, pure_apply]
+  obtain ⟨location, placed, post, firstStep⟩ : ∃ location : Loc,
+      evalPlace 1 cfg env place state = .ok location state ∧
+      Post cfg env cx before initial addressed.2 (initial.set addressed.1 (.val (.ref location)))
+        (start.1, start.2 + 1) [(addressed.1, .val (.ref location))] ∧
+      ∀ fuel, DemandInstructionStep cx fuel ⟨start, initial, state⟩
+        ⟨(start.1, start.2 + 1), initial.set addressed.1 (.val (.ref location)), state⟩ := by
+    cases form with
+    | global global =>
+      have site := GeneratedDemandInstruction.globalAddress_auto childOccurrence childRows input.atPoint
+        (generated_read_place_extended extended)
+      have post := (Post.def_leaf (Post.init input.related input.atPoint)
+        (show emitDef (.globalAddr global) le before = (addressed.1, addressed.2) from rfl)
+        (generated_read_place_extended extended) (.val (.ref ⟨.global global, []⟩))).1
+      refine ⟨⟨.global global, []⟩, ?_, post, ?_⟩
+      · simp only [evalPlace, pure_apply]
+      · intro fuel
+        apply DemandInstructionStep.definition site.instruction
+        simp only [execOp, execPure, pure_apply]
+    | slot slot =>
+      have typed := child.typed
+      simp only [tyPlace] at typed
+      obtain ⟨binding, next, checked, resultType⟩ := (st_bind_ok _ _ _ _).1 typed
+      have visible := ((varOf_ok child.typingEnv slot child.typingStart (binding, next)).1 checked).1
+      obtain ⟨binding, scope, old, variableAt, scopeAt, parameter, stored, shape⟩ := child.frame.bindings slot visible
+      let location : Loc := ⟨.local env.act scope slot, []⟩
+      have site := GeneratedDemandInstruction.slotAddress_auto childOccurrence childRows input.atPoint
+        (generated_read_place_extended extended)
+      have post := (Post.def_leaf (Post.init input.related input.atPoint)
+        (show emitDef (.slotAddr slot) le before = (addressed.1, addressed.2) from rfl)
+        (generated_read_place_extended extended) (.val (.ref location))).1
+      refine ⟨location, ?_, post, ?_⟩
+      · simp [evalPlace, rootOf, variableAt, scopeAt, location, bind_apply, pure_apply]
+      · intro fuel
+        apply DemandInstructionStep.definition site.instruction
+        simp only [execOp, execPure, slotRoot_eq input.related]
+        simp [rootOf, variableAt, scopeAt, location, bind_apply, pure_apply]
+  let middle : DemandRuntimePoint := ⟨(start.1, start.2 + 1), initial.set addressed.1 (.val (.ref location)), state⟩
   have carried := realized.retained post.same bounded.1 bounded.2 RetainsAliases.refl
   have atMiddle : DemandFrameAt cfg env cx source.world source.typingEnv source.rootsEnv source.context.outputFuture
       map.values map.runs middle := by
-    have result := child.result 1 ⟨.global global, []⟩ placed
+    have result := child.result 1 location placed
     have frame := result.frame
     rw [metadata.world, typing, roots, metadata.outputFuture] at frame
     exact ⟨⟨_, post.pp, post.rel⟩, frame, carried⟩
-  have firstStep (fuel : Nat) : DemandInstructionStep cx fuel ⟨start, initial, state⟩ middle := by
-    apply DemandInstructionStep.definition site.instruction
-    simp only [execOp, execPure, pure_apply]
   refine ⟨owned, coverage, ?_⟩
   rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨length, current, rfl, actual, tail⟩
   · exact .interior (.entry ⟨⟨_, input.atPoint, input.related⟩, source.frame, realized⟩)
@@ -81,7 +111,16 @@ theorem accepted_generated_global_read_prefix_family {cfg : Cfg} {env : Env} {cx
       have final := ExpressionDemandBoundary.of_result result admitted bounded realized finalPost
       exact .complete (by omega) (.next actual (.next loaded (.zero _))) residual evaluated final
 
+theorem accepted_generated_global_read_prefix_family {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (loop : Option LoopCtx) (global : GlobalId) :
+    GeneratedExpressionPrefixFamily cx results selected loop (.read (.global global))
+      (@CanonicalExpressionPrefixCursor cfg env cx) :=
+  accepted_generated_read_prefix_family selected loop (.global global)
+
 inductive ScalarPrefixExpression : Expr → Prop
+  | slotRead (slot : VarId) : ScalarPrefixExpression (.read (.var slot))
   | globalRead (global : GlobalId) : ScalarPrefixExpression (.read (.global global))
   | literal (type : IntTy) (number : Int) : ScalarPrefixExpression (.lit type number)
   | boolean (value : Bool) : ScalarPrefixExpression (.bool value)
@@ -103,8 +142,10 @@ theorem accepted_generated_scalar_prefix_family {cfg : Cfg} {env : Env} {cx : Fn
     (loop : Option LoopCtx) {expression : Expr} (form : ScalarPrefixExpression expression) :
     GeneratedExpressionPrefixFamily cx results selected loop expression (@CanonicalExpressionPrefixCursor cfg env cx) := by
   induction form with
+  | slotRead slot =>
+    exact accepted_generated_read_prefix_family selected loop (.slot slot)
   | globalRead global =>
-    exact accepted_generated_global_read_prefix_family selected loop global
+    exact accepted_generated_read_prefix_family selected loop (.global global)
   | literal type number =>
     apply GeneratedExpressionPrefixFamily.mapCursor (accepted_generated_literal_prefix_family selected loop type number)
     intro expression state source before built initial start map required runtime cursor
@@ -134,7 +175,7 @@ theorem accepted_generated_scalar_prefix_family {cfg : Cfg} {env : Env} {cx : Fn
     intro expression state source before built initial start map required runtime cursor
     exact cursor.canonical (by intros; assumption) (by intros; assumption)
 
-#print axioms accepted_generated_global_read_prefix_family
+#print axioms accepted_generated_read_prefix_family
 #print axioms GeneratedExpressionPrefixFamily.mapCursor
 #print axioms accepted_generated_scalar_prefix_family
 

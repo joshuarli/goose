@@ -498,10 +498,10 @@
  {
   "feature": "Recursive scalar expression demand prefixes",
   "label": "model-proved",
-  "theorem": "Goose.Lower.accepted_generated_scalar_prefix_family; Goose.Lower.accepted_generated_global_read_prefix_family",
-  "statement": "The canonical retained-demand invariant holds through every finite successful target prefix of recursively nested scalar expressions built from integer and Boolean literals, global reads, Boolean negation, integer unary operations and conversions, binary integer operations, and comparisons.",
+  "theorem": "Goose.Lower.accepted_generated_scalar_prefix_family; Goose.Lower.accepted_generated_read_prefix_family; Goose.Lower.accepted_generated_global_read_prefix_family",
+  "statement": "The canonical retained-demand invariant holds through every finite successful target prefix of recursively nested scalar expressions built from integer and Boolean literals, global and local-slot reads, Boolean negation, integer unary operations and conversions, binary integer operations, and comparisons.",
   "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, and builder extension. Source validation controls which expression types and Boolean comparisons are permitted.",
-  "limits": "Local and compound-place reads, calls, short-circuit control, other expression forms and stopping prefixes remain open. This component does not close TH-LOWER-03.",
+  "limits": "Compound-place reads, calls, short-circuit control, other expression forms and stopping prefixes remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandGeneratedScalarPrefix.lean and its expression-family dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
