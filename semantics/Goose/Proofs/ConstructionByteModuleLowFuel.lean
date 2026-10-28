@@ -9,13 +9,13 @@ open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 
 theorem acceptedEntry_lowFuel_afterGlobals (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (initialized : ExecutionState) (live : Goose.Core.RootInst → Prop)
-    (world : AcceptedWorld config config.module.globals.size initialized [] (declaredRootTypes config.module) live [] [])
+    (initialized : ExecutionState) (live : Goose.Core.RootInst → Prop) {types : RootTypes}
+    (world : AcceptedWorld config config.module.globals.size initialized [] types live [] [])
     (globals : initGlobals fuel config (List.range config.module.globals.size) .initial = .ok () initialized)
     (low : fuel < 3) :
     ∃ after ambient,
       runModule fuel config .initial = .stop .timeout after ∧
-      AcceptedWorld config config.module.globals.size after ambient (declaredRootTypes config.module) live [] [] := by
+      AcceptedWorld config config.module.globals.size after ambient types live [] [] := by
   obtain ⟨original, implementation, originalAt, implementationAt, parameters, results⟩ :=
     validated_entry config.module accepted.accepted
   let activation : RuntimeActivation := ⟨original.impl, initialized.nextAct, implementation.vars, [], []⟩
@@ -25,7 +25,7 @@ theorem acceptedEntry_lowFuel_afterGlobals (fuel : Nat) (config : EvalConfig) (a
     | nil => simp [Goose.Core.maxCallDepth]
     | cons head tail => simp [active, OwnershipAmbient.activations] at runtime
   have pushed := acceptedWorld_pushEmptyActivation config config.module.globals.size initialized []
-    (declaredRootTypes config.module) live [] [] activation world rfl rfl
+    types live [] [] activation world rfl rfl
   cases fuel with
   | zero =>
     refine ⟨initialized, [], ?_, world⟩

@@ -25,9 +25,9 @@ private theorem mixedAssignEntryFrame_fullInitialization (config : EvalConfig) (
   exact source.futureGlobals id lower within
 
 theorem acceptedMixedAssignEntry_normal_scope_events (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (state : ExecutionState) (live : Goose.Core.RootInst → Prop)
+    (state : ExecutionState) (live : Goose.Core.RootInst → Prop) {initialTypes : RootTypes}
     (original : Context) (implementation : Impl)
-    (world : AcceptedWorld config config.module.globals.size state [] (declaredRootTypes config.module) live [] [])
+    (world : AcceptedWorld config config.module.globals.size state [] initialTypes live [] [])
     (originalAt : config.module.contexts[config.module.entry]? = some original)
     (implementationAt : config.module.impls[original.impl]? = some implementation)
     (form : MixedAssignStatements implementation.body.stmts)
@@ -69,7 +69,7 @@ theorem acceptedMixedAssignEntry_normal_scope_events (fuel : Nat) (config : Eval
       | _ => False) := by
   obtain ⟨frame, activation, environmentEq, act, scopes, channels, freshActed, freshScope, frameWorld, source,
     position, phase, parameters, results, entry, entryAt, implAt, implId, vars⟩ :=
-    acceptedEntryPushedStatements config accepted state [] (declaredRootTypes config.module) live [] [] world
+    acceptedEntryPushedStatements config accepted state [] initialTypes live [] [] world
   have entryEq : entry = original := Option.some.inj (entryAt.symm.trans originalAt)
   subst entry
   have implementationEq : frame.source.impl = implementation := Option.some.inj (implAt.symm.trans implementationAt)
@@ -104,7 +104,7 @@ theorem acceptedMixedAssignEntry_normal_scope_events (fuel : Nat) (config : Eval
   let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
   let entryFrame := entryStatementsFrame config frame activated.nextScope
   let full := { entryFrame with initialized := config.module.globals.size }
-  let types := declaredRootTypes config.module
+  let types := initialTypes
   have form' : MixedAssignStatements frame.source.impl.body.stmts := by rw [implementationEq]; exact form
   have fullSource : AcceptedFrame config accepted full before types :=
     mixedAssignEntryFrame_fullInitialization config accepted entryFrame before types config.module.entry phase source
@@ -191,9 +191,9 @@ theorem acceptedMixedAssignEntry_normal_scope_events (fuel : Nat) (config : Eval
 
 
 theorem acceptedMixedAssignEntry_normal_scope (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (state : ExecutionState) (live : Goose.Core.RootInst → Prop)
+    (state : ExecutionState) (live : Goose.Core.RootInst → Prop) {initialTypes : RootTypes}
     (original : Context) (implementation : Impl)
-    (world : AcceptedWorld config config.module.globals.size state [] (declaredRootTypes config.module) live [] [])
+    (world : AcceptedWorld config config.module.globals.size state [] initialTypes live [] [])
     (originalAt : config.module.contexts[config.module.entry]? = some original)
     (implementationAt : config.module.impls[original.impl]? = some implementation)
     (form : MixedAssignStatements implementation.body.stmts)
