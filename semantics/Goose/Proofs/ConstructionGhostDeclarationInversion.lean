@@ -19,6 +19,12 @@ theorem fixed_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : Lis
     SourceHistory config sourceFuel (path ++ [0]) (.value environment expression) ready
       (evalValue sourceFuel config environment expression ready) := by
   cases history <;> simp_all [declarationSyntax]
+  case valueFirstStatement =>
+    rename_i shape child
+    cases shape <;> simp_all [declarationSyntax]
+  case leafStatement =>
+    rename_i shape
+    cases shape <;> simp_all [declarationSyntax]
 
 theorem occurrence_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
     {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}
@@ -33,6 +39,12 @@ theorem occurrence_history {config : EvalConfig} {α : Type} {fuel : Nat} {path 
     | some destination => SourceHistory config sourceFuel (path ++ [0]) (.builder environment destination expression) ready
         (buildExpr sourceFuel config environment destination expression ready) := by
   cases history <;> simp_all [declarationSyntax]
+  case valueFirstStatement =>
+    rename_i shape child
+    cases shape <;> simp_all [declarationSyntax]
+  case leafStatement =>
+    rename_i shape
+    cases shape <;> simp_all [declarationSyntax]
   case declaration =>
     cases occurrence <;> simp_all
     case direct => apply_assumption <;> first | assumption | rfl

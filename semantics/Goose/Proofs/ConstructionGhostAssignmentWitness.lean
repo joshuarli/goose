@@ -42,6 +42,26 @@ theorem assignment_witness :
   refine ⟨assignment_history 40, ?_, ?_⟩ <;>
     simp only [stepState, before, config, context, implementation, environment, statement] <;> cbv
 
+theorem terminalStatements_history (fuel : Nat) :
+    SourceHistory config fuel [] (.statement environment (.exit (.lit .i64 7) 0)) before
+      (execStmt fuel config environment (.exit (.lit .i64 7) 0) before) ∧
+    SourceHistory config fuel [] (.statement environment (.abort "stop" 0)) before
+      (execStmt fuel config environment (.abort "stop" 0) before) := by
+  constructor
+  · exact fuelHistory_exists fuel config _ [] before
+      ((syntaxFuel_existsWithTails fuel config closed).statement environment _
+        (.exit _ _ (.base (.integer .i64 7))))
+  · exact fuelHistory_exists fuel config _ [] before
+      ((syntaxFuel_existsWithTails fuel config closed).statement environment _ (.abort _ _))
+
+theorem terminalStatements_witness :
+    execStmt 40 config environment (.exit (.lit .i64 7) 0) before = .stop (.exit 7) before ∧
+    execStmt 40 config environment (.abort "stop" 0) before = .stop (.abort .userAbort 0) before := by
+  simp only [before, stepState, config, context, implementation, environment]
+  constructor <;> cbv
+
+#print axioms terminalStatements_history
+#print axioms terminalStatements_witness
 #print axioms assignment_history
 #print axioms assignment_witness
 end Goose.Proofs.ConstructionGhostAssignmentWitness

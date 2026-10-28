@@ -117,6 +117,16 @@ inductive PrintArgumentSyntax (config : EvalConfig) : PrintArg → Prop
   | view (view : View) (child : ViewSyntax config view) : PrintArgumentSyntax config (.view view)
 
 inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
+  | rebind (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId)
+      (child : ValueSyntax config expression) : StatementSyntax config (.rebind localVar expression origin)
+  | assertion (expression : Expr) (origin : Goose.Core.OriginId)
+      (child : ValueSyntax config expression) : StatementSyntax config (.assertS expression origin)
+  | exit (expression : Expr) (origin : Goose.Core.OriginId)
+      (child : ValueSyntax config expression) : StatementSyntax config (.exit expression origin)
+  | abort (message : String) (origin : Goose.Core.OriginId) : StatementSyntax config (.abort message origin)
+  | breakLoop (origin : Goose.Core.OriginId) : StatementSyntax config (.brk origin)
+  | continueLoop (origin : Goose.Core.OriginId) : StatementSyntax config (.cont origin)
+  | returnUnit (origin : Goose.Core.OriginId) : StatementSyntax config (.ret none origin)
   | assignment (place : Place) (expression : Expr) (origin : Goose.Core.OriginId)
       (placeChild : PlaceSyntax config place) (valueChild : ValueSyntax config expression) :
       StatementSyntax config (.assign place expression origin)
@@ -411,6 +421,16 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
               (previous.arguments environment vars parameters arguments tail)
       · intro environment statement derivation
         cases derivation with
+        | rebind localVar expression origin child =>
+            exact .valueFirstStatement fuel environment _ expression (.rebind localVar expression origin) (previous.value environment expression child)
+        | assertion expression origin child =>
+            exact .valueFirstStatement fuel environment _ expression (.assertion expression origin) (previous.value environment expression child)
+        | exit expression origin child =>
+            exact .valueFirstStatement fuel environment _ expression (.exit expression origin) (previous.value environment expression child)
+        | abort message origin => exact .leafStatement fuel environment _ (.abort message origin)
+        | breakLoop origin => exact .leafStatement fuel environment _ (.breakLoop origin)
+        | continueLoop origin => exact .leafStatement fuel environment _ (.continueLoop origin)
+        | returnUnit origin => exact .leafStatement fuel environment _ (.returnUnit origin)
         | assignment place expression origin placeChild valueChild =>
             exact .assignment fuel environment place expression origin (previous.place environment place placeChild)
               (previous.value environment expression valueChild)

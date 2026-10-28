@@ -89,6 +89,11 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.value environment (.fill (.arr element count) operand origin))
+  | valueFirstStatement (fuel : Nat) (environment : RuntimeActivation) (statement : Stmt) (expression : Expr)
+      (shape : ValueFirstStatement statement expression) (child : FuelSupport config fuel (.value environment expression)) :
+      FuelSupport config (fuel + 1) (.statement environment statement)
+  | leafStatement (fuel : Nat) (environment : RuntimeActivation) (statement : Stmt) (shape : LeafStatement statement) :
+      FuelSupport config (fuel + 1) (.statement environment statement)
   | assignment (fuel : Nat) (environment : RuntimeActivation) (place : Place) (expression : Expr) (origin : Goose.Core.OriginId)
       (placeChild : FuelSupport config fuel (.place environment place))
       (valueChild : FuelSupport config fuel (.value environment expression)) :
@@ -407,6 +412,11 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           simp only [execute] at child ⊢
           rw [actual]
           exact .fill fixed child
+      | valueFirstStatement _ environment statement expression shape child =>
+          exact .valueFirstStatement fuel path environment statement expression before shape
+            (ih (.value environment expression) (path ++ [0]) before child)
+      | leafStatement _ environment statement shape =>
+          exact .leafStatement fuel path environment statement before shape
       | assignment _ environment place expression origin placeSupported valueSupported =>
           refine .assignment fuel path environment place expression origin before
             (ih (.place environment place) (path ++ [0]) before placeSupported) ?_

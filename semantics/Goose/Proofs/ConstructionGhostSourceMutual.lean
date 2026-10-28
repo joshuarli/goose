@@ -319,6 +319,20 @@ inductive ValueAggregate : Expr → List Expr → Prop
   | record (id : Goose.Core.StructId) (fields : TyList) (operands : List Expr) :
       ValueAggregate (.structLit (.structT id fields) operands) operands
 
+inductive ValueFirstStatement : Stmt → Expr → Prop
+  | rebind (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId) :
+      ValueFirstStatement (.rebind localVar expression origin) expression
+  | assertion (expression : Expr) (origin : Goose.Core.OriginId) :
+      ValueFirstStatement (.assertS expression origin) expression
+  | exit (expression : Expr) (origin : Goose.Core.OriginId) :
+      ValueFirstStatement (.exit expression origin) expression
+
+inductive LeafStatement : Stmt → Prop
+  | abort (message : String) (origin : Goose.Core.OriginId) : LeafStatement (.abort message origin)
+  | breakLoop (origin : Goose.Core.OriginId) : LeafStatement (.brk origin)
+  | continueLoop (origin : Goose.Core.OriginId) : LeafStatement (.cont origin)
+  | returnUnit (origin : Goose.Core.OriginId) : LeafStatement (.ret none origin)
+
 def logicalExpression (isAnd : Bool) (first second : Expr) : Expr :=
   if isAnd then .and first second else .or first second
 
@@ -993,6 +1007,16 @@ inductive SourceHistory (config : EvalConfig) :
           (execBlock fuel config environment [] [] block ready)) :
       SourceHistory config (fuel + 1) path (.statement environment (.ifS condition yes no origin)) before
         (execStmt (fuel + 1) config environment (.ifS condition yes no origin) before)
+  | valueFirstStatement (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (statement : Stmt) (expression : Expr) (before : ExecutionState) (shape : ValueFirstStatement statement expression)
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment expression) before
+        (evalValue fuel config environment expression before)) :
+      SourceHistory config (fuel + 1) path (.statement environment statement) before
+        (execStmt (fuel + 1) config environment statement before)
+  | leafStatement (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (statement : Stmt) (before : ExecutionState) (shape : LeafStatement statement) :
+      SourceHistory config (fuel + 1) path (.statement environment statement) before
+        (execStmt (fuel + 1) config environment statement before)
   | assignment (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (place : Place)
       (expression : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState)
       (placeChild : SourceHistory config fuel (path ++ [0]) (.place environment place) before
@@ -1063,7 +1087,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | assignment | declaration | valueNonfixedArray | valueNonfixedFill | builderChannelCall | fillBuilder | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
+  | valueFirstStatement | leafStatement | assignment | declaration | valueNonfixedArray | valueNonfixedFill | builderChannelCall | fillBuilder | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]
