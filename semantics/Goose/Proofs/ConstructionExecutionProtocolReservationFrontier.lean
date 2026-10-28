@@ -17,7 +17,7 @@ elab "exit_frontier_head" : term => do
 
 abbrev exitFrontierAction : Nat → DestinationId → ConstructionM DestinationId := exit_frontier_head
 
-private abbrev lookupStep (id : DestinationId) : ConstructionM PendingDestination := fun state =>
+abbrev frontierLookupStep (id : DestinationId) : ConstructionM PendingDestination := fun state =>
   (fun {left right : ConstructionResult PendingDestination} (_ : left = right) => left)
     (lookupDestination_result id state)
 
@@ -26,17 +26,17 @@ theorem exitFrontierAction_zero (id : DestinationId) :
 
 theorem exitFrontierAction_succ (fuel : Nat) (id : DestinationId) :
     exitFrontierAction (fuel + 1) id = (do
-      let destination ← lookupStep id
+      let destination ← frontierLookupStep id
       match destination.progress with
       | .exiting _ replacement =>
-          let selected ← lookupStep replacement
+          let selected ← frontierLookupStep replacement
           if selected.use != .replacement id then ConstructionM.fail .ownership
           exitFrontierAction fuel replacement
       | _ => pure id) := rfl
 
-private theorem lookupStep_finalState (id : DestinationId) (state : ConstructionState) :
-    (lookupStep id state).finalState = state := by
-  simp only [lookupStep, lookupDestination_result]
+private theorem frontierLookupStep_finalState (id : DestinationId) (state : ConstructionState) :
+    (frontierLookupStep id state).finalState = state := by
+  simp only [frontierLookupStep, lookupDestination_result]
   cases state.destinations[id]? <;> rfl
 
 private theorem query_bind (action : ConstructionM α) (next : α → ConstructionM β)
@@ -58,12 +58,12 @@ theorem exitFrontierAction_finalState (fuel : Nat) (id : DestinationId) (state :
   | succ fuel ih =>
       rw [exitFrontierAction_succ]
       apply query_bind
-      · exact lookupStep_finalState id
+      · exact frontierLookupStep_finalState id
       · intro destination current
         cases destination.progress <;> try rfl
         rename_i count replacement
         apply query_bind
-        · exact lookupStep_finalState replacement
+        · exact frontierLookupStep_finalState replacement
         · intro selected after
           split
           · rfl

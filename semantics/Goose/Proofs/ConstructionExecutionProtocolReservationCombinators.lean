@@ -31,7 +31,7 @@ elab "prepare_exit_head" : term => do
 abbrev prepareExitDestinationAction : DestinationId → ExitSource → ConstructionM (DestinationId × PendingDestination) :=
   prepare_exit_head
 
-private abbrev reserveLookupStep (id : DestinationId) : ConstructionM PendingDestination := fun state =>
+abbrev reserveLookupStep (id : DestinationId) : ConstructionM PendingDestination := fun state =>
   (fun {left right : ConstructionResult PendingDestination} (_ : left = right) => left)
     (lookupDestination_result id state)
 
