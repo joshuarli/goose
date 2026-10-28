@@ -43,17 +43,18 @@ theorem recursive_checkpoint_direct_return :
         exitReservations := after.construction.exitReservations.set! 0 .released } }
       execStmt 4 recursiveCheckpointConfig recursiveCheckpointSource (.returnFrom 0 [.bytes (.varr (.int .u8)) [66] 0] 0)
         recursiveDirectCheckpoint = .escape ⟨2, .nonlocal 0⟩ [.completed 1] cleaned ∧
-      finishChannels recursiveCheckpointConfig.layout [.construct 1] [.varr (.int .u8)] [.completed 1] 0 cleaned = .ok () cleaned := by
+      finishChannels recursiveCheckpointConfig.layout [.construct 1] [.varr (.int .u8)] [.completed 1] 0 cleaned = .ok () cleaned ∧
+      Goose.Proofs.ExitExecution.LandedResultChannels cleaned [.construct 1] [.varr (.int .u8)] [.completed 1] := by
   have selection : targetActivation recursiveCheckpointConfig 0 recursiveDirectCheckpoint = .ok recursiveCheckpointTarget recursiveDirectCheckpoint := by cbv
   have current : destinationCurrent recursiveDirectCheckpoint.construction 1 = .ok 1 := by cbv
-  obtain ⟨after, escaped, _, finished, _⟩ := direct_byte_return_cleanup 0 recursiveCheckpointConfig
+  obtain ⟨after, escaped, _, finished, landed, _⟩ := direct_byte_return_cleanup 0 recursiveCheckpointConfig
     recursiveCheckpointSource recursiveCheckpointTarget 0 1 [66] 0 recursiveDirectCheckpoint recursiveCheckpointBacking
     recursive_checkpoint_source selection rfl rfl rfl rfl rfl rfl current (by decide)
   have size : recursiveDirectCheckpoint.construction.exitReservations.size = 0 := by
     rw [recursive_checkpoint_tables.1]
     rfl
   exact ⟨after, by simpa only [size, recursiveCheckpointTarget] using escaped,
-    by simpa only [size] using finished⟩
+    by simpa only [size] using finished, by simpa only [size] using landed⟩
 
 #print axioms recursive_checkpoint_direct_return
 
