@@ -184,7 +184,7 @@ theorem acceptedParameterCallWorldFrame (config : EvalConfig) (accepted : Accept
     sourceScopes, initializing, scopes, channels, allocated⟩
 
 
-theorem acceptedParameterScopeFrame (config : EvalConfig) (accepted : AcceptedModule config)
+theorem acceptedParameterScopeFrame_partial (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (contextId : Nat) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config frame.initialized state ambient types live regions pending)
@@ -192,7 +192,7 @@ theorem acceptedParameterScopeFrame (config : EvalConfig) (accepted : AcceptedMo
     (visible : frame.typing.visible = []) (typingScope : frame.typing.scope = frame.source.impl.body.scope)
     (initializing : frame.source.initializing = [])
     (sourceScopes : frame.source.scopes = [])
-    (scopes : frame.interpretation.environment.scopes = []) (initialized : frame.initialized = config.module.globals.size)
+    (scopes : frame.interpretation.environment.scopes = [])
     (cursor : frame.rootCursor = ⟨0, {}, []⟩) :
     let next := parameterScopeFrame frame state.nextScope
     let after := { state with nextScope := state.nextScope + 1 }
@@ -261,14 +261,30 @@ theorem acceptedParameterScopeFrame (config : EvalConfig) (accepted : AcceptedMo
     · intro id _ root resolved
       exact emptyTypes id root resolved
     · intro id future bound
-      change frame.initialized ≤ id at future
-      rw [initialized] at future
-      exact (Nat.not_lt_of_ge future bound).elim
+      exact source.futureGlobals id future bound
     · intro id member
       simp only [next, parameterScopeFrame, visible, List.not_mem_nil] at member
     · intro fuel id member
       simp only [next, parameterScopeFrame, visible, List.not_mem_nil] at member
   exact ⟨rfl, scopeWorld, framed⟩
+
+theorem acceptedParameterScopeFrame (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (contextId : Nat) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config frame.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame state types) (phase : frame.phase = .implementation contextId)
+    (visible : frame.typing.visible = []) (typingScope : frame.typing.scope = frame.source.impl.body.scope)
+    (initializing : frame.source.initializing = [])
+    (sourceScopes : frame.source.scopes = [])
+    (scopes : frame.interpretation.environment.scopes = []) (initialized : frame.initialized = config.module.globals.size)
+    (cursor : frame.rootCursor = ⟨0, {}, []⟩) :
+    let next := parameterScopeFrame frame state.nextScope
+    let after := { state with nextScope := state.nextScope + 1 }
+    freshScope state = .ok state.nextScope after ∧
+    AcceptedWorld config next.initialized after ambient types live regions pending ∧
+    AcceptedFrame config accepted next after types := by
+  exact acceptedParameterScopeFrame_partial config accepted frame contextId state ambient types live regions pending world source phase
+    visible typingScope initializing sourceScopes scopes cursor
 
 theorem acceptedParameterCallPushedScope (config : EvalConfig) (accepted : AcceptedModule config)
     (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
@@ -349,4 +365,5 @@ theorem acceptedParameterCallPushedScope (config : EvalConfig) (accepted : Accep
 #print axioms acceptedParameterScopeFrame
 #print axioms acceptedParameterCallWorldFrame
 #print axioms acceptedParameterCallFrame
+#print axioms acceptedParameterScopeFrame_partial
 end Goose.Proofs.ConstructionAcceptedExecution
