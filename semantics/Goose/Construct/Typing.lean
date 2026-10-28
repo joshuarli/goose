@@ -570,4 +570,45 @@ def typeStatement : Nat → TypingEnv → Stmt → TypingM TypingEnv
   | fuel + 1, env, .exit expression _ => do requireIntType (← one (← typeExpr fuel (ordinary env) expression)); pure env
 end
 
+theorem typeStatement_byteOwner_counter (fuel : Nat) (env next : TypingEnv) (id : Nat) (bytes : List UInt8) (origin bytesOrigin before after : Nat)
+    (checked : typeStatement (fuel + 1) env (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .ok (next, after)) : after = before + 1 := by
+  cases fuel with
+  | zero =>
+    simp only [typeStatement, bind, StateT.bind, Except.bind] at checked
+    repeat' split at checked
+    all_goals try cases checked
+    all_goals contradiction
+  | succ fuel =>
+    simp only [typeStatement, bind, StateT.bind] at checked
+    change Except.bind (((do
+      let expected ← get
+      if id != expected then throw ⟨.type, "variables must be declared once in ascending order"⟩
+      let some localVar := env.variables[id]? | throw ⟨.type, "declared localVar outside table"⟩
+      if localVar.scope != env.scope || !localVar.ty.storable then throw ⟨.type, "localVar scope or type mismatch"⟩
+      set (expected + 1)
+      pure localVar) : TypingM LocalVar) before) _ = _ at checked
+    have getState (state : Nat) : (get : TypingM Nat) state = .ok (state, state) := rfl
+    have throwState {α : Type} (error : Goose.Core.Rejection) (state : Nat) : (throw error : TypingM α) state = .error error := rfl
+    simp only [bind, StateT.bind, getState, Except.bind] at checked
+    by_cases ordered : id = before
+    · subst before
+      cases present : env.variables[id]? with
+      | none => simp [present, throwState] at checked
+      | some descriptor =>
+        by_cases valid : descriptor.scope != env.scope || !descriptor.ty.storable
+        · simp [StateT.bind, present, valid, throwState] at checked
+          change Except.error _ = Except.ok _ at checked
+          cases checked
+        · simp [StateT.bind, present, valid, typeExpr, pure, StateT.pure, set, StateT.set] at checked
+          simp only [Except.pure] at checked
+          dsimp only [bind, Except.bind] at checked
+          cases passing : (Ty.varr (.int .u8)).passesTo descriptor.ty with
+          | false => simp [one, require, fail, passing, pure, StateT.pure, Except.pure, throwState] at checked
+          | true =>
+            simp [one, require, passing, pure, StateT.pure, Except.pure, Prod.mk.injEq] at checked
+            exact checked.2.symm
+    · simp [StateT.bind, ordered, throwState] at checked
+      change Except.error _ = Except.ok _ at checked
+      cases checked
+
 end Goose.Construct

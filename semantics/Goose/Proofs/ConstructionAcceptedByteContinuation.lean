@@ -27,6 +27,7 @@ theorem execStmt_scopedByteOwner_continuation (fuel typeFuel : Nat) (config : Ev
       let root := Goose.Core.RootInst.local frame.interpretation.environment.act scopeInst id
       rootAfter = (advanceLocalFrame frame id).rootCursor ∧
       typingNext = (advanceLocalFrame frame id).typing ∧
+      typingAfter = (advanceLocalFrame frame id).typingCounter ∧
       RootTypesExtend types (registerRootType types root (.varr (.int .u8))) ∧
       AcceptedWorld config frame.initialized after ambient (registerRootType types root (.varr (.int .u8)))
         (fun other => other = root ∨ live other)
@@ -76,11 +77,99 @@ theorem execStmt_scopedByteOwner_continuation (fuel typeFuel : Nat) (config : Ev
   have publishedResolved := rootOf_transfer frame.interpretation id before published root resolved
   have advanced := publishedSource.bindFreshStored_advance publishedWorld id descriptor root stored rootOrder typingOrder
     declared (valueType.trans descriptorType.symm) (by rw [descriptorType]; rfl) publishedResolved bound
-  refine ⟨stored, published, ?_, ?_, extended, finalWorld, ?_⟩
+  refine ⟨stored, published, ?_, ?_, ?_, extended, finalWorld, ?_⟩
   · simpa only [advanceLocalFrame] using cursor
   · simpa only [advanceLocalFrame] using typing
+  · simpa only [advanceLocalFrame] using typeStatement_byteOwner_counter typeFuel frame.typing typingNext id bytes origin
+      bytesOrigin frame.typingCounter typingAfter typed
   · simpa only [descriptorType] using advanced
 
+theorem execStmt_byteOwner_continuation (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (context id : Nat) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
+    (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
+    (typingNext : TypingEnv) (typingAfter : Nat)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation context)
+    (rootChecked : rpStmt frame.source (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
+      frame.rootCursor = .ok ((), rootAfter))
+    (typed : typeStatement frame.typingFuel frame.typing (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
+      frame.typingCounter = .ok (typingNext, typingAfter))
+    (byteOwner : (frame.typing.variables[id]?).map (·.ty) = some (.varr (.int .u8)))
+    (unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some id)) = none)
+    (executed : execStmt (fuel + 2) config frame.interpretation.environment
+      (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .ok (.normal .unit) after) :
+    ∃ (scopeInst : Nat) (stored : StoredValue) (published : ExecutionState),
+      let root := Goose.Core.RootInst.local frame.interpretation.environment.act scopeInst id
+      rootAfter = (advanceLocalFrame frame id).rootCursor ∧
+      typingNext = (advanceLocalFrame frame id).typing ∧
+      typingAfter = (advanceLocalFrame frame id).typingCounter ∧
+      RootTypesExtend types (registerRootType types root (.varr (.int .u8))) ∧
+      AcceptedWorld config frame.initialized after ambient (registerRootType types root (.varr (.int .u8)))
+        (fun other => other = root ∨ live other)
+        (regions.map (fun region => extendReceivingLimit region stored.storage (storageExtent published stored.storage))) pending ∧
+      AcceptedFrame config accepted (advanceLocalFrame frame id) after (registerRootType types root (.varr (.int .u8))) := by
+  cases fuelCase : frame.typingFuel with
+  | zero =>
+    rw [fuelCase] at typed
+    change Except.error _ = Except.ok _ at typed
+    cases typed
+  | succ typeFuel =>
+    cases scopes : frame.interpretation.environment.scopes with
+    | nil =>
+      have impossible := executed
+      simp only [execStmt] at impossible
+      cases declared : frame.interpretation.environment.vars[id]? with
+      | none => simp only [declared, fault, EvalM.stop] at impossible; cases impossible
+      | some descriptor =>
+        simp only [declared, rootOf, scopes, List.find?_nil, fault, EvalM.stop, bind] at impossible
+        cases impossible
+    | cons scopeEntry outer =>
+      obtain ⟨scope, scopeInst⟩ := scopeEntry
+      obtain ⟨stored, published, result⟩ := execStmt_scopedByteOwner_continuation fuel typeFuel config accepted frame
+        context id scope scopeInst outer bytes origin bytesOrigin before after ambient types live regions pending rootAfter
+        typingNext typingAfter world source phase rootChecked (by simpa only [fuelCase] using typed) byteOwner scopes unnamed executed
+      exact ⟨scopeInst, stored, published, result⟩
+
+theorem execStmt_entryByteOwner_continuation (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (id : Nat) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
+    (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
+    (typingNext : TypingEnv) (typingAfter : Nat)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation config.module.entry)
+    (rootChecked : rpStmt frame.source (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
+      frame.rootCursor = .ok ((), rootAfter))
+    (typed : typeStatement frame.typingFuel frame.typing (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
+      frame.typingCounter = .ok (typingNext, typingAfter))
+    (byteOwner : (frame.typing.variables[id]?).map (·.ty) = some (.varr (.int .u8)))
+    (executed : execStmt (fuel + 2) config frame.interpretation.environment
+      (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .ok (.normal .unit) after) :
+    ∃ (scopeInst : Nat) (stored : StoredValue) (published : ExecutionState),
+      let root := Goose.Core.RootInst.local frame.interpretation.environment.act scopeInst id
+      rootAfter = (advanceLocalFrame frame id).rootCursor ∧
+      typingNext = (advanceLocalFrame frame id).typing ∧
+      typingAfter = (advanceLocalFrame frame id).typingCounter ∧
+      RootTypesExtend types (registerRootType types root (.varr (.int .u8))) ∧
+      AcceptedWorld config frame.initialized after ambient (registerRootType types root (.varr (.int .u8)))
+        (fun other => other = root ∨ live other)
+        (regions.map (fun region => extendReceivingLimit region stored.storage (storageExtent published stored.storage))) pending ∧
+      AcceptedFrame config accepted (advanceLocalFrame frame id) after (registerRootType types root (.varr (.int .u8))) := by
+  obtain ⟨entry, implementation, entryFound, implFound, paramsEmpty, resultsEmpty⟩ := validated_entry config.module accepted.accepted
+  have originFact := source.compatible.origin
+  unfold SourceOrigin at originFact
+  rw [phase] at originFact
+  obtain ⟨actual, calls, actualFound, actualImpl, rest⟩ := originFact
+  have same : actual = entry := Option.some.inj (actualFound.symm.trans entryFound)
+  subst actual
+  have sameImpl : frame.source.impl = implementation := Option.some.inj (actualImpl.symm.trans implFound)
+  have unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some id)) = none := by
+    simp only [sameImpl, resultsEmpty, Array.toList_empty, List.zipIdx_nil, List.find?_nil]
+  exact execStmt_byteOwner_continuation fuel config accepted frame config.module.entry id bytes origin bytesOrigin before after
+    ambient types live regions pending rootAfter typingNext typingAfter world source phase rootChecked typed byteOwner unnamed executed
+
 #print axioms execStmt_scopedByteOwner_continuation
+#print axioms execStmt_byteOwner_continuation
+#print axioms execStmt_entryByteOwner_continuation
 
 end Goose.Proofs.ConstructionAcceptedExecution
