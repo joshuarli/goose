@@ -28,6 +28,17 @@ theorem byValue_head_history {config : EvalConfig} {α : Type} {fuel : Nat} {pat
     rw [actual]
     exact child
 
+theorem byReference_head_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
+    {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}
+    (history : SourceHistory config fuel path operation before outcome) (sourceFuel : Nat)
+    (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param) (parameters : List Param)
+    (mutability : Goose.Core.Mutability) (place : Place) (arguments : List Arg)
+    (fuelEq : fuel = sourceFuel + 1)
+    (operationEq : argumentsSyntax operation = some (environment, vars, parameter :: parameters, .byRef mutability place :: arguments)) :
+    SourceHistory config sourceFuel (path ++ [0]) (.place environment place) before
+      (evalPlace sourceFuel config environment place before) := by
+  cases history <;> simp_all [argumentsSyntax]
+
 theorem arguments_tail_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
     {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}
     (history : SourceHistory config fuel path operation before outcome) (sourceFuel : Nat)
@@ -99,6 +110,45 @@ theorem byValue_head_invokeCall (fuel : Nat) (config : EvalConfig) (environment 
   · exact member
   · exact execution
 
+theorem argumentReplay_sourcePaths {config : EvalConfig} {environment : RuntimeActivation} {vars : Array LocalVar}
+    {fuel offset : Nat} {parameters : List Param} {arguments : List Arg} {before : ExecutionState}
+    {outcome : ExecutionStep (List Value)} {visits : List ArgumentInvocation}
+    (replay : ArgumentReplay config environment vars fuel offset parameters arguments before outcome visits)
+    (property : Nat → Arg → ExecutionState → List Nat → Prop)
+    (headProperty : ∀ headFuel parameter parameters argument arguments before outcome path,
+      SourceHistory config (headFuel + 1) path (.arguments environment vars (parameter :: parameters) (argument :: arguments)) before outcome →
+      property headFuel argument before (path ++ [0])) :
+    ∀ path, SourceHistory config fuel path (.arguments environment vars parameters arguments) before outcome →
+      ∀ visit ∈ visits, ∃ suffix, StatementPath offset suffix visit.ordinal ∧
+        property visit.fuel visit.argument visit.before (path ++ suffix) := by
+  induction replay with
+  | timeout | done | arityLeft | arityRight => intros; simp_all
+  | @next fuel offset parameter parameters argument arguments before middle value outcome visits head tail ih =>
+      intro path history visit member
+      simp only [List.mem_cons] at member
+      rcases member with same | later
+      · subst visit
+        exact ⟨[0], .here offset, headProperty fuel parameter parameters argument arguments before _ path history⟩
+      · have tailHistory := arguments_tail_history history fuel environment vars parameter parameters argument arguments value middle rfl rfl head
+        rw [tail.sound] at tailHistory
+        obtain ⟨suffix, suffixPath, child⟩ := ih (path ++ [1]) tailHistory visit later
+        exact ⟨1 :: suffix, .next offset visit.ordinal suffix suffixPath, by simpa [List.append_assoc] using child⟩
+  | @stopped fuel offset parameter parameters argument arguments before after reason head =>
+      intro path history visit member
+      simp only [List.mem_singleton] at member
+      subst visit
+      exact ⟨[0], .here offset, headProperty fuel parameter parameters argument arguments before _ path history⟩
+  | @escaped fuel offset parameter parameters argument arguments before after address carriers head =>
+      intro path history visit member
+      simp only [List.mem_singleton] at member
+      subst visit
+      exact ⟨[0], .here offset, headProperty fuel parameter parameters argument arguments before _ path history⟩
+  | @jumped fuel offset parameter parameters argument arguments before after target kind head =>
+      intro path history visit member
+      simp only [List.mem_singleton] at member
+      subst visit
+      exact ⟨[0], .here offset, headProperty fuel parameter parameters argument arguments before _ path history⟩
+
 theorem argumentReplay_byValuePaths {config : EvalConfig} {environment : RuntimeActivation} {vars : Array LocalVar}
     {fuel offset : Nat} {parameters : List Param} {arguments : List Arg} {before : ExecutionState}
     {outcome : ExecutionStep (List Value)} {visits : List ArgumentInvocation}
@@ -108,41 +158,42 @@ theorem argumentReplay_byValuePaths {config : EvalConfig} {environment : Runtime
         ∃ suffix, StatementPath offset suffix visit.ordinal ∧
           SourceHistory config visit.fuel (path ++ suffix) (.value environment operand) visit.before
             (evalValue visit.fuel config environment operand visit.before) := by
-  induction replay with
-  | timeout | done | arityLeft | arityRight => intros; simp_all
-  | @next fuel offset parameter parameters argument arguments before middle value outcome visits head tail ih =>
-      intro path history visit member operand byValue
-      simp only [List.mem_cons] at member
-      rcases member with same | later
-      · subst visit
-        simp only at byValue
-        subst argument
-        exact ⟨[0], .here offset, byValue_head_history history fuel environment vars parameter parameters operand arguments rfl rfl⟩
-      · have tailHistory := arguments_tail_history history fuel environment vars parameter parameters argument arguments value middle rfl rfl head
-        rw [tail.sound] at tailHistory
-        obtain ⟨suffix, suffixPath, child⟩ := ih (path ++ [1]) tailHistory visit later operand byValue
-        exact ⟨1 :: suffix, .next offset visit.ordinal suffix suffixPath, by simpa [List.append_assoc] using child⟩
-  | @stopped fuel offset parameter parameters argument arguments before after reason head =>
-      intro path history visit member operand byValue
-      simp only [List.mem_singleton] at member
-      subst visit
-      simp only at byValue
-      subst argument
-      exact ⟨[0], .here offset, byValue_head_history history fuel environment vars parameter parameters operand arguments rfl rfl⟩
-  | @escaped fuel offset parameter parameters argument arguments before after address carriers head =>
-      intro path history visit member operand byValue
-      simp only [List.mem_singleton] at member
-      subst visit
-      simp only at byValue
-      subst argument
-      exact ⟨[0], .here offset, byValue_head_history history fuel environment vars parameter parameters operand arguments rfl rfl⟩
-  | @jumped fuel offset parameter parameters argument arguments before after target kind head =>
-      intro path history visit member operand byValue
-      simp only [List.mem_singleton] at member
-      subst visit
-      simp only at byValue
-      subst argument
-      exact ⟨[0], .here offset, byValue_head_history history fuel environment vars parameter parameters operand arguments rfl rfl⟩
+  let property : Nat → Arg → ExecutionState → List Nat → Prop := fun sourceFuel argument sourceBefore childPath =>
+    ∀ operand, argument = .byVal operand →
+      SourceHistory config sourceFuel childPath (.value environment operand) sourceBefore
+        (evalValue sourceFuel config environment operand sourceBefore)
+  have headProperty : ∀ headFuel parameter parameters argument arguments before outcome path,
+      SourceHistory config (headFuel + 1) path (.arguments environment vars (parameter :: parameters) (argument :: arguments)) before outcome →
+      property headFuel argument before (path ++ [0]) := by
+    intro headFuel parameter parameters argument arguments before outcome path history operand same
+    subst argument
+    exact byValue_head_history history headFuel environment vars parameter parameters operand arguments rfl rfl
+  intro path history visit member operand byValue
+  obtain ⟨suffix, suffixPath, child⟩ := argumentReplay_sourcePaths replay property headProperty path history visit member
+  exact ⟨suffix, suffixPath, child operand byValue⟩
+
+theorem argumentReplay_byReferencePaths {config : EvalConfig} {environment : RuntimeActivation} {vars : Array LocalVar}
+    {fuel offset : Nat} {parameters : List Param} {arguments : List Arg} {before : ExecutionState}
+    {outcome : ExecutionStep (List Value)} {visits : List ArgumentInvocation}
+    (replay : ArgumentReplay config environment vars fuel offset parameters arguments before outcome visits) :
+    ∀ path, SourceHistory config fuel path (.arguments environment vars parameters arguments) before outcome →
+      ∀ visit ∈ visits, ∀ mutability place, visit.argument = .byRef mutability place →
+        ∃ suffix, StatementPath offset suffix visit.ordinal ∧
+          SourceHistory config visit.fuel (path ++ suffix) (.place environment place) visit.before
+            (evalPlace visit.fuel config environment place visit.before) := by
+  let property : Nat → Arg → ExecutionState → List Nat → Prop := fun sourceFuel argument sourceBefore childPath =>
+    ∀ mutability place, argument = .byRef mutability place →
+      SourceHistory config sourceFuel childPath (.place environment place) sourceBefore
+        (evalPlace sourceFuel config environment place sourceBefore)
+  have headProperty : ∀ headFuel parameter parameters argument arguments before outcome path,
+      SourceHistory config (headFuel + 1) path (.arguments environment vars (parameter :: parameters) (argument :: arguments)) before outcome →
+      property headFuel argument before (path ++ [0]) := by
+    intro headFuel parameter parameters argument arguments before outcome path history mutability place same
+    subst argument
+    exact byReference_head_history history headFuel environment vars parameter parameters mutability place arguments rfl rfl
+  intro path history visit member mutability place byReference
+  obtain ⟨suffix, suffixPath, child⟩ := argumentReplay_sourcePaths replay property headProperty path history visit member
+  exact ⟨suffix, suffixPath, child mutability place byReference⟩
 
 theorem argumentReplay_visitExecutes {config : EvalConfig} {environment : RuntimeActivation} {vars : Array LocalVar}
     {fuel offset : Nat} {parameters : List Param} {arguments : List Arg} {before : ExecutionState}
@@ -182,6 +233,39 @@ theorem argumentReplay_byValueSources {config : EvalConfig} {environment : Runti
   rw [actual]
   exact kept
 
+theorem referenceArgument_events (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (vars : Array LocalVar) (parameter : Param) (mutability : Goose.Core.Mutability) (place : Place) (before : ExecutionState) :
+    (Goose.Proofs.Exit.stepState (evalPlace fuel config environment place before)).construction.events =
+      (Goose.Proofs.Exit.stepState (argumentValue fuel config environment vars parameter (.byRef mutability place) before)).construction.events := by
+  simp only [argumentValue, bind]
+  cases evalPlace fuel config environment place before <;> rfl
+
+theorem invokeCall_byReferenceSource (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
+    (origin : Goose.Core.OriginId) (callBefore before : ExecutionState) (id : Goose.Core.ImplId)
+    (implementation : Impl) (callableChannels : List Channel) (outcome : ExecutionStep (List Value))
+    (visits : List ArgumentInvocation) (visit : ArgumentInvocation) (mutability : Goose.Core.Mutability) (place : Place)
+    (history : SourceHistory config fuel path (.arguments environment implementation.vars implementation.params.toList arguments) before outcome)
+    (replay : ArgumentReplay config environment implementation.vars fuel 0 implementation.params.toList arguments before outcome visits)
+    (member : visit ∈ visits) (byReference : visit.argument = .byRef mutability place)
+    (execution : invokeCall (fuel + 1) config environment context arguments channels origin callBefore =
+      callArgumentsContinuation fuel config id implementation channels callableChannels origin outcome) :
+    ∃ suffix, StatementPath 0 suffix visit.ordinal ∧
+      SourceHistory config visit.fuel (path ++ suffix) (.place environment place) visit.before
+        (evalPlace visit.fuel config environment place visit.before) ∧
+      EventPrefix (Goose.Proofs.Exit.stepState (evalPlace visit.fuel config environment place visit.before)).construction.events
+        (Goose.Proofs.Exit.stepState (invokeCall (fuel + 1) config environment context arguments channels origin callBefore)).construction.events := by
+  obtain ⟨suffix, suffixPath, child⟩ := argumentReplay_byReferencePaths replay path history visit member mutability place byReference
+  refine ⟨suffix, suffixPath, child, ?_⟩
+  rw [referenceArgument_events visit.fuel config environment implementation.vars visit.parameter mutability place visit.before]
+  have actual := argumentReplay_visitExecutes replay visit member
+  rw [byReference] at actual
+  rw [actual]
+  exact invokeCall_argumentVisitPrefix fuel config environment context arguments channels origin callBefore before id implementation
+    callableChannels outcome visits visit replay member execution
+
+#print axioms invokeCall_byReferenceSource
+#print axioms referenceArgument_events
 theorem invokeCall_byValueSource (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (path : List Nat) (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
     (origin : Goose.Core.OriginId) (callBefore before : ExecutionState) (id : Goose.Core.ImplId)
@@ -202,6 +286,9 @@ theorem invokeCall_byValueSource (fuel : Nat) (config : EvalConfig) (environment
   rw [execution]
   exact eventPrefix_trans _ _ _ kept (callArgumentsContinuation_resultPrefix fuel config id implementation channels callableChannels origin outcome)
 
+#print axioms argumentReplay_byReferencePaths
+#print axioms argumentReplay_sourcePaths
+#print axioms byReference_head_history
 #print axioms invokeCall_byValueSource
 #print axioms argumentReplay_visitExecutes
 #print axioms argumentReplay_byValueSources
