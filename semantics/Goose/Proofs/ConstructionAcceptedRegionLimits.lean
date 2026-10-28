@@ -14,7 +14,7 @@ theorem ReceivingProtection.extend_unrelated_storage (layout : LayoutEnv) (state
     (valid : ReceivingProtection layout state live region)
     (unrelated : ∀ row, state.construction.destinations[region.destination]? = some row → row.storage ≠ storage) :
     ReceivingProtection layout state live (extendReceivingLimit region storage extent) := by
-  refine ⟨valid.present, ⟨valid.observations.backing, ?_⟩, ?_, ?_, valid.authority, valid.names⟩
+  refine ⟨valid.present, ⟨valid.observations.backing, ?_⟩, ?_, ?_, valid.authority, valid.authorityBound, valid.names⟩
   · intro root retained value found stored occurrence
     obtain ⟨bytes, run, fuel, finish, present, sampled, measured, lower, upper⟩ :=
       (valid.observations.observations root retained value found stored occurrence).observed

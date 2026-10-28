@@ -181,7 +181,7 @@ theorem FreshDestinationFrame.protection {before after : ExecutionState} (frame 
   obtain ⟨row, present⟩ := valid.present
   have found := (frame.lookup region.destination (Array.getElem?_eq_some_iff.mp present).1).trans present
   have objects := congrArg ExecutionState.objects frame.outer
-  refine ⟨⟨row, found⟩, frame.rooted_observations layout _ region.limit valid.observations, ?_, ?_, valid.authority, ?_⟩
+  refine ⟨⟨row, found⟩, frame.rooted_observations layout _ region.limit valid.observations, ?_, ?_, valid.authority, ?_, ?_⟩
   · intro actual actualFound
     have same : actual = row := Option.some.inj (actualFound.symm.trans found)
     subst actual
@@ -190,6 +190,8 @@ theorem FreshDestinationFrame.protection {before after : ExecutionState} (frame 
     have same : actual = row := Option.some.inj (actualFound.symm.trans found)
     subst actual
     exact valid.landing row present
+  · intro id member
+    exact Nat.lt_of_lt_of_le (valid.authorityBound id member) frame.size
   · intro root kept outside value valueFound stored occurrence id named
     exact valid.names root kept outside value (by rw [objects] at valueFound; exact valueFound) stored occurrence id named
 

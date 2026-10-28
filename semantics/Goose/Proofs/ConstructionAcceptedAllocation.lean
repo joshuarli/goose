@@ -96,7 +96,7 @@ theorem newDestination_receivingProtection (layout : LayoutEnv) (owner : Goose.C
       backed.newDestination_frame layout owner ty request origin knownCount before liveRoots
   have extent : storageExtent before destination.storage = 0 := by
     simp only [storageExtent, Array.getElem?_eq_none_iff.mpr fresh, Option.map_none, Option.getD_none]
-  refine ⟨⟨destination, present⟩, ⟨?_, ?_⟩, ?_, ?_, by simp [freshReceivingRegion], ?_⟩
+  refine ⟨⟨destination, present⟩, ⟨?_, ?_⟩, ?_, ?_, by simp [freshReceivingRegion], ?_, ?_⟩
   · exact ⟨fun root retained value found => nextBacking.values root retained.1 value found,
       fun root retained stored found => nextBacking.identities root retained.1 stored found⟩
   · intro root retained value found stored occurrence
@@ -111,6 +111,10 @@ theorem newDestination_receivingProtection (layout : LayoutEnv) (owner : Goose.C
     have same : row = destination := Option.some.inj (found.symm.trans present)
     subst row
     simpa only [freshReceivingRegion, extent] using Nat.zero_le destination.capability.start
+  · intro other member
+    have same : other = id := by simpa only [freshReceivingRegion, List.mem_singleton] using member
+    rw [same]
+    exact (Array.getElem?_eq_some_iff.mp present).1
   · intro root retained outside value found stored occurrence namedId named
     have oldFound : before.objects.lookup root = some value := by rw [objects] at found; exact found
     have bound := ((backed.values root retained value oldFound).occurrence_backing layout before value stored occurrence).named_bound

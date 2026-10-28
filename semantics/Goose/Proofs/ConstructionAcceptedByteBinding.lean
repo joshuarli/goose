@@ -16,7 +16,6 @@ theorem evalValue_byteOwner_bindWorld (fuel : Nat) (config : EvalConfig) (initia
     (compatible : RootTypeCompatible types root (.varr (.int .u8)))
     (conforms : LayoutConforms config.layout (.varr (.int .u8)))
     (fresh : before.objectOrdinals.lookup root = none)
-    (authority : ∀ region ∈ regions, ∀ id ∈ region.mutableDestinations, id < before.construction.destinations.size)
     (freshType : ∀ act scope id, root = .local act scope id → act < before.nextAct ∧ scope < before.nextScope)
     (freshSynthetic : ∀ id, root = .global id → config.module.globals.size ≤ id →
       id < config.module.globals.size + before.nextScope)
@@ -48,7 +47,7 @@ theorem evalValue_byteOwner_bindWorld (fuel : Nat) (config : EvalConfig) (initia
       stored.destination = some id → id ∉ region.mutableDestinations := by
     intro region member immutable id destination included
     have equal : before.construction.destinations.size = id := Option.some.inj (named.symm.trans destination)
-    have bounded := authority region member id included
+    have bounded := (world.protections region member).authorityBound id included
     omega
   obtain ⟨after, bound, extended, finalWorld⟩ := bindRoot_freshStored_extendedWorld config initialized evaluated
     ambient types live root (.varr (.int .u8)) stored regions pending nextWorld compatible conforms

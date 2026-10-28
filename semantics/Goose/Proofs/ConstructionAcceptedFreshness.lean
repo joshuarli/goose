@@ -97,7 +97,7 @@ private theorem acceptedWorld_clockFrame (config : EvalConfig) (initialized : Na
       exact world.backing.identities root retained stored found
   · intro region member
     have valid := world.protections region member
-    refine ⟨?_, ?_, ?_, ?_, valid.authority, ?_⟩
+    refine ⟨?_, ?_, ?_, ?_, valid.authority, ?_, ?_⟩
     · simpa only [construction] using valid.present
     · refine ⟨⟨?_, ?_⟩, ?_⟩
       · intro root retained value found
@@ -115,6 +115,7 @@ private theorem acceptedWorld_clockFrame (config : EvalConfig) (initialized : Na
       exact valid.cutoff row (by simpa only [construction] using found)
     · intro row found
       exact valid.landing row (by simpa only [construction] using found)
+    · simpa only [construction] using valid.authorityBound
     · intro root retained outside value found stored occurrence id named
       exact valid.names root retained outside value (by rw [objects] at found; exact found) stored occurrence id named
   · intro frame member

@@ -225,7 +225,7 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
     · exact afterBacking
     · intro region member
       have valid := world.protections region member
-      refine ⟨valid.present, ⟨⟨?_, ?_⟩, ?_⟩, valid.cutoff, valid.landing, valid.authority, ?_⟩
+      refine ⟨valid.present, ⟨⟨?_, ?_⟩, ?_⟩, valid.cutoff, valid.landing, valid.authority, valid.authorityBound, ?_⟩
       · intro other retained value present
         exact afterBacking.values other retained.1 value present
       · intro other retained stored present

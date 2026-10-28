@@ -222,7 +222,8 @@ theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
       exact ⟨oldTy, extended other oldTy declared⟩
   · intro region member
     have valid := world.protections region member
-    refine ⟨by simpa only [construction] using valid.present, ⟨⟨?_, ?_⟩, ?_⟩, ?_, ?_, valid.authority, ?_⟩
+    refine ⟨by simpa only [construction] using valid.present, ⟨⟨?_, ?_⟩, ?_⟩, ?_, ?_, valid.authority,
+      by simpa only [construction] using valid.authorityBound, ?_⟩
     · intro other retained value found
       exact backing.values other retained.1 value found
     · intro other retained value found
