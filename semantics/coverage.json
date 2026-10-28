@@ -626,8 +626,15 @@
   "feature": "Conditional condition agreement",
   "statement": "Accepted conditionals with or without else have successful-prefix agreement and non-timeout stop reflection through condition, selected branch and join. Arbitrary finite nesting composes into supported statement sequences and enclosing unit and value blocks.",
   "assumptions": "Accepted source and generated occurrence, supported condition expression, no loop context or trailing branch values, scalar assignment branch fragments and supplied expression prefix and stop families, related builder and retained demand.",
-  "limits": "Loop contexts, branch tail values and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "limits": "Branch tail values and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandIfRecursiveSyntax.lean; Goose/Lower/DemandIfRecursiveDepth.lean; Goose/Lower/DemandIfRecursiveStatements.lean; Goose/Lower/DemandIfRecursiveBlock.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Generated while demand prefixes and stops",
+  "statement": "Successful generated prefixes and non-timeout stops of a while statement reflect actual source execution across arbitrary finite iterations. The proof follows the generated header, condition, branch, recursive body and back edge, carrying retained demand and source state across re-entry.",
+  "assumptions": "Accepted source and generated occurrence, retained-map and builder invariants, a supported condition prefix and stop family, and a no-value body in the recursive scalar and conditional statement fragment; the enclosing while has no loop context.",
+  "limits": "Nested loops, other body statements, timeout reflection and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandIfRecursiveLoopBlock.lean; Goose/Lower/DemandWhilePrefixFamily.lean; Goose/Lower/DemandWhileStoppedFamily.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted byte-owner allocation timeout",
