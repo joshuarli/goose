@@ -57,6 +57,57 @@ theorem valueBlock_tail_history {config : EvalConfig} {α : Type} {fuel : Nat} {
     cases fuelEq
     exact tailChild value ready body
 
+def conditionalSyntax : SourceOperation α → Option (RuntimeActivation × Expr × Block × Block × Goose.Core.OriginId)
+  | .value environment (.ifE condition yes no origin) => some (environment, condition, yes, no, origin)
+  | _ => none
+
+theorem conditional_condition_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
+    {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}
+    (history : SourceHistory config fuel path operation before outcome) (sourceFuel : Nat)
+    (environment : RuntimeActivation) (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
+    (fuelEq : fuel = sourceFuel + 1) (operationEq : conditionalSyntax operation = some (environment, condition, yes, no, origin)) :
+    SourceHistory config sourceFuel (path ++ [0]) (.value environment condition) before (evalValue sourceFuel config environment condition before) := by
+  cases history <;> simp_all [conditionalSyntax]
+  case aggregate =>
+    rename_i shape children
+    cases shape <;> simp_all [conditionalSyntax]
+  case logical =>
+    rename_i isAnd first second left right
+    cases isAnd <;> simp_all [conditionalSyntax, logicalExpression]
+  case conditional =>
+    rename_i branch child
+    have actual := child.sound
+    simp only [execute] at actual
+    rw [actual]
+    exact child
+
+theorem conditional_branch_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
+    {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}
+    (history : SourceHistory config fuel path operation before outcome) (sourceFuel : Nat)
+    (environment : RuntimeActivation) (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
+    (value : Value) (middle : ExecutionState) (selected : Bool) (ready : ExecutionState)
+    (fuelEq : fuel = sourceFuel + 1) (operationEq : conditionalSyntax operation = some (environment, condition, yes, no, origin))
+    (conditionResult : evalValue sourceFuel config environment condition before = .ok value middle)
+    (checked : expectBool value middle = .ok selected ready) :
+    SourceHistory config sourceFuel (path ++ [if selected then 1 else 2]) (.block environment (if selected then yes else no)) ready
+      (execBlock sourceFuel config environment [] [] (if selected then yes else no) ready) := by
+  cases history <;> simp_all [conditionalSyntax]
+  case aggregate =>
+    rename_i shape children
+    cases shape <;> simp_all [conditionalSyntax]
+  case logical =>
+    rename_i isAnd first second left right
+    cases isAnd <;> simp_all [conditionalSyntax, logicalExpression]
+  case conditional =>
+    rename_i branch child
+    have actual := child.sound
+    simp only [execute] at actual
+    cases selected with
+    | false => exact (branch value middle).1 ready (actual.symm.trans conditionResult) checked
+    | true => exact (branch value middle).2 ready (actual.symm.trans conditionResult) checked
+
+#print axioms conditional_condition_history
+#print axioms conditional_branch_history
 #print axioms valueBlock_tail_history
 #print axioms valueBlock_child_history
 #print axioms valueBlock_body_history
