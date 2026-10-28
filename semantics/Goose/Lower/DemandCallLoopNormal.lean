@@ -1,4 +1,4 @@
-import Goose.Lower.DemandWhileCallSequence
+import Goose.Lower.DemandCallLoopBody
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound

@@ -1,4 +1,5 @@
 import Goose.Lower.DemandNestedCallLoopDepth
+import Goose.Lower.DemandWhileCallCursor
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound

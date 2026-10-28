@@ -1,4 +1,4 @@
-import Goose.Lower.DemandNestedCallLoopBody
+import Goose.Lower.DemandCallLoopMixedNormal
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
