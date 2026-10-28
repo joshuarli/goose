@@ -61,6 +61,46 @@ theorem execStmt_scopedByteOwner_observation (fuel typeFuel : Nat) (config : Eva
       unnamed resolved compatible True.intro fresh freshType freshSynthetic executed
   exact ⟨stored, published, publishedFrame, bound⟩
 
+theorem execStmt_byteOwner_observation (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (context id : Nat) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
+    (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
+    (typingNext : TypingEnv) (typingAfter : Nat)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation context)
+    (rootChecked : rpStmt frame.source (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
+      frame.rootCursor = .ok ((), rootAfter))
+    (typed : typeStatement frame.typingFuel frame.typing (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
+      frame.typingCounter = .ok (typingNext, typingAfter))
+    (byteOwner : (frame.typing.variables[id]?).map (·.ty) = some (.varr (.int .u8)))
+    (unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some id)) = none)
+    (executed : execStmt (fuel + 2) config frame.interpretation.environment
+      (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .ok (.normal .unit) after) :
+    ∃ (scopeInst : Nat) (stored : StoredValue) (published : ExecutionState),
+      Nonempty (FreshDestinationFrame before published) ∧
+      bindRoot (.local frame.interpretation.environment.act scopeInst id) (.stored stored) published = .ok () after := by
+  cases fuelCase : frame.typingFuel with
+  | zero =>
+    rw [fuelCase] at typed
+    change Except.error _ = Except.ok _ at typed
+    cases typed
+  | succ typeFuel =>
+    cases scopes : frame.interpretation.environment.scopes with
+    | nil =>
+      have impossible := executed
+      simp only [execStmt] at impossible
+      cases declared : frame.interpretation.environment.vars[id]? with
+      | none => simp only [declared, fault, EvalM.stop] at impossible; cases impossible
+      | some descriptor =>
+        simp only [declared, rootOf, scopes, List.find?_nil, fault, EvalM.stop, bind] at impossible
+        cases impossible
+    | cons scopeEntry outer =>
+      obtain ⟨scope, scopeInst⟩ := scopeEntry
+      obtain ⟨stored, published, result⟩ := execStmt_scopedByteOwner_observation fuel typeFuel config accepted frame
+        context id scope scopeInst outer bytes origin bytesOrigin before after ambient types live regions pending rootAfter
+        typingNext typingAfter world source phase rootChecked (by simpa only [fuelCase] using typed) byteOwner scopes unnamed executed
+      exact ⟨scopeInst, stored, published, result⟩
+
 theorem freshDestination_bindRoot_outside (before published after : ExecutionState)
     (root other : Goose.Core.RootInst) (stored : StoredValue)
     (frame : FreshDestinationFrame before published)
@@ -72,6 +112,32 @@ theorem freshDestination_bindRoot_outside (before published after : ExecutionSta
   · rw [bindRoot_lookup_other root other (.stored stored) published after bound different, frame.outer]
   · rw [bindRoot_ordinals_other root other (.stored stored) published after bound different, frame.outer]
 
+theorem execStmt_byteOwner_outside (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (context id : Nat) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
+    (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
+    (typingNext : TypingEnv) (typingAfter : Nat)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation context)
+    (rootChecked : rpStmt frame.source (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
+      frame.rootCursor = .ok ((), rootAfter))
+    (typed : typeStatement frame.typingFuel frame.typing (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)
+      frame.typingCounter = .ok (typingNext, typingAfter))
+    (byteOwner : (frame.typing.variables[id]?).map (·.ty) = some (.varr (.int .u8)))
+    (unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some id)) = none)
+    (executed : execStmt (fuel + 2) config frame.interpretation.environment
+      (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .ok (.normal .unit) after) :
+    ∀ other, (∀ scope id, other ≠ .local frame.interpretation.environment.act scope id) →
+      after.objects.lookup other = before.objects.lookup other ∧
+      after.objectOrdinals.lookup other = before.objectOrdinals.lookup other := by
+  intro other outside
+  obtain ⟨scopeInst, stored, published, ⟨publishedFrame⟩, bound⟩ :=
+    execStmt_byteOwner_observation fuel config accepted frame context id bytes origin bytesOrigin before after
+      ambient types live regions pending rootAfter typingNext typingAfter world source phase rootChecked typed byteOwner unnamed executed
+  exact freshDestination_bindRoot_outside before published after _ other stored publishedFrame bound (outside scopeInst id)
+
+#print axioms execStmt_byteOwner_outside
+#print axioms execStmt_byteOwner_observation
 #print axioms freshDestination_bindRoot_outside
 #print axioms execStmt_scopedByteOwner_observation
 
