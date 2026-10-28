@@ -132,6 +132,25 @@ def callDeliveryResult (fuel : Nat) (config : EvalConfig) (origin : Goose.Core.O
   | .escape address carriers state => .escape address carriers state
   | .jump target kind state => .jump target kind state
 
+def callValueResult (origin : Goose.Core.OriginId) : ExecutionStep (List Carrier) → ExecutionStep Value
+  | .ok carriers state => (do
+      publishCarriers origin carriers
+      carrierValue (← singleCarrier carriers)) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+theorem valueCall_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl) (origin : Goose.Core.OriginId)
+    (before : ExecutionState) (contextFound : config.module.contexts[contextId]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (resultsEmpty : implementation.results = #[]) :
+    evalValue (fuel + 1) config environment (.call contextId [] origin) before =
+      callValueResult origin (invokeCall fuel config environment contextId [] [] origin before) := by
+  simp only [evalValue, getImplementation, contextFound, implementationFound, resultsEmpty,
+    Array.toList_empty, channelsFor, List.mapM_nil, bind, pure, callValueResult]
+  cases invokeCall fuel config environment contextId [] [] origin before <;> rfl
+
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
   | timeout (path : List Nat) (operation : SourceOperation α) (before : ExecutionState) :
@@ -184,6 +203,15 @@ inductive SourceHistory (config : EvalConfig) :
           (execActivationBody fuel config activation [] block before)) :
       SourceHistory config (fuel + 1) path (.activation activation block origin) before
         (activationEnterResult fuel config activation block origin before)
+  | valueCall {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
+      {origin : Goose.Core.OriginId} {before : ExecutionState} {context : Context} {implementation : Impl}
+      {outcome : ExecutionStep (List Carrier)}
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (resultsEmpty : implementation.results = #[])
+      (child : SourceHistory config fuel (path ++ [0]) (.call environment contextId origin) before outcome) :
+      SourceHistory config (fuel + 1) path (.value environment (.call contextId [] origin)) before
+        (callValueResult origin outcome)
   | callOne {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
       {origin : Goose.Core.OriginId} {before : ExecutionState} {context : Context} {implementation : Impl}
       (contextFound : config.module.contexts[contextId]? = some context)
@@ -265,6 +293,11 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   | @activation fuel path activation block origin before body ihBody =>
       simp only [execute]
       exact activationEnter_source fuel config activation block origin before
+  | @valueCall fuel path environment contextId origin before context implementation outcome contextFound
+      implementationFound resultsEmpty child ih =>
+      simp only [execute] at ih ⊢
+      rw [valueCall_source fuel config environment contextId context implementation origin before
+        contextFound implementationFound resultsEmpty, ih]
   | callOne contextFound implementationFound resultsEmpty =>
       exact emptyCall_one _ _ _ _ _ _ _ contextFound implementationFound resultsEmpty
   | callDepth contextFound implementationFound parametersEmpty resultsEmpty depth =>
@@ -358,6 +391,13 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (origin : Goose.Core.OriginId)
       (body : ∀ environment, SupportedOperation config (.statements environment statements)) :
       SupportedOperation config (.activation activation (.mk scope statements none) origin)
+  | valueCall (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (origin : Goose.Core.OriginId)
+      (context : Context) (implementation : Impl)
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (resultsEmpty : implementation.results = #[])
+      (callee : SupportedOperation config (.call environment contextId origin)) :
+      SupportedOperation config (.value environment (.call contextId [] origin))
   | call (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (origin : Goose.Core.OriginId)
       (context : Context) (implementation : Impl)
       (contextFound : config.module.contexts[contextId]? = some context)
@@ -460,6 +500,12 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute]
           rw [activationEnter_source]
           exact .activation body
+      | valueCall environment contextId origin context implementation contextFound implementationFound resultsEmpty callee =>
+          have child := ih (.call environment contextId origin) (path ++ [0]) before callee
+          simp only [execute] at child ⊢
+          rw [valueCall_source fuel config environment contextId context implementation origin before
+            contextFound implementationFound resultsEmpty]
+          exact .valueCall contextFound implementationFound resultsEmpty child
       | call environment contextId origin context implementation contextFound implementationFound parametersEmpty resultsEmpty body =>
           cases fuel with
           | zero =>
@@ -630,6 +676,39 @@ theorem witness_call : ∃ after,
     rw [actual] at history
     exact history
 
+theorem witness_valueCall : ∃ after,
+    evalValue 40 callWitnessConfig witnessEnvironment (.call 0 [] 0) .initial = .ok .unit after ∧
+    SourceHistory callWitnessConfig 40 [] (.value witnessEnvironment (.call 0 [] 0)) .initial (.ok .unit after) := by
+  have bodySupported : ∀ environment, SupportedOperation callWitnessConfig
+      (.statements environment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
+    intro environment
+    exact .sequence environment (.expression environment 0 (.value environment
+      (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
+  have callee : SupportedOperation callWitnessConfig (.call witnessEnvironment 0 0) := by
+    apply SupportedOperation.call witnessEnvironment 0 0 callWitnessContext callWitnessImplementation
+    · rfl
+    · rfl
+    · rfl
+    · rfl
+    · intro act
+      exact .activation _ 0 _ 0 bodySupported
+  have supported : SupportedOperation callWitnessConfig (.value witnessEnvironment (.call 0 [] 0)) :=
+    .valueCall witnessEnvironment 0 0 callWitnessContext callWitnessImplementation rfl rfl rfl callee
+  have history := history_exists 40 callWitnessConfig (.value witnessEnvironment (.call 0 [] 0)) [] .initial supported
+  refine ⟨witnessState (evalValue 40 callWitnessConfig witnessEnvironment (.call 0 [] 0) .initial), ?_, ?_⟩
+  · unfold callWitnessConfig witnessEnvironment witnessState
+    cbv
+  · have actual : evalValue 40 callWitnessConfig witnessEnvironment (.call 0 [] 0) .initial =
+        .ok .unit (witnessState (evalValue 40 callWitnessConfig witnessEnvironment (.call 0 [] 0) .initial)) := by
+      unfold callWitnessConfig witnessEnvironment witnessState
+      cbv
+    change SourceHistory callWitnessConfig 40 [] (.value witnessEnvironment (.call 0 [] 0)) .initial
+      (evalValue 40 callWitnessConfig witnessEnvironment (.call 0 [] 0) .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_valueCall
+
 #print axioms witness_call
 
 #print axioms witness_activationEntry
@@ -638,6 +717,7 @@ theorem witness_call : ∃ after,
 
 #print axioms witness_nestedFill
 
+#print axioms valueCall_source
 #print axioms emptyCall_enter
 #print axioms emptyCall_depth
 #print axioms emptyCall_one
