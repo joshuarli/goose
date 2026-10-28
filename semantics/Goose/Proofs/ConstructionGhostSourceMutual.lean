@@ -640,6 +640,17 @@ inductive SourceHistory (config : EvalConfig) :
           (evalArguments fuel config environment vars parameters arguments middle)) :
       SourceHistory config (fuel + 1) path (.arguments environment vars (parameter :: parameters) (.byVal operand :: arguments))
         before (argumentResult fuel config environment vars parameters arguments outcome)
+  | argumentReference {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {vars : Array LocalVar}
+      {parameter : Param} {parameters : List Param} {mutability : Goose.Core.Mutability} {place : Place} {arguments : List Arg}
+      {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.place environment place) before
+        (evalPlace fuel config environment place before))
+      (tail : ∀ location middle, evalPlace fuel config environment place before = .ok location middle →
+        SourceHistory config fuel (path ++ [1]) (.arguments environment vars parameters arguments) middle
+          (evalArguments fuel config environment vars parameters arguments middle)) :
+      SourceHistory config (fuel + 1) path
+        (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments)) before
+        (evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.byRef mutability place :: arguments) before)
   | expression {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -746,6 +757,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       simp only [execute] at ih ⊢
       rw [fixedElement_execution fuel config environment parent element operand before fixed, ih]
   | nonfixedElement => rfl
+  | argumentReference => rfl
   | argumentsDone => simp [execute, evalArguments, pure]
   | @argumentValue fuel path environment vars parameter parameters operand arguments before outcome child tail ihChild ihTail =>
       simp only [execute] at ihChild ⊢
@@ -991,6 +1003,11 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (child : SupportedOperation config (.value environment operand))
       (tail : SupportedOperation config (.arguments environment vars parameters arguments)) :
       SupportedOperation config (.arguments environment vars (parameter :: parameters) (.byVal operand :: arguments))
+  | argumentReference (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param)
+      (parameters : List Param) (mutability : Goose.Core.Mutability) (place : Place) (arguments : List Arg)
+      (child : SupportedOperation config (.place environment place))
+      (tail : SupportedOperation config (.arguments environment vars parameters arguments)) :
+      SupportedOperation config (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments))
   | producer (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
       SupportedOperation config (.producer environment expression)
 
@@ -1301,6 +1318,10 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute]
           rw [valueArgument_source]
           exact .argumentValue child tail
+      | argumentReference environment vars parameter parameters mutability place arguments childSupported tailSupported =>
+          refine .argumentReference (ih (.place environment place) (path ++ [0]) before childSupported) ?_
+          intro location middle result
+          exact ih (.arguments environment vars parameters arguments) (path ++ [1]) middle tailSupported
       | producer environment supported =>
           exact ProducerHistory.toSource (producerHistory_exists (fuel + 1) config environment path _ before supported)
 
@@ -1938,6 +1959,65 @@ theorem witness_parameterValueCall : ∃ after,
       (evalValue 40 parameterConfig witnessEnvironment (.call 1 parameterArguments 0) .initial) at history
     rw [actual] at history
     exact history
+
+private def referenceTargetImplementation : Impl := ⟨"target", #[⟨0, .byRef⟩], #[], #[],
+  .mk 1 [.print [.text "y"] 0] none, .unknown⟩
+private def referenceConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[], #[parameterSourceImplementation, referenceTargetImplementation],
+    #[parameterSourceContext, parameterTargetContext], 0, #[], #[], #[]⟩⟩
+private def referenceArguments : List Arg := [.byRef .mutable (.deref (.call 0 [] 0))]
+
+theorem witness_referenceArgumentStop : ∃ after,
+    invokeCall 40 referenceConfig witnessEnvironment 1 referenceArguments [] 0 .initial = .stop (.fault .shape) after ∧
+    after.construction.stdout.data.toList = [120, 10] ∧ after.nextAct = 1 ∧
+    SourceHistory referenceConfig 40 [] (.callWith witnessEnvironment 1 referenceArguments 0) .initial (.stop (.fault .shape) after) := by
+  have sourceBody : ∀ environment, SupportedOperation referenceConfig (.statements environment [.print [.text "x"] 0]) := by
+    intro environment
+    exact .sequence environment (.printText environment "x" 0) (.empty environment)
+  have sourceCall : SupportedOperation referenceConfig (.call witnessEnvironment 0 0) := by
+    apply SupportedOperation.call witnessEnvironment 0 0 parameterSourceContext parameterSourceImplementation
+    · rfl
+    · rfl
+    · rfl
+    · rfl
+    · intro act
+      exact .activation _ 0 _ 0 sourceBody
+  have args : SupportedOperation referenceConfig
+      (.arguments witnessEnvironment referenceTargetImplementation.vars referenceTargetImplementation.params.toList referenceArguments) := by
+    unfold referenceTargetImplementation referenceArguments
+    exact .argumentReference _ _ _ _ .mutable _ _
+      (.dereferencePlace witnessEnvironment _
+        (.valueCall witnessEnvironment 0 0 parameterSourceContext parameterSourceImplementation rfl rfl rfl sourceCall))
+      (.argumentsDone _ _)
+  have targetBody : ∀ environment, SupportedOperation referenceConfig (.statements environment [.print [.text "y"] 0]) := by
+    intro environment
+    exact .sequence environment (.printText environment "y" 0) (.empty environment)
+  have supported : SupportedOperation referenceConfig (.callWith witnessEnvironment 1 referenceArguments 0) := by
+    apply SupportedOperation.callWith witnessEnvironment 1 referenceArguments 0 parameterTargetContext referenceTargetImplementation
+    · rfl
+    · rfl
+    · rfl
+    · exact args
+    · intro act pre
+      exact .boundActivation _ pre 1 _ 0 targetBody
+  have history := history_exists 40 referenceConfig (.callWith witnessEnvironment 1 referenceArguments 0) [] .initial supported
+  refine ⟨witnessState (invokeCall 40 referenceConfig witnessEnvironment 1 referenceArguments [] 0 .initial), ?_, ?_, ?_, ?_⟩
+  · unfold witnessState referenceConfig referenceTargetImplementation referenceArguments parameterSourceContext parameterTargetContext parameterSourceImplementation witnessEnvironment
+    cbv
+  · unfold witnessState referenceConfig referenceTargetImplementation referenceArguments parameterSourceContext parameterTargetContext parameterSourceImplementation witnessEnvironment
+    cbv
+  · unfold witnessState referenceConfig referenceTargetImplementation referenceArguments parameterSourceContext parameterTargetContext parameterSourceImplementation witnessEnvironment
+    cbv
+  · have actual : invokeCall 40 referenceConfig witnessEnvironment 1 referenceArguments [] 0 .initial =
+        .stop (.fault .shape) (witnessState (invokeCall 40 referenceConfig witnessEnvironment 1 referenceArguments [] 0 .initial)) := by
+      unfold witnessState referenceConfig referenceTargetImplementation referenceArguments parameterSourceContext parameterTargetContext parameterSourceImplementation witnessEnvironment
+      cbv
+    change SourceHistory referenceConfig 40 [] (.callWith witnessEnvironment 1 referenceArguments 0) .initial
+      (invokeCall 40 referenceConfig witnessEnvironment 1 referenceArguments [] 0 .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_referenceArgumentStop
 
 #print axioms witness_parameterValueCall
 
