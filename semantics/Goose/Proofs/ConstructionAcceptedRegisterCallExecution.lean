@@ -53,7 +53,7 @@ theorem invokeCall_scalarLocal_prefix (fuel : Nat) (config : EvalConfig) (accept
       AcceptedWorld config caller.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
       FutureGlobalsClear config caller.initialized (Goose.Proofs.Exit.stepState outcome) ∧
       (match outcome with
-       | .ok carriers _ => ∃ value, carriers = [.register value] ∧ ValueRepresentation ty value
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation ty value
        | .stop .. => True
        | .escape .. | .jump .. => False) := by
   have clear : FutureGlobalsClear config caller.initialized state := source.futureGlobals
@@ -143,7 +143,7 @@ theorem invokeCall_scalarLocal_prefix (fuel : Nat) (config : EvalConfig) (accept
             simpa only [bind, entered] using deliverCarriers_register (fuel + 1) config ty value origin
               { after with activations := after.activations.filter (fun current => current.act != activation.act) }
           rw [callRun]
-          exact ⟨nextTypes, nextLive, ambient, extend, Nat.le_trans (Nat.le_succ _) bodyActClock, bodyScopeClock, initialized ▸ finishedWorld, initialized ▸ finishedClear, value, rfl, represented⟩
+          exact ⟨nextTypes, nextLive, ambient, extend, Nat.le_trans (Nat.le_succ _) bodyActClock, bodyScopeClock, initialized ▸ finishedWorld, initialized ▸ finishedClear, rfl, value, rfl, represented⟩
 
 theorem evalValue_scalarCall_prefix (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
@@ -171,7 +171,7 @@ theorem evalValue_scalarCall_prefix (fuel : Nat) (config : EvalConfig) (accepted
       AcceptedWorld config caller.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
       FutureGlobalsClear config caller.initialized (Goose.Proofs.Exit.stepState outcome) ∧
       (match outcome with
-       | .ok value _ => ValueRepresentation ty value
+       | .ok value _ => nextAmbient = ambient ∧ ValueRepresentation ty value
        | .stop .. => True
        | .escape .. | .jump .. => False) := by
   cases fuel with
@@ -193,13 +193,13 @@ theorem evalValue_scalarCall_prefix (fuel : Nat) (config : EvalConfig) (accepted
     | escape address carriers after | jump target kind after => simp [execution] at callResult
     | ok carriers after =>
       simp only [execution, Goose.Proofs.Exit.stepState] at callActClock callScopeClock callWorld callClear callResult
-      obtain ⟨value, rfl, represented⟩ := callResult
+      obtain ⟨ambientSame, value, rfl, represented⟩ := callResult
       have evaluated : evalValue (fuel + 1) config caller.interpretation.environment (.call target [] origin) state = .ok value after := by
         simp [evalValue, getImplementation, contextAt, implementationAt, channelsFor, results, execution,
           publishCarriers, liftConstruction, publishOperation, preflightPublication, ConstructionM.get,
           List.mapM_cons, List.mapM_nil, List.forIn_nil, singleCarrier, carrierValue, bind, pure, Except.bind, Except.pure]
       rw [evaluated]
-      exact ⟨nextTypes, nextLive, nextAmbient, extend, callActClock, callScopeClock, callWorld, callClear, represented⟩
+      exact ⟨nextTypes, nextLive, nextAmbient, extend, callActClock, callScopeClock, callWorld, callClear, ambientSame, represented⟩
 
 theorem evalValue_scalarCall_emptyCaller (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
@@ -229,7 +229,7 @@ theorem evalValue_scalarCall_emptyCaller (fuel : Nat) (config : EvalConfig) (acc
       AcceptedFrame config accepted caller (Goose.Proofs.Exit.stepState outcome) nextTypes ∧
       FutureGlobalsClear config caller.initialized (Goose.Proofs.Exit.stepState outcome) ∧
       (match outcome with
-       | .ok value _ => ValueRepresentation ty value
+       | .ok value _ => nextAmbient = ambient ∧ ValueRepresentation ty value
        | .stop .. => True
        | .escape .. | .jump .. => False) := by
   obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, clear, result⟩ :=
