@@ -1,10 +1,11 @@
 import Goose.Proofs.ConstructionGhostSourceTransition
 import Goose.Proofs.ConstructionGhostBlock
 import Goose.Proofs.ConstructionGhostResultScopeCore
+import Goose.Proofs.ConstructionGhostElementCore
 
 namespace Goose.Proofs.ConstructionGhostSourceMutual
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition
-open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultScope
+open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultScope Goose.Proofs.ConstructionGhostElements
 
 inductive SourceOperation : Type → Type
   | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
@@ -14,6 +15,7 @@ inductive SourceOperation : Type → Type
   | activationBody (activation : RuntimeActivation) (block : Block) : SourceOperation (List Carrier)
   | activation (activation : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
   | call (environment : RuntimeActivation) (context : Goose.Core.ContextId) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
+  | element (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty) (operand : Expr) : SourceOperation Unit
   | arguments (environment : RuntimeActivation) (vars : Array LocalVar) (parameters : List Param)
       (arguments : List Arg) : SourceOperation (List Value)
   | producer (environment : RuntimeActivation) (expression : Expr) : SourceOperation (List Carrier)
@@ -26,6 +28,7 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .activationBody activation block => execActivationBody fuel config activation [] block
   | .activation activation block origin => enterActivation fuel config activation [] block origin
   | .call environment context origin => invokeCall fuel config environment context [] [] origin
+  | .element environment parent element operand => buildElement fuel config environment parent element operand
   | .arguments environment vars parameters arguments => evalArguments fuel config environment vars parameters arguments
   | .producer environment expression => evalProduce fuel config environment [] expression
 
@@ -273,6 +276,12 @@ inductive SourceHistory (config : EvalConfig) :
       (origin : Goose.Core.OriginId) (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.statement environment (.print [.text text] origin)) before
         (execStmt (fuel + 1) config environment (.print [.text text] origin) before)
+  | fixedElement {fuel : Nat} {path : List Nat} {environment : RuntimeActivation}
+      {parent : Goose.Core.DestinationId} {element : Ty} {operand : Expr} {before : ExecutionState}
+      {outcome : ExecutionStep Value} (fixed : element.nonfixed = false)
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
+      SourceHistory config (fuel + 1) path (.element environment parent element operand) before
+        (fixedElementContinuation fuel config parent element operand outcome)
   | argumentsDone (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (vars : Array LocalVar)
       (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.arguments environment vars [] []) before (.ok [] before)
@@ -308,7 +317,7 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
@@ -364,6 +373,9 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       simp only [bind, ih, callDeliveryResult]
       cases outcome <;> rfl
   | printText => rfl
+  | @fixedElement fuel path environment parent element operand before outcome fixed child ih =>
+      simp only [execute] at ih ⊢
+      rw [fixedElement_execution fuel config environment parent element operand before fixed, ih]
   | argumentsDone => simp [execute, evalArguments, pure]
   | @argumentValue fuel path environment vars parameter parameters operand arguments before outcome child tail ihChild ihTail =>
       simp only [execute] at ihChild ⊢
@@ -477,6 +489,10 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       SupportedOperation config (.call environment contextId origin)
   | printText (environment : RuntimeActivation) (text : String) (origin : Goose.Core.OriginId) :
       SupportedOperation config (.statement environment (.print [.text text] origin))
+  | fixedElement (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty)
+      (operand : Expr) (fixed : element.nonfixed = false)
+      (child : SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.element environment parent element operand)
   | argumentsDone (environment : RuntimeActivation) (vars : Array LocalVar) :
       SupportedOperation config (.arguments environment vars [] [])
   | argumentValue (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param)
@@ -492,7 +508,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildElement, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -631,6 +647,11 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
                   (SourceHistory.callDepth contextFound implementationFound parametersEmpty resultsEmpty full :
                     SourceHistory config (fuel + 2) path (.call environment contextId origin) before _)
       | printText environment text origin => exact .printText fuel path environment text origin before
+      | fixedElement environment parent element operand fixed childSupported =>
+          have child := ih (.value environment operand) (path ++ [0]) before childSupported
+          simp only [execute] at child ⊢
+          rw [fixedElement_execution fuel config environment parent element operand before fixed]
+          exact .fixedElement fixed child
       | argumentsDone environment vars => simpa [execute, evalArguments, pure] using
           (SourceHistory.argumentsDone fuel path environment vars before :
             SourceHistory config (fuel + 1) path (.arguments environment vars [] []) before _)
@@ -861,23 +882,26 @@ private def sideEffectConfig : EvalConfig := ⟨.release,
   ⟨#[], #[], #[], #[sideEffectImplementation], #[sideEffectContext], 0, #[], #[], #[]⟩⟩
 private def sideEffectFill : Expr := .fill (.arr .unit 3) (.call 0 [] 0) 0
 
+private theorem sideEffectCallee_supported (environment : RuntimeActivation) :
+    SupportedOperation sideEffectConfig (.call environment 0 0) := by
+  have bodySupported : ∀ scopedEnvironment, SupportedOperation sideEffectConfig
+      (.statements scopedEnvironment [.print [.text "x"] 0]) := by
+    intro scopedEnvironment
+    exact .sequence scopedEnvironment (.printText scopedEnvironment "x" 0) (.empty scopedEnvironment)
+  apply SupportedOperation.call environment 0 0 sideEffectContext sideEffectImplementation
+  · rfl
+  · rfl
+  · rfl
+  · rfl
+  · intro act
+    exact .activation _ 0 _ 0 bodySupported
+
 theorem witness_fillSourceOnce : ∃ after,
     evalValue 40 sideEffectConfig witnessEnvironment sideEffectFill .initial = .ok (.fixed #[.unit, .unit, .unit]) after ∧
     after.construction.stdout.data.toList = [120, 10] ∧
     SourceHistory sideEffectConfig 40 [] (.value witnessEnvironment sideEffectFill) .initial
       (.ok (.fixed #[.unit, .unit, .unit]) after) := by
-  have bodySupported : ∀ environment, SupportedOperation sideEffectConfig
-      (.statements environment [.print [.text "x"] 0]) := by
-    intro environment
-    exact .sequence environment (.printText environment "x" 0) (.empty environment)
-  have callee : SupportedOperation sideEffectConfig (.call witnessEnvironment 0 0) := by
-    apply SupportedOperation.call witnessEnvironment 0 0 sideEffectContext sideEffectImplementation
-    · rfl
-    · rfl
-    · rfl
-    · rfl
-    · intro act
-      exact .activation _ 0 _ 0 bodySupported
+  have callee := sideEffectCallee_supported witnessEnvironment
   have valueCall : SupportedOperation sideEffectConfig (.value witnessEnvironment (.call 0 [] 0)) :=
     .valueCall witnessEnvironment 0 0 sideEffectContext sideEffectImplementation rfl rfl rfl callee
   have supported : SupportedOperation sideEffectConfig (.value witnessEnvironment sideEffectFill) :=
@@ -896,6 +920,39 @@ theorem witness_fillSourceOnce : ∃ after,
       (evalValue 40 sideEffectConfig witnessEnvironment sideEffectFill .initial) at history
     rw [actual] at history
     exact history
+
+private def elementWitnessBefore : ExecutionState :=
+  witnessState (newDestination sideEffectConfig.layout 0 (.varr (.int .i64)) .value 0 none (some 1) .initial)
+
+theorem witness_elementSourceCall : ∃ after,
+    newDestination sideEffectConfig.layout 0 (.varr (.int .i64)) .value 0 none (some 1) .initial =
+      .ok 0 elementWitnessBefore ∧
+    buildElement 40 sideEffectConfig witnessEnvironment 0 (.int .i64) (.call 0 [] 0) elementWitnessBefore =
+      .stop (.fault .shape) after ∧ after.construction.stdout.data.toList = [120, 10] ∧
+    SourceHistory sideEffectConfig 40 [] (.element witnessEnvironment 0 (.int .i64) (.call 0 [] 0))
+      elementWitnessBefore (.stop (.fault .shape) after) := by
+  have callee := sideEffectCallee_supported witnessEnvironment
+  have operand : SupportedOperation sideEffectConfig (.value witnessEnvironment (.call 0 [] 0)) :=
+    .valueCall witnessEnvironment 0 0 sideEffectContext sideEffectImplementation rfl rfl rfl callee
+  have history := history_exists 40 sideEffectConfig (.element witnessEnvironment 0 (.int .i64) (.call 0 [] 0))
+    [] elementWitnessBefore (.fixedElement witnessEnvironment 0 (.int .i64) (.call 0 [] 0) rfl operand)
+  refine ⟨witnessState (buildElement 40 sideEffectConfig witnessEnvironment 0 (.int .i64) (.call 0 [] 0) elementWitnessBefore), ?_, ?_, ?_, ?_⟩
+  · unfold elementWitnessBefore witnessState sideEffectConfig sideEffectContext sideEffectImplementation
+    cbv
+  · unfold elementWitnessBefore witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · unfold elementWitnessBefore witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · have actual : buildElement 40 sideEffectConfig witnessEnvironment 0 (.int .i64) (.call 0 [] 0) elementWitnessBefore =
+        .stop (.fault .shape) (witnessState (buildElement 40 sideEffectConfig witnessEnvironment 0 (.int .i64) (.call 0 [] 0) elementWitnessBefore)) := by
+      unfold elementWitnessBefore witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+      cbv
+    change SourceHistory sideEffectConfig 40 [] (.element witnessEnvironment 0 (.int .i64) (.call 0 [] 0))
+      elementWitnessBefore (buildElement 40 sideEffectConfig witnessEnvironment 0 (.int .i64) (.call 0 [] 0) elementWitnessBefore) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_elementSourceCall
 
 #print axioms witness_fillSourceOnce
 
