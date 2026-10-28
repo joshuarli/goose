@@ -43,6 +43,7 @@ theorem mixedLocalRegisterParameter_call_observedWorld {expression : Expr} (shap
         ValueRepresentation resultTy value ∧ RootTypesExtend types nextTypes ∧
         (∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local state.nextAct scope id) → nextTypes root = types root) ∧
         AcceptedWorld config config.module.globals.size after ambient nextTypes nextLive nextRegions pending ∧
+        (state.nextAct ≤ after.nextAct ∧ state.nextScope ≤ after.nextScope) ∧
         (∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local state.nextAct scope id) →
           after.objects.lookup root = state.objects.lookup root ∧ after.objectOrdinals.lookup root = state.objectOrdinals.lookup root)
     | _ => False := by
@@ -126,17 +127,21 @@ theorem mixedLocalRegisterParameter_call_observedWorld {expression : Expr} (shap
             simpa [registerRootType, act, different] using unchanged
           | ok carriers after =>
             simp only [body] at bodyResult
-            obtain ⟨returned, nextTypes, nextLive, nextRegions, equal, represented, bodyExtended, bodyProtected, finalWorld, bodyObserved⟩ := bodyResult
+            obtain ⟨returned, nextTypes, nextLive, nextRegions, equal, represented, bodyExtended, bodyProtected, finalWorld, bodyCounters, bodyObserved⟩ := bodyResult
             subst carriers
             have outer' : OwnershipAmbient.withoutActivation activation.act ambient = ambient := by simpa [act] using outer
             have finished := finalWorld.finishEmptyCall config config.module.globals.size after activation ambient nextTypes nextLive nextRegions pending outer'
             simp [bind, finishActivation, body, finishChannels, landCarriersInto, deliverCarriers, pure, channels]
             refine ⟨returned, rfl, represented, nextTypes,
-              (fun root ty found => bodyExtended root ty (boundExtended root ty found)), ?_, ⟨nextLive, nextRegions, finished⟩, ?_⟩
+              (fun root ty found => bodyExtended root ty (boundExtended root ty found)), ?_, ⟨nextLive, nextRegions, finished⟩, ?_, ?_⟩
             · intro root outside
               have unchanged := bodyProtected root (by simpa [act] using outside)
               have different := outside state.nextScope 0
               simpa [registerRootType, act, different] using unchanged
+            · have boundCounters := bindAll_single_counters activation helper.body.scope parameter.var value state boundState
+                (by simpa [pushed] using bound)
+              change state.nextAct ≤ after.nextAct ∧ state.nextScope ≤ after.nextScope
+              omega
             · intro root outside
               have bodyOutside := bodyObserved root (by simpa [act] using outside)
               have bindOutside := bindAll_single_outside activation helper.body.scope parameter.var value state boundState
@@ -187,7 +192,7 @@ theorem mixedLocalRegisterParameter_call_world {expression : Expr} (shape : Acce
   | jump target kind after => simpa only [outcome] using result
   | ok carriers after =>
     simp only [outcome] at result ⊢
-    obtain ⟨value, nextTypes, nextLive, nextRegions, eq, represented, extended, protectedTypes, finalWorld, observations⟩ := result
+    obtain ⟨value, nextTypes, nextLive, nextRegions, eq, represented, extended, protectedTypes, finalWorld, counters, observations⟩ := result
     exact ⟨value, nextTypes, nextLive, nextRegions, eq, represented, extended, protectedTypes, finalWorld⟩
 
 #print axioms mixedLocalRegisterParameter_call_world

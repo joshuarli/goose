@@ -42,6 +42,7 @@ theorem mixedLocal_registerResultBody_observedWorld (fuel : Nat) (config : EvalC
         ValueRepresentation ty value ∧ RootTypesExtend types nextTypes ∧
         (∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local activation.act scope id) → nextTypes root = types root) ∧
         AcceptedWorld config config.module.globals.size after (.callChannels activation [] :: ambient) nextTypes nextLive nextRegions pending ∧
+        (after.nextAct = boundState.nextAct ∧ after.nextScope = boundState.nextScope) ∧
         (∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local activation.act scope id) →
           after.objects.lookup root = boundState.objects.lookup root ∧
           after.objectOrdinals.lookup root = boundState.objectOrdinals.lookup root)
@@ -109,7 +110,7 @@ theorem mixedLocal_registerResultBody_observedWorld (fuel : Nat) (config : EvalC
     cases fuel with
     | zero => simp [execStmts, timeout, EvalM.stop] at outcome
     | succ fuel =>
-      simp only [outcome, Goose.Proofs.Exit.stepState] at finalWorld finalSource finalObserved finalReplay
+      simp only [outcome, Goose.Proofs.Exit.stepState] at finalWorld finalSource finalCounters finalObserved finalReplay
       let blockFrame := implementationBodyFrame config entryFrame
       have blockPosition : SourcePosition accepted blockFrame (.block blockFrame.source.impl.body) :=
         .implementationBody entryFrame contextId entryPhase source.compatible
@@ -188,12 +189,13 @@ theorem mixedLocal_registerResultBody_observedWorld (fuel : Nat) (config : EvalC
         rw [actual]
         have released := finalWorld.releaseScope config next.initialized middle (.callChannels activation [] :: ambient)
           nextTypes nextLive nextRegions pending activation helper.body.scope before.nextScope
-        refine ⟨value, nextTypes, _, nextRegions, rfl, valid.represented, extended, unaffected, nextFull ▸ released, ?_⟩
-        intro root outside
-        have scopeObserved := releaseScopeState_outsideActivation activation helper.body.scope before.nextScope middle root outside
-        have bodyObserved := finalObserved root (by simpa [entryFrame, entryStatementsFrame, blockStatementsFrame,
-          RootInterpretation.enterScope, environment] using outside)
-        exact ⟨scopeObserved.1.trans bodyObserved.1, scopeObserved.2.trans bodyObserved.2⟩
+        refine ⟨value, nextTypes, _, nextRegions, rfl, valid.represented, extended, unaffected, nextFull ▸ released, ?_, ?_⟩
+        · simpa [releaseScopeState] using finalCounters
+        · intro root outside
+          have scopeObserved := releaseScopeState_outsideActivation activation helper.body.scope before.nextScope middle root outside
+          have bodyObserved := finalObserved root (by simpa [entryFrame, entryStatementsFrame, blockStatementsFrame,
+            RootInterpretation.enterScope, environment] using outside)
+          exact ⟨scopeObserved.1.trans bodyObserved.1, scopeObserved.2.trans bodyObserved.2⟩
 
 theorem mixedLocal_registerResultBody_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (activation : RuntimeActivation) (pre : List (Nat × Value))
@@ -236,7 +238,7 @@ theorem mixedLocal_registerResultBody_world (fuel : Nat) (config : EvalConfig) (
   | jump target kind after => simpa only [outcome] using result
   | ok carriers after =>
     simp only [outcome] at result ⊢
-    obtain ⟨value, nextTypes, nextLive, nextRegions, eq, represented, extended, protectedTypes, finalWorld, observations⟩ := result
+    obtain ⟨value, nextTypes, nextLive, nextRegions, eq, represented, extended, protectedTypes, finalWorld, counters, observations⟩ := result
     exact ⟨value, nextTypes, nextLive, nextRegions, eq, represented, extended, protectedTypes, finalWorld⟩
 
 #print axioms mixedLocal_registerResultBody_world
