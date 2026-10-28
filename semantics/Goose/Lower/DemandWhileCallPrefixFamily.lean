@@ -4,24 +4,13 @@ import Goose.Lower.DemandWhilePrefixFamily
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 
-theorem accepted_generated_while_call_prefix_family {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
+theorem accepted_generated_while_scalar_call_prefix_family {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
     (condition : Expr) (body : Core.Block) (origin : OriginId)
-    {callContext : ContextId} {arguments : List Arg} {callOrigin statementOrigin : OriginId}
-    (bodyStatements : body.stmts = [.expr (.call callContext arguments callOrigin) statementOrigin]) (noValue : body.value = none)
-    {calleeContext : Context} {callee : Impl} (contextAt : cfg.mod.contexts[callContext]? = some calleeContext)
-    (implAt : cfg.mod.impls[calleeContext.impl]? = some callee) (depth : env.depth < maxCallDepth)
-    (fragment : ∀ current : St, WhileMixedStatements cfg
-      { vars := callee.vars, act := current.nextAct, scopes := (callee.body.scope, current.nextScope) :: [], depth := env.depth + 1 } callee.body.stmts)
-    {expression : Expr} (form : ControlPrefixExpression expression) (hasValue : callee.body.value = some expression)
-    (shrink : cfg.mod.profile = .shrink)
-    (argumentsForm : ∀ (middle : St) {innerState : St} (argumentSource : StmtSource cfg
-      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } (.expr (.call callContext arguments callOrigin) statementOrigin) innerState),
-      CallMixedArguments argumentSource.rootsEnv.access arguments)
-    (stoppedArgumentsForm : ∀ (middle : St) {innerState : St} (argumentSource : StmtSource cfg
-      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } (.expr (.call callContext arguments callOrigin) statementOrigin) innerState),
-      CallMixedStoppedArguments argumentSource.rootsEnv.access arguments)
+    (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
+    (noValue : body.value = none)
     (family : GeneratedExpressionPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected none condition (@GeneratedControlProgressCursor cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩)) :
     ReachableStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected none (.while condition body origin)
       (@WhileCallStatementCursor cfg env caller results root owner selected) := by
@@ -47,8 +36,7 @@ theorem accepted_generated_while_call_prefix_family {cfg : Cfg} {env : Env} {cal
     have equal := actual.deterministic (headerStep stepFuel)
     have nextEq : nextPoint = ⟨(header, 0), initial, state⟩ := by cases nextPoint; exact equal
     subst nextPoint
-    rcases accepted_generated_while_call_header_prefix_complete (WhileIterations.zero state) source source rfl bodyStatements noValue
-      contextAt implAt depth fragment form hasValue shrink argumentsForm stoppedArgumentsForm rfl selected owned
+    rcases accepted_generated_while_scalar_call_header_prefix_complete (WhileIterations.zero state) source source rfl fragment noValue rfl selected owned
       headerInput headerTarget headerId headerEq occurrence rows coverage admitted headerBounded headerRealized family loopRun extended
       (Evidence.RuntimePoint.step callerStart first) residual with demanded | ⟨sourceFuel, consumed, rest, final, finalCount, executed, suffix,
         sourceDone, finalPost, finalBounded, finalRealized⟩
@@ -61,5 +49,37 @@ theorem accepted_generated_while_call_prefix_family {cfg : Cfg} {env : Env} {cal
       · simp [bind_apply, sourceDone, prepareLoopFlow, prepareReturn, pure_apply]
       · exact .normal (headerPost.comp finalPost) (source.result sourceFuel _ sourceDone) finalBounded finalRealized
 
+
+theorem accepted_generated_while_call_prefix_family {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
+    (condition : Expr) (body : Core.Block) (origin : OriginId)
+    {callContext : ContextId} {arguments : List Arg} {callOrigin statementOrigin : OriginId}
+    (bodyStatements : body.stmts = [.expr (.call callContext arguments callOrigin) statementOrigin]) (noValue : body.value = none)
+    {calleeContext : Context} {callee : Impl} (contextAt : cfg.mod.contexts[callContext]? = some calleeContext)
+    (implAt : cfg.mod.impls[calleeContext.impl]? = some callee) (depth : env.depth < maxCallDepth)
+    (fragment : ∀ current : St, WhileMixedStatements cfg
+      { vars := callee.vars, act := current.nextAct, scopes := (callee.body.scope, current.nextScope) :: [], depth := env.depth + 1 } callee.body.stmts)
+    {expression : Expr} (form : ControlPrefixExpression expression) (hasValue : callee.body.value = some expression)
+    (shrink : cfg.mod.profile = .shrink)
+    (argumentsForm : ∀ (middle : St) {innerState : St} (argumentSource : StmtSource cfg
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } (.expr (.call callContext arguments callOrigin) statementOrigin) innerState),
+      CallMixedArguments argumentSource.rootsEnv.access arguments)
+    (stoppedArgumentsForm : ∀ (middle : St) {innerState : St} (argumentSource : StmtSource cfg
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } (.expr (.call callContext arguments callOrigin) statementOrigin) innerState),
+      CallMixedStoppedArguments argumentSource.rootsEnv.access arguments)
+    (family : GeneratedExpressionPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected none condition (@GeneratedControlProgressCursor cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩)) :
+    ReachableStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected none (.while condition body origin)
+      (@WhileCallStatementCursor cfg env caller results root owner selected) := by
+  have mixed : ∀ middle : St, ReachableScalarCallStatements cfg
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts := by
+    intro middle
+    rw [bodyStatements]
+    exact ReachableScalarCallStatements.single contextAt implAt depth fragment form hasValue shrink
+      (argumentsForm middle) (stoppedArgumentsForm middle)
+  intro state
+  exact accepted_generated_while_scalar_call_prefix_family selected condition body origin mixed noValue family (state := state)
+
 #print axioms accepted_generated_while_call_prefix_family
+#print axioms accepted_generated_while_scalar_call_prefix_family
 end Goose.Lower
