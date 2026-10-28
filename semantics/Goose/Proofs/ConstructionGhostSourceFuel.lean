@@ -16,6 +16,15 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (child : FuelSupport config fuel (.place environment place)) : FuelSupport config (fuel + 1) (.value environment (.ref mutability place))
   | lengthValue (fuel : Nat) (environment : RuntimeActivation) (view : View)
       (child : FuelSupport config fuel (.view environment view)) : FuelSupport config (fuel + 1) (.value environment (.len view))
+  | printArgumentExpression (fuel : Nat) (environment : RuntimeActivation) (expression : Expr)
+      (child : FuelSupport config fuel (.value environment expression)) :
+      FuelSupport config (fuel + 1) (.printArgument environment (.expr expression))
+  | printArgumentView (fuel : Nat) (environment : RuntimeActivation) (view : View)
+      (child : FuelSupport config fuel (.view environment view)) :
+      FuelSupport config (fuel + 1) (.printArgument environment (.view view))
+  | printArguments (fuel : Nat) (environment : RuntimeActivation) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
+      (children : ∀ argument ∈ arguments, FuelSupport config fuel (.printArgument environment argument)) :
+      FuelSupport config (fuel + 1) (.statement environment (.print arguments origin))
   | expressionBound (fuel : Nat) (environment : RuntimeActivation) (count : Nat) (defaultValue : Int)
       (operand : Expr) (fromEnd : Bool) (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.bound environment count defaultValue (if fromEnd then .fromEnd operand else .expr operand))
@@ -280,6 +289,21 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           exact .referenceValue (ih (.place environment place) (path ++ [0]) before child)
       | lengthValue _ environment view child =>
           exact .lengthValue (ih (.view environment view) (path ++ [0]) before child)
+      | printArgumentExpression _ environment expression child =>
+          exact .printArgumentExpression (ih (.value environment expression) (path ++ [0]) before child)
+      | printArgumentView _ environment view child =>
+          exact .printArgumentView (ih (.view environment view) (path ++ [0]) before child)
+      | printArguments _ environment arguments origin childrenSupported =>
+          refine .printArguments fuel path environment arguments origin before ?_
+          intro outcome visits replay visit member
+          have inMapped : visit.operand ∈ visits.map Goose.Proofs.ConstructionInvocationReplay.Invocation.operand := List.mem_map_of_mem member
+          rw [replay.sourceOrder] at inMapped
+          have inArguments : visit.operand ∈ arguments := List.mem_of_mem_take inMapped
+          have child := ih (.printArgument environment visit.operand) (path ++ [visit.ordinal]) visit.before
+            (childrenSupported visit.operand inArguments)
+          simp only [execute] at child
+          rw [← Goose.Proofs.ConstructionGhostInvocation.visit_executes replay visit member]
+          exact child
       | expressionBound _ environment count defaultValue operand fromEnd child =>
           exact .expressionBound (ih (.value environment operand) (path ++ [0]) before child)
       | sliceValue _ environment mutability view lo hi origin viewSupported loSupported hiSupported =>

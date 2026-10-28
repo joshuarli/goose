@@ -111,6 +111,10 @@ inductive PlaceSyntax (config : EvalConfig) : Place → Prop
 
 end
 
+inductive PrintArgumentSyntax (config : EvalConfig) : PrintArg → Prop
+  | text (text : String) : PrintArgumentSyntax config (.text text)
+  | expression (operand : Expr) (child : ValueSyntax config operand) : PrintArgumentSyntax config (.expr operand)
+  | view (view : View) (child : ViewSyntax config view) : PrintArgumentSyntax config (.view view)
 
 inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
   | declaration (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId)
@@ -118,6 +122,8 @@ inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
       StatementSyntax config (.letS localVar expression origin)
   | expression (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
       StatementSyntax config (.expr operand origin)
+  | printArguments (arguments : List PrintArg) (origin : Goose.Core.OriginId)
+      (children : ∀ argument ∈ arguments, PrintArgumentSyntax config argument) : StatementSyntax config (.print arguments origin)
   | printText (text : String) (origin : Goose.Core.OriginId) : StatementSyntax config (.print [.text text] origin)
   | whileLoop (condition : Expr) (scope : Nat) (statements : List Stmt) (origin : Goose.Core.OriginId)
       (conditionSyntax : ValueSyntax config condition)
@@ -206,6 +212,8 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   placeView : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.view environment (.of place))
   bound : ∀ environment count defaultValue bound, BoundSyntax config bound →
     FuelSupport config fuel (.bound environment count defaultValue bound)
+  printArgument : ∀ environment argument, PrintArgumentSyntax config argument →
+    FuelSupport config fuel (.printArgument environment argument)
   arguments : ∀ environment vars parameters arguments, ArgumentSyntax config parameters arguments →
     FuelSupport config fuel (.arguments environment vars parameters arguments)
   statement : ∀ environment statement, StatementSyntax config statement → FuelSupport config fuel (.statement environment statement)
@@ -376,6 +384,11 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
             simpa using (FuelSupport.expressionBound fuel environment count defaultValue operand false (previous.value environment operand child))
         | fromEnd operand child =>
             simpa using (FuelSupport.expressionBound fuel environment count defaultValue operand true (previous.value environment operand child))
+      · intro environment argument derivation
+        cases derivation with
+        | text text => exact .legacy (fuel + 1) (.printArgumentText environment text)
+        | expression operand child => exact .printArgumentExpression fuel environment operand (previous.value environment operand child)
+        | view view child => exact .printArgumentView fuel environment view (previous.view environment view child)
       · intro environment vars parameters arguments derivation
         cases derivation with
         | nil => exact .legacy (fuel + 1) (.argumentsDone environment vars)
@@ -401,6 +414,8 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | expression operand origin child =>
             exact .expression fuel environment operand origin (previous.value environment operand child)
         | printText text origin => exact .legacy (fuel + 1) (.printText environment text origin)
+        | printArguments arguments origin children =>
+            exact .printArguments fuel environment arguments origin (fun argument member => previous.printArgument environment argument (children argument member))
         | whileLoop condition scope statements origin conditionSyntax body =>
             exact .whileStatement fuel environment condition (.mk scope statements none) origin
               (previous.whileLoop environment condition scope statements conditionSyntax body)
