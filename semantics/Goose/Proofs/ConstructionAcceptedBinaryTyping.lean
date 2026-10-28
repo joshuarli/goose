@@ -194,6 +194,54 @@ theorem checkedValue_cmp_operands (frame : ConstructionSourceFrame) (fuel : Nat)
   exact ⟨operandTy, middle, leftRoots, rightRoots, rootMiddle, sameTy, sameRoots, form,
     ⟨leftTyping, leftRootsChecked, leftAvailable⟩, ⟨rightTyping, rightRootsChecked, checked.available⟩⟩
 
+def scalarShortCircuit (conjunction : Bool) (left right : Expr) : Expr :=
+  if conjunction then .and left right else .or left right
+
+theorem typeExpr_shortCircuit_operands (conjunction : Bool) (fuel : Nat) (environment : TypingEnv)
+    (left right : Expr) (before after : Nat) (ty : Ty)
+    (checked : typeExpr (fuel + 1) environment (scalarShortCircuit conjunction left right) before = .ok ([ty], after)) :
+    ∃ middle, ty = .bool ∧
+      typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] } left before = .ok ([.bool], middle) ∧
+      typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] } right middle = .ok ([.bool], after) := by
+  cases conjunction <;> simp only [scalarShortCircuit, Bool.false_eq_true, ↓reduceIte, typeExpr, bind, StateT.bind] at checked
+  all_goals
+    change (Except.bind (typeExpr fuel
+      { environment with use := .ordinary, request := .value, resultRequests := [] } left before) _) = _ at checked
+    cases first : typeExpr fuel
+        { environment with use := .ordinary, request := .value, resultRequests := [] } left before with
+    | error failure => simp only [first, Except.bind] at checked; cases checked
+    | ok result =>
+      obtain ⟨leftTypes, middle⟩ := result
+      simp only [first, Except.bind] at checked
+      cases leftTypes with
+      | nil => change Except.error _ = Except.ok _ at checked; cases checked
+      | cons leftType tail =>
+        cases tail with
+        | cons other rest => change Except.error _ = Except.ok _ at checked; cases checked
+        | nil =>
+          cases leftType <;> try (change Except.error _ = Except.ok _ at checked; cases checked)
+          case bool =>
+            change (Except.bind (typeExpr fuel
+              { environment with use := .ordinary, request := .value, resultRequests := [] } right middle) _) = _ at checked
+            cases second : typeExpr fuel
+                { environment with use := .ordinary, request := .value, resultRequests := [] } right middle with
+            | error failure => simp only [second, Except.bind] at checked; cases checked
+            | ok result =>
+              obtain ⟨rightTypes, next⟩ := result
+              simp only [second, Except.bind] at checked
+              cases rightTypes with
+              | nil => change Except.error _ = Except.ok _ at checked; cases checked
+              | cons rightType tail =>
+                cases tail with
+                | cons other rest => change Except.error _ = Except.ok _ at checked; cases checked
+                | nil =>
+                  cases rightType <;> try (change Except.error _ = Except.ok _ at checked; cases checked)
+                  case bool =>
+                    change Except.ok ([Ty.bool], next) = Except.ok ([ty], after) at checked
+                    cases checked
+                    exact ⟨middle, rfl, rfl, second⟩
+
+#print axioms typeExpr_shortCircuit_operands
 #print axioms checkedValue_bin_operands
 #print axioms checkedValue_cmp_operands
 #print axioms rpExpr_bin_operands

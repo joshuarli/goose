@@ -206,57 +206,10 @@ private theorem comparison_complete (operation : Goose.Core.CmpOp) (left right :
                 exact acceptedValue_boolean config.layout types frame.interpretation state _
 
 
-private def shortCircuit (conjunction : Bool) (left right : Expr) : Expr :=
-  if conjunction then .and left right else .or left right
-
-private theorem shortCircuit_typing (conjunction : Bool) (fuel : Nat) (environment : TypingEnv)
-    (left right : Expr) (before after : Nat) (ty : Ty)
-    (checked : typeExpr (fuel + 1) environment (shortCircuit conjunction left right) before = .ok ([ty], after)) :
-    ∃ middle, ty = .bool ∧
-      typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] } left before = .ok ([.bool], middle) ∧
-      typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] } right middle = .ok ([.bool], after) := by
-  cases conjunction <;> simp only [shortCircuit, Bool.false_eq_true, ↓reduceIte, typeExpr, bind, StateT.bind] at checked
-  all_goals
-    change (Except.bind (typeExpr fuel
-      { environment with use := .ordinary, request := .value, resultRequests := [] } left before) _) = _ at checked
-    cases first : typeExpr fuel
-        { environment with use := .ordinary, request := .value, resultRequests := [] } left before with
-    | error failure => simp only [first, Except.bind] at checked; cases checked
-    | ok result =>
-      obtain ⟨leftTypes, middle⟩ := result
-      simp only [first, Except.bind] at checked
-      cases leftTypes with
-      | nil => change Except.error _ = Except.ok _ at checked; cases checked
-      | cons leftType tail =>
-        cases tail with
-        | cons other rest => change Except.error _ = Except.ok _ at checked; cases checked
-        | nil =>
-          cases leftType <;> try (change Except.error _ = Except.ok _ at checked; cases checked)
-          case bool =>
-            change (Except.bind (typeExpr fuel
-              { environment with use := .ordinary, request := .value, resultRequests := [] } right middle) _) = _ at checked
-            cases second : typeExpr fuel
-                { environment with use := .ordinary, request := .value, resultRequests := [] } right middle with
-            | error failure => simp only [second, Except.bind] at checked; cases checked
-            | ok result =>
-              obtain ⟨rightTypes, next⟩ := result
-              simp only [second, Except.bind] at checked
-              cases rightTypes with
-              | nil => change Except.error _ = Except.ok _ at checked; cases checked
-              | cons rightType tail =>
-                cases tail with
-                | cons other rest => change Except.error _ = Except.ok _ at checked; cases checked
-                | nil =>
-                  cases rightType <;> try (change Except.error _ = Except.ok _ at checked; cases checked)
-                  case bool =>
-                    change Except.ok ([Ty.bool], next) = Except.ok ([ty], after) at checked
-                    cases checked
-                    exact ⟨middle, rfl, rfl, second⟩
-
 private theorem shortCircuit_operands (conjunction : Bool) (frame : ConstructionSourceFrame) (fuel : Nat)
     (left right : Expr) (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
     (fuelAt : frame.typingFuel = fuel + 1)
-    (checked : CheckedValue frame (shortCircuit conjunction left right) ty roots typingAfter rootsAfter) :
+    (checked : CheckedValue frame (scalarShortCircuit conjunction left right) ty roots typingAfter rootsAfter) :
     ∃ middle leftRoots rightRoots rootMiddle,
       ty = .bool ∧ roots = [] ∧
       CheckedValue (ordinaryOperandFrame frame fuel) left .bool leftRoots middle rootMiddle ∧
@@ -265,7 +218,7 @@ private theorem shortCircuit_operands (conjunction : Bool) (frame : Construction
   have typing := checked.typing
   rw [fuelAt] at typing
   obtain ⟨middle, sameTy, leftTyping, rightTyping⟩ :=
-    shortCircuit_typing conjunction fuel frame.typing left right frame.typingCounter typingAfter ty typing
+    typeExpr_shortCircuit_operands conjunction fuel frame.typing left right frame.typingCounter typingAfter ty typing
   have provenance : rpExpr frame.source (.cmp .eq left right) frame.rootCursor = .ok (roots, rootsAfter) := by
     cases conjunction <;> exact checked.provenance
   obtain ⟨sameRoots, leftRoots, rightRoots, rootMiddle, leftRooted, rightRooted, included⟩ :=
@@ -278,7 +231,7 @@ private theorem shortCircuit_operands (conjunction : Bool) (frame : Construction
 
 private theorem shortCircuit_complete (conjunction : Bool) (left right : Expr)
     (leftCursor : CheckedCursor left) (leftComplete : CheckedExpressionEvaluation left)
-    (rightComplete : CheckedExpressionEvaluation right) : CheckedExpressionEvaluation (shortCircuit conjunction left right) := by
+    (rightComplete : CheckedExpressionEvaluation right) : CheckedExpressionEvaluation (scalarShortCircuit conjunction left right) := by
   intro fuel config accepted frame state ambient types live regions pending world source ty roots typingAfter rootsAfter checked
   cases depth : frame.typingFuel with
   | zero => have typing := checked.typing; rw [depth] at typing; change Except.error _ = Except.ok _ at typing; cases typing
@@ -291,7 +244,7 @@ private theorem shortCircuit_complete (conjunction : Bool) (left right : Expr)
     have leftSource := ordinaryOperandFrame_accepted accepted frame n state types source
     have rightSource := rightFrame_accepted accepted frame n state types source leftCursor .bool leftRoots middle rootMiddle leftChecked
     cases fuel with
-    | zero => cases conjunction <;> simp [shortCircuit, evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState, world, source]
+    | zero => cases conjunction <;> simp [scalarShortCircuit, evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState, world, source]
     | succ fuel =>
       have leftResult := leftComplete fuel config accepted leftFrame state ambient types live regions pending
         world leftSource .bool leftRoots middle rootMiddle leftChecked
@@ -303,7 +256,7 @@ private theorem shortCircuit_complete (conjunction : Bool) (left right : Expr)
         simp only [evaluatedLeft, Goose.Proofs.Exit.stepState] at leftResult
         have same := leftResult.1
         subst after
-        cases conjunction <;> simp only [shortCircuit, Bool.false_eq_true, ↓reduceIte, evalValue, evaluatedLeft, bind,
+        cases conjunction <;> simp only [scalarShortCircuit, Bool.false_eq_true, ↓reduceIte, evalValue, evaluatedLeft, bind,
           Goose.Proofs.Exit.stepState, reduceCtorEq, true_and] <;>
           exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
       | ok value after =>
@@ -315,7 +268,7 @@ private theorem shortCircuit_complete (conjunction : Bool) (left right : Expr)
         | stored => contradiction
         | boolean first =>
           cases conjunction <;> cases first <;>
-            simp only [shortCircuit, Bool.false_eq_true, ↓reduceIte, evalValue, evaluatedLeft, bind, expectBool, pure,
+            simp only [scalarShortCircuit, Bool.false_eq_true, ↓reduceIte, evalValue, evaluatedLeft, bind, expectBool, pure,
               Goose.Proofs.Exit.stepState, ExecutionStep.ok.injEq, true_and]
           all_goals first
             | refine ⟨?_, world, source⟩
