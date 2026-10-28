@@ -168,6 +168,57 @@ theorem accepted_generated_shortCircuit_right_entry {cfg : Cfg} {env : Env} {a b
     exact ⟨branchBuilder, right.frame, rightRealized⟩
   exact ⟨right, typing, rightRoots, type, child, frameEq, stateEq, atPoint, demanded⟩
 
+theorem generated_shortCircuit_right_input {cfg : Cfg} {env : Env} {a b : Expr} {state middle : St}
+    (isAnd : Bool) (source : ExprSource cfg env (if isAnd then .and a b else .or a b) state)
+    (left : ExprSource cfg env a state) (right : ExprSource cfg env b middle)
+    (typing : right.typingEnv = source.typingEnv) (roots : right.rootsEnv = source.rootsEnv)
+    {cx : FnCtx} {results : List Ty} {before : LS} {initial leftFrame : GIR.Frame} {start leftPoint next : Pt}
+    {map : RetainedSsaMap} {loop : Option LoopCtx}
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (boundary : ExpressionDemandBoundary left map cx before initial (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2
+      (lowerExpr a (lowerEnv cfg.mod env.vars results) before).1 (.bool isAnd) middle leftPoint leftFrame)
+    (extended : ExtT (lowerExpr (if isAnd then .and a b else .or a b) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (atPoint : (demandShortCircuitRightBefore isAnd a (lowerEnv cfg.mod env.vars results) before).pp = some next) :
+    GeneratedPrefixInput cfg env cx results loop right.typingEnv right.rootsEnv
+      (demandShortCircuitRightBefore isAnd a (lowerEnv cfg.mod env.vars results) before) leftFrame next := by
+  let le := lowerEnv cfg.mod env.vars results
+  let first := lowerExpr a le before
+  let fork := demandShortCircuitFork isAnd a le before
+  let rightBefore := demandShortCircuitRightBefore isAnd a le before
+  have forkExtended := generated_shortCircuit_fork_extended (right := b) boundary.post.pp extended
+  have ⟨rhsEq, joinEq, parameterEq, valsEq, stackEq, currentEq, instruction, rhsAt, joinAt⟩ :=
+    scFork_facts (show scFork isAnd first.1 le first.2 = (fork.1, fork.2) from rfl) boundary.post.pp forkExtended
+  have firstAdv := advB_lowerExpr a le before first.1 first.2 rfl
+  have forkAdv := advB_scFork isAnd first.1 le first.2 fork.1 fork.2 rfl
+  have firstGenerated : GeneratedBuilderState first.2 := input.generated.lowerExpr a rfl
+  have forkGenerated : GeneratedBuilderState fork.2 := firstGenerated.scFork isAnd first.1 rfl
+  have rightGenerated : GeneratedBuilderState rightBefore := forkGenerated.setCur (env := le) (some fork.1.1)
+    (by intro current same; cases same; exact (Array.getElem?_eq_some_iff.mp rhsAt).1) rfl
+  have firstFrames : LoopBuilderFrames loop first.2 := input.frames.mono firstAdv.ext
+  have forkFrames : LoopBuilderFrames loop fork.2 := firstFrames.mono forkAdv.ext
+  have rightFrames : LoopBuilderFrames loop rightBefore := forkFrames.of_blocks rfl
+  have firstCounter : LoopCounterAt loop first.2 leftFrame := input.counter.afterPost (boundary.post.sub (by simp))
+  have rightCounter : LoopCounterAt loop rightBefore leftFrame := by
+    cases loop with
+    | none => trivial
+    | some context =>
+      cases kind : context.cont with
+      | jump header => simp [LoopCounterAt, kind]
+      | next header type counter =>
+        simp only [LoopCounterAt, kind] at firstCounter ⊢
+        obtain ⟨bound, witness⟩ := firstCounter
+        refine ⟨?_, witness⟩
+        change counter < fork.2.vals.size
+        rw [valsEq]
+        exact Nat.lt_trans bound (Nat.lt_succ_self _)
+  refine ⟨?_, ?_, atPoint, boundary.post.rel.stack_eq stackEq, input.moduleEq, input.resultsEq,
+    input.depth, ?_, rightCounter, rightGenerated, rightFrames⟩
+  · simpa only [typing, roots] using input.metadata
+  · simpa only [typing] using input.loops
+  · cases loop <;> exact input.targets
+
+#print axioms generated_shortCircuit_right_input
+
 #print axioms accepted_generated_shortCircuit_right_entry
 
 #print axioms accepted_generated_shortCircuit_actual_branch

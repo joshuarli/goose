@@ -507,8 +507,8 @@
  {
   "feature": "Generated short-circuit left prefixes and actual branches",
   "label": "model-proved",
-  "theorem": "Goose.Lower.accepted_generated_shortCircuit_left_prefix; Goose.Lower.accepted_generated_shortCircuit_actual_branch; Goose.Lower.accepted_generated_shortCircuit_right_entry",
-  "statement": "A generated short-circuit expression inherits the finite target-prefix decomposition of its accepted left operand. After that operand completes, the actual next runtime instruction selects the matching right-operand or skip destination and carries its accepted demand frame. A taken branch establishes the canonical right operand, its accepted typing and roots, and its generated entry point.",
+  "theorem": "Goose.Lower.accepted_generated_shortCircuit_left_prefix; Goose.Lower.accepted_generated_shortCircuit_actual_branch; Goose.Lower.accepted_generated_shortCircuit_right_entry; Goose.Lower.generated_shortCircuit_right_input",
+  "statement": "A generated short-circuit expression inherits the finite target-prefix decomposition of its accepted left operand. After that operand completes, the actual next runtime instruction selects the matching right-operand or skip destination and carries its accepted demand frame. A taken branch establishes the canonical right operand, its accepted typing and roots, generated entry point, and builder and loop context for a right-operand prefix proof.",
   "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and a left-operand prefix family; the branch result assumes an actual successful target instruction.",
   "limits": "Right-operand prefixes, stopping prefixes and whole-expression composition remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandGeneratedShortCircuitPrefix.lean; scoped Lean 4.35 closure and axiom checks."
