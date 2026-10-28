@@ -71,5 +71,12 @@ theorem ReachableMixedCallStatements.normal {cfg : Cfg} {env : Env} {statements 
     (done : execStmts fuel cfg env statements state = .ok flow after) : flow = .normal .unit :=
   call_mixed_members_normal form.members done
 
+theorem ReachableMixedCallStatements.normal_any_env {cfg : Cfg} {env other : Env} {statements : List Stmt}
+    (form : ReachableMixedCallStatements cfg env statements) {fuel : Nat} {state after : St} {flow : Flow}
+    (done : execStmts fuel cfg other statements state = .ok flow after) : flow = .normal .unit :=
+  call_mixed_members_normal form.members done
+
+#print axioms ReachableMixedCallStatements.normal_any_env
+
 #print axioms ReachableMixedCallStatements.normal
 end Goose.Lower

@@ -3,7 +3,7 @@ import Goose.Lower.DemandWhileCallSequence
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
 
-private theorem call_loop_bind_ok {c : M α} {f : α → M β} {s s' : St} {b : β}
+theorem call_loop_bind_ok {c : M α} {f : α → M β} {s s' : St} {b : β}
     (h : (c >>= f) s = .ok b s') : ∃ a middle, c s = .ok a middle ∧ f a middle = .ok b s' := by
   rw [bind_apply] at h
   cases hc : c s with

@@ -99,6 +99,13 @@ theorem ReachableScalarCallStatements.normal {cfg : Cfg} {env : Env} {statements
     (done : execStmts fuel cfg env statements state = .ok flow after) : flow = .normal .unit :=
   form.toMixed.normal done
 
+theorem ReachableScalarCallStatements.normal_any_env {cfg : Cfg} {env other : Env} {statements : List Stmt}
+    (form : ReachableScalarCallStatements cfg env statements) {fuel : Nat} {state after : St} {flow : Flow}
+    (done : execStmts fuel cfg other statements state = .ok flow after) : flow = .normal .unit :=
+  form.toMixed.normal_any_env done
+
+#print axioms ReachableScalarCallStatements.normal_any_env
+
 theorem ReachableScalarCallStatements.single {cfg : Cfg} {env : Env}
     {context : ContextId} {arguments : List Arg} {origin statementOrigin : OriginId}
     {ctx : Context} {impl : Impl} (contextAt : cfg.mod.contexts[context]? = some ctx)
