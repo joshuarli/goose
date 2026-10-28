@@ -31,5 +31,24 @@ theorem callArgsFuture_priorSliceHolder {m : Core.Module} {plans : Array (Array 
     simp only [callArgsFuture, List.mem_append, List.mem_flatMap]
     exact Or.inl (Or.inl ⟨.byRef borrow (.var slot), member, by simp [Arg.sliceHolderVariables, lookup, Place.variables]⟩)
 
+theorem SliceSlotAliasAt.ofPriorArgumentFrame {cfg : Cfg} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
+    {tenv : TEnv} {penv : PEnv} {env : Env} {world : World} {state : St} {frame : GIR.Frame} {id : ValueId}
+    {alias : RetainedAlias} {slot : VarId} {si : ScopeInst} {lv : LocalVar} {mutability : Mutability} {element : Ty}
+    {index offset : Nat} {borrow : Mutability}
+    (context : EvaluationContext cfg.mod plans path (.expression (.call contextId arguments origin)) .expression)
+    (active : context.ActiveMatches tenv) (access : context.AccessMatches tenv penv)
+    (source : Core.Sound.Frame cfg.mod world tenv penv env state (callArgsFuture context offset (arguments.drop offset)))
+    (visible : slot ∈ tenv.visible) (variableAt : env.vars[slot]? = some lv)
+    (scope : env.scopes.lookup lv.scope = some si) (variableType : lv.ty = .slice mutability element)
+    (annotation : penv.ann slot = some alias.roots) (aliasType : alias.ty = .slice mutability element)
+    (cell : frame.vals[id]? = some (.val (.ref ⟨.local env.act si slot, []⟩)))
+    (found : arguments[index]? = some (.byRef borrow (.var slot))) (prior : index < offset) :
+    SliceSlotAliasAt cfg.mod world env state.store frame id alias mutability element := by
+  have needed := callArgsFuture_priorSliceHolder context active access source.vars_t variableAt variableType visible found prior
+  exact SliceSlotAliasAt.ofFrame source visible needed variableAt scope variableType annotation aliasType cell
+
+#print axioms SliceSlotAliasAt.ofPriorArgumentFrame
+
 #print axioms callArgsFuture_priorSliceHolder
 end Goose.Lower
