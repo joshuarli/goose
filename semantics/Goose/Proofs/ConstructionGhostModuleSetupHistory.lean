@@ -45,6 +45,43 @@ theorem runModule_entrySetupHistory (fuel : Nat) (config : EvalConfig) (before :
       pure, prepared, entryCallResult]
     cases invokeCall (fuel + 1) config ⟨0, 0, #[], [], []⟩ config.module.entry [] channels 0 callReady <;> rfl
 
+theorem runModule_entrySetupClassification (fuel : Nat) (config : EvalConfig) (before : ExecutionState)
+    (closed : ClosedModuleWithTails config) (context : Context) (implementation : Impl)
+    (contextFound : config.module.contexts[config.module.entry]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (entryArguments : ∀ id actual start ready,
+      getImplementation config config.module.entry start = .ok (id, actual) ready →
+      ArgumentSyntax config actual.params.toList []) :
+    ∃ globalOutcome globalVisits,
+      OperandReplay (globalInitializer (fuel + 1) config) 0 (List.range config.module.globals.size) [] before globalOutcome globalVisits ∧
+      runModule (fuel + 1) config before = moduleAfterGlobals (fuel + 1) config (discardGlobalValues globalOutcome) ∧
+      ∀ initialized, discardGlobalValues globalOutcome = .ok () initialized →
+        (∃ terminal, terminalCall (channelsFor config.layout 0 implementation.results.toList 0 initialized) = some terminal ∧
+          runModule (fuel + 1) config before = entryCallResult terminal) ∨
+        (∃ channels callReady, channelsFor config.layout 0 implementation.results.toList 0 initialized = .ok channels callReady ∧
+          CallSetupHistory fuel config ⟨0, 0, #[], [], []⟩ [config.module.globals.size, 0]
+            config.module.entry [] channels 0 callReady ∧
+          runModule (fuel + 1) config before = entryCallResult
+            (invokeCall (fuel + 1) config ⟨0, 0, #[], [], []⟩ config.module.entry [] channels 0 callReady)) := by
+  obtain ⟨globalOutcome, globalVisits, replay, execution, entry⟩ :=
+    runModule_entrySetupHistory fuel config before closed context implementation contextFound implementationFound entryArguments
+  refine ⟨globalOutcome, globalVisits, replay, execution, ?_⟩
+  intro initialized globals
+  cases channelsResult : channelsFor config.layout 0 implementation.results.toList 0 initialized with
+  | ok channels ready =>
+      obtain ⟨history, moduleCall⟩ := entry initialized channels ready globals channelsResult
+      exact Or.inr ⟨channels, ready, rfl, history, moduleCall⟩
+  | stop reason state =>
+      have terminal : terminalCall (channelsFor config.layout 0 implementation.results.toList 0 initialized) = some (.stop reason state) := by simp [channelsResult, terminalCall]
+      exact Or.inl ⟨.stop reason state, rfl, execution.trans (by rw [globals]; exact moduleAfterGlobals_channelTerminal _ _ _ _ _ _ contextFound implementationFound terminal)⟩
+  | escape address carriers state =>
+      have terminal : terminalCall (channelsFor config.layout 0 implementation.results.toList 0 initialized) = some (.escape address carriers state) := by simp [channelsResult, terminalCall]
+      exact Or.inl ⟨.escape address carriers state, rfl, execution.trans (by rw [globals]; exact moduleAfterGlobals_channelTerminal _ _ _ _ _ _ contextFound implementationFound terminal)⟩
+  | jump target kind state =>
+      have terminal : terminalCall (channelsFor config.layout 0 implementation.results.toList 0 initialized) = some (.jump target kind state) := by simp [channelsResult, terminalCall]
+      exact Or.inl ⟨.jump target kind state, rfl, execution.trans (by rw [globals]; exact moduleAfterGlobals_channelTerminal _ _ _ _ _ _ contextFound implementationFound terminal)⟩
+
+#print axioms runModule_entrySetupClassification
 #print axioms moduleAfterGlobals_channelTerminal
 #print axioms runModule_entrySetupHistory
 end Goose.Proofs.ConstructionGhostModuleSetupHistory
