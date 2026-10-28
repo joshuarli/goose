@@ -4,6 +4,7 @@ import Goose.Lower.DemandCallArgumentCells
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
+open Goose.Lower.Validation.ReplacementContentFlowSource
 
 inductive LocalSliceArguments (access : AccessEnv) : List Arg → Prop
   | nil : LocalSliceArguments access []
@@ -24,7 +25,9 @@ theorem accepted_generated_call_slice_sequence {cfg : Cfg} {env : Env} {initialS
     {values : List (ValueId × RetainedAlias)} {slots : List SliceSlotArgumentCell} {map : RetainedSsaMap}
     (split : SplitCallArgumentRows source.rootsEnv.access source.path 0 (arguments.take index)
       (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).1 values slots)
-    {initial : GIR.Frame} {start : Pt} {previousValues : List Val}
+    {initial rootFrame : GIR.Frame} {start : Pt} {previousValues : List Val}
+    (wholePost : Post cfg env cx before rootFrame
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2 initial start [])
     (cells : CallArgumentCells (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).1 previousValues
       (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2.vals.size initial)
     (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
@@ -45,6 +48,8 @@ theorem accepted_generated_call_slice_sequence {cfg : Cfg} {env : Env} {initialS
       (⟨⟨values ++ map.values, map.runs⟩, finalSlots⟩ : SplitCallRetained).Realizes
         cfg.mod source.world env ⟨point, frame, state⟩ ∧
       (∀ cell ∈ finalSlots, cell.Checked source (index + rest.length) frame) ∧
+      Post cfg env cx before rootFrame
+        (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).2 frame point [] ∧
       CallArgumentCells (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).1
         (previousValues ++ resultsValues) (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).2.vals.size frame ∧
       GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
@@ -52,7 +57,7 @@ theorem accepted_generated_call_slice_sequence {cfg : Cfg} {env : Env} {initialS
   induction form generalizing index initial start slots previousValues with
   | nil =>
     exact ⟨0, start, initial, [], slots, .nil state, .zero _, by simpa using split, by simpa using bounded,
-      realized, by simpa using checked, by simpa using cells, by simpa using input⟩
+      realized, by simpa using checked, by simpa using wholePost, by simpa using cells, by simpa using input⟩
   | @cons borrow slot mutability element rest type tail ih =>
     cases sourceEq : sources 0 with
     | cons head tailSource =>
@@ -70,18 +75,27 @@ theorem accepted_generated_call_slice_sequence {cfg : Cfg} {env : Env} {initialS
         obtain ⟨location, length, point, frame, cell, evaluated, executed, post, nextRows, nextBounded, nextRealized, nextChecked, nextInput⟩ :=
           accepted_generated_call_slice_sequence_stage source found child target childCanonical childType occurrence rows split input bounded realized checked extended
         have nextCells := cells.next found post
+        have nextPost : Post cfg env cx before rootFrame
+            (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).2 frame point [] := by
+          have combined := wholePost.comp post
+          have takeEq : arguments.take (index + 1) = arguments.take index ++ [.byRef borrow (.var slot)] := by
+            rw [List.take_add_one, found]
+            simp
+          rw [takeEq, lowerArgs_append_run]
+          simpa [lowerArgs, bind_run, pure_run] using combined.sub (by simp)
         let nextSources := ArgsSource.afterHead sources evaluated
         have nextCanonical : ∀ fuel, (nextSources fuel).CallChildren source (index + 1) := by
           intro fuel
           exact ArgsSource.afterHead_callChildren source sources canonical evaluated fuel
         obtain ⟨tailLength, finalPoint, finalFrame, finalValues, finalSlots, done, tailSteps, finalRows,
-          finalBounded, finalRealized, finalChecked, finalCells, finalInput⟩ :=
-          ih nextSources nextCanonical nextRows nextCells nextInput nextBounded nextRealized nextChecked
+          finalBounded, finalRealized, finalChecked, finalPost, finalCells, finalInput⟩ :=
+          ih nextSources nextCanonical nextRows nextPost nextCells nextInput nextBounded nextRealized nextChecked
         refine ⟨length + tailLength, finalPoint, finalFrame, .ref location :: finalValues, finalSlots,
-          .cons evaluated done, executed.append tailSteps, ?_, ?_, finalRealized, ?_, ?_, ?_⟩
+          .cons evaluated done, executed.append tailSteps, ?_, ?_, finalRealized, ?_, ?_, ?_, ?_⟩
         · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalRows
         · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalBounded
         · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalChecked
+        · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalPost
         · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, List.append_assoc] using finalCells
         · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalInput
 
@@ -106,6 +120,7 @@ theorem accepted_generated_call_slice_arguments {cfg : Cfg} {env : Env} {state :
         (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2.vals.size ∧
       (⟨map, slots⟩ : SplitCallRetained).Realizes cfg.mod source.world env ⟨point, frame, state⟩ ∧
       (∀ cell ∈ slots, cell.Checked source arguments.length frame) ∧
+      Post cfg env cx before initial (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2 frame point [] ∧
       CallArgumentCells (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 values
         (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2.vals.size frame ∧
       mapList (getVal frame) (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 state = .ok values state ∧
@@ -130,15 +145,19 @@ theorem accepted_generated_call_slice_arguments {cfg : Cfg} {env : Env} {state :
   have cells : CallArgumentCells (lowerArgs (arguments.take 0) (lowerEnv cfg.mod env.vars results) before).1 []
       (lowerArgs (arguments.take 0) (lowerEnv cfg.mod env.vars results) before).2.vals.size initial := by
     simpa [lowerArgs, pure_run] using CallArgumentCells.empty before.vals.size initial
-  obtain ⟨length, point, frame, values, slots, done, executed, rowsFinal, boundFinal, realizedFinal, checkedFinal, cellsFinal, inputFinal⟩ :=
-    accepted_generated_call_slice_sequence source occurrence rows form sources canonical split cells input' bounded' realized'
+  have wholePost : Post cfg env cx before initial
+      (lowerArgs (arguments.take 0) (lowerEnv cfg.mod env.vars results) before).2 initial start [] := by
+    simpa [lowerArgs, pure_run] using Post.init input.related input.atPoint
+  obtain ⟨length, point, frame, values, slots, done, executed, rowsFinal, boundFinal, realizedFinal, checkedFinal, postFinal, cellsFinal, inputFinal⟩ :=
+    accepted_generated_call_slice_sequence source occurrence rows form sources canonical split wholePost cells input' bounded' realized'
       (by simp) extended
   obtain ⟨fuel, evaluated⟩ := done.fuel
-  refine ⟨fuel, length, point, frame, values, slots, evaluated, executed, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨fuel, length, point, frame, values, slots, evaluated, executed, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simpa using rowsFinal
   · simpa using boundFinal
   · simpa using realizedFinal
   · simpa using checkedFinal
+  · simpa using postFinal
   · simpa using cellsFinal
   · simpa using cellsFinal.read state
   · simpa using inputFinal

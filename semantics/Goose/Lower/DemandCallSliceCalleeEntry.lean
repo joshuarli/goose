@@ -56,7 +56,7 @@ theorem accepted_generated_call_slice_callee_prefix {cfg : Cfg} {env : Env} {sta
         { state with nextAct := state.nextAct + 1, nextScope := state.nextScope + 1, store := preStore state.nextAct state.nextScope (((impl.params.toList.zip values).map fun item => (item.1.var, item.2)).take count) state.store } ∧
       (⟨map, slots⟩ : SplitCallRetained).Realizes cfg.mod source.world env
         ⟨point, frame, { state with nextAct := state.nextAct + 1, nextScope := state.nextScope + 1, store := preStore state.nextAct state.nextScope (((impl.params.toList.zip values).map fun item => (item.1.var, item.2)).take count) state.store }⟩ := by
-  obtain ⟨fuel, length, point, frame, values, slots, evaluated, executed, split, bound, carried, checked, cells, read, finalInput⟩ :=
+  obtain ⟨fuel, length, point, frame, values, slots, evaluated, executed, split, bound, carried, checked, wholePost, cells, read, finalInput⟩ :=
     accepted_generated_call_slice_arguments source occurrence rows form input bounded realized extended
   let le := lowerEnv cfg.mod env.vars results
   obtain ⟨ids, middle, afterCall, argsRun, definition, tail⟩ := lowerExpr_call_split
