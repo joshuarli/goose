@@ -101,6 +101,10 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (body : ∀ act pre, FuelSupport config fuel
         (.boundActivation ⟨context.impl, act, implementation.vars, [], []⟩ pre implementation.body origin)) :
       FuelSupport config (fuel + 1) (.callWith environment contextId arguments origin)
+  | valueChannelCall (fuel : Nat) (environment : RuntimeActivation) (context : Goose.Core.ContextId)
+      (arguments : List Arg) (origin : Goose.Core.OriginId)
+      (callee : ∀ channels, FuelSupport config fuel (.channelCall environment context arguments channels origin)) :
+      FuelSupport config (fuel + 1) (.value environment (.call context arguments origin))
   | channelCall (fuel : Nat) (environment : RuntimeActivation) (context : Goose.Core.ContextId)
       (arguments : List Arg) (channels : List Channel) (origin : Goose.Core.OriginId)
       (argumentChild : ∀ id implementation start lookupReady,
@@ -306,6 +310,10 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           rw [callWith_source fuel config environment contextId arguments origin context implementation before
             contextFound implementationFound resultsEmpty]
           exact .callWith contextFound implementationFound resultsEmpty argumentsHistory activationHistory
+      | valueChannelCall _ environment context arguments origin calleeSupported =>
+          refine .valueChannelCall fuel path environment context arguments origin before ?_
+          intro id implementation lookupReady channels ready lookup prepared
+          exact ih (.channelCall environment context arguments channels origin) (path ++ [0]) ready (calleeSupported channels)
       | channelCall _ environment context arguments channels origin argumentSupported activationSupported =>
           refine .channelCall fuel path environment context arguments channels origin before ?_ ?_
           · intro id implementation lookupReady callableChannels ready lookup arity prepared

@@ -821,6 +821,15 @@ inductive SourceHistory (config : EvalConfig) :
       SourceHistory config (fuel + 1) path
         (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments)) before
         (evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.byRef mutability place :: arguments) before)
+  | valueChannelCall (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (callee : ∀ id implementation lookupReady channels ready,
+        getImplementation config context before = .ok (id, implementation) lookupReady →
+        channelsFor config.layout environment.act implementation.results.toList origin lookupReady = .ok channels ready →
+        SourceHistory config fuel (path ++ [0]) (.channelCall environment context arguments channels origin) ready
+          (invokeCall fuel config environment context arguments channels origin ready)) :
+      SourceHistory config (fuel + 1) path (.value environment (.call context arguments origin)) before
+        (evalValue (fuel + 1) config environment (.call context arguments origin) before)
   | channelCall (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
       (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
       (origin : Goose.Core.OriginId) (before : ExecutionState)
@@ -883,7 +892,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall => rfl
+  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]

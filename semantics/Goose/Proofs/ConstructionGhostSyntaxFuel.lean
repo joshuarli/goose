@@ -12,6 +12,11 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | fill (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId)
       (fixed : (Ty.arr element count).nonfixed = false) (child : ValueSyntax config operand) :
       ValueSyntax config (.fill (.arr element count) operand origin)
+  | channelCall (contextId : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
+      (argumentsSyntax : ∀ id implementation start lookupReady,
+        getImplementation config contextId start = .ok (id, implementation) lookupReady →
+        ArgumentSyntax config implementation.params.toList arguments) :
+      ValueSyntax config (.call contextId arguments origin)
   | call (contextId : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
       (context : Context) (implementation : Impl)
       (contextFound : config.module.contexts[contextId]? = some context)
@@ -129,6 +134,9 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
         | bytes ty bytes origin => exact .legacy (fuel + 1) (.valueBytes environment ty bytes origin)
         | fill element count operand origin fixed child =>
             exact .fill fuel environment element count origin operand fixed (previous.value environment operand child)
+        | channelCall contextId arguments origin argumentsSyntax =>
+            exact .valueChannelCall fuel environment contextId arguments origin
+              (fun channels => previous.channelCall environment contextId arguments channels origin argumentsSyntax)
         | call contextId arguments origin context implementation contextFound implementationFound resultsEmpty argumentsSyntax =>
             exact .valueCallWith fuel environment contextId arguments origin context implementation contextFound implementationFound
               resultsEmpty (previous.call environment contextId arguments origin context implementation contextFound implementationFound
