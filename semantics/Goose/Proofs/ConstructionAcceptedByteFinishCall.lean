@@ -1,5 +1,6 @@
 import Goose.Proofs.ConstructionAcceptedReturnedCall
 import Goose.Proofs.ExitExecutionLandedChannels
+import Goose.Proofs.ConstructionAcceptedByteReturnProduce
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -32,5 +33,27 @@ theorem finishConstructCall_world (fuel : Nat) (config : EvalConfig) (initialize
   · simp [finishActivation, done, channels, finished, bind, deliverCarriers, pure, final]
   · exact world.finishReturnedCall config initialized after activation [.completed id] ambient types live regions pending
 
+theorem finishConstructSelfCall_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (activation : RuntimeActivation) (id : Nat) (ty : Ty) (origin : OriginId)
+    (action : EvalM (List Carrier)) (before after : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (channels : activation.channels = [.construct id])
+    (done : action before = .ok [.completed id] after)
+    (world : AcceptedWorld config initialized after
+      (.returned [.completed id] :: .callChannels activation [] :: ambient) types live regions pending)
+    (normalized : NormalizedCompletedCarrier after ty id) :
+    let final := { after with activations := after.activations.filter (fun current => current.act != activation.act) }
+    (finishActivation config.layout activation [ty] origin action >>= fun carriers =>
+      deliverCarriers fuel config.layout [.construct id] carriers origin) before = .ok [.completed id] final ∧
+    AcceptedWorld config initialized final (.returned [.completed id] :: ambient) types live regions pending := by
+  obtain ⟨count, built⟩ := normalized.built
+  have terminal := destinationSuccessorKeysInactive_built_terminal after.construction world.ownership.source.inactiveKeys id normalized.destination normalized.present count built
+  have inside := (Array.getElem?_eq_some_iff.mp normalized.present).1
+  have current : destinationCurrent after.construction id = .ok id := by
+    simp only [destinationCurrent_result, destinationCurrentSteps_succ, inside, ↓reduceIte, terminal]
+  exact finishConstructCall_world fuel config initialized activation id id ty origin action before after ambient types live regions pending channels done world current normalized
+
+#print axioms finishConstructSelfCall_world
 #print axioms finishConstructCall_world
 end Goose.Proofs.ConstructionAcceptedExecution
