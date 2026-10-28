@@ -24,7 +24,7 @@ theorem completion_register_call (fuel : Nat) (config : EvalConfig) (environment
       (fun channels => evalProduce (fuel + 1) config environment channels (.call target [] origin)) state =
       invokeCall fuel config environment target [] [.register ty] origin state := by
   cases executed : invokeCall fuel config environment target [] [.register ty] origin state <;>
-    simp [withCompletionChannels, evalProduce, selectCompletionChannel, materialize_noTokens, bind, pure, executed]
+    simp [withCompletionChannels, completionChannelSetup, evalProduce, selectCompletionChannel, materialize_noTokens, bind, pure, executed]
 
 theorem execActivationBody_register_call_tail (fuel : Nat) (config : EvalConfig)
     (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt) (before middle : ExecutionState)

@@ -66,7 +66,7 @@ theorem completion_byte_with_completion_channels (fuel : Nat) (config : EvalConf
       (.returned [.completed id] :: .completionChannels [token] [] [] :: ambient)
       (⟨[.completion token], [.completed id]⟩ :: pending) after afterTracked
     refine ⟨after, ?_, ?_⟩
-    · simp only [withCompletionChannels, List.mapM_cons, List.mapM_nil, liftConstruction, wait, bind, pure,
+    · simp only [withCompletionChannels, completionChannelSetup, List.mapM_cons, List.mapM_nil, liftConstruction, wait, bind, pure,
         List.map_cons, List.map_nil, List.filterMap_cons, List.filterMap_nil, evaluatedAt, materializeOwnedCarriers,
         List.reverse_cons, List.reverse_nil, List.nil_append, List.forIn_cons, List.forIn_nil,
         Bool.false_eq_true, ↓reduceIte, released]
