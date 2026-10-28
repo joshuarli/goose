@@ -142,6 +142,61 @@ theorem invokeCall_scalarLocal_prefix (fuel : Nat) (config : EvalConfig) (accept
           rw [callRun]
           exact ⟨nextTypes, nextLive, ambient, extend, initialized ▸ finishedWorld, initialized ▸ finishedClear, value, rfl, represented⟩
 
+theorem evalValue_scalarCall_prefix (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (target : Nat) (context : Context) (implementation : Impl) (ty : Ty) (origin : Nat) (scope : Nat)
+    (statements : List Stmt) (expression : Expr) (summary : Summary)
+    (world : AcceptedWorld config caller.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted caller state types)
+    (contextAt : config.module.contexts[target]? = some context)
+    (implementationAt : config.module.impls[context.impl]? = some implementation)
+    (parameters : implementation.params = #[]) (results : implementation.results = #[⟨ty, .register, none⟩])
+    (body : implementation.body = ⟨scope, statements, some expression⟩)
+    (known : implementation.summary = .known summary)
+    (scalarTy : (∃ intTy, ty = .int intTy) ∨ ty = .bool)
+    (form : ScalarLocalStatements statements) (tailForm : AcceptedBinaryExpression expression)
+    (scalarLocals : ∀ id expression origin, .letS id expression origin ∈ statements → ∀ descriptor,
+      implementation.vars[id]? = some descriptor → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool)
+    (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue caller (.call target [] origin) ty roots typingAfter rootsAfter) :
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := evalValue fuel config caller.interpretation.environment (.call target [] origin) state
+      RootTypesExtend types nextTypes ∧
+      AcceptedWorld config caller.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      FutureGlobalsClear config caller.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      (match outcome with
+       | .ok value _ => ValueRepresentation ty value
+       | .stop .. => True
+       | .escape .. | .jump .. => False) := by
+  cases fuel with
+  | zero =>
+    simp only [evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
+    exact ⟨types, live, ambient, (fun _ _ found => found), world, source.futureGlobals, trivial⟩
+  | succ fuel =>
+    obtain ⟨nextTypes, nextLive, nextAmbient, extend, callWorld, callClear, callResult⟩ :=
+      invokeCall_scalarLocal_prefix fuel config accepted caller state ambient types live regions pending target context implementation
+        ty origin scope statements expression summary world source contextAt implementationAt parameters results body known scalarTy
+        form tailForm scalarLocals roots typingAfter rootsAfter checked
+    cases execution : invokeCall fuel config caller.interpretation.environment target [] [.register ty] origin state with
+    | stop reason after =>
+      simp only [execution, Goose.Proofs.Exit.stepState] at callWorld callClear callResult
+      have evaluated : evalValue (fuel + 1) config caller.interpretation.environment (.call target [] origin) state = .stop reason after := by
+        simp [evalValue, getImplementation, contextAt, implementationAt, channelsFor, results, execution, bind, pure]
+      rw [evaluated]
+      exact ⟨nextTypes, nextLive, nextAmbient, extend, callWorld, callClear, trivial⟩
+    | escape address carriers after | jump target kind after => simp [execution] at callResult
+    | ok carriers after =>
+      simp only [execution, Goose.Proofs.Exit.stepState] at callWorld callClear callResult
+      obtain ⟨value, rfl, represented⟩ := callResult
+      have evaluated : evalValue (fuel + 1) config caller.interpretation.environment (.call target [] origin) state = .ok value after := by
+        simp [evalValue, getImplementation, contextAt, implementationAt, channelsFor, results, execution,
+          publishCarriers, liftConstruction, publishOperation, preflightPublication, ConstructionM.get,
+          List.mapM_cons, List.mapM_nil, List.forIn_nil, singleCarrier, carrierValue, bind, pure, Except.bind, Except.pure]
+      rw [evaluated]
+      exact ⟨nextTypes, nextLive, nextAmbient, extend, callWorld, callClear, represented⟩
+
+#print axioms evalValue_scalarCall_prefix
 #print axioms invokeCall_scalarLocal_prefix
 #print axioms invokeCall_zeroArgument_register_transition
 end Goose.Proofs.ConstructionAcceptedExecution
