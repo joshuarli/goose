@@ -613,11 +613,11 @@
  {
   "feature": "Accepted global byte-owner timeout",
   "label": "model-proved",
-  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwner_timeout_world; Goose.Proofs.ConstructionAcceptedExecution.acceptedByteGlobal_zero_run_timeout_world",
-  "statement": "A zero-fuel byte-owner global initializer that times out preserves the accepted world with its fresh open receiving region and leaves future globals unbound. The result is connected to an actual stopped module run when the first global has that initializer.",
-  "assumptions": "Accepted initial world and future-global freshness, checked byte-owner global descriptor, and an actual zero-fuel timeout. The module result assumes validation and that global zero is the stated byte owner.",
-  "limits": "Higher-fuel construction stops, other global types and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionAcceptedByteGlobalTimeout.lean; scoped Lean 4.35 closure and axiom checks."
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwners_timeout_world; Goose.Proofs.ConstructionAcceptedExecution.acceptedByteGlobal_zero_run_timeout_world",
+  "statement": "A timeout at any fuel during a sequence of byte-owner global initializers preserves the accepted world with its fresh open receiving region and leaves future globals unbound. Positive-fuel byte-owner initialization cannot time out. The zero-fuel result is connected to an actual stopped module run when the first global has that initializer.",
+  "assumptions": "Accepted initial world and future-global freshness, byte-owner global descriptors, and an actual timeout. The module result assumes validation and that global zero is the stated byte owner.",
+  "limits": "Other construction stops, other global types and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedByteGlobalTimeout.lean; Goose/Proofs/ConstructionByteGlobalLocal.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Expression-statement sequence stop reflection",
