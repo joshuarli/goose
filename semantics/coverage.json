@@ -619,8 +619,8 @@
   "feature": "Generated scalar field addressing",
   "statement": "A field projection of an accepted local-slot or global place evaluates at the source and follows the two generated GIR address steps to the corresponding field address. The field child exposes its canonical source path and world.",
   "assumptions": "Accepted field place, scalar local-slot or global owner, generated builder state and the address-step inputs.",
-  "limits": "Field-place retained-alias transport and assignment prefix and stop reflection are not established. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandFieldAddress.lean; Goose/Lower/DemandFieldScalarAddress.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "Only one field projection over a local-slot or global owner is covered. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandFieldAddress.lean; Goose/Lower/DemandFieldScalarAddress.lean; Goose/Lower/DemandAssignmentFieldAlias.lean; Goose/Lower/DemandFieldAssignmentPrefix.lean; Goose/Lower/DemandFieldAssignmentStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted byte-owner allocation timeout",
@@ -677,10 +677,10 @@
  },
  {
   "feature": "Accepted scalar value evaluation",
-  "statement": "At every fuel, recursively composed checked integer and Boolean literals, initialized global reads, negations, integer unary operations, conversions, binary operations, comparisons and short-circuit Boolean operations preserve the accepted world and source frame; every successful value satisfies its checked value invariant. Numeric aborts, operand stops and skipped short-circuit operands are included.",
+  "statement": "At every fuel, recursively composed checked integer and Boolean literals, direct local and initialized global reads, negations, integer unary operations, conversions, binary operations, comparisons and short-circuit Boolean operations preserve the accepted world and source frame; every successful value satisfies its checked value invariant. Numeric aborts, operand stops and skipped short-circuit operands are included.",
   "assumptions": "Accepted world and source frame, and a checked value expression.",
   "limits": "Other places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; Goose/Proofs/ConstructionAcceptedNotComplete.lean; Goose/Proofs/ConstructionAcceptedNumericComplete.lean; Goose/Proofs/ConstructionAcceptedBinaryComplete.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; Goose/Proofs/ConstructionAcceptedLocalRead.lean; Goose/Proofs/ConstructionAcceptedNotComplete.lean; Goose/Proofs/ConstructionAcceptedNumericComplete.lean; Goose/Proofs/ConstructionAcceptedBinaryComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Stopped byte-owner local construction",
@@ -838,16 +838,16 @@
  },
  {
   "feature": "Mixed scalar assignment statement agreement",
-  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, local or global clears and assignments whose values include literals, local or global reads, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
+  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, local or global clears and assignments to local or global places or their fields. Assignment values include literals, local or global reads, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
   "assumptions": "Accepted source and generated sequence, related builder, admitted bounded realized retained map, generated rows and builder extension. Direct read assignments require a reference-target type proof, derivable from the local or global declaration.",
-  "limits": "Assignment destinations and direct-read sources are local or global places; other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "limits": "Field destinations cover one projection; direct-read sources are local or global places. Other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandScalarAssignmentExpressions.lean; Goose/Lower/DemandScalarAssignmentStatementAgreement.lean; Goose/Lower/DemandScalarClear.lean; Goose/Lower/DemandReadAssignmentTyping.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Mixed scalar assignment block agreement",
   "statement": "Successful generated prefixes and non-timeout stops agree with source execution through scope entry, mixed statement sequences and scope exit for blocks containing supported scalar assignments, including a supported final scalar or short-circuit expression. Intermediate successful prefixes preserve the accepted frame.",
   "assumptions": "Accepted block source, generated block and statement rows, related builder, admitted bounded realized retained map and builder extension.",
-  "limits": "No loop context in the stop theorems; direct read assignments require a reference-target type proof. Assignments use supported expressions and local or global destinations. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "limits": "No loop context in the stop theorems; direct read assignments require a reference-target type proof. Assignments use supported expressions and local or global destinations, including one field projection. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandScalarAssignmentBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentUnitBlock.lean; Goose/Lower/DemandScalarAssignmentValueBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentValueBlock.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
