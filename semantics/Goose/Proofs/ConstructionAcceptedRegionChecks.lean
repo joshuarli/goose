@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedAllocation
+import Goose.Proofs.ConstructionAcceptedRegionLimits
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -53,8 +53,8 @@ private def nestedOwnerModule : Module := Id.run do
   | .done .returned _ events => events == [.begin 0, .begin 1, .write 1 0, .publish 1, .write 0 0, .publish 0]
   | _ => false)
 
-private def laterAcceptedOwner : Option (Nat × Nat × Nat × Nat) := Id.run do
-  let action : EvalM (Nat × Nat × Nat × Nat) := do
+private def laterAcceptedOwner : Option (Nat × Nat × Nat × Nat × Nat) := Id.run do
+  let action : EvalM (Nat × Nat × Nat × Nat × Nat) := do
     let activation ← freshAct
     let outerScope ← freshScope
     let before ← EvalM.get
@@ -66,12 +66,15 @@ private def laterAcceptedOwner : Option (Nat × Nat × Nat × Nat) := Id.run do
     let _ ← execStmt 100 config environment (.letS 1 (.bytes (.varr (.int .u8)) [65] 0) 0)
     let some (.stored stored) := (← EvalM.get).objects.lookup (.local activation innerScope 1) | fault .unbound
     let (_, run) ← sampledStored stored
-    pure (outer, stored.storage, run.byteStart, (freshReceivingRegion before outer).limit stored.storage)
+    let current ← EvalM.get
+    let region := freshReceivingRegion before outer
+    let extended := extendReceivingLimit region stored.storage (storageExtent current stored.storage)
+    pure (outer, stored.storage, run.byteStart, region.limit stored.storage, extended.limit stored.storage)
   match action .initial with
   | .ok result _ => return some result
   | _ => return none
 
-#guard laterAcceptedOwner == some (0, 1, 4, 0)
+#guard laterAcceptedOwner == some (0, 1, 4, 0, 5)
 
 #print axioms freshRegion_excludes_later_sample
 

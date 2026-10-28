@@ -488,6 +488,15 @@
   "evidence": "ConstructionAcceptedFreshness.lean, ConstructionAcceptedStaticBytes.lean and ConstructionAcceptedFreshnessChecks.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Receiving-region limits for fresh stored owners",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.ReceivingProtection.extend_unrelated_storage; Goose.Proofs.ConstructionAcceptedExecution.newDestination_separate_from_regions; Goose.Proofs.ConstructionAcceptedExecution.newDestination_excludes_freshRegion; Goose.Proofs.ConstructionAcceptedExecution.bindRoot_freshStored_extendedWorld",
+  "statement": "A receiving region can extend its observation limit for storage unrelated to its receiver without weakening the receiver bounds. Fresh destination allocation is separate from existing region storage, and fresh stored-owner binding preserves the resulting world.",
+  "assumptions": "The stated accepted world, successful fresh allocation, source typing and backing facts. Binding requires the new storage to remain unrelated to region receivers and its named destination to be excluded from each protected region's mutable destinations.",
+  "limits": "Allocation proves separation at its immediate result; the evaluator induction must preserve the storage and destination links through construction and publication. TH-CON-01 remains open.",
+  "evidence": "ConstructionAcceptedRegionLimits.lean and ConstructionAcceptedRegionChecks.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Fresh receiving-region storage limit counterexample",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.freshRegion_excludes_later_sample",
