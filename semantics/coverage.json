@@ -421,10 +421,10 @@
  },
  {
   "feature": "Scoped nonlocal return selection",
-  "statement": "An actual block whose first statement returns from a nonlocal target selects the nearest matching activation and releases its enclosing scope without changing construction state. An actual activation with a nested conditional block catches a return to itself or propagates a return to a distinct activation after releasing both scopes. Roots outside the released scopes remain present.",
-  "assumptions": "Successful block binding, target selection and return-channel completion. The activation case also assumes that return carriers are already landed and normalized.",
-  "limits": "Deriving channel ownership validity and landing readiness, propagation through the call site to the outer handler, and general statement positions remain open. Outside-root preservation requires explicit exclusion from released scope roots. This component does not close TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ExitExecutionBlockNonlocal.lean; Goose/Proofs/ExitExecutionActivationBlock.lean; Goose/Proofs/ExitExecutionActivationOuter.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "An actual block whose first statement returns from a nonlocal target selects the nearest matching activation and releases its enclosing scope without changing construction state. A nested call propagates a return through an intervening activation to the outer call and handler. Roots outside the released scopes remain present. A successful integer literal return to a matching register channel establishes landed-channel readiness through scope unwind.",
+  "assumptions": "Successful block binding, target selection and return-channel completion. The nested call assumes landed and normalized return carriers; the literal result derives readiness for its matching single register channel.",
+  "limits": "General channel ownership validity and landing readiness, constructed and completion channels, and general statement positions remain open. Outside-root preservation requires explicit exclusion from released scope roots. This component does not close TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ExitExecutionBlockNonlocal.lean; Goose/Proofs/ExitExecutionActivationBlock.lean; Goose/Proofs/ExitExecutionActivationOuter.lean; Goose/Proofs/ExitExecutionNestedCall.lean; Goose/Proofs/ExitExecutionRegisterLanding.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted construction value representation fragment",
@@ -642,8 +642,8 @@
  },
  {
   "feature": "Accepted byte-owner value evaluation",
-  "statement": "For every fuel and outcome of actual byte-owner value evaluation, the resulting state preserves an accepted world and the accepted source frame. The receiving-region list accounts for an unfinished allocated destination.",
-  "assumptions": "Accepted world and source frame before evaluation. The expression is a byte literal producing a growable byte owner.",
+  "statement": "For every fuel and outcome of actual byte-owner value evaluation, the resulting state preserves an accepted world and the accepted source frame. A successful checked expression also yields an accepted value. The receiving-region list accounts for an unfinished allocated destination.",
+  "assumptions": "Accepted world and source frame before evaluation. The expression is a byte literal producing a growable byte owner; the accepted-value conclusion also requires its source check.",
   "limits": "This is one evaluator case. Other value and construction forms, call and exit handling, and the full mutual induction remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionByteValueComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },

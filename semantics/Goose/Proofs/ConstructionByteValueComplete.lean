@@ -88,7 +88,38 @@ theorem evalValue_byteOwner_accepted_world (fuel : Nat) (config : EvalConfig) (a
         rw [executed] at localAction
         cases localAction
 
+theorem evalValue_checkedByteOwner_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (before : ExecutionState) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (ty : Ty) (roots : List RootRef)
+    (typingAfter : Nat) (rootsAfter : RState)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types)
+    (checked : CheckedValue frame (.bytes (.varr (.int .u8)) bytes origin) ty roots typingAfter rootsAfter) :
+    ∃ nextRegions,
+      let outcome := evalValue fuel config frame.interpretation.environment (.bytes (.varr (.int .u8)) bytes origin) before
+      let after := Goose.Proofs.Exit.stepState outcome
+      AcceptedWorld config frame.initialized after ambient types live nextRegions pending ∧
+      AcceptedFrame config accepted frame after types ∧
+      (∀ value, outcome = .ok value after → AcceptedValue config.layout types frame.interpretation after ty roots value) := by
+  obtain ⟨nextRegions, finalWorld, finalSource⟩ := evalValue_byteOwner_accepted_world fuel config accepted frame before bytes origin
+    ambient types live regions pending world source
+  refine ⟨nextRegions, finalWorld, finalSource, ?_⟩
+  intro value evaluated
+  cases fuel with
+  | zero => simp [evalValue, timeout, EvalM.stop] at evaluated
+  | succ fuel =>
+    cases fuel with
+    | zero =>
+      simp only [evalValue, Ty.nonfixed, constructLocal, producerCount?, literalCount, bind, ↓reduceIte] at evaluated
+      cases created : newDestination (LayoutEnv.ofModule config.module) frame.interpretation.environment.act (.varr (.int .u8)) .value origin none
+          (some bytes.length) before <;> simp only [created, buildExpr, timeout, EvalM.stop, reduceCtorEq] at evaluated
+    | succ fuel =>
+      exact (evalValue_checkedByteOwner_world fuel config accepted frame before _ value ambient types live bytes origin ty roots typingAfter rootsAfter
+        regions pending world source checked evaluated).2.2
+
 #print axioms evalValue_byteOwner_stopped_world
 #print axioms evalValue_byteOwner_accepted_world
+#print axioms evalValue_checkedByteOwner_complete
 
 end Goose.Proofs.ConstructionAcceptedExecution
