@@ -9,7 +9,7 @@ theorem CallMixedStoppedCells.actualCalleeEntry {cfg : Cfg} {env : Env} {state :
     {source : ExprSource cfg env (.call context arguments origin) state}
     {cx : FnCtx} {results : List Ty} {before : LS} {loop : Option LoopCtx} {map : RetainedSsaMap}
     {initial : GIR.Frame} {start : Pt} {taken : Nat} {reached : DemandRuntimePoint} {stop : Stop} {after : St}
-    (outcome : CallMixedStoppedCells source cx results before loop map [] 0 arguments ⟨start, initial, state⟩ taken reached stop after)
+    (outcome : CallMixedStoppedCells source cx results before loop map initial [] 0 arguments ⟨start, initial, state⟩ taken reached stop after)
     (extended : ExtT (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
     (callerStart : RuntimePoint cx.cfg cx.fn start initial state) (depth : env.depth < maxCallDepth) :
     (∃ fuel, mapList (evalArg fuel cfg env) arguments state = .stop stop after) ∨
@@ -28,7 +28,7 @@ theorem CallMixedStoppedCells.actualCalleeEntry {cfg : Cfg} {env : Env} {state :
               { boundary.state with nextAct := boundary.state.nextAct + 1, nextScope := boundary.state.nextScope + 1, store := preStore boundary.state.nextAct boundary.state.nextScope [] boundary.state.store }⟩ := by
   cases outcome with
   | aborted trace => exact Or.inl trace.fuel.2
-  | @complete consumed remaining boundary values prior count executed residual trace tracked bounded realized cells input =>
+  | @complete consumed remaining boundary values prior count executed residual trace tracked bounded realized wholePost cells input =>
     obtain ⟨sourceFuel, evaluated⟩ := trace.fuel
     have read := cells.read boundary.state
     let le := lowerEnv cfg.mod env.vars results
