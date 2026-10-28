@@ -181,17 +181,47 @@ theorem accepted_generated_sequence_prefix_nil {cfg : Cfg} {env : Env} {cx : FnC
   exact ⟨owned, coverage, .complete (consumed := 0) (by omega) (.zero _) steps evaluated
     (.normal (Post.init input.related input.atPoint) (source.result 1 (.normal .unit) raw) bounded realized)⟩
 
-theorem accepted_generated_sequence_prefix_cons {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+def InvariantSequencePrefixFamily {cfg : Cfg} {env : Env} (cx : FnCtx) (results : List Ty)
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool)
+    (block : Core.Block) (statements : List Stmt)
+    (cursor : ∀ {statement : Stmt} {state : St}, StmtSource cfg env statement state →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop) (invariant : DemandRuntimePoint → Prop) : Prop :=
+  ∀ {state : St} (source : StmtsSource cfg env statements state)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block loop bindings want block) before),
+    source.all = block.stmts → source.scope = block.scope → source.value = block.value →
+    ∀ {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required),
+    map.Covers required → map.Admitted cfg.mod.profile source.context.retained →
+    map.Bounded (lowerStmts loop (block.stmts.take source.offset) (lowerEnv cfg.mod env.vars results)
+      (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2.vals.size →
+    ∀ {initial : GIR.Frame} {start : Pt}, map.Realizes cfg.mod source.world env ⟨start, initial, state⟩ →
+    GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
+      (lowerStmts loop (block.stmts.take source.offset) (lowerEnv cfg.mod env.vars results)
+        (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2 initial start →
+    ExtT (lowerStmts loop statements (lowerEnv cfg.mod env.vars results)
+      (lowerStmts loop (block.stmts.take source.offset) (lowerEnv cfg.mod env.vars results)
+        (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2).2 cx.fn.blocks →
+    invariant ⟨start, initial, state⟩ →
+    ∀ {taken : Nat} {reached : DemandRuntimePoint}, DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached →
+    GeneratedSequencePrefixDecomposition source selected occurrence rows map initial start (@cursor) taken reached
+
+
+theorem accepted_generated_invariant_sequence_prefix_cons {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool) (block : Core.Block)
     (cursor : ∀ {statement : Stmt} {state : St}, StmtSource cfg env statement state →
       LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    (invariant : DemandRuntimePoint → Prop)
+    (advance : ∀ {length : Nat} {first last : DemandRuntimePoint}, invariant first → DemandRuntimePrefix cx length first last → invariant last)
     {statement : Stmt} {rest : List Stmt}
-    (headFamily : GeneratedStatementPrefixFamily cx results selected loop statement (@cursor))
-    (tailFamily : GeneratedSequencePrefixFamily cx results selected before loop bindings want block rest (@cursor)) :
-    GeneratedSequencePrefixFamily cx results selected before loop bindings want block (statement :: rest) (@cursor) := by
-  intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended taken reached steps
+    (headFamily : InvariantStatementPrefixFamily cx results selected loop statement (@cursor) invariant)
+    (tailFamily : InvariantSequencePrefixFamily cx results selected before loop bindings want block rest (@cursor) invariant) :
+    InvariantSequencePrefixFamily cx results selected before loop bindings want block (statement :: rest) (@cursor) invariant := by
+  intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended callerStart taken reached steps
   obtain ⟨head, canonical, _, headTyping, headRoots, headOccurrence, headRows, _, headAdmitted, _, nextSource⟩ :=
     accepted_generated_statement_entry source occurrence all scope value rows coverage admitted input.atPoint input.related realized
   have headOwner : GeneratedSourceOwner selected head.context :=
@@ -216,7 +246,7 @@ theorem accepted_generated_sequence_prefix_cons {cfg : Cfg} {env : Env} {cx : Fn
   have restExtended := extended
   rw [lowerRun] at restExtended
   have headExtended := restExtended.of_adv (advB_lowerStmts loop rest _ _ _ _ rfl)
-  have headProgress := headFamily head headOwner headOccurrence headRows coverage headAdmitted bounded headRealized headInput headExtended steps
+  have headProgress := headFamily head headOwner headOccurrence headRows coverage headAdmitted bounded headRealized headInput headExtended callerStart steps
   refine ⟨owned, coverage, ?_⟩
   cases headProgress.progress with
   | interior demanded =>
@@ -265,7 +295,7 @@ theorem accepted_generated_sequence_prefix_cons {cfg : Cfg} {env : Env} {cx : Fn
         simpa only [RetainedSsaMap.Realizes, tailCanonical.world, canonical.world] using headCarried
       have tailProgress := tailFamily tail tailOwner tailOccurrence (tailCanonical.all.trans all)
         (tailCanonical.scope.trans scope) (tailCanonical.value.trans value) tailRows coverage tailAdmitted
-        (by rw [tailBuilder]; exact headBounded) tailCarried tailInput (by rw [tailBuilder]; exact restExtended) residual
+        (by rw [tailBuilder]; exact headBounded) tailCarried tailInput (by rw [tailBuilder]; exact restExtended) (advance callerStart prefixSteps) residual
       cases tailProgress.progress with
       | interior demanded =>
         exact .interior (.tail tailCanonical headRaw prefixSteps headPost demanded)
@@ -293,5 +323,26 @@ theorem accepted_generated_sequence_prefix_cons {cfg : Cfg} {env : Env} {cx : Fn
           have combined := StatementLoopPost.prefix input.related headPost input.counter tailPost
           exact .complete (by omega) (prefixSteps.append tailSteps) afterPrefix sourceDone
             (.transfer abnormal (by rw [lowerRun]; exact combined))
+
+
+theorem accepted_generated_sequence_prefix_cons {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool) (block : Core.Block)
+    (cursor : ∀ {statement : Stmt} {state : St}, StmtSource cfg env statement state →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    {statement : Stmt} {rest : List Stmt}
+    (headFamily : GeneratedStatementPrefixFamily cx results selected loop statement (@cursor))
+    (tailFamily : GeneratedSequencePrefixFamily cx results selected before loop bindings want block rest (@cursor)) :
+    GeneratedSequencePrefixFamily cx results selected before loop bindings want block (statement :: rest) (@cursor) := by
+  have head : InvariantStatementPrefixFamily cx results selected loop statement (@cursor) (fun _ => True) := by
+    intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended _ taken reached steps
+    exact headFamily source owned occurrence rows coverage admitted bounded realized input extended steps
+  have tail : InvariantSequencePrefixFamily cx results selected before loop bindings want block rest (@cursor) (fun _ => True) := by
+    intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended _ taken reached steps
+    exact tailFamily source owned occurrence all scope value rows coverage admitted bounded realized input extended steps
+  intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended taken reached steps
+  exact accepted_generated_invariant_sequence_prefix_cons selected before loop bindings want block cursor (fun _ => True)
+    (fun _ _ => trivial) head tail source owned occurrence all scope value rows coverage admitted bounded realized input extended trivial steps
 
 end Goose.Lower

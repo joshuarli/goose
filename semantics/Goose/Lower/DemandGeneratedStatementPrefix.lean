@@ -85,6 +85,28 @@ def GeneratedStatementPrefixFamily {cfg : Cfg} {env : Env} (cx : FnCtx) (results
     GeneratedStatementPrefixDecomposition source selected occurrence rows map initial start
       (cursor source before (lowerStmt loop statement (lowerEnv cfg.mod env.vars results) before).2 initial start map required) taken reached
 
+def InvariantStatementPrefixFamily {cfg : Cfg} {env : Env} (cx : FnCtx) (results : List Ty)
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (loop : Option LoopCtx) (statement : Stmt)
+    (cursor : ∀ {statement : Stmt} {state : St}, StmtSource cfg env statement state →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop) (invariant : DemandRuntimePoint → Prop) : Prop :=
+  ∀ {state : St} (source : StmtSource cfg env statement state) {before : LS}
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.statement loop statement) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required),
+    map.Covers required → map.Admitted cfg.mod.profile source.context.retained → map.Bounded before.vals.size →
+    ∀ {initial : GIR.Frame} {start : Pt},
+    map.Realizes cfg.mod source.world env ⟨start, initial, state⟩ →
+    GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start →
+    ExtT (lowerStmt loop statement (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks →
+    invariant ⟨start, initial, state⟩ →
+    ∀ {taken : Nat} {reached : DemandRuntimePoint}, DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached →
+    GeneratedStatementPrefixDecomposition source selected occurrence rows map initial start
+      (cursor source before (lowerStmt loop statement (lowerEnv cfg.mod env.vars results) before).2 initial start map required) taken reached
+
+
 theorem accepted_generated_global_clear_prefix {cfg : Cfg} {env : Env} {global : GlobalId} {origin : OriginId} {state : St}
     (source : StmtSource cfg env (.clear (.global global) origin) state)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}

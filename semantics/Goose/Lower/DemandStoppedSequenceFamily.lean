@@ -103,15 +103,44 @@ theorem accepted_generated_stopped_sequence_nil {cfg : Cfg} {env : Env} {cx : Fn
   exact .complete (consumed := 0) (by omega) (.zero _) steps evaluated
     (.normal (Post.init input.related input.atPoint) (source.result 1 (.normal .unit) raw) bounded realized)
 
-theorem accepted_generated_stopped_sequence_cons {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+def InvariantStoppedSequencePrefixFamily {cfg : Cfg} {env : Env} (cx : FnCtx) (results : List Ty)
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool)
+    (block : Core.Block) (statements : List Stmt) (invariant : DemandRuntimePoint → Prop) : Prop :=
+  ∀ {state : St} (source : StmtsSource cfg env statements state)
+    (_owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block loop bindings want block) before),
+    source.all = block.stmts → source.scope = block.scope → source.value = block.value →
+    ∀ {required map : RetainedSsaMap} (_rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required),
+    map.Covers required → map.Admitted cfg.mod.profile source.context.retained →
+    map.Bounded (lowerStmts loop (block.stmts.take source.offset) (lowerEnv cfg.mod env.vars results)
+      (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2.vals.size →
+    ∀ {initial : GIR.Frame} {start : Pt}, map.Realizes cfg.mod source.world env ⟨start, initial, state⟩ →
+    GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
+      (lowerStmts loop (block.stmts.take source.offset) (lowerEnv cfg.mod env.vars results)
+        (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2 initial start →
+    ExtT (lowerStmts loop statements (lowerEnv cfg.mod env.vars results)
+      (lowerStmts loop (block.stmts.take source.offset) (lowerEnv cfg.mod env.vars results)
+        (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2).2 cx.fn.blocks →
+    invariant ⟨start, initial, state⟩ →
+    ∀ {taken : Nat} {reached : DemandRuntimePoint}, DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached →
+    ∀ {fuel : Nat} {stop : Stop} {after : St}, DemandInstructionStop cx fuel reached stop after → stop ≠ .timeout →
+    StoppedSequencePrefix source map cx results before loop bindings block initial start taken reached stop after
+
+
+theorem accepted_generated_invariant_stopped_sequence_cons {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool) (block : Core.Block)
+    (invariant : DemandRuntimePoint → Prop)
+    (advance : ∀ {length : Nat} {first last : DemandRuntimePoint}, invariant first → DemandRuntimePrefix cx length first last → invariant last)
     {statement : Stmt} {rest : List Stmt}
-    (headFamily : GeneratedStoppedStatementPrefixFamily cx results selected loop statement)
-    (tailFamily : GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block rest) :
-    GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block (statement :: rest) := by
-  intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended taken reached steps targetFuel stop after stopped nonTimeout
+    (headFamily : InvariantStoppedStatementPrefixFamily cx results selected loop statement invariant)
+    (tailFamily : InvariantStoppedSequencePrefixFamily cx results selected before loop bindings want block rest invariant) :
+    InvariantStoppedSequencePrefixFamily cx results selected before loop bindings want block (statement :: rest) invariant := by
+  intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended callerStart taken reached steps targetFuel stop after stopped nonTimeout
   obtain ⟨head, canonical, _, headTyping, headRoots, headOccurrence, headRows, _, headAdmitted, _, nextSource⟩ :=
     accepted_generated_statement_entry source occurrence all scope value rows coverage admitted input.atPoint input.related realized
   have headOwner : GeneratedSourceOwner selected head.context :=
@@ -136,7 +165,7 @@ theorem accepted_generated_stopped_sequence_cons {cfg : Cfg} {env : Env} {cx : F
   have restExtended := extended
   rw [lowerRun] at restExtended
   have headExtended := restExtended.of_adv (advB_lowerStmts loop rest _ _ _ _ rfl)
-  have headProgress := headFamily head headOwner headOccurrence headRows coverage headAdmitted bounded headRealized headInput headExtended steps stopped nonTimeout
+  have headProgress := headFamily head headOwner headOccurrence headRows coverage headAdmitted bounded headRealized headInput headExtended callerStart steps stopped nonTimeout
   cases headProgress with
   | aborted fuel done =>
     exact .aborted (fuel + 1) (prepared_sequence_cons_stopped_head done)
@@ -184,7 +213,7 @@ theorem accepted_generated_stopped_sequence_cons {cfg : Cfg} {env : Env} {cx : F
         simpa only [RetainedSsaMap.Realizes, tailCanonical.world, canonical.world] using headCarried
       have tailProgress := tailFamily tail tailOwner tailOccurrence (tailCanonical.all.trans all)
         (tailCanonical.scope.trans scope) (tailCanonical.value.trans value) tailRows coverage tailAdmitted
-        (by rw [tailBuilder]; exact headBounded) tailCarried tailInput (by rw [tailBuilder]; exact restExtended) residual stopped nonTimeout
+        (by rw [tailBuilder]; exact headBounded) tailCarried tailInput (by rw [tailBuilder]; exact restExtended) (advance callerStart prefixSteps) residual stopped nonTimeout
       cases tailProgress with
       | aborted fuel done =>
         obtain ⟨sourceFuel, sourceDone⟩ := prepared_sequence_cons_stopped_tail headRaw done nonTimeout
@@ -213,6 +242,25 @@ theorem accepted_generated_stopped_sequence_cons {cfg : Cfg} {env : Env} {cx : F
           have combined := StatementLoopPost.prefix input.related headPost input.counter tailPost
           exact .complete (by omega) (prefixSteps.append tailSteps) afterPrefix sourceDone
             (.transfer abnormal (by rw [lowerRun]; exact combined))
+
+
+theorem accepted_generated_stopped_sequence_cons {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool) (block : Core.Block)
+    {statement : Stmt} {rest : List Stmt}
+    (headFamily : GeneratedStoppedStatementPrefixFamily cx results selected loop statement)
+    (tailFamily : GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block rest) :
+    GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block (statement :: rest) := by
+  have head : InvariantStoppedStatementPrefixFamily cx results selected loop statement (fun _ => True) := by
+    intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended _ taken reached steps fuel stop after stopped nonTimeout
+    exact headFamily source owned occurrence rows coverage admitted bounded realized input extended steps stopped nonTimeout
+  have tail : InvariantStoppedSequencePrefixFamily cx results selected before loop bindings want block rest (fun _ => True) := by
+    intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended _ taken reached steps fuel stop after stopped nonTimeout
+    exact tailFamily source owned occurrence all scope value rows coverage admitted bounded realized input extended steps stopped nonTimeout
+  intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended taken reached steps fuel stop after stopped nonTimeout
+  exact accepted_generated_invariant_stopped_sequence_cons selected before loop bindings want block (fun _ => True)
+    (fun _ _ => trivial) head tail source owned occurrence all scope value rows coverage admitted bounded realized input extended trivial steps stopped nonTimeout
 
 inductive StoppedExpressionStatements : List Stmt → Prop
   | nil : StoppedExpressionStatements []
