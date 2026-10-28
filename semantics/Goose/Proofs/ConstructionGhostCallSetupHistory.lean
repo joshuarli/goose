@@ -4,7 +4,8 @@ import Goose.Proofs.ConstructionGhostCallHistoryInversion
 namespace Goose.Proofs.ConstructionGhostCallSetupHistory
 open Goose.Construct Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostArguments
 open Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostCallHistoryInversion
-open Goose.Proofs.ConstructionGhostCallSetup
+open Goose.Proofs.ConstructionGhostCallSetup Goose.Proofs.ConstructionGhostSourceFuel
+open Goose.Proofs.ConstructionGhostSyntaxFuel
 
 theorem call_arguments_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
     {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}
@@ -22,11 +23,9 @@ theorem call_arguments_history {config : EvalConfig} {α : Type} {fuel : Nat} {p
       (evalArguments sourceFuel config environment implementation.vars implementation.params.toList arguments argumentsReady) := by
   cases history <;> simp_all [channelCallSyntax]
 
-theorem invokeCall_setupHistory (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+def CallSetupHistory (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (path : List Nat) (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
-    (origin : Goose.Core.OriginId) (before : ExecutionState)
-    (history : SourceHistory config (fuel + 1) path (.channelCall environment context arguments channels origin) before
-      (invokeCall (fuel + 1) config environment context arguments channels origin before)) :
+    (origin : Goose.Core.OriginId) (before : ExecutionState) : Prop :=
     (∃ terminal, terminalCall (getImplementation config context before) = some terminal ∧
       invokeCall (fuel + 1) config environment context arguments channels origin before = terminal) ∨
     (∃ id implementation lookupReady, getImplementation config context before = .ok (id, implementation) lookupReady ∧
@@ -43,7 +42,14 @@ theorem invokeCall_setupHistory (fuel : Nat) (config : EvalConfig) (environment 
       ArgumentReplay config environment implementation.vars fuel 0 implementation.params.toList arguments argumentsReady outcome visits ∧
       SourceHistory config fuel (path ++ [0]) (.arguments environment implementation.vars implementation.params.toList arguments) argumentsReady outcome ∧
       invokeCall (fuel + 1) config environment context arguments channels origin before =
-        callArgumentsContinuation fuel config id implementation channels callableChannels origin outcome) := by
+        callArgumentsContinuation fuel config id implementation channels callableChannels origin outcome)
+
+theorem invokeCall_setupHistory (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
+    (origin : Goose.Core.OriginId) (before : ExecutionState)
+    (history : SourceHistory config (fuel + 1) path (.channelCall environment context arguments channels origin) before
+      (invokeCall (fuel + 1) config environment context arguments channels origin before)) : CallSetupHistory fuel config environment path context arguments channels origin before := by
+  unfold CallSetupHistory
   rcases invokeCall_setupClassification fuel config environment context arguments channels origin before with
     lookupTerminal | arityFault | preparationTerminal | ⟨id, implementation, lookupReady, callableChannels, argumentsReady,
       outcome, visits, lookup, arity, prepared, replay, execution⟩
@@ -56,6 +62,18 @@ theorem invokeCall_setupHistory (fuel : Nat) (config : EvalConfig) (environment 
     exact Or.inr (Or.inr (Or.inr ⟨id, implementation, lookupReady, callableChannels, argumentsReady, outcome, visits,
       lookup, arity, prepared, replay, argumentsHistory, execution⟩))
 
+theorem invokeCall_validatedSetupHistory (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
+    (origin : Goose.Core.OriginId) (before : ExecutionState) (closed : ClosedModuleWithTails config)
+    (argumentsSyntax : ∀ id implementation start lookupReady,
+      getImplementation config context start = .ok (id, implementation) lookupReady →
+      ArgumentSyntax config implementation.params.toList arguments) :
+    CallSetupHistory fuel config environment path context arguments channels origin before := by
+  have support := (syntaxFuel_existsWithTails (fuel + 1) config closed).channelCall environment context arguments channels origin argumentsSyntax
+  have history := fuelHistory_exists (fuel + 1) config (.channelCall environment context arguments channels origin) path before support
+  exact invokeCall_setupHistory fuel config environment path context arguments channels origin before history
+
+#print axioms invokeCall_validatedSetupHistory
 #print axioms invokeCall_setupHistory
 #print axioms call_arguments_history
 end Goose.Proofs.ConstructionGhostCallSetupHistory
