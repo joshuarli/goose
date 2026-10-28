@@ -1,8 +1,73 @@
 import Goose.Lower.DemandCallLoopNormal
+import Goose.Lower.DemandCallLoopMixedNormal
+import Goose.Lower.DemandWhileScalarCallAgreement
 import Goose.Lower.DemandReachableBranchBlock
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
+
+theorem accepted_generated_while_scalar_call_outer_block {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state)
+    (condition : Expr) (body : Core.Block) (loopOrigin : OriginId) (conditionForm : ControlPrefixExpression condition)
+    (outerStatements : block.stmts = [.while condition body loopOrigin]) (outerNoValue : block.value = none)
+    (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
+      { env with scopes := (body.scope, middle.nextScope) :: (block.scope, state.nextScope) :: env.scopes } body.stmts)
+    (noValue : body.value = none)
+    {caller : Func} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS}
+    (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod caller (lowerEnv cfg.mod env.vars results)
+      root source.path (.block none [] false block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results none source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock none [] false block (lowerEnv cfg.mod env.vars results) before).2 caller.blocks)
+    (entry : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller start initial state) :
+    (∀ {taken : Nat} {reached : DemandRuntimePoint},
+      DemandRuntimePrefix ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ taken ⟨start, initial, state⟩ reached →
+      GeneratedGenericBranchBlockDecomposition source (cx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩) (results := results)
+        selected map required before none initial start
+        (@WhileCallStatementCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } caller results root owner selected)
+        taken reached) ∧
+    (∀ {taken : Nat} {reached : DemandRuntimePoint},
+      DemandRuntimePrefix ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ taken ⟨start, initial, state⟩ reached →
+      ∀ {targetFuel : Nat} {stop : Stop} {after : St},
+        DemandInstructionStop ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ targetFuel reached stop after → stop ≠ .timeout →
+        StoppedLoopBranchBlockPrefix source map required ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results before none initial start taken reached stop after) := by
+  let innerEnv : Env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }
+  let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩
+  have agreement := accepted_generated_while_scalar_call_agreement (env := innerEnv) selected condition body loopOrigin conditionForm fragment noValue
+  have nilPrefix : ReachableSequencePrefixFamily (env := innerEnv) cx results selected before none [] false block []
+      (@WhileCallStatementCursor cfg innerEnv caller results root owner selected) :=
+    GeneratedSequencePrefixFamily.reachable (env := innerEnv) (cx := cx) (selected := selected) (before := before) (loop := none)
+      (bindings := []) (want := false) (block := block) (statements := [])
+      (cursor := @WhileCallStatementCursor cfg innerEnv caller results root owner selected)
+      (fun {state} => accepted_generated_sequence_prefix_nil selected before none [] false block _ (state := state))
+  have nilStopped : ReachableStoppedSequencePrefixFamily (env := innerEnv) cx results selected before none [] false block [] :=
+    GeneratedStoppedSequencePrefixFamily.reachable (env := innerEnv) (cx := cx) (selected := selected) (before := before) (loop := none)
+      (bindings := []) (want := false) (block := block) (statements := [])
+      (fun {state} => accepted_generated_stopped_sequence_nil selected before none [] false block (state := state))
+  have prefixFamily : ReachableSequencePrefixFamily (env := innerEnv) cx results selected before none [] false block
+      [.while condition body loopOrigin] (@WhileCallStatementCursor cfg innerEnv caller results root owner selected) :=
+    fun {state} => accepted_generated_reachable_sequence_prefix_cons (env := innerEnv) selected before none [] false block _ agreement.1 nilPrefix (state := state)
+  have stoppedFamily : ReachableStoppedSequencePrefixFamily (env := innerEnv) cx results selected before none [] false block
+      [.while condition body loopOrigin] :=
+    fun {state} => accepted_generated_reachable_stopped_sequence_cons (env := innerEnv) selected before none [] false block agreement.2 nilStopped (state := state)
+  have normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
+      execStmts fuel cfg innerEnv block.stmts innerState = .ok flow after → flow = .normal .unit := by
+    intro fuel innerState after flow done
+    rw [outerStatements] at done
+    exact scalar_call_loop_statement_normal (fragment St.initial) noValue done
+  constructor
+  · intro taken reached steps
+    exact accepted_generated_reachable_branch_block_prefix source selected owned occurrence rows coverage admitted bounded realized input extended _
+      (by rw [outerStatements]; exact prefixFamily) normal outerNoValue entry steps
+  · intro taken reached steps targetFuel stop after stopped nonTimeout
+    exact accepted_generated_reachable_loop_branch_block_stopped source selected owned occurrence rows coverage admitted bounded realized input extended
+      (by rw [outerStatements]; exact stoppedFamily) normal outerNoValue entry steps stopped nonTimeout
+
 
 theorem accepted_generated_while_call_outer_block {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state)
@@ -45,38 +110,14 @@ theorem accepted_generated_while_call_outer_block {cfg : Cfg} {env : Env} {block
       ∀ {targetFuel : Nat} {stop : Stop} {after : St},
         DemandInstructionStop ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ targetFuel reached stop after → stop ≠ .timeout →
         StoppedLoopBranchBlockPrefix source map required ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results before none initial start taken reached stop after) := by
-  let innerEnv : Env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }
-  let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩
-  have agreement := accepted_generated_while_call_agreement (env := innerEnv) selected condition body loopOrigin conditionForm
-    bodyStatements noValue contextAt implAt depth fragment form hasValue shrink argumentsForm stoppedArgumentsForm
-  have nilPrefix : ReachableSequencePrefixFamily (env := innerEnv) cx results selected before none [] false block []
-      (@WhileCallStatementCursor cfg innerEnv caller results root owner selected) :=
-    GeneratedSequencePrefixFamily.reachable (env := innerEnv) (cx := cx) (selected := selected) (before := before) (loop := none)
-      (bindings := []) (want := false) (block := block) (statements := [])
-      (cursor := @WhileCallStatementCursor cfg innerEnv caller results root owner selected)
-      (fun {state} => accepted_generated_sequence_prefix_nil selected before none [] false block _ (state := state))
-  have nilStopped : ReachableStoppedSequencePrefixFamily (env := innerEnv) cx results selected before none [] false block [] :=
-    GeneratedStoppedSequencePrefixFamily.reachable (env := innerEnv) (cx := cx) (selected := selected) (before := before) (loop := none)
-      (bindings := []) (want := false) (block := block) (statements := [])
-      (fun {state} => accepted_generated_stopped_sequence_nil selected before none [] false block (state := state))
-  have prefixFamily : ReachableSequencePrefixFamily (env := innerEnv) cx results selected before none [] false block
-      [.while condition body loopOrigin] (@WhileCallStatementCursor cfg innerEnv caller results root owner selected) :=
-    fun {state} => accepted_generated_reachable_sequence_prefix_cons (env := innerEnv) selected before none [] false block _ agreement.1 nilPrefix (state := state)
-  have stoppedFamily : ReachableStoppedSequencePrefixFamily (env := innerEnv) cx results selected before none [] false block
-      [.while condition body loopOrigin] :=
-    fun {state} => accepted_generated_reachable_stopped_sequence_cons (env := innerEnv) selected before none [] false block agreement.2 nilStopped (state := state)
-  have normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
-      execStmts fuel cfg innerEnv block.stmts innerState = .ok flow after → flow = .normal .unit := by
-    intro fuel innerState after flow done
-    rw [outerStatements] at done
-    exact call_loop_statement_single_normal bodyStatements noValue done
-  constructor
-  · intro taken reached steps
-    exact accepted_generated_reachable_branch_block_prefix source selected owned occurrence rows coverage admitted bounded realized input extended _
-      (by rw [outerStatements]; exact prefixFamily) normal outerNoValue entry steps
-  · intro taken reached steps targetFuel stop after stopped nonTimeout
-    exact accepted_generated_reachable_loop_branch_block_stopped source selected owned occurrence rows coverage admitted bounded realized input extended
-      (by rw [outerStatements]; exact stoppedFamily) normal outerNoValue entry steps stopped nonTimeout
+  have mixed : ∀ middle : St, ReachableScalarCallStatements cfg
+      { env with scopes := (body.scope, middle.nextScope) :: (block.scope, state.nextScope) :: env.scopes } body.stmts := by
+    intro middle
+    rw [bodyStatements]
+    exact ReachableScalarCallStatements.single contextAt implAt depth fragment form hasValue shrink
+      (argumentsForm middle) (stoppedArgumentsForm middle)
+  exact accepted_generated_while_scalar_call_outer_block source condition body loopOrigin conditionForm outerStatements outerNoValue
+    mixed noValue selected owned occurrence rows coverage admitted bounded realized input extended entry
 
 theorem GeneratedGenericBlockPrefixDemand.whileCall_excludes_maximal_terminal
     {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
@@ -94,5 +135,6 @@ theorem GeneratedGenericBlockPrefixDemand.whileCall_excludes_maximal_terminal
 
 #print axioms GeneratedGenericBlockPrefixDemand.whileCall_excludes_maximal_terminal
 
+#print axioms accepted_generated_while_scalar_call_outer_block
 #print axioms accepted_generated_while_call_outer_block
 end Goose.Lower
