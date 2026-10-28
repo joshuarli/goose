@@ -739,11 +739,11 @@
   "evidence": "Goose/Lower/DemandScalarPlaceAddress.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
-  "feature": "Generated scalar assignment with compositional value proof",
-  "statement": "Successful prefixes and non-timeout stops of an assignment to a local or global integer or Boolean place compose with a supplied value-expression proof, including a value stop before the store.",
-  "assumptions": "Accepted assignment source, scalar-typed value, generated rows, related builder, admitted bounded realized retained map, builder extension, and successful-prefix or stopped-prefix family for the value expression.",
-  "limits": "Destination is a local or global scalar place; the caller supplies the integer-type and value-expression family proofs. Whole-function traversal and timeout remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandScalarAssignmentPrefix.lean; Goose/Lower/DemandScalarAssignmentStopped.lean; scoped Lean 4.35 closure and axiom checks."
+  "feature": "Generated assignment with compositional value proof",
+  "statement": "Successful prefixes and non-timeout stops of an assignment to a local or global place compose with a supplied value-expression proof, including a value stop before the store. A direct local or global read is an instance.",
+  "assumptions": "Accepted assignment source, value type admitted as a reference target, generated rows, related builder, admitted bounded realized retained map, builder extension, and successful-prefix or stopped-prefix family for the value expression.",
+  "limits": "Destination and direct-read source are local or global places; the caller supplies the reference-target type proof. Whole-function traversal and timeout remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandScalarAssignmentPrefix.lean; Goose/Lower/DemandScalarAssignmentStopped.lean; Goose/Lower/DemandReadAssignment.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Mixed scalar assignment statement agreement",

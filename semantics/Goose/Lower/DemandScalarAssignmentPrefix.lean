@@ -41,8 +41,8 @@ theorem accepted_generated_scalar_assignment_prefix {cfg : Cfg} {env : Env} {cx 
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (loop : Option LoopCtx) (place : Place) (form : ScalarReadPlace place) (expression : Expr) (origin : OriginId)
-    (scalar : ∀ {state after : St} (source : StmtSource cfg env (.assign place expression origin) state)
-      (child : ExprSource cfg env expression after), source.AssignmentValueAt child → child.ty = .bool ∨ ∃ type, child.ty = .int type)
+    (target : ∀ {state after : St} (source : StmtSource cfg env (.assign place expression origin) state)
+      (child : ExprSource cfg env expression after), source.AssignmentValueAt child → child.ty.refTarget = true)
     (valueFamily : GeneratedExpressionPrefixFamily cx results selected loop expression (@CanonicalExpressionPrefixCursor cfg env cx)) :
     GeneratedStatementPrefixFamily cx results selected loop (.assign place expression origin)
       (@ScalarAssignmentPrefixCursor cfg env cx results) := by
@@ -70,13 +70,13 @@ theorem accepted_generated_scalar_assignment_prefix {cfg : Cfg} {env : Env} {cx 
     have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
     subst current
     obtain ⟨child, childTyping, childRoots, childWorld, childObservation, typeEq, childAt⟩ := next 1 location state placed
-    have destinationScalar : destination.ty = .bool ∨ ∃ type, destination.ty = .int type := by
+    have destinationTarget : destination.ty.refTarget = true := by
       rw [← typeEq]
-      exact scalar source child childAt
+      exact target source child childAt
     have middleCarried := realized.retained addressPost.same bounded.1 bounded.2 RetainsAliases.refl
     have addressBounded := bounded.mono addressPost.mono
     obtain ⟨aliases, query, nextCoverage, nextBounded, nextAdmitted, nextRealized, childInput⟩ :=
-      accepted_assignment_scalar_value_demand source form destination destinationRoots destinationWorld rfl destinationScalar placed
+      accepted_assignment_scalar_value_demand source form destination destinationRoots destinationWorld rfl destinationTarget placed
         child childAt childTyping childRoots coverage admitted addressBounded input addressPost middleCarried
     have childOwner : GeneratedSourceOwner selected child.context :=
       (owned.child rfl 1 (.expression expression) .expression rfl (by trivial)).transport

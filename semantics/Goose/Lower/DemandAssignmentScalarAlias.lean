@@ -10,7 +10,7 @@ theorem accepted_assignment_scalar_destination_alias {cfg : Cfg} {env : Env} {st
     (source : StmtSource cfg env (.assign place value origin) state) (form : ScalarReadPlace place)
     (destination : PlaceSource cfg env place state) (roots : destination.rootsEnv = source.rootsEnv)
     (world : destination.world = source.world) {type : Ty} (destinationType : destination.ty = type)
-    (scalar : type = .bool ∨ ∃ integer, type = .int integer)
+    (target : type.refTarget = true)
     {fuel : Nat} {location : Loc} (placed : evalPlace fuel cfg env place state = .ok location after) :
     ∃ alias : RetainedAlias,
       source.rootsEnv.access.aliasPlace (source.path ++ [0]) place = .ok [alias] ∧
@@ -22,9 +22,9 @@ theorem accepted_assignment_scalar_destination_alias {cfg : Cfg} {env : Env} {st
     rcases valid with valid | invalid | invalid
     · exact ⟨location, rfl, Or.inl valid⟩
     · obtain ⟨_, _, _, _, _, _, _, _, _, impossible, _⟩ := invalid
-      rcases scalar with rfl | ⟨integer, rfl⟩ <;> cases impossible
+      cases type <;> simp_all [Ty.refTarget, Ty.isRefLike]
     · obtain ⟨_, _, _, _, _, _, _, _, _, impossible, _⟩ := invalid
-      rcases scalar with rfl | ⟨integer, rfl⟩ <;> cases impossible
+      cases type <;> simp_all [Ty.refTarget]
   have lookup := tyPlace_accessType (destination.frame.mod_t.trans destination.frame.mod_p.symm)
     (destination.frame.vars_t.trans destination.frame.vars_p.symm) destination.typed
   rw [roots, destinationType] at lookup
@@ -37,16 +37,16 @@ theorem accepted_assignment_scalar_destination_alias {cfg : Cfg} {env : Env} {st
         Except.ok (destination.roots, destination.rootsEnd) at rooted
       have rootsShape : destination.roots = [.global global] :=
         (congrArg Prod.fst (Except.ok.inj rooted)).symm
-      rcases scalar with rfl | ⟨integer, rfl⟩ <;>
-        simp [AccessEnv.aliasPlace, lookup, AccessEnv.placeRoots, rootsShape, Ty.interiorTarget?, Ty.ownerElem?, alias] <;> rfl
+      cases owner : type.ownerElem?.isSome <;>
+        simp [AccessEnv.aliasPlace, lookup, AccessEnv.placeRoots, rootsShape, Ty.interiorTarget?, owner, alias] <;> rfl
     | slot slot =>
       have rooted := destination.rooted
       change Except.ok ([RootRef.local slot], destination.rootsStart) =
         Except.ok (destination.roots, destination.rootsEnd) at rooted
       have rootsShape : destination.roots = [.local slot] :=
         (congrArg Prod.fst (Except.ok.inj rooted)).symm
-      rcases scalar with rfl | ⟨integer, rfl⟩ <;>
-        simp [AccessEnv.aliasPlace, lookup, AccessEnv.placeRoots, rootsShape, Ty.interiorTarget?, Ty.ownerElem?, alias] <;> rfl
+      cases owner : type.ownerElem?.isSome <;>
+        simp [AccessEnv.aliasPlace, lookup, AccessEnv.placeRoots, rootsShape, Ty.interiorTarget?, owner, alias] <;> rfl
   · simpa only [world] using locationType
   · intro root target
     have rootEq : location.root = root := target
@@ -58,7 +58,7 @@ theorem accepted_assignment_scalar_destination_retained {cfg : Cfg} {env : Env} 
     (source : StmtSource cfg env (.assign place value origin) state) (form : ScalarReadPlace place)
     (destination : PlaceSource cfg env place state) (roots : destination.rootsEnv = source.rootsEnv)
     (world : destination.world = source.world) {type : Ty} (destinationType : destination.ty = type)
-    (scalar : type = .bool ∨ ∃ integer, type = .int integer)
+    (target : type.refTarget = true)
     {fuel : Nat} {location : Loc} (placed : evalPlace fuel cfg env place state = .ok location after)
     {cx : FnCtx} {before built : LS} {initial frame : GIR.Frame} {point : Pt} {id : ValueId}
     (post : Post cfg env cx before initial built frame point [(id, .val (.ref location))])
@@ -66,7 +66,7 @@ theorem accepted_assignment_scalar_destination_retained {cfg : Cfg} {env : Env} 
     ∃ aliases, source.rootsEnv.access.aliasPlace (source.path ++ [0]) place = .ok aliases ∧
       (map.addValues id aliases).Realizes cfg.mod source.world env ⟨point, frame, after⟩ := by
   obtain ⟨alias, query, valid⟩ :=
-    accepted_assignment_scalar_destination_alias source form destination roots world destinationType scalar placed
+    accepted_assignment_scalar_destination_alias source form destination roots world destinationType target placed
   refine ⟨[alias], query, RetainedSsaMap.addValues_realizes realized ?_⟩
   intro other member
   simp only [List.mem_singleton] at member
@@ -144,7 +144,7 @@ theorem accepted_assignment_scalar_value_demand {cfg : Cfg} {env : Env} {state a
     (source : StmtSource cfg env (.assign place value origin) state) (form : ScalarReadPlace place)
     (destination : PlaceSource cfg env place state) (roots : destination.rootsEnv = source.rootsEnv)
     (world : destination.world = source.world) {type : Ty} (destinationType : destination.ty = type)
-    (scalar : type = .bool ∨ ∃ integer, type = .int integer)
+    (target : type.refTarget = true)
     {fuel : Nat} {location : Loc} (placed : evalPlace fuel cfg env place state = .ok location after)
     (child : ExprSource cfg env value after) (childAt : source.AssignmentValueAt child)
     (childTyping : child.typingEnv = source.typingEnv) (childRoots : child.rootsEnv = source.rootsEnv)
@@ -168,7 +168,7 @@ theorem accepted_assignment_scalar_value_demand {cfg : Cfg} {env : Env} {state a
         (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 frame point := by
   let id := (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1
   obtain ⟨aliases, query, realizedNext⟩ := accepted_assignment_scalar_destination_retained
-    source form destination roots world destinationType scalar placed post realized
+    source form destination roots world destinationType target placed post realized
   have childAdmitted : map.Admitted cfg.mod.profile child.context.retained := by
     rw [demandContextRetainedEq childAt.plans childAt.path rfl childAt.context]
     intro profile alias member

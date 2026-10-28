@@ -63,13 +63,19 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
     have head : GeneratedStatementPrefixFamily cx results selected loop (.assign place expression origin)
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
       apply GeneratedStatementPrefixFamily.mapCursor (accepted_generated_scalar_assignment_prefix selected loop place form expression origin
-          (fun source child _ => value.scalar child) (accepted_generated_control_prefix_family selected loop value.control))
+          (fun source child _ => by
+            rcases value.scalar child with boolean | ⟨type, integer⟩
+            · simp [boolean, Ty.refTarget]
+            · simp [integer, Ty.refTarget]) (accepted_generated_control_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .assignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_scalar_assignment_stopped selected loop place form expression origin
-          (fun source child _ => value.scalar child) (accepted_generated_read_stopped_expressions selected loop value.control.stopped)) ih.2⟩
+          (fun source child _ => by
+            rcases value.scalar child with boolean | ⟨type, integer⟩
+            · simp [boolean, Ty.refTarget]
+            · simp [integer, Ty.refTarget]) (accepted_generated_read_stopped_expressions selected loop value.control.stopped)) ih.2⟩
 
 theorem ScalarAssignmentStatementPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
