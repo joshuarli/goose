@@ -3283,4 +3283,127 @@ theorem rpBound_clearEffects {env : PEnv} {bound : Bound}
       EffectMetadataIncluded replayed.eff after.eff :=
   replay_cleared _ (rp_effects_replayed.2.2.2.2.2.2.2.2.2.2.2 env bound) checked
 
+private def KeepsNextVar (action : P α) : Prop :=
+  ∀ before result after, action before = .ok (result, after) → after.nextVar = before.nextVar
+
+private theorem keeps_pure (value : α) : KeepsNextVar (pure value) := by
+  intro before result after checked
+  change Except.ok (value, before) = Except.ok (result, after) at checked
+  cases checked
+  rfl
+
+private theorem keeps_bind (action : P α) (next : α → P β)
+    (first : KeepsNextVar action) (remaining : ∀ value, KeepsNextVar (next value)) :
+    KeepsNextVar (action >>= next) := by
+  intro before result after checked
+  cases initial : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, initial] at checked
+  | ok pair =>
+    have rest : next pair.1 pair.2 = .ok (result, after) := by
+      simpa [bind, StateT.bind, Except.bind, initial] using checked
+    exact (remaining pair.1 pair.2 result after rest).trans (first before pair.1 pair.2 initial)
+
+private theorem keeps_get : KeepsNextVar (get : P RState) := by
+  intro before result after checked
+  change Except.ok (before, before) = Except.ok (result, after) at checked
+  cases checked
+  rfl
+
+private theorem keeps_modify (update : RState → RState)
+    (keeps : ∀ before, (update before).nextVar = before.nextVar) : KeepsNextVar (modify update) := by
+  intro before result after checked
+  change Except.ok (PUnit.unit, update before) = Except.ok (result, after) at checked
+  cases checked
+  exact keeps _
+
+private theorem keeps_lift (action : V α) : KeepsNextVar (liftV action) := by
+  intro before result after checked
+  cases action with
+  | error error => cases checked
+  | ok value =>
+    change Except.ok (value, before) = Except.ok (result, after) at checked
+    cases checked
+    rfl
+
+private theorem keeps_reject (rule : Goose.Core.Rule) (message : String) :
+    KeepsNextVar (rejP (α := α) rule message) := by
+  intro before result after checked
+  cases checked
+
+private theorem keeps_forIn_list (rows : List α) (initial : β)
+    (body : α → β → P (ForInStep β))
+    (each : ∀ row token, KeepsNextVar (body row token)) :
+    KeepsNextVar (forIn rows initial body) := by
+  induction rows generalizing initial with
+  | nil => exact keeps_pure initial
+  | cons row rows ih =>
+    rw [List.forIn_cons]
+    apply keeps_bind _ _ (each row initial)
+    intro step
+    cases step with
+    | done token => exact keeps_pure token
+    | yield token => exact ih token
+
+private theorem keeps_forIn'_list (rows : List α) (initial : β)
+    (body : (row : α) → row ∈ rows → β → P (ForInStep β))
+    (each : ∀ row member token, KeepsNextVar (body row member token)) :
+    KeepsNextVar (forIn' rows initial body) := by
+  induction rows generalizing initial with
+  | nil => exact keeps_pure initial
+  | cons row rows ih =>
+    rw [List.forIn'_cons]
+    apply keeps_bind _ _ (each row (by simp) initial)
+    intro step
+    cases step with
+    | done token => exact keeps_pure token
+    | yield token => exact ih token _ (fun selected member token => each selected (by simp [member]) token)
+
+private theorem keeps_forIn'_range (rows : Std.Legacy.Range) (initial : β)
+    (body : (row : Nat) → row ∈ rows → β → P (ForInStep β))
+    (each : ∀ row member token, KeepsNextVar (body row member token)) :
+    KeepsNextVar (forIn' rows initial body) := by
+  rw [Std.Legacy.Range.forIn'_eq_forIn'_range']
+  exact keeps_forIn'_list _ _ _ (fun row member token => each row _ token)
+
+local macro "keep_next_var" "[" extra:tacticSeq "]" : tactic => `(tactic|
+  repeat' first
+  | $extra
+  | assumption
+  | exact keeps_pure _
+  | exact keeps_lift _
+  | exact keeps_reject _ _
+  | exact keeps_get
+  | exact keeps_modify _ (fun _ => rfl)
+  | refine keeps_forIn_list _ _ _ (fun _ _ => ?_)
+  | refine keeps_forIn'_range _ _ _ (fun _ _ _ => ?_)
+  | refine keeps_bind _ _ ?_ (fun _ => ?_)
+  | split)
+
+private theorem keeps_scopedShrinkAliases (env : PEnv) (effects : Eff) :
+    KeepsNextVar (checkScopedShrinkAliases env effects) := by
+  unfold checkScopedShrinkAliases checkRetainedShrinks
+  keep_next_var [fail]
+  all_goals try dsimp only
+  all_goals keep_next_var [fail]
+
+private theorem keeps_escapeRoots (env : PEnv) (target : Nat) (channels : List (List RootRef)) :
+    KeepsNextVar (receiveEscapeRoots env target channels) := by
+  unfold receiveEscapeRoots
+  keep_next_var [fail]
+
+private theorem keeps_call (env : PEnv) (context : ContextId) (arguments : List (List RootRef)) :
+    KeepsNextVar (rpCall env context arguments) := by
+  unfold rpCall
+  simp only [checkRetainedShrinks]
+  keep_next_var [first | exact keeps_scopedShrinkAliases _ _ | exact keeps_escapeRoots _ _ _]
+  all_goals try dsimp only
+  all_goals keep_next_var [first | exact keeps_scopedShrinkAliases _ _ | exact keeps_escapeRoots _ _ _]
+
+theorem rpCall_nextVar {env : PEnv} {context : ContextId} {arguments : List (List RootRef)}
+    {before after : RState} {roots : List RootRef}
+    (checked : rpCall env context arguments before = .ok (roots, after)) : after.nextVar = before.nextVar :=
+  keeps_call env context arguments before roots after checked
+
+#print axioms rpCall_nextVar
+
 end Goose.Construct
