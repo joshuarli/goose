@@ -623,6 +623,13 @@
   "evidence": "Goose/Lower/DemandFieldAddress.lean; Goose/Lower/DemandFieldScalarAddress.lean; Goose/Lower/DemandAssignmentFieldAlias.lean; Goose/Lower/DemandFieldAssignmentPrefix.lean; Goose/Lower/DemandFieldAssignmentStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Conditional condition agreement",
+  "statement": "An accepted conditional statement's supported generated condition has successful-prefix agreement and non-timeout stop reflection, and its actual source result selects the matching branch or skip path.",
+  "assumptions": "Accepted source and generated occurrence, supported condition expression, related builder and retained demand.",
+  "limits": "Generated branch-body control and its composition into mixed statements and blocks remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandIfCondition.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted byte-owner allocation timeout",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.evalValue_byteOwner_timeout_complete; Goose.Proofs.ConstructionAcceptedExecution.execStmt_acceptedByteOwner_timeout_complete; Goose.Proofs.ConstructionAcceptedExecution.execStmts_acceptedByteOwner_timeout_split",
@@ -688,6 +695,13 @@
   "assumptions": "Accepted world and source frame, and a checked value expression.",
   "limits": "Other places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; Goose/Proofs/ConstructionAcceptedLocalRead.lean; Goose/Proofs/ConstructionAcceptedNotComplete.lean; Goose/Proofs/ConstructionAcceptedNumericComplete.lean; Goose/Proofs/ConstructionAcceptedBinaryComplete.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Scalar entry tail exclusion",
+  "statement": "The current recursive scalar expression family cannot have unit type, while a validated no-result entry body requires a unit-typed tail. Consequently that scalar family cannot provide an accepted entry tail.",
+  "assumptions": "The current scalar expression family and validated no-result entry typing.",
+  "limits": "Other unit-valued expressions, including block and call forms, are not excluded by this result.",
+  "evidence": "Goose/Proofs/ConstructionScalarTailVacuity.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted scalar expression statements",
