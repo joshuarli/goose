@@ -6,7 +6,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 
-theorem execStmt_acceptedScalarLocal_replayOutcome (fuel checkFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+theorem execStmt_acceptedScalarLocal_observedOutcome (fuel checkFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (context id : Nat) (expression : Expr) (origin : Goose.Core.OriginId)
     (rest : List Stmt) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -33,7 +33,10 @@ theorem execStmt_acceptedScalarLocal_replayOutcome (fuel checkFuel : Nat) (confi
           (fun other => other = root ∨ live other) regions pending ∧
         AcceptedFrame config accepted next after (registerRootType types root descriptor.ty) ∧
         SourcePosition accepted next (.statements rest) ∧
-        GlobalEffectTargetsBounded rootsAfter.eff config.module.globals.size
+        GlobalEffectTargetsBounded rootsAfter.eff config.module.globals.size ∧
+        (∀ other, (∀ scope id, other ≠ Goose.Core.RootInst.local frame.interpretation.environment.act scope id) →
+          after.objects.lookup other = before.objects.lookup other ∧
+          after.objectOrdinals.lookup other = before.objectOrdinals.lookup other)
     | .escape .. | .jump .. => False := by
   have headPosition := position.statements_head accepted frame (.letS id expression origin) rest (checkFuel + 1) nesting
   obtain ⟨next, typingAfter, rootsAfter, typed, rooted⟩ := headPosition.checked accepted _ _
@@ -151,7 +154,51 @@ theorem execStmt_acceptedScalarLocal_replayOutcome (fuel checkFuel : Nat) (confi
           simpa [nextFrame, advanceLocalFrame, nextTyping, nextCounter] using typed
         have replayRooted : rpStmt frame.source (.letS id expression origin) frame.rootCursor =
             .ok ((), nextFrame.rootCursor) := by simpa [nextFrame] using rooted
-        exact ⟨trivial, scopeInst, descriptor, rootsAfter, replayTyped, replayRooted, extended, afterWorld, nextSource, tailPosition, effects⟩
+        refine ⟨trivial, scopeInst, descriptor, rootsAfter, replayTyped, replayRooted, extended, afterWorld, nextSource, tailPosition, effects, ?_⟩
+        intro other outside
+        exact ⟨bindRoot_lookup_other _ other value before after bound (outside scopeInst id),
+          bindRoot_ordinals_other _ other value before after bound (outside scopeInst id)⟩
+
+theorem execStmt_acceptedScalarLocal_replayOutcome (fuel checkFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (context id : Nat) (expression : Expr) (origin : Goose.Core.OriginId)
+    (rest : List Stmt) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (form : AcceptedBinaryExpression expression)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types) (_phase : frame.phase = .implementation context)
+    (position : SourcePosition accepted frame (.statements (.letS id expression origin :: rest)))
+    (nesting : frame.typingFuel = checkFuel + 2)
+    (initialized : frame.initialized = config.module.globals.size)
+    (bounded : GlobalEffectTargetsBounded frame.rootCursor.eff config.module.globals.size)
+    (scalar : ∀ descriptor, frame.typing.variables[id]? = some descriptor →
+      (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool) :
+    match execStmt fuel config frame.interpretation.environment (.letS id expression origin) before with
+    | .stop _ after => AcceptedWorld config frame.initialized after ambient types live regions pending ∧
+        AcceptedFrame config accepted frame after types
+    | .ok flow after => flow = .normal .unit ∧ ∃ (scopeInst : Nat) (descriptor : LocalVar) (rootsAfter : RState),
+        let root := Goose.Core.RootInst.local frame.interpretation.environment.act scopeInst id
+        let next := { advanceLocalFrame { frame with typingFuel := checkFuel + 1 } id with rootCursor := rootsAfter }
+        typeStatement (checkFuel + 1) frame.typing (.letS id expression origin) frame.typingCounter =
+          .ok (next.typing, next.typingCounter) ∧
+        rpStmt frame.source (.letS id expression origin) frame.rootCursor = .ok ((), next.rootCursor) ∧
+        RootTypesExtend types (registerRootType types root descriptor.ty) ∧
+        AcceptedWorld config frame.initialized after ambient (registerRootType types root descriptor.ty)
+          (fun other => other = root ∨ live other) regions pending ∧
+        AcceptedFrame config accepted next after (registerRootType types root descriptor.ty) ∧
+        SourcePosition accepted next (.statements rest) ∧
+        GlobalEffectTargetsBounded rootsAfter.eff config.module.globals.size
+    | .escape .. | .jump .. => False := by
+  have result := execStmt_acceptedScalarLocal_observedOutcome fuel checkFuel config accepted frame context id expression origin rest
+    before ambient types live regions pending form world source _phase position nesting initialized bounded scalar
+  cases executed : execStmt fuel config frame.interpretation.environment (.letS id expression origin) before with
+  | stop reason after => simpa only [executed] using result
+  | escape target carriers after => simpa only [executed] using result
+  | jump target kind after => simpa only [executed] using result
+  | ok flow after =>
+    simp only [executed] at result ⊢
+    obtain ⟨normal, scopeInst, descriptor, rootsAfter, typed, rooted, extended, finalWorld, finalSource, tailPosition, effects, observations⟩ := result
+    exact ⟨normal, scopeInst, descriptor, rootsAfter, typed, rooted, extended, finalWorld, finalSource, tailPosition, effects⟩
 
 #print axioms execStmt_acceptedScalarLocal_replayOutcome
+#print axioms execStmt_acceptedScalarLocal_observedOutcome
 end Goose.Proofs.ConstructionAcceptedExecution
