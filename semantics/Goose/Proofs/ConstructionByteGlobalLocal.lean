@@ -1,6 +1,7 @@
 import Goose.Proofs.ConstructionByteNoTimeout
 import Goose.Proofs.ConstructionAcceptedByteGlobalOutcome
 import Goose.Proofs.ConstructionAcceptedByteGlobalTimeout
+import Goose.Proofs.ConstructionAcceptedByteGlobalRun
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 
@@ -106,8 +107,32 @@ theorem initGlobals_byteOwners_timeout_world (count fuel initialized : Nat) (con
     rw [executed] at noTimeout
     exact (noTimeout rfl).elim
 
+theorem acceptedByteGlobals_run_timeout_afterInit (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (after : ExecutionState)
+    (declarations : ∀ id, id < config.module.globals.size →
+      ∃ descriptor bytes bytesOrigin, config.module.globals[id]? = some descriptor ∧
+        descriptor.ty = .varr (.int .u8) ∧ descriptor.init = .bytes (.varr (.int .u8)) bytes bytesOrigin)
+    (executed : runModule (fuel + 1) config .initial = .stop .timeout after) :
+    ∃ initialized live,
+      initGlobals (fuel + 1) config (List.range config.module.globals.size) .initial = .ok () initialized ∧
+      AcceptedWorld config config.module.globals.size initialized [] (declaredRootTypes config.module) live [] [] ∧
+      (getImplementation config config.module.entry >>= fun (_, implementation) => do
+        let channels ← channelsFor config.layout 0 implementation.results.toList 0
+        let environment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
+        let carriers ← invokeCall (fuel + 1) config environment config.module.entry [] channels 0
+        publishCarriers 0 carriers) initialized = .stop .timeout after := by
+  rcases acceptedByteGlobals_runPrefix fuel config accepted declarations with ⟨initialized, live, done, world⟩ |
+      ⟨completed, middle, live, bound, world, clear, stopped⟩
+  · refine ⟨initialized, live, done, world, ?_⟩
+    simpa only [runModule, bind, done] using executed
+  · obtain ⟨descriptor, bytes, bytesOrigin, declared, ty, initializer⟩ := declarations completed bound
+    have noTimeout := initGlobals_byteOwner_single_local fuel config completed descriptor bytes bytesOrigin declared ty initializer middle
+    rw [stopped, executed] at noTimeout
+    exact (noTimeout rfl).elim
+
 #print axioms initGlobals_byteOwner_single_local
 #print axioms initGlobals_byteOwners_local
 #print axioms initGlobals_byteOwners_timeout_world
+#print axioms acceptedByteGlobals_run_timeout_afterInit
 
 end Goose.Proofs.ConstructionAcceptedExecution
