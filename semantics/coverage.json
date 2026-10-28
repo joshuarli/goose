@@ -487,6 +487,15 @@
   "evidence": "Goose/Lower/DemandGeneratedExpressionPrefixBinary.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Generated comparison demand prefixes",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_compare_prefix_family; Goose.Lower.accepted_generated_compare_literal_prefix_family; Goose.Lower.accepted_generated_compare_boolean_prefix_family",
+  "statement": "Every finite successful target prefix of a generated comparison decomposes through its actual left operand, right operand and comparison instruction. Accepted operand typing establishes compatible integer types or Boolean operands; the proof preserves the source owner and retained demand map across both operands.",
+  "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and prefix families for both operands. Boolean comparisons remain subject to source validation.",
+  "limits": "General expression recursion and stopping prefixes remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandGeneratedExpressionPrefixCompare.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
