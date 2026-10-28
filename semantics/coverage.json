@@ -568,6 +568,15 @@
   "evidence": "Goose/Lower/DemandCompareStoppedFamily.lean and its stopped-family dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Recursive short-circuit stop reflection",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_shortCircuit_stopped_family; Goose.Lower.accepted_generated_control_stopped_expressions",
+  "statement": "A non-timeout target stop reflects through recursively nested scalar and short-circuit expressions, including stops in reachable operands. Generated branch and join instructions cannot be non-timeout stopping instructions; stops after completion retain their actual residual target prefix.",
+  "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and an actual successful target prefix followed by a non-timeout stopped instruction. Leaves are literals.",
+  "limits": "Reads, other expression forms, timeout stops and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandShortCircuitStoppedFamily.lean and its stopped-family dependencies; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
