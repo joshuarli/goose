@@ -746,18 +746,18 @@
   "evidence": "Goose/Lower/DemandScalarAssignmentPrefix.lean; Goose/Lower/DemandScalarAssignmentStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
-  "feature": "Mixed integer assignment statement agreement",
-  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, global clears and integer assignments whose values are literals, unary or binary expressions, or integer conversions over supported expressions.",
+  "feature": "Mixed scalar assignment statement agreement",
+  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, global clears and scalar assignments whose values include literals, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
   "assumptions": "Accepted source and generated sequence, related builder, admitted bounded realized retained map, generated rows and builder extension.",
   "limits": "Assignment destinations are local or global scalar places; reads at the top level of assignment values, other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandIntegerAssignmentExpressions.lean; Goose/Lower/DemandIntegerAssignmentStatementAgreement.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Lower/DemandScalarAssignmentExpressions.lean; Goose/Lower/DemandScalarAssignmentStatementAgreement.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
-  "feature": "Mixed integer assignment block agreement",
-  "statement": "Successful generated prefixes and non-timeout stops agree with source execution through scope entry, mixed statement sequences and scope exit for blocks containing supported integer assignments, including a supported final scalar or short-circuit expression. Intermediate successful prefixes preserve the accepted frame.",
+  "feature": "Mixed scalar assignment block agreement",
+  "statement": "Successful generated prefixes and non-timeout stops agree with source execution through scope entry, mixed statement sequences and scope exit for blocks containing supported scalar assignments, including a supported final scalar or short-circuit expression. Intermediate successful prefixes preserve the accepted frame.",
   "assumptions": "Accepted block source, generated block and statement rows, related builder, admitted bounded realized retained map and builder extension.",
-  "limits": "No loop context in the stop theorems; assignments use supported integer expressions and local or global scalar destinations. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandIntegerAssignmentBlockPrefix.lean; Goose/Lower/DemandStoppedIntegerAssignmentUnitBlock.lean; Goose/Lower/DemandIntegerAssignmentValueBlockPrefix.lean; Goose/Lower/DemandStoppedIntegerAssignmentValueBlock.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "No loop context in the stop theorems; assignments use supported scalar expressions and local or global scalar destinations. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandScalarAssignmentBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentUnitBlock.lean; Goose/Lower/DemandScalarAssignmentValueBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentValueBlock.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted Core short-circuit control demand transfer",

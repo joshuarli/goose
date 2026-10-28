@@ -1,11 +1,11 @@
-import Goose.Lower.DemandIntegerAssignmentStatementAgreement
+import Goose.Lower.DemandScalarAssignmentStatementAgreement
 import Goose.Lower.DemandStoppedBlockStatements
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound
 
-theorem IntegerAssignmentStatements.normal {statements : List Stmt} (fragment : IntegerAssignmentStatements statements)
+theorem ScalarAssignmentStatements.normal {statements : List Stmt} (fragment : ScalarAssignmentStatements statements)
     {cfg : Cfg} {env : Env} {fuel : Nat} {state after : St} {flow : Flow}
     (done : execStmts fuel cfg env statements state = .ok flow after) : flow = .normal .unit := by
   induction fragment generalizing fuel state after with
@@ -77,6 +77,6 @@ theorem IntegerAssignmentStatements.normal {statements : List Stmt} (fragment : 
         simp only [head] at done
         exact ih done
 
-#print axioms IntegerAssignmentStatements.normal
+#print axioms ScalarAssignmentStatements.normal
 
 end Goose.Lower

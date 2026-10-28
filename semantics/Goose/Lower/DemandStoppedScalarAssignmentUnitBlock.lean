@@ -1,11 +1,11 @@
-import Goose.Lower.DemandIntegerAssignmentValueBlockPrefix
-import Goose.Lower.DemandStoppedControlValueBlock
+import Goose.Lower.DemandScalarAssignmentBlockPrefix
+import Goose.Lower.DemandStoppedControlUnitBlock
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound
 
-theorem accepted_generated_integer_assignment_value_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+theorem accepted_generated_scalar_assignment_unit_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
     {owner : Nat} {before : LS}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
@@ -18,13 +18,12 @@ theorem accepted_generated_integer_assignment_value_block_stopped {cfg : Cfg} {e
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
     (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
     (extended : ExtT (lowerBlock none [] true block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
-    (fragment : IntegerAssignmentStatements block.stmts) {expression : Expr} (hasValue : block.value = some expression)
-    (valueForm : ControlPrefixExpression expression)
+    (fragment : ScalarAssignmentStatements block.stmts) (noValue : block.value = none)
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
     {targetFuel : Nat} {stop : Stop} {after : St}
     (stopped : DemandInstructionStop cx targetFuel reached stop after) (nonTimeout : stop ≠ .timeout) :
-    StoppedValueBlockSuffix source map required cx results before none initial start taken reached stop after := by
+    StoppedUnitBlockPrefix source map required cx results before initial start taken reached stop after := by
   let loop : Option LoopCtx := none
   let le := lowerEnv cfg.mod env.vars results
   let enteredFrame : GIR.Frame := { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
@@ -88,7 +87,7 @@ theorem accepted_generated_integer_assignment_value_block_stopped {cfg : Cfg} {e
     have bodyFamily : GeneratedStoppedSequencePrefixFamily
         (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before none [] true block block.stmts := by
       intro bodyState
-      exact (accepted_generated_integer_assignment_statements_agreement
+      exact (accepted_generated_scalar_assignment_statements_agreement
         (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
         selected before none [] true block fragment).2
     have bodyProgress := bodyFamily body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted
@@ -111,7 +110,7 @@ theorem accepted_generated_integer_assignment_value_block_stopped {cfg : Cfg} {e
           have normal := fragment.normal raw
           subst flow
           simp [prepareLoopFlow, prepareReturn, pure_apply] at done
-      apply StoppedValueBlockSuffix.aborted (fuel + 1)
+      apply StoppedUnitBlockPrefix.aborted (fuel + 1)
       cases block with
       | mk scope statements value =>
         simp only [Core.Block.scope, Core.Block.stmts] at raw ⊢
@@ -141,17 +140,12 @@ theorem accepted_generated_integer_assignment_value_block_stopped {cfg : Cfg} {e
             (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before [] block)
             { initial with scopes := (block.scope, state.nextScope) :: initial.scopes } (start.1, start.2 + 1) [] :=
           ⟨bodyPoint, by simp, by simp, Nat.le_of_eq enteredValues.symm, fun _ _ => rfl, bodyRelated⟩
-        have valueFamily : GeneratedStoppedExpressionPrefixFamily
-            (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected none expression := by
-          intro innerState
-          exact accepted_generated_read_stopped_expressions
-            (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) selected none valueForm.stopped
-        have suffix := accepted_generated_block_value_suffix_stopped source body canonical hasValue selected owned occurrence
-          bodyOccurrence rows bodyRows coverage admitted bounded realized input bodyInput raw (enteredPost.comp bodyPost)
-          bodyBounded bodyRealized extended valueFamily (DemandRuntimePrefix.next enterStep bodySteps) afterBody stopped nonTimeout
-        have lengthEq : (consumed + 1) + remaining = taken := by omega
-        simpa only [lengthEq] using suffix
+        obtain ⟨sourceFuel, total, rest, final, resultFlow, finalCount, finalSteps, finalResidual, sourceDone, finalBoundary⟩ :=
+          accepted_generated_unit_block_suffix_stopped source body canonical noValue occurrence bodyOccurrence rows bodyRows
+            coverage admitted bounded realized raw (enteredPost.comp bodyPost) bodyBounded bodyRealized extended
+            (DemandRuntimePrefix.next enterStep bodySteps) afterBody stopped nonTimeout
+        exact .complete (by omega) finalSteps finalResidual sourceDone finalBoundary
 
-#print axioms accepted_generated_integer_assignment_value_block_stopped
+#print axioms accepted_generated_scalar_assignment_unit_block_stopped
 
 end Goose.Lower

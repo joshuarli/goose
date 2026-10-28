@@ -1,32 +1,32 @@
-import Goose.Lower.DemandIntegerAssignmentStatementsNormal
+import Goose.Lower.DemandScalarAssignmentStatementsNormal
 import Goose.Lower.DemandControlBlockPrefix
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound
 
-inductive GeneratedIntegerAssignmentBlockPrefixDemand {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+inductive GeneratedScalarAssignmentBlockPrefixDemand {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (map required : RetainedSsaMap) (before : LS) (loop : Option LoopCtx) (initial : GIR.Frame)
     (suffixCursor : DemandRuntimePoint → Prop) : DemandRuntimePoint → Prop
   | emitted {runtime : DemandRuntimePoint}
       (demanded : GeneratedClearBlockDemand source map required cx results before loop initial runtime) :
-      GeneratedIntegerAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime
+      GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime
   | suffix {runtime : DemandRuntimePoint} (demanded : suffixCursor runtime) :
-      GeneratedIntegerAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime
+      GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime
   | body {body : StmtsSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
         block.stmts { state with nextScope := state.nextScope + 1 }} {start : Pt} {runtime : DemandRuntimePoint}
       (canonical : GeneratedBlockBodyAt source body)
       (demanded : GeneratedSequencePrefixCursor
-        (@IntegerAssignmentStatementPrefixCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results)
+        (@ScalarAssignmentStatementPrefixCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results)
         map required cx results before loop [] block selected body
         ⟨start, { initial with scopes := (block.scope, state.nextScope) :: initial.scopes },
           { state with nextScope := state.nextScope + 1 }⟩ runtime) :
-      GeneratedIntegerAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime
+      GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime
 
-theorem accepted_generated_integer_assignment_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
-    (source : BlockSource cfg env [] block state) (fragment : IntegerAssignmentStatements block.stmts)
+theorem accepted_generated_scalar_assignment_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements block.stmts)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
     {before : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
@@ -44,12 +44,12 @@ theorem accepted_generated_integer_assignment_block_prefix {cfg : Cfg} {env : En
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
     GeneratedBlockPrefixDecomposition source selected map required before loop initial start
-      (GeneratedIntegerAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor) taken reached := by
+      (GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor) taken reached := by
   refine ⟨owned, coverage, ?_⟩
   have bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
       cx results selected before loop [] true block block.stmts
-      (@IntegerAssignmentStatementPrefixCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results) :=
-    (accepted_generated_integer_assignment_statements_agreement (cfg := cfg)
+      (@ScalarAssignmentStatementPrefixCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results) :=
+    (accepted_generated_scalar_assignment_statements_agreement (cfg := cfg)
     (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) (cx := cx) (results := results)
     selected before loop [] true block fragment).1
   have progress := accepted_generated_block_statements_prefix source selected owned occurrence rows coverage admitted bounded
@@ -102,8 +102,8 @@ theorem accepted_generated_integer_assignment_block_prefix {cfg : Cfg} {env : En
           | complete suffixCount prefixSteps residual evaluated post =>
             exact .complete (by omega) prefixSteps residual evaluated post
 
-theorem accepted_generated_integer_assignment_unit_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
-    (source : BlockSource cfg env [] block state) (fragment : IntegerAssignmentStatements block.stmts)
+theorem accepted_generated_scalar_assignment_unit_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements block.stmts)
     (noValue : block.value = none) {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
     {before : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
@@ -119,9 +119,9 @@ theorem accepted_generated_integer_assignment_unit_block_prefix {cfg : Cfg} {env
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
     GeneratedBlockPrefixDecomposition source selected map required before loop initial start
-      (GeneratedIntegerAssignmentBlockPrefixDemand source selected map required before loop initial
+      (GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial
         (GeneratedClearBlockDemand source map required cx results before loop initial)) taken reached := by
-  apply accepted_generated_integer_assignment_block_prefix source fragment selected owned occurrence rows coverage admitted bounded
+  apply accepted_generated_scalar_assignment_block_prefix source fragment selected owned occurrence rows coverage admitted bounded
     realized input extended (GeneratedClearBlockDemand source map required cx results before loop initial) ?_ steps
   intro body canonical bodyOccurrence bodyRows bodyInput fuel addressed statements post bodyBounded bodyRealized consumed taken reached prefixSteps residual
   exact accepted_generated_block_unit_suffix_prefix source body canonical noValue occurrence bodyOccurrence rows bodyRows
@@ -143,22 +143,22 @@ theorem ScalarAssignmentPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} 
   | store child canonical aliases site demanded =>
     exact ⟨_, _, _, ⟨demanded.builder, by simpa only [canonical.world] using demanded.source, carried⟩⟩
 
-theorem IntegerAssignmentStatementPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+theorem ScalarAssignmentStatementPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
     {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
-    (cursor : IntegerAssignmentStatementPrefixCursor cx results source before built initial start map required runtime) :
+    (cursor : ScalarAssignmentStatementPrefixCursor cx results source before built initial start map required runtime) :
     ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
   cases cursor with
   | control cursor => exact cursor.frame
   | assignment cursor => exact cursor.frame
 
-theorem GeneratedSequencePrefixCursor.integer_assignment_frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+theorem GeneratedSequencePrefixCursor.scalar_assignment_frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {map required : RetainedSsaMap} {before : LS} {loop : Option LoopCtx}
     {bindings : List (SlotId × ValueId × OriginId)} {block : Core.Block} {root : DemandNode} {owner : Nat}
     {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
     {statements : List Stmt} {state : St} {source : StmtsSource cfg env statements state}
     {initial runtime : DemandRuntimePoint}
-    (cursor : GeneratedSequencePrefixCursor (@IntegerAssignmentStatementPrefixCursor cfg env cx results)
+    (cursor : GeneratedSequencePrefixCursor (@ScalarAssignmentStatementPrefixCursor cfg env cx results)
       map required cx results before loop bindings block selected source initial runtime) :
     ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
   induction cursor with
@@ -167,7 +167,7 @@ theorem GeneratedSequencePrefixCursor.integer_assignment_frame {cfg : Cfg} {env 
   | tail canonical evaluated prefixSteps post demanded ih =>
     simpa only [canonical.world] using ih
 
-theorem GeneratedIntegerAssignmentBlockPrefixDemand.frame {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+theorem GeneratedScalarAssignmentBlockPrefixDemand.frame {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     {source : BlockSource cfg env [] block state} {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
     {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
     {map required : RetainedSsaMap} {before : LS} {loop : Option LoopCtx} {initial : GIR.Frame} {runtime : DemandRuntimePoint}
@@ -176,7 +176,7 @@ theorem GeneratedIntegerAssignmentBlockPrefixDemand.frame {cfg : Cfg} {env : Env
       DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime ∨
       DemandFrameAt cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
         cx source.world typing roots future map.values map.runs runtime)
-    (demanded : GeneratedIntegerAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime) :
+    (demanded : GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime) :
     ∃ typing roots future,
       DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime ∨
       DemandFrameAt cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
@@ -185,11 +185,11 @@ theorem GeneratedIntegerAssignmentBlockPrefixDemand.frame {cfg : Cfg} {env : Env
   | emitted demanded => exact demanded.frame
   | suffix demanded => exact suffixFrame _ demanded
   | body canonical demanded =>
-    obtain ⟨typing, roots, future, framed⟩ := demanded.integer_assignment_frame
+    obtain ⟨typing, roots, future, framed⟩ := demanded.scalar_assignment_frame
     exact ⟨typing, roots, future, Or.inr (by simpa only [canonical.world] using framed)⟩
 
-#print axioms GeneratedIntegerAssignmentBlockPrefixDemand.frame
-#print axioms accepted_generated_integer_assignment_block_prefix
-#print axioms accepted_generated_integer_assignment_unit_block_prefix
+#print axioms GeneratedScalarAssignmentBlockPrefixDemand.frame
+#print axioms accepted_generated_scalar_assignment_block_prefix
+#print axioms accepted_generated_scalar_assignment_unit_block_prefix
 
 end Goose.Lower
