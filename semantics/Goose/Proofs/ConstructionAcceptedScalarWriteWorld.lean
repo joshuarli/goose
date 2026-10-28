@@ -171,6 +171,45 @@ theorem bindRoot_scalar_update_world (config : EvalConfig) (initialized : Nat)
     rw [sameTypes, sameLive] at afterWorld
     exact ⟨after, bound, afterWorld⟩
 
+theorem bindRoot_scalar_registered_world (config : EvalConfig) (initialized : Nat)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (root : RootInst) (ty : Ty) (value : Value)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (scalar : (∃ intTy number, value = .int intTy number) ∨ ∃ boolean, value = .bool boolean)
+    (rootType : types root = some ty)
+    (represented : ValueRepresentation ty value) (pointers : PointerTypedValue types ty value) :
+    ∃ after, bindRoot root value before = .ok () after ∧
+      AcceptedWorld config initialized after ambient types (fun other => other = root ∨ live other) regions pending := by
+  have compatible : RootTypeCompatible types root ty := by
+    intro previous present
+    exact Option.some.inj (present.symm.trans rootType)
+  have conform := world.layouts root ty rootType
+  have freshType : ∀ act scope id, root = .local act scope id → act < before.nextAct ∧ scope < before.nextScope := by
+    intro act scope id equal
+    exact world.typeFrontier act scope id ty (by simpa [equal] using rootType)
+  have freshSynthetic : ∀ id, root = .global id → config.module.globals.size ≤ id →
+      id < config.module.globals.size + before.nextScope := by
+    intro id equal outside
+    exact world.syntheticFrontier id ty (by simpa [equal] using rootType) outside
+  have sameTypes : registerRootType types root ty = types := by
+    funext other
+    by_cases same : other = root
+    · subst other; simp [registerRootType, rootType]
+    · simp [registerRootType, same]
+  cases existing : before.objectOrdinals.lookup root with
+  | none =>
+    obtain ⟨after, bound, extended, afterWorld⟩ := bindRoot_freshScalar_world config initialized before ambient types live root ty value
+      regions pending world scalar existing compatible conform represented pointers freshType freshSynthetic
+    rw [sameTypes] at afterWorld
+    exact ⟨after, bound, afterWorld⟩
+  | some ordinal =>
+    obtain ⟨after, bound, extended, afterWorld⟩ := bindRoot_existingScalar_world config initialized before ambient types live root ty value
+      regions pending world scalar ordinal existing compatible conform represented pointers freshType freshSynthetic
+    rw [sameTypes] at afterWorld
+    exact ⟨after, bound, afterWorld⟩
+
+#print axioms bindRoot_scalar_registered_world
 #print axioms bindRoot_scalar_update_world
 #print axioms bindRoot_existingScalar_world
 end Goose.Proofs.ConstructionAcceptedExecution

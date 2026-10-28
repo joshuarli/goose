@@ -30,6 +30,32 @@ theorem writeLoc_scalar_complete (fuel : Nat) (config : EvalConfig) (accepted : 
     have afterSource := source.bindScalar_update root ty value initialized rootType represented scalar bound
     simp [writeLoc, EvalM.get, found, bind, writeValuePath, pure, bound, Goose.Proofs.Exit.stepState, afterWorld, afterSource]
 
+theorem writeLoc_scalar_registered_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (root : RootInst) (ty : Ty) (old value : Value)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types)
+    (initialized : frame.initialized = config.module.globals.size)
+    (rootType : types root = some ty) (found : before.objects.lookup root = some old)
+    (scalar : (∃ intTy number, value = .int intTy number) ∨ ∃ boolean, value = .bool boolean)
+    (represented : ValueRepresentation ty value) (pointers : PointerTypedValue types ty value) :
+    let outcome := writeLoc fuel config.layout ⟨root, []⟩ value before
+    ∃ nextLive, AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) ambient types nextLive regions pending ∧
+      AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState outcome) types ∧
+      (match outcome with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  cases fuel with
+  | zero =>
+    simp only [writeLoc, EvalM.get, found, bind, writeValuePath, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
+    exact ⟨live, world, source, trivial⟩
+  | succ fuel =>
+    obtain ⟨after, bound, afterWorld⟩ := bindRoot_scalar_registered_world config frame.initialized before ambient types live root ty value
+      regions pending world scalar rootType represented pointers
+    have afterSource := source.bindScalar_update root ty value initialized rootType represented scalar bound
+    simp only [writeLoc, EvalM.get, found, bind, writeValuePath, pure, bound, Goose.Proofs.Exit.stepState]
+    exact ⟨(fun other => other = root ∨ live other), afterWorld, afterSource, trivial⟩
+
+#print axioms writeLoc_scalar_registered_complete
 theorem execStmt_checkedScalarRebind_complete (fuel checkFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -84,6 +110,60 @@ theorem execStmt_checkedScalarRebind_complete (fuel checkFuel : Nat) (config : E
       simp only [execStmt, execution, resolved, bind, write, pure, Goose.Proofs.Exit.stepState]
       exact ⟨result.1, result.2.1, trivial⟩
 
+theorem execStmt_checkedScalarRebind_registered (fuel checkFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (id : Nat) (expression : Expr) (origin : Goose.Core.OriginId) (root : RootInst) (ty : Ty) (old : Value)
+    (form : AcceptedBinaryExpression expression)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types)
+    (initialized : frame.initialized = config.module.globals.size)
+    (rootType : types root = some ty) (found : before.objects.lookup root = some old)
+    (resolved : rootOf frame.interpretation.environment id before = .ok root before)
+    (scalarTy : (∃ intTy, ty = .int intTy) ∨ ty = .bool)
+    (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue (ordinaryOperandFrame frame checkFuel) expression ty roots typingAfter rootsAfter) :
+    let outcome := execStmt (fuel + 1) config frame.interpretation.environment (.rebind id expression origin) before
+    ∃ nextLive, AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) ambient types nextLive regions pending ∧
+      AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState outcome) types ∧
+      (match outcome with | .ok flow _ => flow = .normal .unit | .stop .. => True | .escape .. | .jump .. => False) := by
+  have child := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
+  have evaluated := evalValue_checked_binary_recursive form fuel config accepted (ordinaryOperandFrame frame checkFuel) before
+    ambient types live regions pending world child ty roots typingAfter rootsAfter checked
+  change Goose.Proofs.Exit.stepState (evalValue fuel config frame.interpretation.environment expression before) = before ∧ _ at evaluated
+  cases execution : evalValue fuel config frame.interpretation.environment expression before with
+  | stop reason after =>
+    have same : after = before := by simpa [execution, Goose.Proofs.Exit.stepState] using evaluated.1
+    subst after
+    simp only [execStmt, execution, bind, Goose.Proofs.Exit.stepState]
+    exact ⟨live, world, source, trivial⟩
+  | escape address carriers after =>
+    exact ((evalValue_scalar_controlFree form fuel config frame.interpretation.environment).1 before address carriers after execution).elim
+  | jump target kind after =>
+    exact ((evalValue_scalar_controlFree form fuel config frame.interpretation.environment).2 before target kind after execution).elim
+  | ok value after =>
+    have same : after = before := by simpa [execution, Goose.Proofs.Exit.stepState] using evaluated.1
+    subst after
+    have valid := evaluated.2.1 value before execution
+    have scalar : (∃ intTy number, value = .int intTy number) ∨ ∃ boolean, value = .bool boolean := by
+      rcases scalarTy with ⟨intTy, same⟩ | same <;> rw [same] at valid <;>
+        cases value <;> cases valid.represented <;> simp_all [Ty.nonfixed]
+    have result := writeLoc_scalar_registered_complete fuel config accepted frame before ambient types live regions pending root ty old value
+      world source initialized rootType found scalar valid.represented valid.pointers
+    obtain ⟨nextLive, nextWorld, nextSource, nextFlow⟩ := result
+    cases write : writeLoc fuel config.layout ⟨root, []⟩ value before with
+    | stop reason after =>
+      simp only [write, Goose.Proofs.Exit.stepState] at nextWorld nextSource nextFlow
+      simp only [execStmt, execution, resolved, bind, write, Goose.Proofs.Exit.stepState]
+      exact ⟨nextLive, nextWorld, nextSource, trivial⟩
+    | escape address carriers after | jump target kind after =>
+      simp only [write] at nextFlow
+    | ok valueUnit after =>
+      cases valueUnit
+      simp only [write, Goose.Proofs.Exit.stepState] at nextWorld nextSource nextFlow
+      simp only [execStmt, execution, resolved, bind, write, pure, Goose.Proofs.Exit.stepState]
+      exact ⟨nextLive, nextWorld, nextSource, trivial⟩
+
 theorem execStmt_scalarAssign_local_eq_rebind (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (id : Nat) (expression : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState) (root : RootInst)
     (resolved : rootOf environment id before = .ok root before)
@@ -129,6 +209,47 @@ theorem execStmt_checkedScalarAssignLocal_complete (fuel checkFuel : Nat) (confi
       exact execStmt_checkedScalarRebind_complete (fuel + 1) checkFuel config accepted frame before ambient types live regions pending
         id expression origin root ty old form world source initialized rootType retained found resolved scalarTy roots typingAfter rootsAfter checked
 
+theorem execStmt_checkedScalarAssignLocal_registered (fuel checkFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (id : Nat) (expression : Expr) (origin : Goose.Core.OriginId) (descriptor : LocalVar)
+    (form : AcceptedBinaryExpression expression)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types)
+    (initialized : frame.initialized = config.module.globals.size)
+    (visible : id ∈ frame.typing.visible) (declared : frame.typing.variables[id]? = some descriptor)
+    (scalarTy : (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool)
+    (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue (ordinaryOperandFrame frame checkFuel) expression descriptor.ty roots typingAfter rootsAfter) :
+    let outcome := execStmt fuel config frame.interpretation.environment (.assign (.var id) expression origin) before
+    ∃ nextLive, AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) ambient types nextLive regions pending ∧
+      AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState outcome) types ∧
+      (match outcome with | .ok flow _ => flow = .normal .unit | .stop .. => True | .escape .. | .jump .. => False) := by
+  obtain ⟨other, root, old, runtimeDeclared, resolved, found, represented⟩ := source.locals id visible
+  rw [source.compatible.variables] at runtimeDeclared
+  have same : other = descriptor := Option.some.inj (runtimeDeclared.symm.trans declared)
+  subst other
+  have rootType := source.localTypes id visible descriptor root declared resolved
+  cases fuel with
+  | zero =>
+    simp only [execStmt, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
+    exact ⟨live, world, source, trivial⟩
+  | succ fuel =>
+    cases fuel with
+    | zero =>
+      simp only [execStmt, evalPlace, timeout, EvalM.stop, bind, Goose.Proofs.Exit.stepState]
+      exact ⟨live, world, source, trivial⟩
+    | succ fuel =>
+      have child := ordinaryOperandFrame_accepted accepted frame checkFuel before types source
+      have evaluated := evalValue_checked_binary_recursive form (fuel + 1) config accepted (ordinaryOperandFrame frame checkFuel) before
+        ambient types live regions pending world child descriptor.ty roots typingAfter rootsAfter checked
+      have unchanged : Goose.Proofs.Exit.stepState (evalValue (fuel + 1) config frame.interpretation.environment expression before) = before := evaluated.1
+      rw [execStmt_scalarAssign_local_eq_rebind fuel config frame.interpretation.environment id expression origin before root resolved unchanged]
+      exact execStmt_checkedScalarRebind_registered (fuel + 1) checkFuel config accepted frame before ambient types live regions pending
+        id expression origin root descriptor.ty old form world source initialized rootType found resolved scalarTy roots typingAfter rootsAfter checked
+
+#print axioms execStmt_checkedScalarAssignLocal_registered
+#print axioms execStmt_checkedScalarRebind_registered
 theorem execStmt_checkedScalarAssignGlobal_positive (fuel checkFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
