@@ -80,6 +80,57 @@ theorem ScalarLocalReplay.registerCall_tail_checked {config : EvalConfig} (accep
   refine ⟨roots, typingAfter, rootsAfter, ?_, finalRooted, available roots rootsAfter finalRooted⟩
   simpa [sameEnvironment, sameCounter] using typedTail
 
+theorem execActivationBody_registerCall_afterStatements (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt) (ty : Ty) (target origin : Nat)
+    (before middle : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (channels : activation.channels = [.register ty])
+    (normal : execStmts (fuel + 1) config
+      { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements
+      (ownershipResultScopeState activation scope before) = .ok (.normal .unit) middle)
+    (middleActs : before.nextAct ≤ middle.nextAct) (middleScopes : before.nextScope ≤ middle.nextScope)
+    (inner : ∃ nextTypes nextLive nextAmbient,
+      let environment := { activation with scopes := (scope, before.nextScope) :: activation.scopes }
+      let outcome := invokeCall fuel config environment target [] [.register ty] origin middle
+      RootTypesExtend types nextTypes ∧ middle.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      middle.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      FutureGlobalsClear config initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation ty value
+       | .stop .. => True | .escape .. | .jump .. => False)) :
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := execActivationBody (fuel + 2) config activation [] ⟨scope, statements, some (.call target [] origin)⟩ before
+      RootTypesExtend types nextTypes ∧ before.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      before.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      FutureGlobalsClear config initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation ty value
+       | .stop .. => True | .escape .. | .jump .. => False) := by
+  let environment := { activation with scopes := (scope, before.nextScope) :: activation.scopes }
+  have body := execActivationBody_register_call_tail fuel config activation scope statements before middle ty target origin channels normal
+  obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, world, clear, result⟩ := inner
+  cases execution : invokeCall fuel config environment target [] [.register ty] origin middle with
+  | stop reason after =>
+    simp only [environment] at execution
+    simp only [execution, Goose.Proofs.Exit.stepState] at acts scopes world clear result
+    rw [body, execution]
+    exact ⟨nextTypes, nextLive, nextAmbient, extend, Nat.le_trans middleActs acts, Nat.le_trans middleScopes scopes, world, clear, trivial⟩
+  | escape address carriers after | jump destination kind after =>
+    simp only [environment] at execution
+    simp [execution] at result
+  | ok carriers after =>
+    simp only [environment] at execution
+    simp only [execution, Goose.Proofs.Exit.stepState] at acts scopes world clear result
+    obtain ⟨rfl, value, rfl, represented⟩ := result
+    rw [body, execution]
+    have released := world.releaseScope config initialized after nextAmbient nextTypes nextLive regions pending
+      activation scope before.nextScope
+    exact ⟨nextTypes, _, nextAmbient, extend, Nat.le_trans middleActs acts, Nat.le_trans middleScopes scopes, released,
+      clear.releaseScope activation scope before.nextScope, rfl, value, rfl, represented⟩
+
+#print axioms execActivationBody_registerCall_afterStatements
 #print axioms ScalarLocalReplay.registerCall_tail_checked
 #print axioms typeStatements_scalarLocal_callContext
 end Goose.Proofs.ConstructionAcceptedExecution
