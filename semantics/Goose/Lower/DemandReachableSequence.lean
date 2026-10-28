@@ -1,3 +1,4 @@
+import Goose.Lower.DemandIfMixedSequence
 import Goose.Lower.DemandStoppedSequenceFamily
 import Goose.Lower.DemandGeneratedSequencePrefix
 import Goose.Lower.DemandRunAtPrefix
@@ -107,6 +108,27 @@ theorem ReachableStatementPrefixFamily.mapCursor {cfg : Cfg} {env : Env} {cx : F
   | interior demanded => exact .interior (convert source demanded)
   | complete count prefixSteps residual evaluated post => exact .complete count prefixSteps residual evaluated post
 
+
+theorem ReachableSequencePrefixFamily.mapCursor {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+    {before : LS} {loop : Option LoopCtx} {bindings : List (SlotId × ValueId × OriginId)} {want : Bool}
+    {block : Core.Block} {statements : List Stmt}
+    {cursor next : ∀ {statement : Stmt} {state : St}, StmtSource cfg env statement state →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop}
+    (family : ReachableSequencePrefixFamily cx results selected before loop bindings want block statements cursor)
+    (convert : ∀ {statement : Stmt} {state : St} (source : StmtSource cfg env statement state)
+      {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint},
+      cursor source before built initial start map required runtime → next source before built initial start map required runtime) :
+    ReachableSequencePrefixFamily cx results selected before loop bindings want block statements next := by
+  intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended callerStart taken reached steps
+  have decomposition := family source owned occurrence all scope value rows coverage admitted bounded realized input extended callerStart steps
+  refine ⟨decomposition.sourceOwner, decomposition.coverage, ?_⟩
+  cases decomposition.progress with
+  | interior demanded => exact .interior (demanded.map convert)
+  | complete count prefixSteps residual evaluated post => exact .complete count prefixSteps residual evaluated post
+
+#print axioms ReachableSequencePrefixFamily.mapCursor
 #print axioms ReachableStatementPrefixFamily.mapCursor
 #print axioms GeneratedSequencePrefixFamily.reachable
 #print axioms GeneratedStoppedSequencePrefixFamily.reachable
