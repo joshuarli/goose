@@ -1,8 +1,10 @@
 import Goose.Proofs.ConstructionGhostSyntaxFuel
+import Goose.Proofs.ConstructionGhostBuilderCallEvents
 
 namespace Goose.Proofs.ConstructionGhostBuilderChannelWitness
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceFuel
-open Goose.Proofs.ConstructionGhostSyntaxFuel
+open Goose.Proofs.ConstructionGhostSyntaxFuel Goose.Proofs.ConstructionGhostBuilderCallEvents
+open Goose.Proofs.ConstructionExecution
 
 private def bytes : Expr := .bytes (.varr (.int .u8)) [65, 66] 0
 private def context : Context := ⟨0, "target", [], [], []⟩
@@ -50,5 +52,24 @@ theorem builderCall_events : ∃ after,
   · simp only [stepState, ready, config, context, implementation, environment, bytes]
     cbv
 
+private def callReady : ExecutionState := stepState (liftConstruction 0 (renewReceivingDestination 0) ready)
+
+theorem builderCall_childEvents :
+    SourceHistory config 39 [0] (.channelCall environment 0 [] [.construct 0] 0) callReady
+      (invokeCall 39 config environment 0 [] [.construct 0] 0 callReady) ∧
+    EventPrefix (Goose.Proofs.Exit.stepState (invokeCall 39 config environment 0 [] [.construct 0] 0 callReady)).construction.events
+      (Goose.Proofs.Exit.stepState (buildExpr 40 config environment 0 (.call 0 [] 0) ready)).construction.events ∧
+    (Goose.Proofs.Exit.stepState (buildExpr 40 config environment 0 (.call 0 [] 0) ready)).construction.events =
+      [.begin 0, .write 0 0, .write 0 1] := by
+  obtain ⟨after, history, execution, events⟩ := builderCall_events
+  have renewed : liftConstruction 0 (renewReceivingDestination 0) ready = .ok 0 callReady := by
+    simp only [callReady, ready, stepState, config, context, implementation, environment, bytes]
+    cbv
+  refine ⟨builderCall_child_history history 39 environment 0 0 0 [] 0 callReady rfl rfl renewed,
+    builderCall_sourcePrefix 39 config environment 0 0 0 [] 0 ready callReady renewed, ?_⟩
+  rw [execution]
+  exact events
+
+#print axioms builderCall_childEvents
 #print axioms builderCall_events
 end Goose.Proofs.ConstructionGhostBuilderChannelWitness
