@@ -180,6 +180,57 @@ theorem RetainedSsaMap.addValues_bounded {map : RetainedSsaMap} {frontier id : V
     · exact bounded.1 cell old
   · exact bounded.2
 
+
+theorem accepted_assignment_value_demand_of_retained {cfg : Cfg} {env : Env} {state after : St}
+    {place : Place} {value : Expr} {origin : OriginId}
+    (source : StmtSource cfg env (.assign place value origin) state)
+    (child : ExprSource cfg env value after) (childAt : source.AssignmentValueAt child)
+    (childTyping : child.typingEnv = source.typingEnv) (childRoots : child.rootsEnv = source.rootsEnv)
+    {cx : FnCtx} {results : List Ty} {before : LS} {initial frame : GIR.Frame} {start point : Pt} {loop : Option LoopCtx}
+    {map required : RetainedSsaMap} (coverage : map.Covers required)
+    (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2.vals.size)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    {location : Loc} (post : Post cfg env cx before initial (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 frame point
+      [((lowerPlace place (lowerEnv cfg.mod env.vars results) before).1, .val (.ref location))])
+    {aliases : List RetainedAlias} (query : source.rootsEnv.access.aliasPlace (source.path ++ [0]) place = .ok aliases)
+    (realizedNext : (map.addValues (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1 aliases).Realizes
+      cfg.mod source.world env ⟨point, frame, after⟩) :
+    let id := (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1
+    let next := map.addValues id aliases
+    next.Covers (required.addValues id aliases) ∧
+    next.Bounded (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2.vals.size ∧
+    next.Admitted cfg.mod.profile child.context.retained ∧
+    next.Realizes cfg.mod child.world env ⟨point, frame, after⟩ ∧
+    GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv
+      (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 frame point := by
+  let id := (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1
+  have childAdmitted : map.Admitted cfg.mod.profile child.context.retained := by
+    rw [demandContextRetainedEq childAt.plans childAt.path rfl childAt.context]
+    intro profile alias member
+    exact source.context.child_retained_subset rfl 1 (.expression value) .expression rfl (by trivial)
+      (admitted profile alias member)
+  have nextAdmitted : (map.addValues id aliases).Admitted cfg.mod.profile child.context.retained :=
+    RetainedSsaMap.addValues_admitted childAdmitted (fun profile => childAt.retains_generated query profile)
+  have idBound : id < (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2.vals.size :=
+    post.lt (id, .val (.ref location)) (by simp [id])
+  have nextBounded := RetainedSsaMap.addValues_bounded bounded idBound aliases
+  have nextRealized : (map.addValues id aliases).Realizes cfg.mod child.world env ⟨point, frame, after⟩ := by
+    simpa only [childAt.world] using realizedNext
+  have placeAdv := advB_lowerPlace place (lowerEnv cfg.mod env.vars results) before
+    (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1
+    (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 rfl
+  have childInput : GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv
+      (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 frame point := by
+    refine ⟨?_, ?_, post.pp, post.rel, input.moduleEq, input.resultsEq, input.depth,
+      (by cases loop <;> exact input.targets), input.counter.afterPost (post.sub (by simp)),
+      input.generated.lowerPlace place rfl, input.frames.mono placeAdv.ext⟩
+    · simpa only [childTyping, childRoots] using input.metadata
+    · simpa only [childTyping] using input.loops
+  exact ⟨coverage.addValues id aliases, nextBounded, nextAdmitted, nextRealized, childInput⟩
+
+#print axioms accepted_assignment_value_demand_of_retained
+
 theorem accepted_assignment_value_demand {cfg : Cfg} {env : Env} {state after : St}
     {place : Place} {value : Expr} {origin : OriginId}
     (source : StmtSource cfg env (.assign place value origin) state)
@@ -211,29 +262,9 @@ theorem accepted_assignment_value_demand {cfg : Cfg} {env : Env} {state after : 
   let id := (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1
   obtain ⟨aliases, query, realizedNext⟩ := accepted_assignment_destination_retained
     source destination roots world placeRoots destinationType target placed post realized
-  have childAdmitted : map.Admitted cfg.mod.profile child.context.retained := by
-    rw [demandContextRetainedEq childAt.plans childAt.path rfl childAt.context]
-    intro profile alias member
-    exact source.context.child_retained_subset rfl 1 (.expression value) .expression rfl (by trivial)
-      (admitted profile alias member)
-  have nextAdmitted : (map.addValues id aliases).Admitted cfg.mod.profile child.context.retained :=
-    RetainedSsaMap.addValues_admitted childAdmitted (fun profile => childAt.retains_generated query profile)
-  have idBound : id < (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2.vals.size :=
-    post.lt (id, .val (.ref location)) (by simp [id])
-  have nextBounded := RetainedSsaMap.addValues_bounded bounded idBound aliases
-  have nextRealized : (map.addValues id aliases).Realizes cfg.mod child.world env ⟨point, frame, after⟩ := by
-    simpa only [childAt.world] using realizedNext
-  have placeAdv := advB_lowerPlace place (lowerEnv cfg.mod env.vars results) before
-    (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1
-    (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 rfl
-  have childInput : GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv
-      (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 frame point := by
-    refine ⟨?_, ?_, post.pp, post.rel, input.moduleEq, input.resultsEq, input.depth,
-      (by cases loop <;> exact input.targets), input.counter.afterPost (post.sub (by simp)),
-      input.generated.lowerPlace place rfl, input.frames.mono placeAdv.ext⟩
-    · simpa only [childTyping, childRoots] using input.metadata
-    · simpa only [childTyping] using input.loops
-  exact ⟨aliases, query, coverage.addValues id aliases, nextBounded, nextAdmitted, nextRealized, childInput⟩
+  obtain ⟨nextCoverage, nextBounded, nextAdmitted, nextRealized, nextInput⟩ :=
+    accepted_assignment_value_demand_of_retained source child childAt childTyping childRoots coverage admitted bounded input post query realizedNext
+  exact ⟨aliases, query, nextCoverage, nextBounded, nextAdmitted, nextRealized, nextInput⟩
 
 
 theorem accepted_assignment_scalar_value_demand {cfg : Cfg} {env : Env} {state after : St}
