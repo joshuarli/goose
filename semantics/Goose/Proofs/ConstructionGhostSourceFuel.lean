@@ -16,6 +16,15 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (child : FuelSupport config fuel (.place environment place)) : FuelSupport config (fuel + 1) (.value environment (.ref mutability place))
   | lengthValue (fuel : Nat) (environment : RuntimeActivation) (view : View)
       (child : FuelSupport config fuel (.view environment view)) : FuelSupport config (fuel + 1) (.value environment (.len view))
+  | expressionBound (fuel : Nat) (environment : RuntimeActivation) (count : Nat) (defaultValue : Int)
+      (operand : Expr) (fromEnd : Bool) (child : FuelSupport config fuel (.value environment operand)) :
+      FuelSupport config (fuel + 1) (.bound environment count defaultValue (if fromEnd then .fromEnd operand else .expr operand))
+  | sliceValue (fuel : Nat) (environment : RuntimeActivation) (mutability : Goose.Core.Mutability)
+      (view : View) (lo hi : Bound) (origin : Goose.Core.OriginId)
+      (viewChild : FuelSupport config fuel (.view environment view))
+      (loChild : ∀ count defaultValue, FuelSupport config fuel (.bound environment count defaultValue lo))
+      (hiChild : ∀ count defaultValue, FuelSupport config fuel (.bound environment count defaultValue hi)) :
+      FuelSupport config (fuel + 1) (.value environment (.slice mutability view lo hi origin))
   | popValue (fuel : Nat) (environment : RuntimeActivation) (place : Place) (origin : Goose.Core.OriginId)
       (child : FuelSupport config fuel (.place environment place)) : FuelSupport config (fuel + 1) (.value environment (.pop place origin))
   | valueView (fuel : Nat) (environment : RuntimeActivation) (operand : Expr)
@@ -271,6 +280,14 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           exact .referenceValue (ih (.place environment place) (path ++ [0]) before child)
       | lengthValue _ environment view child =>
           exact .lengthValue (ih (.view environment view) (path ++ [0]) before child)
+      | expressionBound _ environment count defaultValue operand fromEnd child =>
+          exact .expressionBound (ih (.value environment operand) (path ++ [0]) before child)
+      | sliceValue _ environment mutability view lo hi origin viewSupported loSupported hiSupported =>
+          refine .sliceValue (ih (.view environment view) (path ++ [0]) before viewSupported) ?_ ?_
+          · intro value middle viewed
+            exact ih (.bound environment value.count 0 lo) (path ++ [1]) middle (loSupported _ _)
+          · intro value middle low ready viewed lowResult
+            exact ih (.bound environment value.count value.count hi) (path ++ [2]) ready (hiSupported _ _)
       | popValue _ environment place origin child =>
           exact .popValue (ih (.place environment place) (path ++ [0]) before child)
       | valueView _ environment operand child =>

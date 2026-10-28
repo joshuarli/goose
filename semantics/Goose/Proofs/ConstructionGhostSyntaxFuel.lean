@@ -11,6 +11,9 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | read (place : Place) (child : PlaceSyntax config place) : ValueSyntax config (.read place)
   | reference (mutability : Goose.Core.Mutability) (place : Place) (child : PlaceSyntax config place) : ValueSyntax config (.ref mutability place)
   | length (view : View) (child : ViewSyntax config view) : ValueSyntax config (.len view)
+  | slice (mutability : Goose.Core.Mutability) (view : View) (lo hi : Bound) (origin : Goose.Core.OriginId)
+      (viewChild : ViewSyntax config view) (loChild : BoundSyntax config lo) (hiChild : BoundSyntax config hi) :
+      ValueSyntax config (.slice mutability view lo hi origin)
   | pop (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.pop place origin)
   | aggregate (expression : Expr) (operands : List Expr) (shape : ValueAggregate expression operands)
       (children : ∀ operand ∈ operands, ValueSyntax config operand) : ValueSyntax config expression
@@ -92,6 +95,11 @@ inductive ArgumentSyntax (config : EvalConfig) : List Param → List Arg → Pro
 inductive ViewSyntax (config : EvalConfig) : View → Prop
   | place (place : Place) (child : PlaceSyntax config place) : ViewSyntax config (.of place)
   | value (operand : Expr) (child : ValueSyntax config operand) : ViewSyntax config (.val operand)
+
+inductive BoundSyntax (config : EvalConfig) : Bound → Prop
+  | omitted : BoundSyntax config .omitted
+  | expression (operand : Expr) (child : ValueSyntax config operand) : BoundSyntax config (.expr operand)
+  | fromEnd (operand : Expr) (child : ValueSyntax config operand) : BoundSyntax config (.fromEnd operand)
 
 inductive PlaceSyntax (config : EvalConfig) : Place → Prop
   | localPlace (localVar : Goose.Core.VarId) : PlaceSyntax config (.var localVar)
@@ -196,6 +204,8 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   place : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.place environment place)
   view : ∀ environment view, ViewSyntax config view → FuelSupport config fuel (.view environment view)
   placeView : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.view environment (.of place))
+  bound : ∀ environment count defaultValue bound, BoundSyntax config bound →
+    FuelSupport config fuel (.bound environment count defaultValue bound)
   arguments : ∀ environment vars parameters arguments, ArgumentSyntax config parameters arguments →
     FuelSupport config fuel (.arguments environment vars parameters arguments)
   statement : ∀ environment statement, StatementSyntax config statement → FuelSupport config fuel (.statement environment statement)
@@ -290,6 +300,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | reference mutability place child => exact .referenceValue fuel environment mutability place (previous.place environment place child)
         | length view child => exact .lengthValue fuel environment view (previous.view environment view child)
         | pop place origin child => exact .popValue fuel environment place origin (previous.place environment place child)
+        | slice mutability view lo hi origin viewChild loChild hiChild =>
+            exact .sliceValue fuel environment mutability view lo hi origin (previous.view environment view viewChild)
+              (fun count defaultValue => previous.bound environment count defaultValue lo loChild)
+              (fun count defaultValue => previous.bound environment count defaultValue hi hiChild)
         | aggregate expression operands shape children =>
             exact .aggregate fuel environment expression operands shape
               (fun operand member => previous.value environment operand (children operand member))
@@ -355,6 +369,13 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | value operand child => exact .valueView fuel environment operand (previous.value environment operand child)
       · intro environment place derivation
         exact .placeView fuel environment place (previous.place environment place derivation)
+      · intro environment count defaultValue bound derivation
+        cases derivation with
+        | omitted => exact .legacy (fuel + 1) (.omittedBound environment count defaultValue)
+        | expression operand child =>
+            simpa using (FuelSupport.expressionBound fuel environment count defaultValue operand false (previous.value environment operand child))
+        | fromEnd operand child =>
+            simpa using (FuelSupport.expressionBound fuel environment count defaultValue operand true (previous.value environment operand child))
       · intro environment vars parameters arguments derivation
         cases derivation with
         | nil => exact .legacy (fuel + 1) (.argumentsDone environment vars)
