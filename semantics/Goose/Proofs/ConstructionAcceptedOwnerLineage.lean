@@ -2,6 +2,7 @@ import Goose.Proofs.ConstructionAcceptedRegionLimits
 import Goose.Proofs.ConstructionExecutionOwnershipSourcePrimitives
 import Goose.Proofs.ConstructionAcceptedDestinationWorld
 import Goose.Proofs.ConstructionAcceptedOpenDestination
+import Goose.Proofs.ConstructionElementWriteTransition
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -9,6 +10,64 @@ open Goose.Core (ActId ConstructionRequest OriginId RootInst)
 open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionExecutionProtocol
+open Goose.Proofs.ConstructionStorage
+
+theorem destinationCurrentSteps_same_indexing (fuel : Nat) (before after : ConstructionState)
+    (sizes : after.destinations.size = before.destinations.size)
+    (successors : after.destinationSuccessors = before.destinationSuccessors) (id : Nat) :
+    destinationCurrentSteps fuel after id = destinationCurrentSteps fuel before id := by
+  induction fuel generalizing id with
+  | zero => rfl
+  | succ fuel ih =>
+    simp only [destinationCurrentSteps_succ, sizes, successors]
+    split <;> simp_all only
+
+theorem bytes_writeLoop_ownershipSource (bytes : List UInt8) (origin : OriginId) (id : Nat)
+    (before after : ExecutionState) (row : PendingDestination) (count : Nat)
+    (valid : DestinationLifecycleInvariant before.construction)
+    (current : destinationCurrent before.construction id = .ok id)
+    (present : before.construction.destinations[id]? = some row) (opened : row.progress = .open count)
+    (executed : ((forIn bytes PUnit.unit fun byte _ => do
+      receivingAction origin id (fun destination => writeElement destination ⟨#[byte]⟩)
+      pure (.yield PUnit.unit)) : EvalM PUnit) before = .ok PUnit.unit after) :
+    OwnershipSourceExtension before.construction after.construction ∧
+      DestinationLifecycleInvariant after.construction ∧
+      destinationCurrent after.construction id = .ok id ∧
+      ∃ next n, after.construction.destinations[id]? = some next ∧ next.progress = .open n := by
+  induction bytes generalizing before row count with
+  | nil =>
+    simp only [List.forIn_nil, pure, ExecutionStep.ok.injEq, true_and] at executed
+    subst after
+    exact ⟨.refl _, valid, current, row, count, present, opened⟩
+  | cons byte rest ih =>
+    have renewal : renewReceivingDestination id before.construction = .ok id before.construction := by
+      simp only [renewReceivingDestination, ConstructionM.get, bind, current, pure,
+        lookupDestination_result, present, opened]
+    simp only [List.forIn_cons, receivingAction, liftConstruction, renewal, bind] at executed
+    cases written : writeElement id ⟨#[byte]⟩ before.construction with
+    | fault reason final => simp only [written] at executed; cases executed
+    | ok value final =>
+      cases value
+      simp only [written, pure] at executed
+      have source : OwnershipSourceExtension before.construction final := by
+        simpa only [written, ConstructionResult.finalState] using
+          writeElement_ownership_source id ⟨#[byte]⟩ before.construction valid
+      have valid' : DestinationLifecycleInvariant final := by
+        simpa only [written, ConstructionResult.finalState] using
+          writeElement_destination_lifecycle_invariant id ⟨#[byte]⟩ before.construction valid
+      have row' := writeElement_success_destination id ⟨#[byte]⟩ before.construction final row count present opened written
+      have indexing := writeElement_preserves_indexing id ⟨#[byte]⟩ before.construction
+      rw [written] at indexing
+      simp only [ConstructionResult.finalState] at indexing
+      have current' : destinationCurrent final id = .ok id := by
+        rw [destinationCurrent_result, destinationCurrentSteps_same_indexing _ before.construction final indexing.1 indexing.2, indexing.1]
+        simpa only [destinationCurrent_result] using current
+      obtain ⟨tailSource, tailValid, tailCurrent, next, n, nextPresent, nextOpen⟩ :=
+        ih { before with construction := final }
+          { row with progress := .open (count + 1), writeEnd := row.writeEnd + (⟨#[byte]⟩ : ByteArray).size } (count + 1)
+          valid' current' row'.1 rfl executed
+      exact ⟨ownershipSourceExtension_trans _ _ _ source tailSource, tailValid, tailCurrent,
+        next, n, nextPresent, nextOpen⟩
 
 theorem newDestination_publishedOwner_storage (config : EvalConfig) (initialized : Nat)
     (owner : ActId) (ty : Ty) (request : ConstructionRequest) (origin : OriginId) (knownCount : Option Nat)
@@ -39,30 +98,61 @@ theorem newDestination_publishedOwner_storage (config : EvalConfig) (initialized
   cases sampled
   exact ⟨storage.trans receiverStorage, rfl⟩
 
-theorem buildExpr_emptyBytes_ownershipSource (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
-    (id : Nat) (ty : Ty) (origin : OriginId) (before after : ExecutionState) (row : PendingDestination) (count : Nat)
+private theorem protectDestination_success (origin : OriginId) (id : Nat) (action : EvalM α)
+    (before after : ExecutionState) (value : α)
+    (executed : protectDestination origin id action before = .ok value after) :
+    action before = .ok value after := by
+  cases result : action before with
+  | ok actual state => simp only [protectDestination, result] at executed; cases executed; rfl
+  | stop reason state => simp only [protectDestination, result] at executed; cases executed
+  | escape target carriers state =>
+    simp only [protectDestination, result] at executed
+    split at executed <;> cases executed
+  | jump target kind state =>
+    simp only [protectDestination, result] at executed
+    split at executed <;> cases executed
+
+theorem buildExpr_bytes_ownershipSource (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (id : Nat) (ty : Ty) (bytes : List UInt8) (origin : OriginId) (before after : ExecutionState) (row : PendingDestination) (count : Nat)
     (valid : DestinationLifecycleInvariant before.construction)
     (current : destinationCurrent before.construction id = .ok id)
     (present : before.construction.destinations[id]? = some row) (opened : row.progress = .open count)
-    (executed : buildExpr (fuel + 1) config environment id (.bytes ty [] origin) before = .ok () after) :
+    (executed : buildExpr (fuel + 1) config environment id (.bytes ty bytes origin) before = .ok () after) :
     OwnershipSourceExtension before.construction after.construction ∧
       DestinationLifecycleInvariant after.construction := by
   have renewal : renewReceivingDestination id before.construction = .ok id before.construction := by
     simp only [renewReceivingDestination, ConstructionM.get, bind, current, pure,
       lookupDestination_result, present, opened]
-  simp only [buildExpr, liftConstruction, renewal, bind, List.forIn_nil, pure, protectDestination,
-    receivingAction] at executed
-  cases finished : finishDestination id before.construction with
-  | fault reason final => simp only [finished] at executed; cases executed
-  | ok value final =>
+  simp only [buildExpr, liftConstruction, renewal, bind] at executed
+  have action := protectDestination_success origin id _ before after () executed
+  cases loop : ((forIn bytes PUnit.unit fun byte _ => do
+      receivingAction origin id (fun destination => writeElement destination ⟨#[byte]⟩)
+      pure (.yield PUnit.unit)) : EvalM PUnit) before with
+  | stop reason state => simp only [bind] at loop; rw [loop] at action; cases action
+  | escape target carriers state => simp only [bind] at loop; rw [loop] at action; cases action
+  | jump target kind state => simp only [bind] at loop; rw [loop] at action; cases action
+  | ok value state =>
     cases value
-    simp only [finished, ExecutionStep.ok.injEq, true_and] at executed
-    subst after
-    constructor
-    · simpa only [finished, ConstructionResult.finalState] using
-        finishDestination_ownership_source before.construction id valid
-    · simpa only [finished, ConstructionResult.finalState] using
-        finishDestination_destination_lifecycle_invariant id before.construction valid
+    obtain ⟨source, valid', current', next, n, present', opened'⟩ :=
+      bytes_writeLoop_ownershipSource bytes origin id before state row count valid current present opened loop
+    have renewal' : renewReceivingDestination id state.construction = .ok id state.construction := by
+      simp only [renewReceivingDestination, ConstructionM.get, bind, current', pure,
+        lookupDestination_result, present', opened']
+    simp only [bind] at loop
+    rw [loop] at action
+    simp only [receivingAction, liftConstruction, renewal', bind] at action
+    cases finished : finishDestination id state.construction with
+    | fault reason final => simp only [finished] at action; cases action
+    | ok value final =>
+      cases value
+      simp only [finished, ExecutionStep.ok.injEq, true_and] at action
+      subst after
+      constructor
+      · exact ownershipSourceExtension_trans _ _ _ source (by
+          simpa only [finished, ConstructionResult.finalState] using
+            finishDestination_ownership_source state.construction id valid')
+      · simpa only [finished, ConstructionResult.finalState] using
+          finishDestination_destination_lifecycle_invariant id state.construction valid'
 
 theorem publishCompleted_ownershipSource (origin : OriginId) (destination : Nat) (before after : ExecutionState)
     (valid : DestinationLifecycleInvariant before.construction)
@@ -102,38 +192,39 @@ theorem newDestination_current_self (config : EvalConfig) (initialized : Nat) (o
       exact False.elim (Nat.not_lt_of_ge (Nat.le_of_lt earlier) bounded)
   exact destinationCurrent_unaliased after.construction destination inside terminal
 
-theorem emptyBytes_publishedOwner_storage (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+theorem bytes_publishedOwner_storage (fuel : Nat) (config : EvalConfig) (initialized : Nat) (bytes : List UInt8)
     (environment : RuntimeActivation) (origin : OriginId) (before allocated built final : ExecutionState)
     (destination count : Nat) (row : PendingDestination) (stored : StoredValue)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
-    (created : newDestination config.layout environment.act (.varr (.int .u8)) .value origin none (some 0) before =
+    (created : newDestination config.layout environment.act (.varr (.int .u8)) .value origin none (some bytes.length) before =
       .ok destination allocated)
-    (constructed : buildExpr (fuel + 1) config environment destination (.bytes (.varr (.int .u8)) [] origin) allocated =
+    (constructed : buildExpr (fuel + 1) config environment destination (.bytes (.varr (.int .u8)) bytes origin) allocated =
       .ok () built)
     (published : publishCarriers origin [.completed destination] built = .ok () final)
     (present : final.construction.destinations[destination]? = some row)
     (phase : row.progress = .published count) (sampled : storedDestination destination final = .ok stored final) :
     stored.storage = before.construction.storage.size ∧ stored.destination = some destination := by
-  have allocatedWorld := newDestination_acceptedWorld config environment.act (.varr (.int .u8)) .value origin (some 0)
+  have allocatedWorld := newDestination_acceptedWorld config environment.act (.varr (.int .u8)) .value origin (some bytes.length)
     initialized before allocated destination ambient types live regions pending world created
   obtain ⟨ready⟩ := newDestination_initial_backing config.layout environment.act (.varr (.int .u8)) .value origin
-    (some 0) before allocated destination (.int .u8) rfl created
+    (some bytes.length) before allocated destination (.int .u8) rfl created
   have current := newDestination_current_self config initialized environment.act (.varr (.int .u8)) .value origin
-    (some 0) before allocated destination ambient types live regions pending world created
-  obtain ⟨buildSource, lifecycle⟩ := buildExpr_emptyBytes_ownershipSource fuel config environment destination
-    (.varr (.int .u8)) origin allocated built ready.destination 0 allocatedWorld.ownership.source.structural.1.1.1
+    (some bytes.length) before allocated destination ambient types live regions pending world created
+  obtain ⟨buildSource, lifecycle⟩ := buildExpr_bytes_ownershipSource fuel config environment destination
+    (.varr (.int .u8)) bytes origin allocated built ready.destination 0 allocatedWorld.ownership.source.structural.1.1.1
     current ready.present ready.opened constructed
   have publishSource := publishCompleted_ownershipSource origin destination built final lifecycle published
   have history := ownershipSourceExtension_trans allocated.construction built.construction final.construction buildSource publishSource
-  exact newDestination_publishedOwner_storage config initialized environment.act (.varr (.int .u8)) .value origin (some 0)
+  exact newDestination_publishedOwner_storage config initialized environment.act (.varr (.int .u8)) .value origin (some bytes.length)
     before allocated final destination count row stored ambient types live regions pending world created history present phase sampled
 
 #print axioms newDestination_publishedOwner_storage
-#print axioms buildExpr_emptyBytes_ownershipSource
+#print axioms bytes_writeLoop_ownershipSource
+#print axioms buildExpr_bytes_ownershipSource
 #print axioms publishCompleted_ownershipSource
 #print axioms newDestination_current_self
-#print axioms emptyBytes_publishedOwner_storage
+#print axioms bytes_publishedOwner_storage
 
 end Goose.Proofs.ConstructionAcceptedExecution
