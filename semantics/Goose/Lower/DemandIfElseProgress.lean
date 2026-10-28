@@ -8,16 +8,16 @@ theorem accepted_generated_if_generic_selected_stopped {cfg : Cfg} {env : Env} {
     (child : ExprSource cfg env condition state)
     (canonical : source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
     (takeYes : Bool) {conditionFuel : Nat} (conditionDone : evalExpr conditionFuel cfg env condition state = .ok (.bool takeYes) middle)
-    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (owned : GeneratedSourceOwner selected source.context)
     {before forked yesStart yesEnd noStart noEnd built : LS} {initial conditionFrame : GIR.Frame} {start conditionPoint : Pt}
     {map required : RetainedSsaMap} {yesBlock noBlock yesValue noValue : Nat} {yesEndPoint noEndPoint : Option BlockId}
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root source.path (.statement none (.ifS condition yes (some no) origin)) before)
+      root source.path (.statement loop (.ifS condition yes (some no) origin)) before)
     (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
     (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
-    (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
     (boundary : ExpressionDemandBoundary child map cx before initial
       (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2
       (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1 (.bool takeYes) middle conditionPoint conditionFrame)
@@ -25,16 +25,16 @@ theorem accepted_generated_if_generic_selected_stopped {cfg : Cfg} {env : Env} {
       (lowerEnv cfg.mod env.vars results) (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2 =
       ((yesBlock, noBlock), forked))
     (forkExtended : ExtT forked cx.fn.blocks) (yesStartEq : yesStart = { forked with cur := some yesBlock })
-    (yesRun : lowerBlock none [] false yes (lowerEnv cfg.mod env.vars results) yesStart = (yesValue, yesEnd))
+    (yesRun : lowerBlock loop [] false yes (lowerEnv cfg.mod env.vars results) yesStart = (yesValue, yesEnd))
     (yesCurrent : yesEndPoint = yesEnd.cur) (yesExtended : ExtT yesEnd cx.fn.blocks)
     (noStartEq : noStart = { yesEnd with cur := some noBlock })
-    (noRun : lowerBlock none [] false no (lowerEnv cfg.mod env.vars results) noStart = (noValue, noEnd))
+    (noRun : lowerBlock loop [] false no (lowerEnv cfg.mod env.vars results) noStart = (noValue, noEnd))
     (noCurrent : noEndPoint = noEnd.cur) (noExtended : ExtT noEnd cx.fn.blocks)
     (joined : joinArms yesEndPoint noEndPoint (lowerEnv cfg.mod env.vars results) noEnd = ((), built))
     (extended : ExtT built cx.fn.blocks)
     (bodyFamily : GeneratedStoppedSequencePrefixFamily
       (env := { env with scopes := ((if takeYes then yes else no).scope, middle.nextScope) :: env.scopes })
-      cx results selected (if takeYes then yesStart else noStart) none [] false (if takeYes then yes else no)
+      cx results selected (if takeYes then yesStart else noStart) loop [] false (if takeYes then yes else no)
       (if takeYes then yes else no).stmts)
     (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
       execStmts fuel cfg { env with scopes := ((if takeYes then yes else no).scope, middle.nextScope) :: env.scopes }
@@ -49,18 +49,18 @@ theorem accepted_generated_if_generic_selected_stopped {cfg : Cfg} {env : Env} {
         DemandRuntimePrefix cx consumed ⟨(if takeYes then yesBlock else noBlock, 0), conditionFrame, middle⟩ boundaryPoint ∧
         DemandRuntimePrefix cx remaining boundaryPoint reached ∧
         execStmt fuel cfg env (.ifS condition yes (some no) origin) state = .ok (.normal .unit) boundaryPoint.state ∧
-        GeneratedStatementPrefixEnd source map cx before initial built none (.normal .unit) boundaryPoint := by
+        GeneratedStatementPrefixEnd source map cx before initial built loop (.normal .unit) boundaryPoint := by
   obtain ⟨branch, world, branchOwner, branchAdmitted, branchBounded, branchRealized, branchInput, branchOccurrence, branchRows⟩ :=
     accepted_generated_if_selected_input source child canonical takeYes conditionDone selected owned occurrence rows admitted input boundary
       forkRun forkExtended yesStartEq yesRun noStartEq
-  have selectedRun : (lowerBlock none [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
+  have selectedRun : (lowerBlock loop [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
       (if takeYes then yesStart else noStart)).2 = (if takeYes then yesEnd else noEnd) := by
     cases takeYes <;> simp [yesRun, noRun]
-  have branchExtended : ExtT (lowerBlock none [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
+  have branchExtended : ExtT (lowerBlock loop [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
       (if takeYes then yesStart else noStart)).2 cx.fn.blocks := by
     rw [selectedRun]
     cases takeYes <;> assumption
-  have progress := accepted_generated_generic_branch_block_stopped branch selected branchOwner branchOccurrence branchRows
+  have progress := accepted_generated_loop_branch_block_stopped branch selected branchOwner branchOccurrence branchRows
     coverage branchAdmitted branchBounded branchRealized branchInput branchExtended bodyFamily normal noTail steps stopped nonTimeout
   cases progress with
   | aborted fuel branchStopped =>
@@ -144,16 +144,16 @@ theorem accepted_generated_if_generic_selected_prefix_canonical {cfg : Cfg} {env
     (child : ExprSource cfg env condition state)
     (canonical : source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
     (takeYes : Bool) {conditionFuel : Nat} (conditionDone : evalExpr conditionFuel cfg env condition state = .ok (.bool takeYes) middle)
-    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (owned : GeneratedSourceOwner selected source.context)
     {before forked yesStart yesEnd noStart noEnd built : LS} {initial conditionFrame : GIR.Frame} {start conditionPoint : Pt}
     {map required : RetainedSsaMap} {yesBlock noBlock yesValue noValue : Nat} {yesEndPoint noEndPoint : Option BlockId}
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root source.path (.statement none (.ifS condition yes (some no) origin)) before)
+      root source.path (.statement loop (.ifS condition yes (some no) origin)) before)
     (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
     (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
-    (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
     (boundary : ExpressionDemandBoundary child map cx before initial
       (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2
       (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1 (.bool takeYes) middle conditionPoint conditionFrame)
@@ -161,10 +161,10 @@ theorem accepted_generated_if_generic_selected_prefix_canonical {cfg : Cfg} {env
       (lowerEnv cfg.mod env.vars results) (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2 =
       ((yesBlock, noBlock), forked))
     (forkExtended : ExtT forked cx.fn.blocks) (yesStartEq : yesStart = { forked with cur := some yesBlock })
-    (yesRun : lowerBlock none [] false yes (lowerEnv cfg.mod env.vars results) yesStart = (yesValue, yesEnd))
+    (yesRun : lowerBlock loop [] false yes (lowerEnv cfg.mod env.vars results) yesStart = (yesValue, yesEnd))
     (yesCurrent : yesEndPoint = yesEnd.cur) (yesExtended : ExtT yesEnd cx.fn.blocks)
     (noStartEq : noStart = { yesEnd with cur := some noBlock })
-    (noRun : lowerBlock none [] false no (lowerEnv cfg.mod env.vars results) noStart = (noValue, noEnd))
+    (noRun : lowerBlock loop [] false no (lowerEnv cfg.mod env.vars results) noStart = (noValue, noEnd))
     (noCurrent : noEndPoint = noEnd.cur) (noExtended : ExtT noEnd cx.fn.blocks)
     (joined : joinArms yesEndPoint noEndPoint (lowerEnv cfg.mod env.vars results) noEnd = ((), built))
     (extended : ExtT built cx.fn.blocks)
@@ -173,7 +173,7 @@ theorem accepted_generated_if_generic_selected_prefix_canonical {cfg : Cfg} {env
       LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
     (bodyFamily : GeneratedSequencePrefixFamily
       (env := { env with scopes := ((if takeYes then yes else no).scope, middle.nextScope) :: env.scopes })
-      cx results selected (if takeYes then yesStart else noStart) none [] false (if takeYes then yes else no)
+      cx results selected (if takeYes then yesStart else noStart) loop [] false (if takeYes then yes else no)
       (if takeYes then yes else no).stmts cursor)
     (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
       execStmts fuel cfg { env with scopes := ((if takeYes then yes else no).scope, middle.nextScope) :: env.scopes }
@@ -184,23 +184,23 @@ theorem accepted_generated_if_generic_selected_prefix_canonical {cfg : Cfg} {env
         (∃ index, ∃ found : (DemandNode.statement (.ifS condition yes (some no) origin)).child? index =
             some (.block (if takeYes then yes else no)),
           index = (if takeYes then 1 else 2) ∧ source.BlockChildAt branch index found) ∧
-        GeneratedGenericBlockPrefixDemand branch selected map required (if takeYes then yesStart else noStart) none conditionFrame cursor
-          (GeneratedClearBlockDemand branch map required cx results (if takeYes then yesStart else noStart) none conditionFrame) reached) ∨
+        GeneratedGenericBlockPrefixDemand branch selected map required (if takeYes then yesStart else noStart) loop conditionFrame cursor
+          (GeneratedClearBlockDemand branch map required cx results (if takeYes then yesStart else noStart) loop conditionFrame) reached) ∨
       ∃ consumed remaining current fuel,
         consumed + remaining = taken ∧
         DemandRuntimePrefix cx consumed ⟨(if takeYes then yesBlock else noBlock, 0), conditionFrame, middle⟩ current ∧
         DemandRuntimePrefix cx remaining current reached ∧
         execStmt fuel cfg env (.ifS condition yes (some no) origin) state = .ok (.normal .unit) current.state ∧
         (∀ targetFuel, DemandInstructionStep cx targetFuel current ⟨(noEnd.blocks.size, 0), current.frame, current.state⟩) ∧
-        GeneratedStatementPrefixEnd source map cx before initial built none (.normal .unit)
+        GeneratedStatementPrefixEnd source map cx before initial built loop (.normal .unit)
           ⟨(noEnd.blocks.size, 0), current.frame, current.state⟩ := by
   obtain ⟨branch, world, branchCanonical, branchOwner, branchAdmitted, branchBounded, branchRealized, branchInput, branchOccurrence, branchRows⟩ :=
     accepted_generated_if_selected_input_canonical source child canonical takeYes conditionDone selected owned occurrence rows admitted input boundary
       forkRun forkExtended yesStartEq yesRun noStartEq
-  have selectedRun : (lowerBlock none [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
+  have selectedRun : (lowerBlock loop [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
       (if takeYes then yesStart else noStart)).2 = (if takeYes then yesEnd else noEnd) := by
     cases takeYes <;> simp [yesRun, noRun]
-  have branchExtended : ExtT (lowerBlock none [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
+  have branchExtended : ExtT (lowerBlock loop [] false (if takeYes then yes else no) (lowerEnv cfg.mod env.vars results)
       (if takeYes then yesStart else noStart)).2 cx.fn.blocks := by
     rw [selectedRun]
     cases takeYes <;> assumption
