@@ -276,6 +276,12 @@ theorem producerCall_source (fuel : Nat) (config : EvalConfig) (environment : Ru
       invokeCall fuel config environment context [] [] origin before :=
   producerCallWith_source fuel config environment context [] origin before
 
+inductive ValueAggregate : Expr → List Expr → Prop
+  | fixedArray (ty : Ty) (operands : List Expr) (origin : Goose.Core.OriginId)
+      (fixed : ty.nonfixed = false) : ValueAggregate (.arrLit ty operands origin) operands
+  | record (id : Goose.Core.StructId) (fields : TyList) (operands : List Expr) :
+      ValueAggregate (.structLit (.structT id fields) operands) operands
+
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
   | timeout (path : List Nat) (operation : SourceOperation α) (before : ExecutionState) :
@@ -299,6 +305,14 @@ inductive SourceHistory (config : EvalConfig) :
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
       SourceHistory config (fuel + 1) path (.value environment (.fill (.arr element count) operand origin)) before
         (fillResult count outcome)
+  | aggregate (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (expression : Expr)
+      (operands : List Expr) (before : ExecutionState) (shape : ValueAggregate expression operands)
+      (children : ∀ outcome visits,
+        OperandReplay (evalValue fuel config environment) 0 operands [] before outcome visits →
+        ∀ visit ∈ visits, SourceHistory config fuel (path ++ [visit.ordinal]) (.value environment visit.operand)
+          visit.before visit.outcome) :
+      SourceHistory config (fuel + 1) path (.value environment expression) before
+        (evalValue (fuel + 1) config environment expression before)
   | singleton {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -493,7 +507,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | valueBytes | builderArray => rfl
+  | valueBytes | builderArray | aggregate => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]
@@ -639,6 +653,10 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : SupportedOperation config (.value environment operand)) :
       SupportedOperation config (.value environment (.fill (.arr element count) operand origin))
+  | aggregate (environment : RuntimeActivation) (expression : Expr) (operands : List Expr)
+      (shape : ValueAggregate expression operands)
+      (children : ∀ operand ∈ operands, SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.value environment expression)
   | singleton (environment : RuntimeActivation) (operand : Expr)
       (child : SupportedOperation config (.value environment operand)) :
       SupportedOperation config (.value environment (.values [operand]))
@@ -760,6 +778,17 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute] at child ⊢
           rw [actual]
           exact .fill fixed child
+      | aggregate environment expression operands shape childrenSupported =>
+          refine .aggregate fuel path environment expression operands before shape ?_
+          intro outcome visits replay visit member
+          have inMapped : visit.operand ∈ visits.map Invocation.operand := List.mem_map_of_mem member
+          rw [replay.sourceOrder] at inMapped
+          have inOperands : visit.operand ∈ operands := List.mem_of_mem_take inMapped
+          have child := ih (.value environment visit.operand) (path ++ [visit.ordinal]) visit.before
+            (childrenSupported visit.operand inOperands)
+          simp only [execute] at child
+          rw [← visit_executes replay visit member]
+          exact child
       | singleton environment operand childSupported =>
           have child := ih (.value environment operand) (path ++ [0]) before childSupported
           simpa [execute, evalValue, bind] using (SourceHistory.singleton child)
