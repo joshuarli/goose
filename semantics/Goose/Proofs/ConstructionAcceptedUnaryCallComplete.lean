@@ -1,6 +1,7 @@
 import Goose.Proofs.ConstructionAcceptedEarlierCallLocalGraph
 import Goose.Proofs.ConstructionAcceptedInvocationValue
 import Goose.Proofs.ConstructionAcceptedNumericComplete
+import Goose.Proofs.ConstructionAcceptedScalarControl
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -9,6 +10,7 @@ open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionExecutionOwnership
 
 inductive UnaryRegisterExpression (config : EvalConfig) (integer : Goose.Core.IntTy) : Expr → Prop
+  | scalar {expression : Expr} (form : AcceptedBinaryExpression expression) : UnaryRegisterExpression config integer expression
   | call (target origin : Nat) (context : Context) (callee : Impl)
       (contextAt : config.module.contexts[target]? = some context) (calleeAt : config.module.impls[context.impl]? = some callee)
       (parameters : callee.params = #[]) (results : callee.results = #[⟨.int integer, .register, none⟩]) :
@@ -38,6 +40,26 @@ theorem evalValue_unaryRegisterExpression {expression : Expr} (config : EvalConf
        | .ok value _ => nextAmbient = ambient ∧ ValueRepresentation (.int integer) value
        | .stop .. => True | .escape .. | .jump .. => False) := by
   induction form generalizing fuel frame before ambient types live roots typingAfter rootsAfter with
+  | @scalar scalarExpression form =>
+    have complete := evalValue_checked_binary_recursive form fuel config accepted frame before ambient types live regions pending
+      world source (.int integer) roots typingAfter rootsAfter checked
+    have control := evalValue_scalar_controlFree form fuel config frame.interpretation.environment
+    cases evaluated : evalValue fuel config frame.interpretation.environment scalarExpression before with
+    | stop reason after =>
+      simp only [evaluated, Goose.Proofs.Exit.stepState] at complete
+      have same := complete.1
+      subst after
+      exact ⟨types, live, ambient, (fun _ _ found => found), Nat.le_refl _, Nat.le_refl _, world, source,
+        source.futureGlobals, EarlierCallerObservations.refl _ _ _, trivial⟩
+    | escape target carriers after => exact False.elim (control.1 before target carriers after evaluated)
+    | jump target kind after => exact False.elim (control.2 before target kind after evaluated)
+    | ok value after =>
+      have acceptedValue := complete.2.1 value after evaluated
+      simp only [evaluated, Goose.Proofs.Exit.stepState] at complete
+      have same := complete.1
+      subst after
+      exact ⟨types, live, ambient, (fun _ _ found => found), Nat.le_refl _, Nat.le_refl _, world, source,
+        source.futureGlobals, EarlierCallerObservations.refl _ _ _, rfl, acceptedValue.represented⟩
   | call target origin context callee contextAt calleeAt parameters results =>
     apply evalValue_register_earlier_fromInvocation fuel config accepted frame before ambient types live regions pending
       target context callee (.int integer) origin world source contextAt calleeAt results
