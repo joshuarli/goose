@@ -1,4 +1,6 @@
 import Goose.Proofs.ConstructionAcceptedMixedLocalExecution
+import Goose.Proofs.ConstructionAcceptedMixedLocalAsAssign
+import Goose.Proofs.ConstructionAcceptedMixedAssignBoundBody
 import Goose.Proofs.ConstructionAcceptedParameterScopeExit
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -33,67 +35,19 @@ theorem mixedLocal_boundBody_world (fuel : Nat) (config : EvalConfig) (accepted 
     | .ok carriers after => carriers = [] ∧ ∃ nextTypes nextLive nextRegions,
         AcceptedWorld config config.module.globals.size after (.callChannels activation [] :: ambient) nextTypes nextLive nextRegions pending
     | _ => False := by
-  let entryFrame := entryStatementsFrame config frame before.nextScope
-  have fullInitialized : entryFrame.initialized = config.module.globals.size := by
-    simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using initialized
-  have frameWorld : AcceptedWorld config entryFrame.initialized boundState (.callChannels activation [] :: ambient) types live regions pending :=
-    fullInitialized.symm ▸ world
-  have limit : entryFrame.typing.globalLimit ≤ config.module.globals.size := by
-    simp [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame]
-  have initialBound : GlobalEffectTargetsBounded entryFrame.rootCursor.eff config.module.globals.size := by
-    simp [GlobalEffectTargetsBounded, Eff.accessTargets, entryFrame, entryStatementsFrame,
-      blockStatementsFrame, implementationBodyFrame]
-  have owners' : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ frame.source.impl.body.stmts →
-      (entryFrame.source.impl.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)) := by
-    intro declaration member
-    simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using owners declaration member
-  have scalarOwners' : ∀ id expression origin, .letS id expression origin ∈ frame.source.impl.body.stmts →
-      AcceptedBinaryExpression expression → ∀ descriptor, entryFrame.source.impl.vars[id]? = some descriptor →
+  have localTargets : ∀ id expression origin, .assign (.var id) expression origin ∈ frame.source.impl.body.stmts →
+      ∀ descriptor, frame.source.impl.vars[id]? = some descriptor →
         (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool := by
-    intro id expression origin member shape descriptor declared
-    apply scalarOwners id expression origin member shape descriptor
-    simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using declared
-  have unnamed : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ frame.source.impl.body.stmts →
-      (entryFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none := by
-    intro declaration member
-    simp only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, results,
-      Array.toList_empty, List.zipIdx_nil, List.find?_nil]
-  obtain ⟨next, nextTypes, nextLive, nextRegions, nextInitialized, extended, finalWorld, finalSource, finalFlow⟩ :=
-    execStmts_mixedLocal_accepted_world form fuel config accepted entryFrame contextId boundState
-      (.callChannels activation [] :: ambient) types live regions pending frameWorld source
-      (by simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using phase)
-      position fullInitialized limit initialBound owners' scalarOwners' unnamed
-  change (match execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts boundState with
-    | .ok result _ => result = .normal .unit | .stop _ _ => True | .escape .. | .jump .. => False) at finalFlow
-  change AcceptedWorld config next.initialized
-    (Goose.Proofs.Exit.stepState (execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts boundState))
-    (.callChannels activation [] :: ambient) nextTypes nextLive nextRegions pending at finalWorld
-  have nextInitialized' : next.initialized = config.module.globals.size := by
-    simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, initialized] using nextInitialized
-  cases outcome : execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts boundState with
-  | escape address carriers after | jump target kind after => simp only [outcome] at finalFlow
-  | stop reason after =>
-    simp only [outcome, Goose.Proofs.Exit.stepState] at finalWorld
-    have stopped : execStmts fuel config
-        { activation with scopes := (frame.source.impl.body.scope, before.nextScope) :: activation.scopes }
-        frame.source.impl.body.stmts boundState = .stop reason after := by
-      simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, RootInterpretation.enterScope, environment] using outcome
-    have actual := execActivationBody_bound_stopped fuel config activation pre frame.source.impl.body before boundState after reason bound stopped
-    rw [actual]
-    exact ⟨nextTypes, nextLive, nextRegions, nextInitialized' ▸ finalWorld⟩
-  | ok flow after =>
-    simp only [outcome] at finalFlow
-    subst flow
-    simp only [outcome, Goose.Proofs.Exit.stepState] at finalWorld
-    have normal : execStmts fuel config
-        { activation with scopes := (frame.source.impl.body.scope, before.nextScope) :: activation.scopes }
-        frame.source.impl.body.stmts boundState = .ok (.normal .unit) after := by
-      simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, RootInterpretation.enterScope, environment] using outcome
-    have actual := execActivationBody_bound_normal fuel config activation pre frame.source.impl.body before boundState after channels tail bound normal
-    have released := finalWorld.releaseScope config next.initialized after (.callChannels activation [] :: ambient)
-      nextTypes nextLive nextRegions pending activation frame.source.impl.body.scope before.nextScope
-    rw [actual]
-    exact ⟨rfl, nextTypes, _, nextRegions, nextInitialized' ▸ released⟩
+    intro id expression origin member descriptor declared
+    exact (form.noAssignment (.var id) expression origin member).elim
+  have globalTargets : ∀ id expression origin, .assign (.global id) expression origin ∈ frame.source.impl.body.stmts →
+      ∀ descriptor, config.module.globals[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool := by
+    intro id expression origin member descriptor declared
+    exact (form.noAssignment (.global id) expression origin member).elim
+  have result := mixedAssign_boundBody_world fuel config accepted frame activation pre before boundState ambient types live regions pending
+    contextId environment channels results tail phase initialized bound world source position form.asAssign owners scalarOwners localTargets globalTargets
+  cases step : execActivationBody (fuel + 1) config activation pre frame.source.impl.body before <;> simpa [step] using result
 
 #print axioms mixedLocal_boundBody_world
 end Goose.Proofs.ConstructionAcceptedExecution
