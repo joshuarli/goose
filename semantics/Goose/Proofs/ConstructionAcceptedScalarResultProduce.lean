@@ -12,9 +12,7 @@ theorem withCompletion_register_scalar {expression : Expr} (form : AcceptedBinar
     withCompletionChannels [.register ty] (expressionOrigin expression)
       (fun channels => evalProduce (fuel + 1) config environment channels expression) state =
       (do let value ← evalValue fuel config environment expression; pure [Carrier.register value]) state := by
-  have produced := evalProduce_register_scalar form fuel config environment state ty
-  cases evaluated : evalValue fuel config environment expression state <;>
-    simp [withCompletionChannels, materializeOwnedCarriers, bind, pure, produced, evaluated]
+  exact completion_register_scalar form fuel config environment state ty
 
 theorem evalProduce_checkedScalar_register_world {expression : Expr} (form : AcceptedBinaryExpression expression)
     (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (frame : ConstructionSourceFrame)
