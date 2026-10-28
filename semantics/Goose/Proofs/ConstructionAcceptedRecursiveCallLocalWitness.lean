@@ -1,5 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedEarlierCallLocalGraph
-import Goose.Proofs.ConstructionAcceptedRecursiveLocalCallModule
+import Goose.Proofs.ConstructionAcceptedCallLocalGraphModule
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -59,60 +58,11 @@ theorem callLocalCycle_allFuel (fuel : Nat) :
     ∃ initialized ambient types live regions,
       AcceptedWorld callLocalCycleConfig initialized (Goose.Proofs.Exit.stepState (runModule fuel callLocalCycleConfig .initial)) ambient types live regions [] ∧
       (match runModule fuel callLocalCycleConfig .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
-  let config := callLocalCycleConfig
-  let accepted := acceptedModule config callLocalCycle_validated
   let descriptor : Global := ⟨"answer", .int .i64, .immutable, .call 1 [] 0, 0⟩
   let context : Context := ⟨1, "cycle", [], [[]], []⟩
-  have initial : InitialGlobalsOutcome fuel config := by
-    obtain ⟨completed, types, live, ambient, extend, lower, upper, world, final⟩ :=
-      initGlobals_registerCall_fromEvaluation fuel 0 config accepted .initial [] (declaredRootTypes config.module) (fun _ => False)
-        descriptor 1 0 context callLocalCycleHelper (initial_acceptedWorld config callLocalCycle_validated)
-        (futureGlobalsClear_initial config) (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩) (by rfl) (by rfl) (by rfl) (by rfl) (by
-          intro names roots typingAfter rootsAfter
-          dsimp only
-          intro activeWorld frameSource checked
-          let frame := scalarGlobalInitializerFrame config 0 ExecutionState.initial.nextAct names
-          let activated := { ExecutionState.initial with nextAct := ExecutionState.initial.nextAct + 1 }
-          cases fuel with
-          | zero =>
-            simp only [evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-            exact ⟨_, _, _, (fun _ _ found => found), activeWorld, frameSource.futureGlobals, trivial⟩
-          | succ fuel =>
-            obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, clear, observed, result⟩ :=
-              invokeCall_recursive_register_callLocal_earlier fuel config accepted (.int .i64) (Or.inl ⟨.i64, rfl⟩)
-                callLocalCycle_graph frame activated [] (declaredRootTypes config.module) (fun _ => False) [] []
-                1 context callLocalCycleHelper 0 activeWorld frameSource (by rfl) (by rfl) (by rfl) (by rfl)
-                roots typingAfter rootsAfter checked
-            have safe : ∃ nextTypes nextLive nextAmbient,
-                let outcome := invokeCall fuel config frame.interpretation.environment 1 [] [.register (.int .i64)] 0 activated
-                RootTypesExtend (declaredRootTypes config.module) nextTypes ∧ activated.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
-                activated.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
-                AcceptedWorld config 0 (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive [] [] ∧
-                FutureGlobalsClear config 0 (Goose.Proofs.Exit.stepState outcome) ∧
-                (match outcome with
-                 | .ok carriers _ => nextAmbient = [] ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation (.int .i64) value
-                 | .stop .. => True | .escape .. | .jump .. => False) :=
-              ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, clear, result⟩
-            obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, world, clear, result⟩ :=
-              evalValue_registerCall_fromInvoke fuel config 0 frame.interpretation.environment activated [] (declaredRootTypes config.module)
-                [] [] 1 context callLocalCycleHelper (.int .i64) 0 (by rfl) (by rfl) (by rfl) safe
-            exact ⟨nextTypes, nextLive, nextAmbient, extend, world, clear, result⟩)
-    have size : config.module.globals.size = 1 := rfl
-    have range : List.range config.module.globals.size = [0] := by rfl
-    refine ⟨completed, types, live, ambient, [], by omega, ?_, ?_⟩
-    · simpa only [range] using world
-    · cases run : initGlobals fuel config [0] .initial with
-      | ok value after =>
-        simp only [run, Goose.Proofs.Exit.stepState] at final
-        simp only [range, run, Goose.Proofs.Exit.stepState]
-        exact ⟨final.1, by simpa [config, callLocalCycleConfig, callLocalCycleModule] using final.2.1, trivial,
-          by simpa [config, callLocalCycleConfig, callLocalCycleModule] using final.2.2⟩
-      | stop reason after =>
-        simp only [run, Goose.Proofs.Exit.stepState] at final
-        simp only [range, run, Goose.Proofs.Exit.stepState]
-        exact ⟨by rw [final.1, size]; decide, by simp [runModule, range, run, bind]⟩
-      | escape address carriers after | jump destination kind after => simp only [run] at final
-  apply acceptedModuleFromGlobals_allFuel fuel config accepted ⟨0, "entry", [], [], []⟩ callLocalCycleEntry initial (by rfl) (by rfl)
+  apply acceptedCallLocalGraphModule_allFuel fuel callLocalCycleConfig (acceptedModule callLocalCycleConfig callLocalCycle_validated)
+    descriptor 1 0 context callLocalCycleHelper (by rfl) (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩)
+    (by rfl) (by rfl) (by rfl) (by rfl) callLocalCycle_graph ⟨0, "entry", [], [], []⟩ callLocalCycleEntry (by rfl) (by rfl)
   · exact .nil
   · simp [callLocalCycleEntry, Block.stmts]
   · simp [callLocalCycleEntry, Block.stmts]
