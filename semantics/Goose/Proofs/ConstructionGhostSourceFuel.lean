@@ -360,37 +360,38 @@ theorem recursiveModule_terminal : ∃ state,
   subst outcome
   exact ⟨state, execution, allocated, history⟩
 
-private def parameterContext : Context := ⟨0, "recursive", [], [], []⟩
-private def parameterArguments : List Arg := [.byVal (.lit .i64 1)]
-private def parameterImplementation : Impl := ⟨"recursive", #[⟨0, .byValue⟩], #[],
-  #[⟨"n", .int .i64, .immutable, 0, 0⟩], .mk 0 [.expr (.call 0 parameterArguments 0) 0] none, .unknown⟩
-private def parameterConfig : EvalConfig := ⟨.release,
-  ⟨#[], #[], #[], #[parameterImplementation], #[parameterContext], 0, #[], #[], #[]⟩⟩
-
-theorem recursiveParameterCall_supported (fuel : Nat) : ∀ environment,
-    FuelSupport parameterConfig fuel (.callWith environment 0 parameterArguments 0) := by
+theorem recursiveParameter_supported (fuel : Nat) (config : EvalConfig) (contextId : Goose.Core.ContextId)
+    (context : Context) (implementation : Impl) (parameter : Goose.Core.VarId) (ty : Goose.Core.IntTy) (number : Int)
+    (scope : Nat) (callOrigin statementOrigin : Goose.Core.OriginId)
+    (contextFound : config.module.contexts[contextId]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (resultsEmpty : implementation.results = #[]) (parameters : implementation.params = #[⟨parameter, .byValue⟩])
+    (body : implementation.body = .mk scope [.expr (.call contextId [.byVal (.lit ty number)] callOrigin) statementOrigin] none) :
+    ∀ environment, FuelSupport config fuel (.callWith environment contextId [.byVal (.lit ty number)] callOrigin) := by
   induction fuel using Nat.strongRecOn with
   | ind fuel ih =>
     intro environment
     cases fuel with
     | zero => exact .timeout _
     | succ fuel =>
-      apply FuelSupport.callWith fuel environment 0 parameterArguments 0 parameterContext parameterImplementation rfl rfl rfl
+      apply FuelSupport.callWith fuel environment contextId [.byVal (.lit ty number)] callOrigin context implementation
+        contextFound implementationFound resultsEmpty
       · cases fuel with
         | zero => exact .timeout _
         | succ fuel =>
-          change FuelSupport parameterConfig (fuel + 1)
-            (.arguments environment parameterImplementation.vars [⟨0, .byValue⟩] [.byVal (.lit .i64 1)])
-          exact .argumentValue fuel environment parameterImplementation.vars ⟨0, .byValue⟩ [] (.lit .i64 1) []
-            (.legacy fuel (.value environment (.integer .i64 1))) (.legacy fuel (.argumentsDone environment _))
+          have arguments : FuelSupport config (fuel + 1)
+              (.arguments environment implementation.vars [⟨parameter, .byValue⟩] [.byVal (.lit ty number)]) :=
+            .argumentValue fuel environment implementation.vars ⟨parameter, .byValue⟩ [] (.lit ty number) []
+              (.legacy fuel (.value environment (.integer ty number))) (.legacy fuel (.argumentsDone environment _))
+          simpa [parameters] using arguments
       · intro act pre
-        let activation : RuntimeActivation := ⟨0, act, parameterImplementation.vars, [], []⟩
-        change FuelSupport parameterConfig fuel
-          (.boundActivation activation pre (.mk 0 [.expr (.call 0 parameterArguments 0) 0] none) 0)
+        let activation : RuntimeActivation := ⟨context.impl, act, implementation.vars, [], []⟩
+        change FuelSupport config fuel (.boundActivation activation pre implementation.body callOrigin)
+        rw [body]
         cases fuel with
         | zero => exact .timeout _
         | succ fuel =>
-          apply FuelSupport.boundActivation fuel activation pre 0 _ 0
+          apply FuelSupport.boundActivation fuel activation pre scope _ callOrigin
           cases fuel with
           | zero => exact .timeout _
           | succ fuel =>
@@ -407,10 +408,37 @@ theorem recursiveParameterCall_supported (fuel : Nat) : ∀ environment,
                   cases fuel with
                   | zero => exact .timeout _
                   | succ fuel =>
-                    apply FuelSupport.valueCallWith fuel scopedEnvironment 0 parameterArguments 0
-                      parameterContext parameterImplementation rfl rfl rfl
+                    apply FuelSupport.valueCallWith fuel scopedEnvironment contextId [.byVal (.lit ty number)] callOrigin
+                      context implementation contextFound implementationFound resultsEmpty
                     exact ih fuel (by omega) scopedEnvironment
               · exact .legacy fuel (.empty scopedEnvironment)
+
+theorem recursiveParameter_history (fuel : Nat) (config : EvalConfig) (contextId : Goose.Core.ContextId)
+    (context : Context) (implementation : Impl) (parameter : Goose.Core.VarId) (ty : Goose.Core.IntTy) (number : Int)
+    (scope : Nat) (callOrigin statementOrigin : Goose.Core.OriginId) (environment : RuntimeActivation)
+    (path : List Nat) (before : ExecutionState)
+    (contextFound : config.module.contexts[contextId]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (resultsEmpty : implementation.results = #[]) (parameters : implementation.params = #[⟨parameter, .byValue⟩])
+    (body : implementation.body = .mk scope [.expr (.call contextId [.byVal (.lit ty number)] callOrigin) statementOrigin] none) :
+    SourceHistory config fuel path (.callWith environment contextId [.byVal (.lit ty number)] callOrigin) before
+      (invokeCall fuel config environment contextId [.byVal (.lit ty number)] [] callOrigin before) :=
+  fuelHistory_exists fuel config _ path before
+    (recursiveParameter_supported fuel config contextId context implementation parameter ty number scope callOrigin statementOrigin
+      contextFound implementationFound resultsEmpty parameters body environment)
+
+
+private def parameterContext : Context := ⟨0, "recursive", [], [], []⟩
+private def parameterArguments : List Arg := [.byVal (.lit .i64 1)]
+private def parameterImplementation : Impl := ⟨"recursive", #[⟨0, .byValue⟩], #[],
+  #[⟨"n", .int .i64, .immutable, 0, 0⟩], .mk 0 [.expr (.call 0 parameterArguments 0) 0] none, .unknown⟩
+private def parameterConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[], #[parameterImplementation], #[parameterContext], 0, #[], #[], #[]⟩⟩
+
+theorem recursiveParameterCall_supported (fuel : Nat) : ∀ environment,
+    FuelSupport parameterConfig fuel (.callWith environment 0 parameterArguments 0) :=
+  recursiveParameter_supported fuel parameterConfig 0 parameterContext parameterImplementation 0 .i64 1 0 0 0
+    rfl rfl rfl rfl rfl
 
 theorem recursiveParameterCall_history (fuel : Nat) (environment : RuntimeActivation) :
     SourceHistory parameterConfig fuel [] (.callWith environment 0 parameterArguments 0) .initial
@@ -435,6 +463,8 @@ theorem recursiveParameterCall_terminal : ∃ state,
     rw [actual] at history
     exact history
 
+#print axioms recursiveParameter_supported
+#print axioms recursiveParameter_history
 #print axioms recursiveParameterCall_supported
 #print axioms recursiveParameterCall_history
 #print axioms recursiveParameterCall_terminal
