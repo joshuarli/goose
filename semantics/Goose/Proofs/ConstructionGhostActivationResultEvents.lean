@@ -58,6 +58,57 @@ theorem activationBodyFinish_events (outcome : ExecutionStep (Flow × List Carri
   | ok pair state => cases pair with | mk flow carriers => cases flow <;> rfl
   | stop | escape | jump => rfl
 
+theorem resultScopeContinuation_resultPrefix (channels : List Channel) (tail : Option Expr)
+    (tailAction : Expr → EvalM (List Carrier)) (outcome : ExecutionStep Flow)
+    (preserved : ∀ expression, PreservesConstructionInvariant
+      (PrefixInvariant (Goose.Proofs.Exit.stepState outcome).construction.events) (tailAction expression)) :
+    EventPrefix (Goose.Proofs.Exit.stepState outcome).construction.events
+      (Goose.Proofs.Exit.stepState (resultScopeContinuation channels tail tailAction outcome)).construction.events := by
+  cases outcome with
+  | ok flow state =>
+      cases flow with
+      | normal value =>
+          cases tail with
+          | none => rw [resultScope_noTail_events]; exact eventPrefix_refl _
+          | some expression =>
+              apply (eventPrefix_iff_isPrefix _ _).mpr
+              have kept : PreservesConstructionInvariant (PrefixInvariant state.construction.events)
+                  (do let carriers ← tailAction expression; pure (Flow.normal .unit, carriers)) := by
+                apply preservesConstructionInvariant_bind
+                · exact preserved expression
+                · intro carriers; exact preservesConstructionInvariant_pure _
+              exact kept state List.prefix_rfl
+      | breaking | continuing => cases tail <;> exact eventPrefix_refl _
+  | stop | escape | jump => exact eventPrefix_refl _
+
+theorem activationBody_resultPrefix (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (scope : Nat) (statements : List Stmt) (tail : Option Expr)
+    (before : ExecutionState) (outcome : ExecutionStep Flow)
+    (execution : execActivationBody (fuel + 1) config activation pre (.mk scope statements tail) before =
+      activationBodyFinish (withScope activation scope before.nextScope (fun _ =>
+        resultScopeContinuation activation.channels tail
+          (fun expression => withCompletionChannels activation.channels (expressionOrigin expression)
+            (fun channels => evalProduce fuel config
+              { activation with scopes := (scope, before.nextScope) :: activation.scopes } channels expression)) outcome)
+        (resultScopeStart activation scope before))) :
+    EventPrefix (Goose.Proofs.Exit.stepState outcome).construction.events
+      (Goose.Proofs.Exit.stepState (execActivationBody (fuel + 1) config activation pre
+        (.mk scope statements tail) before)).construction.events := by
+  rw [execution, activationBodyFinish_events]
+  let action := fun expression => withCompletionChannels activation.channels (expressionOrigin expression)
+    (fun channels => evalProduce fuel config
+      { activation with scopes := (scope, before.nextScope) :: activation.scopes } channels expression)
+  have preserved : ∀ expression, PreservesConstructionInvariant
+      (PrefixInvariant (Goose.Proofs.Exit.stepState outcome).construction.events) (action expression) := by
+    intro expression
+    apply preservesConstructionInvariant_withCompletionChannels
+    intro channels
+    exact (evaluation_preservesConstructionInvariant fuel config).produce _ channels expression
+  have continuation := resultScopeContinuation_resultPrefix activation.channels tail action outcome preserved
+  have scopeKept := withScope_resultPrefix activation scope before.nextScope (fun _ =>
+    resultScopeContinuation activation.channels tail action outcome) (resultScopeStart activation scope before)
+  exact eventPrefix_trans _ _ _ continuation scopeKept
+
 theorem activationBody_noTail_resultPrefix (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
     (pre : List (Goose.Core.VarId × Value)) (scope : Nat) (statements : List Stmt)
     (before : ExecutionState) (outcome : ExecutionStep Flow)
@@ -71,15 +122,10 @@ theorem activationBody_noTail_resultPrefix (fuel : Nat) (config : EvalConfig) (a
     EventPrefix (Goose.Proofs.Exit.stepState outcome).construction.events
       (Goose.Proofs.Exit.stepState (execActivationBody (fuel + 1) config activation pre
         (.mk scope statements none) before)).construction.events := by
-  rw [execution, activationBodyFinish_events]
-  have kept := withScope_resultPrefix activation scope before.nextScope (fun _ =>
-    resultScopeContinuation activation.channels none
-      (fun expression => withCompletionChannels activation.channels (expressionOrigin expression)
-        (fun channels => evalProduce fuel config
-          { activation with scopes := (scope, before.nextScope) :: activation.scopes } channels expression)) outcome)
-    (resultScopeStart activation scope before)
-  simpa only [resultScope_noTail_events] using kept
+  exact activationBody_resultPrefix fuel config activation pre scope statements none before outcome execution
 
+#print axioms activationBody_resultPrefix
+#print axioms resultScopeContinuation_resultPrefix
 #print axioms activationBody_noTail_resultPrefix
 #print axioms resultScope_noTail_events
 #print axioms activationBodyFinish_events
