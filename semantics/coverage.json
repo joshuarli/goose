@@ -479,6 +479,15 @@
   "evidence": "Goose/Lower/DemandShortCircuit.lean; DemandShortCircuitChecks.lean rejects the opposite branch and checks all four branch choices with a retained sampled SSA run; registered axiom audit."
  },
  {
+  "feature": "Fresh activation and scope in an accepted construction world",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.freshAct_acceptedWorld; Goose.Proofs.ConstructionAcceptedExecution.freshScope_acceptedWorld; Goose.Proofs.ConstructionAcceptedExecution.freshScope_after_newDestination",
+  "statement": "Fresh activation and scope allocation preserve accepted construction worlds with active receiving regions and pending carrier frames. An actual fresh destination followed by scope allocation retains its receiving protection.",
+  "assumptions": "An accepted world and the stated successful fresh destination allocation for the composed case.",
+  "limits": "This does not establish that arbitrary evaluator execution preserves the accepted world or discharges TH-CON-01.",
+  "evidence": "ConstructionAcceptedFreshness.lean and ConstructionAcceptedFreshnessChecks.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Construction receiver fixed-width storage write",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.storage_count; Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.other_storage; Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.byte_count; Goose.Proofs.ConstructionStorage.writeElement_receiver_fixedWidth",
