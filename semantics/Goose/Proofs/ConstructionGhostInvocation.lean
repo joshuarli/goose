@@ -70,11 +70,36 @@ def binaryContinuation (fuel : Nat) (config : EvalConfig) (environment : Runtime
   | .escape address carriers state => .escape address carriers state
   | .jump target kind state => .jump target kind state
 
+def unaryContinuation (config : EvalConfig) (operation : Goose.Core.UnOp)
+    (origin : Goose.Core.OriginId) (source : ExecutionStep Value) : ExecutionStep Value :=
+  match source with
+  | .ok value state => (do
+      let (ty, number) ← expectInt value
+      match Goose.Core.evalUn config.profile operation ty number with
+      | .ok result => pure (Value.int ty result)
+      | .error reason => abortAt (Goose.Core.AbortKind.ofNum reason) origin) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+def conversionContinuation (config : EvalConfig) (kind : Goose.Core.ConvKind) (target : Ty)
+    (origin : Goose.Core.OriginId) (source : ExecutionStep Value) : ExecutionStep Value :=
+  match source with
+  | .ok value state => (do
+      let (sourceTy, number) ← expectInt value
+      let .int targetTy := target | fault .shape
+      match Goose.Core.evalConv config.profile kind sourceTy targetTy number with
+      | .ok result => pure (Value.int targetTy result)
+      | .error reason => abortAt (Goose.Core.AbortKind.ofNum reason) origin) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
 def trackedInitializer : Expr → Bool
   | .arrLit ty _ _ => !ty.nonfixed
   | .fill (.arr element count) _ _ => !(Ty.arr element count).nonfixed
   | .structLit (.structT _ _) _ => true
-  | .cmp _ _ _ | .not _ | .and _ _ | .or _ _ | .bin _ _ _ _ => true
+  | .cmp _ _ _ | .not _ | .and _ _ | .or _ _ | .bin _ _ _ _ | .un _ _ _ | .conv _ _ _ _ => true
   | _ => false
 
 theorem structLiteral_replay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
@@ -114,6 +139,18 @@ inductive EvaluationTree (config : EvalConfig) (environment : RuntimeActivation)
         | .stop reason after => .stop reason after
         | .escape address carriers after => .escape address carriers after
         | .jump target kind after => .jump target kind after)
+  | unary (fuel : Nat) (path : List Nat) (operation : Goose.Core.UnOp) (operand : Expr)
+      (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (child : EvaluationTree config environment fuel (path ++ [0]) operand before
+        (evalValue fuel config environment operand before)) :
+      EvaluationTree config environment (fuel + 1) path (.un operation operand origin) before
+        (unaryContinuation config operation origin (evalValue fuel config environment operand before))
+  | conversion (fuel : Nat) (path : List Nat) (kind : Goose.Core.ConvKind) (target : Ty)
+      (operand : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (child : EvaluationTree config environment fuel (path ++ [0]) operand before
+        (evalValue fuel config environment operand before)) :
+      EvaluationTree config environment (fuel + 1) path (.conv kind target operand origin) before
+        (conversionContinuation config kind target origin (evalValue fuel config environment operand before))
   | binary (fuel : Nat) (path : List Nat) (operation : Goose.Core.BinOp)
       (first second : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState)
       (left : EvaluationTree config environment fuel (path ++ [0]) first before
@@ -193,6 +230,20 @@ theorem evaluationTree_exists (fuel : Nat) (config : EvalConfig) (environment : 
           rw [← visit_executes replay visit member]
           exact ih _ _ _)
       | true => exact .opaque fuel path _ before (by simp [trackedInitializer, fixed])
+    | un operation operand origin =>
+      have execution : evalValue (fuel + 1) config environment (.un operation operand origin) before =
+          unaryContinuation config operation origin (evalValue fuel config environment operand before) := by
+        simp only [evalValue, bind, unaryContinuation]
+        cases evalValue fuel config environment operand before <;> rfl
+      rw [execution]
+      exact .unary fuel path operation operand origin before (ih _ _ _)
+    | conv kind target operand origin =>
+      have execution : evalValue (fuel + 1) config environment (.conv kind target operand origin) before =
+          conversionContinuation config kind target origin (evalValue fuel config environment operand before) := by
+        simp only [evalValue, bind, conversionContinuation]
+        cases evalValue fuel config environment operand before <;> rfl
+      rw [execution]
+      exact .conversion fuel path kind target operand origin before (ih _ _ _)
     | bin operation first second origin =>
       have execution : evalValue (fuel + 1) config environment (.bin operation first second origin) before =
           binaryContinuation fuel config environment operation second origin
@@ -271,6 +322,12 @@ theorem evaluationTree_sound {fuel : Nat} {config : EvalConfig} {environment : R
     change (operands.mapM (evalValue fuel config environment)) before = mapped at actual
     rw [actual]
     cases mapped <;> rfl
+  | unary fuel path operation operand origin before child =>
+    simp only [evalValue, bind, unaryContinuation]
+    cases evalValue fuel config environment operand before <;> rfl
+  | conversion fuel path kind target operand origin before child =>
+    simp only [evalValue, bind, conversionContinuation]
+    cases evalValue fuel config environment operand before <;> rfl
   | binary fuel path operation first second origin before left right =>
     simp only [evalValue, bind, binaryContinuation]
     cases evalValue fuel config environment first before <;> rfl
@@ -358,6 +415,14 @@ theorem binary_source_sideEffect :
       (some (.lit .i64 7))) 0) 0) .initial), ?_, ?_⟩ <;>
     unfold finalState witnessConfig witnessEnv witnessSource <;> cbv
 
+theorem unary_source_sideEffect :
+    ∃ state, evalValue 31 witnessConfig witnessEnv (.un .neg witnessSource 0) .initial =
+      .ok (.int .i64 (-7)) state ∧
+      state.construction.stdout.data.toList = [111, 110, 99, 101, 10] := by
+  refine ⟨finalState (evalValue 31 witnessConfig witnessEnv (.un .neg witnessSource 0) .initial), ?_, ?_⟩ <;>
+    unfold finalState witnessConfig witnessEnv witnessSource <;> cbv
+
+#print axioms unary_source_sideEffect
 #print axioms binary_source_sideEffect
 #print axioms shortCircuit_skips_source
 #print axioms comparison_source_sideEffect
