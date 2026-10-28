@@ -2849,12 +2849,12 @@ local macro "record_access_targets" "[" extra:tacticSeq "]" : tactic => `(tactic
   | refine recordsAccess_bind_right _ _ _ (fun _ => ?_)
   | split)
 
-theorem rpCall_zeroArgument_access {env : PEnv} {target : ContextId} {context : Context} {callee : Impl}
-    {before after : RState} {roots : List RootRef}
+theorem rpCall_access {env : PEnv} {target : ContextId} {context : Context} {callee : Impl}
+    {before after : RState} {roots : List RootRef} (arguments : List (List RootRef))
     (contextAt : env.mod.contexts[target]? = some context) (calleeAt : env.mod.impls[context.impl]? = some callee)
-    (checked : rpCall env target [] before = .ok (roots, after)) :
-    EffectTargetsIncluded (callEffects callee context [] {}) after.eff := by
-  have recorded : RecordsAccessTargets (callEffects callee context [] {}) (rpCall env target []) := by
+    (checked : rpCall env target arguments before = .ok (roots, after)) :
+    EffectTargetsIncluded (callEffects callee context arguments {}) after.eff := by
+  have recorded : RecordsAccessTargets (callEffects callee context arguments {}) (rpCall env target arguments) := by
     unfold rpCall
     simp only [contextAt, calleeAt]
     record_access_targets [fail]
@@ -2862,6 +2862,14 @@ theorem rpCall_zeroArgument_access {env : PEnv} {target : ContextId} {context : 
     all_goals record_access_targets [fail]
     all_goals retain_effect_targets [exact retains_escapeRoots _ _ _]
   exact recorded before roots after checked
+
+
+theorem rpCall_zeroArgument_access {env : PEnv} {target : ContextId} {context : Context} {callee : Impl}
+    {before after : RState} {roots : List RootRef}
+    (contextAt : env.mod.contexts[target]? = some context) (calleeAt : env.mod.impls[context.impl]? = some callee)
+    (checked : rpCall env target [] before = .ok (roots, after)) :
+    EffectTargetsIncluded (callEffects callee context [] {}) after.eff :=
+  rpCall_access [] contextAt calleeAt checked
 
 private def SameRootCursor (left right : RState) : Prop :=
   left.nextVar = right.nextVar ∧ left.valueBreakRoots = right.valueBreakRoots
@@ -3404,6 +3412,7 @@ theorem rpCall_nextVar {env : PEnv} {context : ContextId} {arguments : List (Lis
     (checked : rpCall env context arguments before = .ok (roots, after)) : after.nextVar = before.nextVar :=
   keeps_call env context arguments before roots after checked
 
+#print axioms rpCall_access
 #print axioms rpCall_nextVar
 
 end Goose.Construct

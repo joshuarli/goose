@@ -119,7 +119,7 @@ theorem checkSummary_accessIncluded (module : Module) (impl : Impl) (context : C
     · exact Or.inl (Or.inr (g grow))
     · exact Or.inr (s shrink)
 
-private theorem nestedAssign_addTargets_members (before added : List Target) (target : Target) :
+theorem callEffects_addTargets_members (before added : List Target) (target : Target) :
     target ∈ addTargets before added ↔ target ∈ before ∨ target ∈ added := by
   induction added generalizing before with
   | nil => simp [addTargets]
@@ -168,7 +168,7 @@ theorem checkSummary_zeroArgument_callEffects (module : Module) (impl : Impl) (c
     expandTargets_noParameters impl context summary.shrinks shrinks] at inside
   simp only [List.mem_append] at inside
   change target ∈ (callEffects impl context [] before).accessTargets
-  simp only [callEffects, known, Eff.accessTargets, List.mem_append, nestedAssign_addTargets_members]
+  simp only [callEffects, known, Eff.accessTargets, List.mem_append, callEffects_addTargets_members]
   rcases inside with ((read | write) | grow) | shrink
   · exact Or.inl (Or.inl (Or.inl (Or.inr read)))
   · exact Or.inl (Or.inl (Or.inr (Or.inr write)))
@@ -215,6 +215,7 @@ theorem contextRootFactsAt_zeroArgument_bodyAvailable (module : Module) (context
   intro target member global instantiates
   exact finalAvailable target (included member) global instantiates
 
+#print axioms callEffects_addTargets_members
 #print axioms contextRootFactsAt_zeroArgument_bodyAvailable
 #print axioms zeroArgument_body_effectsAvailable
 #print axioms checkSummary_zeroArgument_callEffects

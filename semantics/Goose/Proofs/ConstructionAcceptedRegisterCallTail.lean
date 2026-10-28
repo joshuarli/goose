@@ -18,13 +18,46 @@ private theorem materialize_noTokens (origin : Nat) (carriers : List Carrier) (s
     simp only [materializeOwnedCarriers, List.contains_nil, Bool.false_eq_true, ↓reduceIte, pure] at tail
     cases carrier <;> simp [materializeOwnedCarriers, List.mapM_cons, bind, pure, tail]
 
+theorem completion_register_call_withArguments (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (state : ExecutionState) (ty : Ty) (target origin : Nat) (arguments : List Arg) :
+    withCompletionChannels [.register ty] origin
+      (fun channels => evalProduce (fuel + 1) config environment channels (.call target arguments origin)) state =
+      invokeCall fuel config environment target arguments [.register ty] origin state := by
+  cases executed : invokeCall fuel config environment target arguments [.register ty] origin state <;>
+    simp [withCompletionChannels, completionChannelSetup, evalProduce, selectCompletionChannel, materialize_noTokens, bind, pure, executed]
+
+
 theorem completion_register_call (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (state : ExecutionState) (ty : Ty) (target origin : Nat) :
     withCompletionChannels [.register ty] origin
       (fun channels => evalProduce (fuel + 1) config environment channels (.call target [] origin)) state =
-      invokeCall fuel config environment target [] [.register ty] origin state := by
-  cases executed : invokeCall fuel config environment target [] [.register ty] origin state <;>
-    simp [withCompletionChannels, completionChannelSetup, evalProduce, selectCompletionChannel, materialize_noTokens, bind, pure, executed]
+      invokeCall fuel config environment target [] [.register ty] origin state :=
+  completion_register_call_withArguments fuel config environment state ty target origin []
+
+theorem execActivationBody_register_call_tail_withBindings (fuel : Nat) (config : EvalConfig)
+    (activation : RuntimeActivation) (scope : Nat) (pre : List (Nat × Value)) (statements : List Stmt) (before boundState middle : ExecutionState)
+    (ty : Ty) (target origin : Nat) (arguments : List Arg) (channels : activation.channels = [.register ty])
+    (bound : bindAll activation.act before.nextScope pre (ownershipResultScopeState activation scope before) = .ok () boundState)
+    (normal : execStmts (fuel + 1) config
+      { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements
+      boundState = .ok (.normal .unit) middle) :
+    execActivationBody (fuel + 2) config activation pre ⟨scope, statements, some (.call target arguments origin)⟩ before =
+      match invokeCall fuel config { activation with scopes := (scope, before.nextScope) :: activation.scopes }
+          target arguments [.register ty] origin middle with
+      | .ok values after => .ok values (releaseScopeState activation scope before.nextScope after)
+      | .stop reason after => .stop reason after
+      | .escape destination carriers after => .escape destination carriers (releaseScopeState activation scope before.nextScope after)
+      | .jump destination kind after => .jump destination kind (releaseScopeState activation scope before.nextScope after) := by
+  have tail := completion_register_call_withArguments fuel config
+    { activation with scopes := (scope, before.nextScope) :: activation.scopes } middle ty target origin arguments
+  simp only [ownershipResultScopeState, beq_iff_eq] at bound
+  simp only [channels] at normal tail ⊢
+  cases executed : invokeCall fuel config
+      { activation with scopes := (scope, before.nextScope) :: activation.scopes, channels := [.register ty] }
+      target arguments [.register ty] origin middle <;>
+    simp [execActivationBody, execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope,
+      channels, beq_iff_eq, bound, normal, tail, executed, releaseScope, expressionOrigin]
+
 
 theorem execActivationBody_register_call_tail (fuel : Nat) (config : EvalConfig)
     (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt) (before middle : ExecutionState)
@@ -39,15 +72,8 @@ theorem execActivationBody_register_call_tail (fuel : Nat) (config : EvalConfig)
       | .stop reason after => .stop reason after
       | .escape destination carriers after => .escape destination carriers (releaseScopeState activation scope before.nextScope after)
       | .jump destination kind after => .jump destination kind (releaseScopeState activation scope before.nextScope after) := by
-  have tail := completion_register_call fuel config
-    { activation with scopes := (scope, before.nextScope) :: activation.scopes } middle ty target origin
-  simp only [ownershipResultScopeState, beq_iff_eq, channels] at normal
-  simp only [channels] at tail ⊢
-  cases executed : invokeCall fuel config
-      { activation with scopes := (scope, before.nextScope) :: activation.scopes, channels := [.register ty] }
-      target [] [.register ty] origin middle <;>
-    simp [execActivationBody, execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope, bindAll,
-      channels, beq_iff_eq, normal, tail, executed, releaseScope, expressionOrigin]
+  exact execActivationBody_register_call_tail_withBindings fuel config activation scope [] statements before
+    (ownershipResultScopeState activation scope before) middle ty target origin [] channels (by simp [bindAll, bind, pure]) normal
 
 theorem execActivationBody_empty_registerCall_compose (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (activation : RuntimeActivation) (scope : Nat) (ty : Ty) (target origin : Nat) (before : ExecutionState)
@@ -101,6 +127,43 @@ theorem execActivationBody_empty_registerCall_compose (fuel : Nat) (config : Eva
       clear.releaseScope activation scope before.nextScope, rfl, value, rfl, represented⟩
 
 #print axioms execActivationBody_empty_registerCall_compose
+theorem SourcePosition.emptyBlock_registerCall_withArguments_checked {config : EvalConfig} (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (scope fuel target origin : Nat) (context : Context) (callee : Impl) (ty : Ty) (arguments : List Arg)
+    (position : SourcePosition accepted frame (.block ⟨scope, [], some (.call target arguments origin)⟩))
+    (nesting : frame.typingFuel = fuel + 1) (contextAt : frame.typing.module.contexts[target]? = some context)
+    (calleeAt : frame.typing.module.impls[context.impl]? = some callee)
+    (results : callee.results = #[⟨ty, .register, none⟩])
+    (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool)
+    (requests : frame.typing.resultRequests = [.register])
+    (available : ∀ result after, rpBlockValue frame.source [] ⟨scope, [], some (.call target arguments origin)⟩ frame.rootCursor =
+      .ok (result, after) → GlobalEffectsAvailable frame.interpretation frame.initialized after.eff) :
+    ∃ roots typingAfter rootsAfter,
+      CheckedValue { frame with typingFuel := fuel, typing := { frame.typing with scope := scope }, source := { frame.source with scopes := scope :: frame.source.scopes } }
+        (.call target arguments origin) ty roots typingAfter rootsAfter := by
+  obtain ⟨next, typingMiddle, rootMiddle, types, typingAfter, roots, rootsAfter,
+    _, statementsTyped, statementsRooted, tailTyped, tailRooted⟩ :=
+    position.blockTail_checks accepted frame scope fuel [] (.call target arguments origin) nesting
+  cases fuel with
+  | zero => change Except.error _ = Except.ok _ at statementsTyped; cases statementsTyped
+  | succ fuel =>
+    simp only [typeStatements, pure, StateT.pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at statementsTyped
+    obtain ⟨rfl, rfl⟩ := statementsTyped
+    simp only [rpStmts, pure, StateT.pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at statementsRooted
+    cases statementsRooted.2
+    have singleton := typeExpr_registerCall_tail_result fuel { frame.typing with scope := scope } target origin context callee arguments ty
+      frame.typingCounter typingAfter types contextAt calleeAt results scalar requests tailTyped
+    subst types
+    obtain ⟨middle, otherRoots, final, sameStatements, sameTail, _, finalAvailable⟩ :=
+      position.blockTail_effects accepted frame scope [] (.call target arguments origin) available
+    have sameMiddle : middle = frame.rootCursor := by
+      simp only [rpStmts, pure, StateT.pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at sameStatements
+      exact sameStatements.2.symm
+    subst middle
+    have sameFinal : rootsAfter = final := (Prod.mk.inj (Except.ok.inj (tailRooted.symm.trans sameTail))).2
+    subst final
+    exact ⟨roots, typingAfter, rootsAfter, tailTyped, tailRooted, finalAvailable⟩
+
+
 theorem SourcePosition.emptyBlock_registerCall_checked {config : EvalConfig} (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (scope fuel target origin : Nat) (context : Context) (callee : Impl) (ty : Ty)
     (position : SourcePosition accepted frame (.block ⟨scope, [], some (.call target [] origin)⟩))
@@ -114,30 +177,13 @@ theorem SourcePosition.emptyBlock_registerCall_checked {config : EvalConfig} (ac
     ∃ roots typingAfter rootsAfter,
       CheckedValue { frame with typingFuel := fuel, typing := { frame.typing with scope := scope }, source := { frame.source with scopes := scope :: frame.source.scopes } }
         (.call target [] origin) ty roots typingAfter rootsAfter := by
-  obtain ⟨next, typingMiddle, rootMiddle, types, typingAfter, roots, rootsAfter,
-    _, statementsTyped, statementsRooted, tailTyped, tailRooted⟩ :=
-    position.blockTail_checks accepted frame scope fuel [] (.call target [] origin) nesting
-  cases fuel with
-  | zero => change Except.error _ = Except.ok _ at statementsTyped; cases statementsTyped
-  | succ fuel =>
-    simp only [typeStatements, pure, StateT.pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at statementsTyped
-    obtain ⟨rfl, rfl⟩ := statementsTyped
-    simp only [rpStmts, pure, StateT.pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at statementsRooted
-    cases statementsRooted.2
-    have singleton := typeExpr_registerCall_tail_result fuel { frame.typing with scope := scope } target origin context callee [] ty
-      frame.typingCounter typingAfter types contextAt calleeAt results scalar requests tailTyped
-    subst types
-    obtain ⟨middle, otherRoots, final, sameStatements, sameTail, _, finalAvailable⟩ :=
-      position.blockTail_effects accepted frame scope [] (.call target [] origin) available
-    have sameMiddle : middle = frame.rootCursor := by
-      simp only [rpStmts, pure, StateT.pure, Except.pure, Except.ok.injEq, Prod.mk.injEq] at sameStatements
-      exact sameStatements.2.symm
-    subst middle
-    have sameFinal : rootsAfter = final := (Prod.mk.inj (Except.ok.inj (tailRooted.symm.trans sameTail))).2
-    subst final
-    exact ⟨roots, typingAfter, rootsAfter, tailTyped, tailRooted, finalAvailable⟩
+  exact position.emptyBlock_registerCall_withArguments_checked accepted frame scope fuel target origin context callee ty [] nesting
+    contextAt calleeAt results scalar requests available
 
+#print axioms SourcePosition.emptyBlock_registerCall_withArguments_checked
 #print axioms SourcePosition.emptyBlock_registerCall_checked
+#print axioms completion_register_call_withArguments
+#print axioms execActivationBody_register_call_tail_withBindings
 #print axioms completion_register_call
 #print axioms execActivationBody_register_call_tail
 end Goose.Proofs.ConstructionAcceptedExecution

@@ -92,6 +92,34 @@ theorem invokeCall_register_compose (fuel : Nat) (config : EvalConfig) (initiali
       exact ⟨nextTypes, nextLive, ambient, extend, Nat.le_trans (Nat.le_succ _) acts, scopes, finishedWorld,
         finishedClear, rfl, value, rfl, represented⟩
 
+theorem SourcePosition.callee_registerCall_withArguments_tail_checked {config : EvalConfig} (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (state : ExecutionState) (scope target origin : Nat) (context : Context)
+    (callee : Impl) (ty : Ty) (arguments : List Arg)
+    (bodyFrame : implementationBodyFrame config frame = frame)
+    (body : frame.source.impl.body = ⟨scope, [], some (.call target arguments origin)⟩)
+    (position : SourcePosition accepted frame (.block ⟨scope, [], some (.call target arguments origin)⟩))
+    (contextAt : frame.typing.module.contexts[target]? = some context)
+    (calleeAt : frame.typing.module.impls[context.impl]? = some callee)
+    (results : callee.results = #[⟨ty, .register, none⟩])
+    (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool)
+    (requests : frame.typing.resultRequests = [.register])
+    (available : ∀ result after, rpBlockValue frame.source [] ⟨scope, [], some (.call target arguments origin)⟩ frame.rootCursor =
+      .ok (result, after) → GlobalEffectsAvailable frame.interpretation frame.initialized after.eff) :
+    ∃ roots typingAfter rootsAfter,
+      CheckedValue (entryStatementsFrame config frame state.nextScope) (.call target arguments origin) ty roots typingAfter rootsAfter := by
+  have nesting : frame.typingFuel = 4095 + 1 := by
+    have fixed := congrArg (fun f : ConstructionSourceFrame => f.typingFuel) bodyFrame
+    simpa [implementationBodyFrame] using fixed.symm
+  obtain ⟨roots, typingAfter, rootsAfter, checked⟩ := position.emptyBlock_registerCall_withArguments_checked accepted frame scope 4095 target origin
+    context callee ty arguments nesting contextAt calleeAt results scalar requests available
+  refine ⟨roots, typingAfter, rootsAfter, ?_⟩
+  constructor
+  · simpa [entryStatementsFrame, blockStatementsFrame, bodyFrame, body, Block.scope] using checked.typing
+  · simpa [entryStatementsFrame, blockStatementsFrame, bodyFrame, body, Block.scope] using checked.provenance
+  · simpa [entryStatementsFrame, blockStatementsFrame, bodyFrame, body, Block.scope, RootInterpretation.enterScope,
+      GlobalEffectsAvailable] using checked.available
+
+
 theorem SourcePosition.callee_registerCall_tail_checked {config : EvalConfig} (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (state : ExecutionState) (scope target origin : Nat) (context : Context)
     (callee : Impl) (ty : Ty)
@@ -107,17 +135,8 @@ theorem SourcePosition.callee_registerCall_tail_checked {config : EvalConfig} (a
       .ok (result, after) → GlobalEffectsAvailable frame.interpretation frame.initialized after.eff) :
     ∃ roots typingAfter rootsAfter,
       CheckedValue (entryStatementsFrame config frame state.nextScope) (.call target [] origin) ty roots typingAfter rootsAfter := by
-  have nesting : frame.typingFuel = 4095 + 1 := by
-    have fixed := congrArg (fun f : ConstructionSourceFrame => f.typingFuel) bodyFrame
-    simpa [implementationBodyFrame] using fixed.symm
-  obtain ⟨roots, typingAfter, rootsAfter, checked⟩ := position.emptyBlock_registerCall_checked accepted frame scope 4095 target origin
-    context callee ty nesting contextAt calleeAt results scalar requests available
-  refine ⟨roots, typingAfter, rootsAfter, ?_⟩
-  constructor
-  · simpa [entryStatementsFrame, blockStatementsFrame, bodyFrame, body, Block.scope] using checked.typing
-  · simpa [entryStatementsFrame, blockStatementsFrame, bodyFrame, body, Block.scope] using checked.provenance
-  · simpa [entryStatementsFrame, blockStatementsFrame, bodyFrame, body, Block.scope, RootInterpretation.enterScope,
-      GlobalEffectsAvailable] using checked.available
+  exact position.callee_registerCall_withArguments_tail_checked accepted frame state scope target origin context callee ty [] bodyFrame body
+    contextAt calleeAt results scalar requests available
 
 theorem execActivationBody_checked_registerCall_compose (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (contextId : Nat) (state : ExecutionState) (ambient : OwnershipAmbient)
@@ -174,6 +193,7 @@ theorem execActivationBody_checked_registerCall_compose (fuel : Nat) (config : E
     ambient types regions pending channels (inner roots typingAfter rootsAfter checked scopeWorld scopeSource)
 
 #print axioms execActivationBody_checked_registerCall_compose
+#print axioms SourcePosition.callee_registerCall_withArguments_tail_checked
 #print axioms SourcePosition.callee_registerCall_tail_checked
 #print axioms invokeCall_register_compose
 end Goose.Proofs.ConstructionAcceptedExecution
