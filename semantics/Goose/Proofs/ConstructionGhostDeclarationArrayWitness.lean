@@ -23,8 +23,9 @@ private def pending : PendingDestination := (prepared.construction.destinations[
   simp only [prepared, initial, stepState, config, implementation, environment, descriptor, element, expression, operands]
   cbv)
 
-theorem byteArray_declarationEvents : ∃ outcome visits chunks continuation,
+theorem byteArray_declarationEvents : ∃ outcome visits chunks continuation after,
     OperandReplay (fun operand => buildElement 38 config environment 0 element operand) 0 operands [] ready outcome visits ∧
+    outcome = .ok [(), ()] after ∧
     (∀ visit ∈ visits, SourceHistory config 38 [4, 0, 0, visit.ordinal]
       (.element environment 0 element visit.operand) visit.before visit.outcome) ∧
     (visits.map Invocation.ordinal).Nodup ∧ ChunksAlign visits chunks ∧
@@ -67,7 +68,7 @@ theorem byteArray_declarationEvents : ∃ outcome visits chunks continuation,
   have chunksActual : chunks.flatten = [.write 0 0, .write 0 1] := by
     apply (List.append_right_inj ready.construction.events).mp
     exact chunksEq.symm.trans events
-  refine ⟨outcome, visits, chunks, continuation, replay, ?_, once, aligned, chunksActual, ?_⟩
+  refine ⟨outcome, visits, chunks, continuation, after, replay, outcomeEq, ?_, once, aligned, chunksActual, ?_⟩
   · simpa using histories
   · exact finalEq
 
