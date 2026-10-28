@@ -40,6 +40,19 @@ theorem advanceParameterFrames_canonicalVisible {config : EvalConfig} {accepted 
   simp only [List.mem_append, List.mem_reverse] at member ⊢
   exact member
 
+theorem FreshScalarParameterPlan.finalFrame {scope : Nat} {frame : ConstructionSourceFrame} {types : RootTypes}
+    {live : Goose.Core.RootInst → Prop} {values : List (Nat × Value)} {finalFrame : ConstructionSourceFrame}
+    {finalTypes : RootTypes} {finalLive : Goose.Core.RootInst → Prop}
+    (plan : FreshScalarParameterPlan scope frame types live values finalFrame finalTypes finalLive) :
+    finalFrame = advanceParameterFrames frame frame.rootCursor.nextVar values.length := by
+  induction plan with
+  | nil => rfl
+  | @cons frame types live id descriptor value rest finalFrame finalTypes finalLive rootOrder typingOrder declared resolved scalar represented pointers tail ih =>
+    simp only [List.length_cons, advanceParameterFrames]
+    rw [ih, rootOrder]
+    rfl
+
+#print axioms FreshScalarParameterPlan.finalFrame
 #print axioms advanceParameterFrames_facts
 #print axioms advanceParameterFrames_canonicalVisible
 end Goose.Proofs.ConstructionAcceptedExecution
