@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionByteValueComplete
+import Goose.Proofs.ConstructionByteLocalSuccess
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -24,94 +25,53 @@ theorem execStmt_byteOwner_stopped_afterAllocation (fuel : Nat) (config : EvalCo
       (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = .stop stop after) :
     AcceptedWorld config sourceFrame.initialized after ambient types live (freshReceivingRegion before destination :: regions) pending ∧
       AcceptedFrame config accepted sourceFrame after types := by
-  simp only [execStmt, declared, ty, Ty.nonfixed, implementationFound, unnamed, ordinaryProducerCount?,
-    producerCount?, literalCount, Option.isSome_some, ↓reduceIte, materializeProducer, bind, pure, resolved,
-    Option.isNone_none, Option.isSome_none, Option.map_none] at executed
-  simp only [Bool.false_eq_true, ↓reduceIte, Option.orElse_eq_orElse, Option.orElse, created] at executed
-  cases constructed : buildExpr (fuel + 1) config sourceFrame.interpretation.environment destination
-      (.bytes (.varr (.int .u8)) bytes bytesOrigin) allocated with
-  | stop reason state =>
-    simp only [constructed, ExecutionStep.stop.injEq] at executed
+  let action := constructLocal ⟨config.module, sourceFrame.interpretation.environment.vars⟩
+    sourceFrame.interpretation.environment.act (.varr (.int .u8)) origin (.bytes (.varr (.int .u8)) bytes bytesOrigin)
+    (fun destination => buildExpr (fuel + 1) config sourceFrame.interpretation.environment destination
+      (.bytes (.varr (.int .u8)) bytes bytesOrigin))
+  let continuation : Carrier → EvalM Flow := fun carrier => do
+    let value ← carrierValue carrier
+    match value with
+    | .stored stored =>
+      bindRoot root (.stored { stored with ty := .varr (.int .u8), object := none })
+      pure (.normal .unit)
+    | _ => fault .flow
+  have equivalent : execStmt (fuel + 2) config sourceFrame.interpretation.environment
+      (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before = (action >>= continuation) before := by
+    simp only [execStmt, declared, ty, Ty.nonfixed, implementationFound, unnamed, ordinaryProducerCount?,
+      producerCount?, literalCount, Option.isSome_some, ↓reduceIte, materializeProducer, bind, pure, resolved,
+      Option.isNone_none, Option.isSome_none, Option.map_none, Bool.false_eq_true, Option.orElse_eq_orElse, Option.orElse]
+    simp only [action, constructLocal, producerCount?, literalCount, bind, pure, continuation, carrierValue]
+    cases allocation : newDestination config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin none
+        (some bytes.length) before <;> simp only [EvalConfig.layout] at allocation <;> simp only [allocation]
+    case ok id state =>
+      cases construction : buildExpr (fuel + 1) config sourceFrame.interpretation.environment id
+          (.bytes (.varr (.int .u8)) bytes bytesOrigin) state <;> simp only [construction]
+      case ok result built =>
+        cases completion : completedReceivingDestination id built <;> simp only [completion]
+        case ok selected checked =>
+          cases publication : publishCarriers origin [.completed selected] checked <;> simp only [publication]
+          case ok value final => cases value; cases storedDestination selected final <;> rfl
+  rw [equivalent] at executed
+  cases result : action before with
+  | stop reason final =>
+    simp only [bind, result, ExecutionStep.stop.injEq] at executed
     obtain ⟨rfl, rfl⟩ := executed
-    exact buildExpr_byteOwner_stopped_world fuel config accepted sourceFrame before allocated state bytes origin bytesOrigin destination reason
-      ambient types live regions pending world source created constructed
-  | escape address carriers state =>
-    have localAction := buildExpr_byteOwner_local fuel config sourceFrame.interpretation.environment destination (.varr (.int .u8)) bytes bytesOrigin allocated
-    rw [constructed] at localAction
-    cases localAction
-  | jump target kind state =>
-    have localAction := buildExpr_byteOwner_local fuel config sourceFrame.interpretation.environment destination (.varr (.int .u8)) bytes bytesOrigin allocated
-    rw [constructed] at localAction
-    cases localAction
-  | ok result built =>
-    cases result
-    simp only [constructed] at executed
-    have freshId := newDestination_fresh_id config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
-      (some bytes.length) before allocated destination created
-    subst destination
-    let id := before.construction.destinations.size
-    change buildExpr (fuel + 1) config sourceFrame.interpretation.environment id
-      (.bytes (.varr (.int .u8)) bytes bytesOrigin) allocated = .ok () built at constructed
-    obtain ⟨frame⟩ := newDestination_fresh_frame config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
-      (some bytes.length) before allocated id world.ownership.source.structural.1.1.1 created
-    obtain ⟨ready⟩ := newDestination_initial_backing config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
-      (some bytes.length) before allocated id (.int .u8) rfl created
-    obtain ⟨row, present, packed, request, direct, receiver⟩ := newDestination_byteOwner_packed_value config.layout
-      sourceFrame.interpretation.environment.act origin (some bytes.length) before allocated id created
-    have framePresent : allocated.construction.destinations[id]? = some frame.row := by
-      rw [frame.destinations]; exact Array.getElem?_push_size
-    have same : row = frame.row := Option.some.inj (present.symm.trans framePresent)
-    subst row
-    have allocatedWorld := newDestination_acceptedWorld config sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
-      (some bytes.length) sourceFrame.initialized before allocated id ambient types live regions pending world created
-    have current := newDestination_current_self config sourceFrame.initialized sourceFrame.interpretation.environment.act (.varr (.int .u8))
-      .value origin (some bytes.length) before allocated id ambient types live regions pending world created
-    obtain ⟨builtFrame, _⟩ := buildExpr_byteOwner_freshFrame fuel config sourceFrame.interpretation.environment bytes bytesOrigin before allocated built
-      frame before.construction.storage.size 0 ready direct rfl packed request allocatedWorld.ownership.source.structural.1.1.1 current constructed
-    have currentBuilt := frame.same_current builtFrame id current
-    have fits := newDestination_byteOwner_count_bound config.layout sourceFrame.interpretation.environment.act origin bytes.length before allocated id created
-    have readySame : ready.destination = frame.row := Option.some.inj (ready.present.symm.trans framePresent)
-    obtain ⟨builtRow, storage, builtPresent, stored, _, _, _, _, _, builtProgress, _⟩ :=
-      buildExpr_byteOwner_geometry fuel config sourceFrame.interpretation.environment bytes bytesOrigin id 0 allocated built ready
-        (by rw [readySame]; exact packed) (by rw [readySame]; exact request) (by simpa using fits)
-        allocatedWorld.ownership.source.structural.1.1.1 current constructed
-    have completed : completedReceivingDestination id built = .ok id built := by
-      simp only [completedReceivingDestination, receivingDestination, liftConstruction, currentBuilt, bind,
-        completedDestination, getDestination, EvalM.get, builtPresent, builtProgress, pure]
-    have completed' := completed
-    dsimp only [id] at completed'
-    simp only [completed'] at executed
-    cases published : publishCarriers origin [.completed id] built with
-    | stop reason state =>
-      have published' := published
-      dsimp only [id] at published'
-      simp only [published', ExecutionStep.stop.injEq] at executed
-      obtain ⟨rfl, rfl⟩ := executed
-      exact allocated_byteOwner_publishStop_world fuel config accepted sourceFrame before allocated built state bytes origin bytesOrigin id reason
-        ambient types live regions pending world source created constructed published
-    | escape address carriers state =>
-      have localAction := publishCompleted_local origin id built
-      rw [published] at localAction
-      cases localAction
-    | jump target kind state =>
-      have localAction := publishCompleted_local origin id built
-      rw [published] at localAction
-      cases localAction
-    | ok value final =>
-      cases value
-      have published' := published
-      dsimp only [id] at published'
-      simp only [published'] at executed
-      obtain ⟨_, _, stored, sampled, _, _, _, _⟩ := allocated_published_byteOwner_world fuel config sourceFrame.initialized
-        sourceFrame.interpretation.environment bytes origin bytesOrigin before allocated built final id ambient types live regions pending
-        world created constructed published
-      dsimp only [id] at sampled
-      simp only [sampled] at executed
-      have bound : ∃ result, bindRoot root (.stored { stored with ty := .varr (.int .u8), object := none }) final = .ok () result := by
-        simp only [bindRoot, EvalM.get, bind]
-        split <;> simp [setObjectOrdinal, bindStaticRoot, EvalM.get, EvalM.set, bind]
-      obtain ⟨result, bound⟩ := bound
-      simp only [bound, reduceCtorEq] at executed
+    exact constructLocal_byteOwner_stopped_afterAllocation fuel config accepted sourceFrame before allocated final bytes origin bytesOrigin
+      destination reason ambient types live regions pending world source created result
+  | escape address carriers final => simp only [bind, result, reduceCtorEq] at executed
+  | jump target kind final => simp only [bind, result, reduceCtorEq] at executed
+  | ok carrier final =>
+    obtain ⟨finalWorld, finalFrame, stored, sameCarrier, sampled, backed, storage, named, valueType⟩ :=
+      constructLocal_byteOwner_success_world fuel config sourceFrame.initialized sourceFrame.interpretation.environment bytes origin bytesOrigin
+        before final carrier ambient types live regions pending world result
+    subst carrier
+    simp only [bind, result, continuation, carrierValue, sampled, pure] at executed
+    have bound : ∃ next, bindRoot root (.stored { stored with ty := .varr (.int .u8), object := none }) final = .ok () next := by
+      simp only [bindRoot, EvalM.get, bind]
+      split <;> simp [setObjectOrdinal, bindStaticRoot, EvalM.get, EvalM.set, bind]
+    obtain ⟨next, bound⟩ := bound
+    simp only [bound, reduceCtorEq] at executed
 
 theorem execStmt_byteOwner_stopped_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (sourceFrame : ConstructionSourceFrame) (before after : ExecutionState)
