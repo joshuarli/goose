@@ -1,10 +1,10 @@
 import Goose.Proofs.ConstructionGhostSyntaxFuel
-import Goose.Proofs.ConstructionGhostBuilderCallEvents
+import Goose.Proofs.ConstructionGhostBuilderCallOccurrence
 
 namespace Goose.Proofs.ConstructionGhostBuilderChannelWitness
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Proofs.ConstructionGhostSyntaxFuel Goose.Proofs.ConstructionGhostBuilderCallEvents
-open Goose.Proofs.ConstructionExecution
+open Goose.Proofs.ConstructionExecution Goose.Proofs.ConstructionGhostBuilderCallOccurrence
 
 private def bytes : Expr := .bytes (.varr (.int .u8)) [65, 66] 0
 private def context : Context := ⟨0, "target", [], [], []⟩
@@ -65,10 +65,14 @@ theorem builderCall_childEvents :
   have renewed : liftConstruction 0 (renewReceivingDestination 0) ready = .ok 0 callReady := by
     simp only [callReady, ready, stepState, config, context, implementation, environment, bytes]
     cbv
-  refine ⟨builderCall_child_history history 39 environment 0 0 0 [] 0 callReady rfl rfl renewed,
-    builderCall_sourcePrefix 39 config environment 0 0 0 [] 0 ready callReady renewed, ?_⟩
-  rw [execution]
-  exact events
+  have classification := builderCall_history_or_earlyTerminal 39 config environment 0 0 [] 0 ready [] history
+  rcases classification with ⟨destination, sourceReady, occurrence, unique, child, retained⟩ | early
+  · have same := unique 0 callReady renewed
+    obtain ⟨rfl, rfl⟩ := same
+    refine ⟨child, retained, ?_⟩
+    rw [execution]
+    exact events
+  · exact False.elim (early.2 ⟨0, callReady, renewed⟩)
 
 #print axioms builderCall_childEvents
 #print axioms builderCall_events
