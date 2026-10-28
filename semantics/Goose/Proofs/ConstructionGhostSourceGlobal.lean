@@ -485,6 +485,81 @@ theorem witness_directGlobal_events : ∃ state,
   refine ⟨witnessState (runModule 40 directConfig .initial), ?_, ?_⟩ <;>
     unfold witnessState directConfig directGlobal witnessEntry witnessEntryContext <;> cbv
 
+private def nestedGlobalOperand : Expr := .bytes (.varr (.int .u8)) [65, 66] 0
+private def nestedGlobal : Global := ⟨"nested", .varr (.varr (.int .u8)), .immutable,
+  .arrLit (.varr (.varr (.int .u8))) [nestedGlobalOperand, nestedGlobalOperand] 0, 0⟩
+private def nestedConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[nestedGlobal], #[witnessEntry], #[witnessEntryContext], 0, #[], #[], #[]⟩⟩
+
+private theorem nested_descriptor (global : Goose.Core.GlobalId) (descriptor : Global)
+    (found : nestedConfig.module.globals[global]? = some descriptor) : descriptor = nestedGlobal := by
+  cases global with
+  | zero => simpa [nestedConfig] using found.symm
+  | succ global => simp [nestedConfig] at found
+
+private theorem nested_fixedSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global),
+    nestedConfig.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = false →
+    ∀ environment, SupportedOperation nestedConfig (.value environment descriptor.init) := by
+  intro global descriptor found fixed environment
+  have descriptorEq := nested_descriptor global descriptor found
+  subst descriptor
+  simp [nestedGlobal, Ty.nonfixed] at fixed
+
+private theorem nested_materializedSupported (fuel : Nat) : ∀ (global : Goose.Core.GlobalId) (descriptor : Global) count,
+    nestedConfig.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+    ordinaryProducerCount? fuel ⟨nestedConfig.module, #[]⟩ descriptor.init = some count →
+    ∀ environment, SupportedOperation nestedConfig (.value environment descriptor.init) := by
+  intro global descriptor count found nonfixed countFound environment
+  have descriptorEq := nested_descriptor global descriptor found
+  subst descriptor
+  simp [nestedGlobal, ordinaryProducerCount?, producerCount?, literalCount] at countFound
+
+private theorem nested_directSupported (fuel : Nat) : ∀ (global : Goose.Core.GlobalId) (descriptor : Global),
+    nestedConfig.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+    ordinaryProducerCount? fuel ⟨nestedConfig.module, #[]⟩ descriptor.init = none →
+    ∀ environment destination, SupportedOperation nestedConfig (.builder environment destination descriptor.init) := by
+  intro global descriptor found nonfixed direct environment destination
+  have descriptorEq := nested_descriptor global descriptor found
+  subst descriptor
+  unfold nestedGlobal
+  apply SupportedOperation.builderArray
+  intro operand member current element
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at member
+  rcases member with rfl | rfl
+  all_goals exact byteElement_supported nestedConfig environment current element (.varr (.int .u8)) [65, 66] 0
+
+private theorem nested_entrySupported : SupportedOperation nestedConfig (.call ⟨0, 0, #[], [], []⟩ 0 0) := by
+  apply SupportedOperation.call ⟨0, 0, #[], [], []⟩ 0 0 witnessEntryContext witnessEntry
+  · rfl
+  · rfl
+  · rfl
+  · rfl
+  · intro act
+    exact .activation _ 0 [] 0 (fun environment => .empty environment)
+
+theorem witness_nestedGlobal (fuel : Nat) : ∃ outcome visits,
+    OperandReplay (globalInitializer fuel nestedConfig) 0 (List.range nestedConfig.module.globals.size) [] .initial outcome visits ∧
+    DirectSourceForest fuel nestedConfig visits ∧
+    ∀ initialized, discardGlobalValues outcome = .ok () initialized →
+      SourceHistory nestedConfig fuel [nestedConfig.module.globals.size, 0] (.call ⟨0, 0, #[], [], []⟩ 0 0) initialized
+        (invokeCall fuel nestedConfig ⟨0, 0, #[], [], []⟩ 0 [] [] 0 initialized) ∧
+      runModule fuel nestedConfig .initial = entryCallResult
+        (invokeCall fuel nestedConfig ⟨0, 0, #[], [], []⟩ 0 [] [] 0 initialized) := by
+  obtain ⟨outcome, visits, replay, fixed, materialized, direct, ordered, once, execution, entry⟩ :=
+    runModule_allSourceForestsAndEntry fuel nestedConfig .initial nested_fixedSupported (nested_materializedSupported fuel)
+      (nested_directSupported fuel) witnessEntryContext witnessEntry rfl rfl rfl nested_entrySupported
+  exact ⟨outcome, visits, replay, direct, entry⟩
+
+theorem witness_nestedGlobal_events : ∃ state,
+    runModule 40 nestedConfig .initial = .ok () state ∧
+    state.construction.events = [.begin 0, .begin 1, .write 1 0, .write 1 1, .write 0 0,
+      .begin 2, .write 2 0, .write 2 1, .write 0 1, .publish 0] := by
+  refine ⟨witnessState (runModule 40 nestedConfig .initial), ?_, ?_⟩ <;>
+    unfold witnessState nestedConfig nestedGlobal nestedGlobalOperand witnessEntry witnessEntryContext <;> cbv
+
+#print axioms witness_nestedGlobal
+#print axioms witness_nestedGlobal_events
+
 #print axioms witness_directGlobal
 #print axioms witness_directGlobal_events
 
