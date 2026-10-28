@@ -1,9 +1,9 @@
-import Goose.Proofs.ConstructionGhostSourceTransition
+import Goose.Proofs.ConstructionGhostSourceMutual
 import Goose.Proofs.ConstructionGhostEntry
 
 namespace Goose.Proofs.ConstructionGhostSourceEntry
 open Goose.Construct Goose.Proofs.ConstructionGhostStatements
-open Goose.Proofs.ConstructionGhostSourceTransition Goose.Proofs.ConstructionGhostEntry
+open Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostEntry
 open Goose.Proofs.ConstructionGhostResultScope Goose.Proofs.ConstructionGhostBlockInitializers
 
 theorem entry_sourceHistory (fuel : Nat) (config : EvalConfig)
@@ -13,13 +13,13 @@ theorem entry_sourceHistory (fuel : Nat) (config : EvalConfig)
     (implementationFound : config.module.impls[context.impl]? = some implementation)
     (parametersEmpty : implementation.params = #[]) (resultsEmpty : implementation.results = #[])
     (body : implementation.body = .mk scope statements none)
-    (supported : ∀ statement ∈ statements, SupportedStatement statement) :
+    (supported : ∀ environment, SupportedOperation (.statements environment statements)) :
     let activation : RuntimeActivation := ⟨context.impl, 0, implementation.vars, [], []⟩
     let activated := { ExecutionState.initial with nextAct := 1, activations := [activation] }
     let ready := resultScopeStart activation scope activated
     ∃ outcome,
-      StatementSequenceHistory config { activation with scopes := [(scope, activated.nextScope)] }
-        (fuel + 1) [] statements ready outcome ∧
+      SourceHistory config (fuel + 1) []
+        (.statements { activation with scopes := [(scope, activated.nextScope)] } statements) ready outcome ∧
       runModule (fuel + 4) config .initial =
         (finishActivation config.layout activation [] 0 (fun _ =>
           activationBodyContinuation (withScope activation scope activated.nextScope (fun _ =>
@@ -34,17 +34,20 @@ theorem entry_sourceHistory (fuel : Nat) (config : EvalConfig)
     zeroGlobalEntry_initializerForest fuel config context implementation scope statements noGlobals
       contextFound implementationFound parametersEmpty resultsEmpty body
   refine ⟨outcome, ?_, execution⟩
-  have history := statementSequenceHistory_exists (fuel + 1) config
-    { (⟨context.impl, 0, implementation.vars, [], []⟩ : RuntimeActivation) with
-      scopes := [(scope, ExecutionState.initial.nextScope)] } [] statements
-    (resultScopeStart ⟨context.impl, 0, implementation.vars, [], []⟩ scope
-      { ExecutionState.initial with nextAct := 1, activations := [⟨context.impl, 0, implementation.vars, [], []⟩] }) supported
+  let environment : RuntimeActivation := { (⟨context.impl, 0, implementation.vars, [], []⟩ : RuntimeActivation) with
+    scopes := [(scope, ExecutionState.initial.nextScope)] }
+  let ready := resultScopeStart ⟨context.impl, 0, implementation.vars, [], []⟩ scope
+    { ExecutionState.initial with nextAct := 1, activations := [⟨context.impl, 0, implementation.vars, [], []⟩] }
+  have history := history_exists (fuel + 1) config (.statements environment statements) [] ready (supported environment)
+  change SourceHistory config (fuel + 1) [] (.statements environment statements) ready
+    (execStmts (fuel + 1) config environment statements ready) at history
+
   rw [replay.sound] at history
   exact history
 
 private def witnessModule : Module :=
   ⟨#[], #[], #[], #[⟨"entry", #[], #[], #[],
-    .mk 0 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none, .unknown⟩],
+    .mk 0 [.expr (.ifE (.bool true) (.mk 1 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none) (.mk 2 [] none) 0) 0] none, .unknown⟩],
     #[⟨0, "entry", [], [], []⟩], 0, #[], #[], #[]⟩
 private def witnessState : ExecutionStep α → ExecutionState
   | .ok _ state | .stop _ state | .escape _ _ state | .jump _ _ state => state
