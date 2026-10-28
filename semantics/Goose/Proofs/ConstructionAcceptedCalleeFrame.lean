@@ -20,6 +20,7 @@ theorem acceptedZeroArgumentCalleeFrame (config : EvalConfig) (accepted : Accept
       frame.initialized = caller.initialized ∧ frame.typing.visible = [] ∧
       frame.interpretation = CallInterpretation caller.interpretation
         ⟨original.impl, state.nextAct, implementation.vars, [], channels⟩ [] ∧
+      implementationBodyFrame config frame = frame ∧ frame.rootCursor = ⟨0, {}, []⟩ ∧
       AcceptedFrame config accepted frame { state with nextAct := state.nextAct + 1 } types ∧
       SourcePosition accepted frame (.block frame.source.impl.body) ∧
       ∃ bodyTypes declared, typeBlock frame.typingFuel frame.typing frame.source.impl.body frame.typingCounter =
@@ -66,10 +67,13 @@ theorem acceptedZeroArgumentCalleeFrame (config : EvalConfig) (accepted : Accept
     direct := by intro id member; rw [visible] at member; cases member
     contents := by intro fuel id member; rw [visible] at member; cases member }
   obtain ⟨bodyTypes, declared, typed⟩ := validated_implementation_typing config.module original.impl implementation accepted.accepted implementationAt
+  have cursor : frame.rootCursor = ⟨0, {}, []⟩ := by
+    have equal := congrArg (fun f : ConstructionSourceFrame => f.rootCursor) bodyFrame
+    simpa [implementationBodyFrame, impl, parameters] using equal.symm
   have position : SourcePosition accepted frame (.block frame.source.impl.body) := by
     have original := SourcePosition.implementationBody frame target phase compatible
     simpa [bodyFrame] using original
-  refine ⟨frame, phase, impl, initialized, visible, interpretation, framed, position, bodyTypes, declared, ?_⟩
+  refine ⟨frame, phase, impl, initialized, visible, interpretation, bodyFrame, cursor, framed, position, bodyTypes, declared, ?_⟩
   have same := bodyFrame
   conv => lhs; rw [← same]
   simpa [implementationBodyFrame, impl, parameters] using typed
@@ -88,19 +92,20 @@ theorem acceptedZeroArgumentRegisterCallee (config : EvalConfig) (accepted : Acc
       let after := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
       frame.phase = .implementation target ∧ frame.source.impl = implementation ∧ frame.initialized = caller.initialized ∧
       frame.interpretation = CallInterpretation caller.interpretation activation [] ∧
+      implementationBodyFrame config frame = frame ∧ frame.rootCursor = ⟨0, {}, []⟩ ∧
       AcceptedFrame config accepted frame after types ∧
       SourcePosition accepted frame (.block frame.source.impl.body) ∧
       AcceptedWorld config frame.initialized after (.callChannels activation [] :: ambient) types live regions pending ∧
       ∃ bodyTypes declared, typeBlock frame.typingFuel frame.typing frame.source.impl.body frame.typingCounter =
         .ok (bodyTypes, declared) := by
-  obtain ⟨frame, phase, impl, initialized, visible, interpretation, source, position, bodyTypes, declared, typed⟩ :=
+  obtain ⟨frame, phase, impl, initialized, visible, interpretation, bodyFrame, cursor, source, position, bodyTypes, declared, typed⟩ :=
     acceptedZeroArgumentCalleeFrame config accepted caller state types target original implementation [.register ty]
       callerSource contextAt implementationAt parameters
   let activation : RuntimeActivation := ⟨original.impl, state.nextAct, implementation.vars, [], [.register ty]⟩
   have pushed := acceptedWorld_pushRegisterActivation config caller.initialized state ambient types live regions pending
     activation world rfl ty rfl
   have transferred := source.emptyVisible_activations visible (activation :: state.activations)
-  exact ⟨frame, phase, impl, initialized, interpretation, transferred, position, initialized ▸ pushed, bodyTypes, declared, typed⟩
+  exact ⟨frame, phase, impl, initialized, interpretation, bodyFrame, cursor, transferred, position, initialized ▸ pushed, bodyTypes, declared, typed⟩
 
 #print axioms acceptedZeroArgumentRegisterCallee
 #print axioms acceptedZeroArgumentCalleeFrame
