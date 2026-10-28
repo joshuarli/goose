@@ -78,6 +78,27 @@ def ParameterizedArithmeticRegisterGraph (config : EvalConfig) (integer : Goose.
       implementation.body = ⟨implementation.body.scope, [], some expression⟩ ∧ AcceptedBinaryExpression expression) ∨
       ParameterizedArithmeticTailCallee config integer implementation
 
+def ParameterizedSummaryRegisterGraph (config : EvalConfig) (integer : Goose.Core.IntTy) : Prop :=
+  ∀ (target : Nat) (context : Context) (implementation : Impl) (parameter : Param),
+    config.module.contexts[target]? = some context → config.module.impls[context.impl]? = some implementation →
+    implementation.params = #[parameter] → parameter.mode = .byValue →
+    implementation.results = #[⟨.int integer, .register, none⟩] →
+    (∃ descriptor, implementation.vars[0]? = some descriptor ∧ descriptor.ty = .int integer ∧
+      implementation.body = ⟨implementation.body.scope, [], some (.read (.var 0))⟩) ∨
+    (∃ descriptor summary expression, implementation.vars[0]? = some descriptor ∧ descriptor.ty = .int integer ∧
+      implementation.summary = .known summary ∧
+      implementation.body = ⟨implementation.body.scope, [], some expression⟩ ∧ AcceptedBinaryExpression expression) ∨
+      ParameterizedArithmeticTailCallee config integer implementation
+
+theorem ParameterizedArithmeticRegisterGraph.toSummaryGraph {config : EvalConfig} {integer : Goose.Core.IntTy}
+    (graph : ParameterizedArithmeticRegisterGraph config integer) : ParameterizedSummaryRegisterGraph config integer := by
+  intro target context implementation parameter contextAt implementationAt parameters mode results
+  rcases graph target context implementation parameter contextAt implementationAt parameters mode results with identity | scalar | tail
+  · exact Or.inl identity
+  · obtain ⟨descriptor, summary, expression, declared, descriptorTy, known, noParameters, body, form⟩ := scalar
+    exact Or.inr (Or.inl ⟨descriptor, summary, expression, declared, descriptorTy, known, body, form⟩)
+  · exact Or.inr (Or.inr tail)
+
 theorem ParameterizedScalarRegisterGraph.toArithmeticGraph {config : EvalConfig} {integer : Goose.Core.IntTy}
     (graph : ParameterizedScalarRegisterGraph config integer) : ParameterizedArithmeticRegisterGraph config integer := by
   intro target context implementation parameter contextAt implementationAt parameters mode results

@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedParameterizedScalarTail
+import Goose.Proofs.ConstructionAcceptedParameterizedScalarTailEffects
 import Goose.Proofs.ConstructionAcceptedParameterIdentityWorld
 import Goose.Proofs.ConstructionAcceptedScalarControl
 
@@ -8,7 +8,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionRepresentation
 
-theorem scalarParameterBody_partial (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+theorem scalarParameterBody_parameterSummary_partial (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (contextId origin : Nat) (context : Context) (implementation : Impl) (parameter : Param) (descriptor : LocalVar)
@@ -20,7 +20,6 @@ theorem scalarParameterBody_partial (fuel : Nat) (config : EvalConfig) (accepted
     (scalar : (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool)
     (sameTy : descriptor.ty = ty) (represented : ValueRepresentation ty value) (pointers : PointerTypedValue types ty value)
     (known : implementation.summary = .known summary)
-    (noParameters : ∀ id, .param id ∉ summary.reads ++ summary.writes ++ summary.grows ++ summary.shrinks)
     (results : implementation.results = #[⟨ty, .register, none⟩])
     (world : AcceptedWorld config caller.initialized state ambient types live regions pending)
     (source : AcceptedFrame config accepted caller state types) (outerTy : Ty) (outerRoots : List RootRef)
@@ -42,9 +41,9 @@ theorem scalarParameterBody_partial (fuel : Nat) (config : EvalConfig) (accepted
   have scalarTy : (∃ intTy, ty = .int intTy) ∨ ty = .bool := by simpa [sameTy] using scalar
   obtain ⟨frame, actual, after, tailRoots, tailTypingAfter, tailRootsAfter, sameImpl, initialized, environment, act, scopes, channels,
     activationImpl, activationVars, bound, extended, afterWorld, afterSource, tailChecked⟩ :=
-    acceptedSingleByValueBoundScalarTail config accepted caller state ambient types live regions pending contextId origin context implementation
+    acceptedSingleByValueBoundScalarTail_parameterSummary config accepted caller state ambient types live regions pending contextId origin context implementation
       parameter descriptor argument value ty summary expression contextAt implementationAt parameters declared scalar
-      (by simpa [sameTy] using represented) (by simpa [sameTy] using pointers) known noParameters results body scalarTy world source
+      (by simpa [sameTy] using represented) (by simpa [sameTy] using pointers) known form results body scalarTy world source
       outerTy outerRoots outerTypingAfter outerRootsAfter checked
   have actualEq : actual = (⟨context.impl, state.nextAct, implementation.vars, [], [.register ty]⟩ : RuntimeActivation) := by
     cases actual
@@ -135,5 +134,43 @@ theorem scalarParameterBody_partial (fuel : Nat) (config : EvalConfig) (accepted
           observed.trans (Nat.le_refl _) (EarlierCallerObservations.releaseScope state.nextAct activation implementation.body.scope
             state.nextScope after nextTypes (by simp [activation])), rfl, result, rfl, valueAccepted.represented⟩
 
+
+theorem scalarParameterBody_partial (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (contextId origin : Nat) (context : Context) (implementation : Impl) (parameter : Param) (descriptor : LocalVar)
+    (argument expression : Expr) (value : Value) (ty : Ty) (summary : Summary)
+    (contextAt : config.module.contexts[contextId]? = some context)
+    (implementationAt : config.module.impls[context.impl]? = some implementation)
+    (parameters : implementation.params = #[parameter]) (declared : implementation.vars[0]? = some descriptor)
+    (body : implementation.body = ⟨implementation.body.scope, [], some expression⟩) (form : AcceptedBinaryExpression expression)
+    (scalar : (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool)
+    (sameTy : descriptor.ty = ty) (represented : ValueRepresentation ty value) (pointers : PointerTypedValue types ty value)
+    (known : implementation.summary = .known summary)
+    (noParameters : ∀ id, .param id ∉ summary.reads ++ summary.writes ++ summary.grows ++ summary.shrinks)
+    (results : implementation.results = #[⟨ty, .register, none⟩])
+    (world : AcceptedWorld config caller.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted caller state types) (outerTy : Ty) (outerRoots : List RootRef)
+    (outerTypingAfter : Nat) (outerRootsAfter : RState)
+    (checked : CheckedValue caller (.call contextId [.byVal argument] origin) outerTy outerRoots outerTypingAfter outerRootsAfter) :
+    let activation : RuntimeActivation := ⟨context.impl, state.nextAct, implementation.vars, [], [.register ty]⟩
+    let pushed := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := execActivationBody fuel config activation [(parameter.var, value)] implementation.body pushed
+      RootTypesExtend types nextTypes ∧ pushed.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      pushed.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config caller.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      FutureGlobalsClear config caller.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      EarlierCallerObservations state.nextAct pushed (Goose.Proofs.Exit.stepState outcome) types nextTypes ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = .callChannels activation [] :: ambient ∧
+           ∃ result, carriers = [.register result] ∧ ValueRepresentation ty result
+       | .stop .. => True | .escape .. | .jump .. => False) := by
+  exact scalarParameterBody_parameterSummary_partial fuel config accepted caller state ambient types live regions pending
+    contextId origin context implementation parameter descriptor argument expression value ty summary contextAt implementationAt
+    parameters declared body form scalar sameTy represented pointers known results world source outerTy outerRoots outerTypingAfter
+    outerRootsAfter checked
+
+#print axioms scalarParameterBody_parameterSummary_partial
 #print axioms scalarParameterBody_partial
 end Goose.Proofs.ConstructionAcceptedExecution
