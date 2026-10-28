@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionAcceptedNestedScalarGlobalsTerminal
 import Goose.Proofs.ConstructionAcceptedNestedSingleGlobalInitializer
 import Goose.Proofs.ConstructionAcceptedTerminalSequence
 
@@ -33,49 +34,19 @@ theorem nestedArgumentList_singleGlobalTerminal_world {config : EvalConfig} {acc
     StatementWorldOutcome config accepted caller.initialized ambient pending
       (execStmt fuel config caller.interpretation.environment (.letS localId (.call contextId
         (expressions.map Arg.byVal) callOrigin) statementOrigin) state) := by
-  let arguments := expressions.map Arg.byVal
-  obtain ⟨next, typingAfter, rootsAfter, typed, rooted⟩ := position.checked accepted caller _
-  cases nesting : caller.typingFuel with
-  | zero => rw [nesting] at typed; change Except.error _ = Except.ok _ at typed; cases typed
-  | succ checkFuel =>
-    have typedContext : caller.typing.module.contexts[contextId]? = some context := by simpa [source.compatible.module] using contextAt
-    have typedCallee : caller.typing.module.impls[context.impl]? = some callee := by simpa [source.compatible.module] using calleeAt
-    obtain ⟨descriptor, declared, order, resultType⟩ := typeStatement_registerCall_result checkFuel caller.typing next
-      localId contextId callOrigin statementOrigin arguments caller.typingCounter typingAfter context callee resultTy
-      typedContext typedCallee results resultScalar targetScalar (by simpa [arguments, nesting] using typed)
-    obtain ⟨scopeDescriptor, scopeDeclared, localScopeEq, _⟩ := typeStatement_let_descriptor checkFuel caller.typing next localId
-      (.call contextId arguments callOrigin) statementOrigin caller.typingCounter typingAfter (by simpa [arguments, nesting] using typed)
-    have same : scopeDescriptor = descriptor := Option.some.inj (scopeDeclared.symm.trans declared)
-    subst scopeDescriptor
-    have runtimeDeclared : caller.interpretation.environment.vars[localId]? = some descriptor := by rw [source.compatible.variables]; exact declared
-    have resolved : rootOf caller.interpretation.environment localId state = .ok (.local caller.interpretation.environment.act localScope localId) state := by
-      simp [rootOf, runtimeDeclared, scopes, localScopeEq, pure]
-    cases fuel with
-    | zero => simp only [execStmt, timeout, EvalM.stop, StatementWorldOutcome]; exact ⟨ambient, types, live, regions, world⟩
-    | succ fuel =>
-      cases fuel with
-      | zero =>
-        have fixed : descriptor.ty.nonfixed = false := by
-          rcases resultScalar with ⟨ty, same⟩ | same <;> simp [resultType, same, Ty.nonfixed]
-        simp [execStmt, runtimeDeclared, fixed, rootOf, scopes, localScopeEq, evalValue, bind, pure,
-          timeout, EvalM.stop, StatementWorldOutcome]
-        exact ⟨ambient, types, live, regions, world⟩
-      | succ fuel =>
-        have outcome := nestedArgumentList_singleGlobalInitializer_world fuel caller state ambient types live regions pending
-          contextId callOrigin context callee expressions parameterTypes resultTy resultExpression forms world source contextAt calleeAt descriptors
-          results resultScalar tail resultForm globalId globalOrigin assigned assignedForm statements globalScalar initialized bounded blocks localId localScope statementOrigin position targetScalar resolved
-        cases executed : execStmt (fuel + 2) config caller.interpretation.environment (.letS localId (.call contextId arguments callOrigin) statementOrigin) state with
-        | stop reason after =>
-          simp only [arguments, executed] at outcome
-          obtain ⟨nextAmbient, nextTypes, nextLive, nextRegions, finalWorld⟩ := outcome
-          simp only [StatementWorldOutcome, arguments, executed]
-          exact ⟨nextAmbient, nextTypes, nextLive, nextRegions, initialized.symm ▸ finalWorld⟩
-        | escape address carriers after | jump target kind after => simp [arguments, executed] at outcome
-        | ok flow after =>
-          simp only [arguments, executed] at outcome
-          obtain ⟨normal, nextTypes, nextLive, nextRegions, finalWorld, finalSource⟩ := outcome
-          simp only [StatementWorldOutcome, arguments, executed]
-          exact ⟨normal, advanceLocalFrame caller localId, _, _, _, rfl, finalWorld, finalSource⟩
+  apply nestedArgumentList_scalarGlobalsTerminal_world (localScope := localScope) (outerScopes := outerScopes) fuel caller state ambient types live regions pending contextId callOrigin context callee expressions parameterTypes resultTy resultExpression forms world source contextAt calleeAt descriptors results resultScalar tail resultForm
+  · rw [statements]
+    exact .cons globalId assigned globalOrigin [] assignedForm .nil
+  · intro id expression origin member descriptor declared
+    simp [statements] at member
+    obtain ⟨rfl, rfl, rfl⟩ := member
+    exact globalScalar descriptor declared
+  · exact initialized
+  · exact bounded
+  · exact blocks
+  · exact scopes
+  · exact position
+  · exact targetScalar
 
 #print axioms nestedArgumentList_singleGlobalTerminal_world
 end Goose.Proofs.ConstructionAcceptedExecution

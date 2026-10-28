@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionAcceptedNestedScalarGlobalsInvoke
 import Goose.Proofs.ConstructionAcceptedNestedArgumentAnyUse
 import Goose.Proofs.ConstructionAcceptedSingleGlobalRegisterInvoke
 
@@ -35,40 +36,19 @@ theorem nestedArgumentList_singleGlobalRegisterCall_world {config : EvalConfig} 
         AcceptedWorld config config.module.globals.size after ambient nextTypes nextLive nextRegions pending ∧
         AcceptedFrame config accepted frame after nextTypes
     | _ => False := by
-  cases nesting : frame.typingFuel with
-  | zero =>
-    obtain ⟨resultTypes, after, roots, rootAfter, typed, rooted⟩ := position.checked accepted frame _
-    rw [nesting] at typed
-    change Except.error _ = Except.ok _ at typed
-    cases typed
-  | succ checkFuel =>
-    let argsFrame := { frame with typingFuel := checkFuel }
-    have argsPosition := position.call_arguments accepted frame contextId origin checkFuel context callee (expressions.map Arg.byVal)
-      source.compatible contextAt calleeAt nesting
-    have argsSource := source.withTypingFuel checkFuel
-    have argsBlocks : ∀ expression ∈ expressions, NestedArgumentSafe config argsFrame expression := by
-      intro expression member
-      simpa [NestedArgumentSafe, ArgumentBlockSafe, argsFrame] using blocks expression member
-    obtain ⟨specifications, sameExpressions, sameTypes, safe⟩ := checkedNestedArgumentList_safetyAnyUse config accepted context.impl callee calleeAt
-      descriptors expressions forms argsFrame state types ambient live regions pending argsSource initialized bounded argsBlocks argsPosition
-    have callerSafe : ∀ specification ∈ specifications, ∀ runtimeFuel current,
-        AcceptedWorld config frame.initialized current ambient types live regions pending →
-        AcceptedFrame config accepted frame current types →
-        FirstArgumentOutcome config accepted frame ambient types live regions pending specification.2 []
-          (evalValue runtimeFuel config frame.interpretation.environment specification.1 current) := by
-      intro specification member runtimeFuel current currentWorld currentSource
-      have currentArgs := currentSource.withTypingFuel checkFuel
-      have actual := safe specification member runtimeFuel current currentWorld currentArgs
-      exact FirstArgumentOutcome.retargetCursor checkFuel frame.rootCursor rfl specification.2 _ actual
-    have outcome := singleGlobalScalarParameterList_call_worldWithCallerFrame specifications fuel config accepted frame state ambient types live regions pending
-      contextId origin context callee resultTy resultExpression contextAt calleeAt parameterTypes descriptors sameTypes results resultScalar
-      tail resultForm globalId globalOrigin assigned assignedForm statements globalScalar world source initialized callerSafe
-    have mapped : specifications.map (fun specification => Arg.byVal specification.1) = expressions.map Arg.byVal := by
-      simpa [List.map_map, Function.comp_def] using congrArg (List.map Arg.byVal) sameExpressions
-    rw [mapped] at outcome
-    cases step : invokeCall fuel config frame.interpretation.environment contextId (expressions.map Arg.byVal) [.register resultTy] origin state <;>
-      simpa [step] using outcome
-
+  apply nestedArgumentList_scalarGlobalsRegisterCall_world accepted fuel frame state ambient types live regions pending contextId origin context callee expressions parameterTypes resultTy resultExpression contextAt calleeAt descriptors forms results resultScalar tail resultForm
+  · rw [statements]
+    exact .cons globalId assigned globalOrigin [] assignedForm .nil
+  · intro id expression origin member descriptor declared
+    simp [statements] at member
+    obtain ⟨rfl, rfl, rfl⟩ := member
+    exact globalScalar descriptor declared
+  · exact world
+  · exact source
+  · exact initialized
+  · exact bounded
+  · exact blocks
+  · exact position
 
 #print axioms nestedArgumentList_singleGlobalRegisterCall_world
 end Goose.Proofs.ConstructionAcceptedExecution
