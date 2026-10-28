@@ -5,6 +5,20 @@ import Goose.Lower.DemandScalarPlaceAddress
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 
+theorem ExprSource.sliceGlobalViewAlias {cfg : Cfg} {env : Env} {state : St}
+    {mutability : Mutability} {global : GlobalId} {lower upper : Bound} {origin : OriginId}
+    (source : ExprSource cfg env (.slice mutability (.of (.global global)) lower upper origin) state) :
+    ∃ aliases, source.rootsEnv.access.aliasView (source.path ++ [0]) (.of (.global global)) = .ok aliases := by
+  obtain ⟨view, typing, roots, canonical, next⟩ := source.sliceChildren mutability origin
+  have element := tyView_accessElement (view.frame.mod_t.trans view.frame.mod_p.symm)
+    (view.frame.vars_t.trans view.frame.vars_p.symm) view.typed
+  rw [roots] at element
+  refine ⟨[⟨.slice .readOnly view.element, [.global global], .operand (source.path ++ [0])⟩], ?_⟩
+  simp only [AccessEnv.aliasView, element, AccessEnv.viewRoots, AccessEnv.placeRoots, bind, pure]
+  rfl
+
+#print axioms ExprSource.sliceGlobalViewAlias
+
 theorem accepted_generated_slice_global_snapshot {cfg : Cfg} {env : Env} {state after : St}
     {mutability : Mutability} {global : GlobalId} {lower upper : Bound} {origin : OriginId}
     (source : ExprSource cfg env (.slice mutability (.of (.global global)) lower upper origin) state)
