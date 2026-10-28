@@ -136,6 +136,55 @@ theorem AcceptedFrame.leaveEmptyChild {config : EvalConfig} {accepted : Accepted
   · simp [LocalRootCorrespondence, noVisible]
   · simp [ContentRootCorrespondence, noVisible]
 
+theorem AcceptedFrame.retargetEmptyVariables {config : EvalConfig} {accepted : AcceptedModule config}
+    {frame : ConstructionSourceFrame} {before after : ExecutionState} {types : RootTypes}
+    (source : AcceptedFrame config accepted frame before types)
+    (emptyFrame : frame.interpretation.environment.vars = #[]) (other : ConstructionSourceFrame)
+    (sameInterpretation : other.interpretation = frame.interpretation) (sameInitialized : other.initialized = frame.initialized)
+    (child : AcceptedFrame config accepted other after types) :
+    AcceptedFrame config accepted frame after types := by
+  have emptyTypes : frame.typing.variables = #[] := source.compatible.variables.symm.trans emptyFrame
+  have noVisible : frame.typing.visible = [] := by
+    have zeroCounter : frame.typingCounter = 0 := by
+      have bound := source.compatible.typingBound
+      simp only [emptyTypes, Array.size_empty] at bound
+      omega
+    have zeroRoots : frame.rootCursor.nextVar = 0 := by
+      have bound := source.compatible.declarations
+      omega
+    cases visible : frame.typing.visible with
+    | nil => rfl
+    | cons id rest =>
+      have bound := source.compatible.visible id (by simp [visible])
+      rw [zeroRoots] at bound
+      exact (Nat.not_lt_zero id bound).elim
+  refine ⟨source.compatible, ?_, ?_, source.initializingBefore, source.aliases, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa [sameInterpretation] using child.frontier
+  · simpa [sameInterpretation] using child.scopeFrontier
+  · simp [LocalRepresentations, noVisible]
+  · simp [noVisible]
+  · intro id condition root resolved
+    simp [rootOf, emptyFrame, fault, EvalM.stop] at resolved
+  · intro id condition root resolved
+    simp [rootOf, emptyFrame, fault, EvalM.stop] at resolved
+  · simpa [sameInitialized] using child.futureGlobals
+  · simp [LocalRootCorrespondence, noVisible]
+  · simp [ContentRootCorrespondence, noVisible]
+
+theorem AcceptedWorld.releaseEmptyScope (config : EvalConfig) (initialized : Nat) (state : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (environment : RuntimeActivation) (empty : environment.vars = #[]) (scope scopeInst : Nat)
+    (world : AcceptedWorld config initialized state ambient types live regions pending) :
+    AcceptedWorld config initialized (releaseScopeState environment scope scopeInst state) ambient types live regions pending := by
+  have result := world.releaseScope config initialized state ambient types live regions pending environment scope scopeInst
+  have same : (fun root => live root ∧ (Goose.Proofs.Exit.runtimeScopeRoots environment scope scopeInst).contains root = false) = live := by
+    funext root
+    simp [Goose.Proofs.Exit.runtimeScopeRoots, empty]
+  rwa [same] at result
+
+#print axioms AcceptedWorld.releaseEmptyScope
+#print axioms AcceptedFrame.retargetEmptyVariables
 #print axioms AcceptedFrame.leaveEmptyChild
 #print axioms AcceptedFrame.enterEmptyScope
 #print axioms AcceptedFrame.releaseEmptyScope
