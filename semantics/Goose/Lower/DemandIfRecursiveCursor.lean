@@ -1,4 +1,5 @@
 import Goose.Lower.DemandIfRecursiveDepth
+import Goose.Lower.DemandControlProgressCursor
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -10,10 +11,42 @@ inductive RecursiveIfCursorStep {cfg : Cfg} (cx : FnCtx) (results : List Ty) {ro
     ∀ {env : Env} (_selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner),
     ∀ {statement : Stmt} {state : St}, StmtSource cfg env statement state →
       LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop
-  | base {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+  | scalar {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
       {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
-      (cursor : IfMixedStatementCursor cx results selected source before built initial start map required runtime) :
+      (cursor : ScalarAssignmentStatementPrefixCursor cx results source before built initial start map required runtime) :
+      RecursiveIfCursorStep cx results inner selected source before built initial start map required runtime
+  | condition {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+      {condition : Expr} {yes : Core.Block} {no : Option Core.Block} {origin : OriginId} {state : St}
+      {source : StmtSource cfg env (.ifS condition yes no origin) state} {before built : LS}
+      {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+      (child : ExprSource cfg env condition state)
+      (canonical : source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
+      (demanded : CanonicalExpressionDemand map cx child runtime)
+      (progress : (∃ id op, instAt cx.fn runtime.point = some (.def id op)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
+      RecursiveIfCursorStep cx results inner selected source before built initial start map required runtime
+  | fork {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+      {condition : Expr} {yes : Core.Block} {no : Option Core.Block} {origin : OriginId} {state : St}
+      {source : StmtSource cfg env (.ifS condition yes no origin) state} {before built : LS}
+      {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+      (child : ExprSource cfg env condition state) (boolean : Bool) (fuel : Nat)
+      (canonical : source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
+      (evaluated : evalExpr fuel cfg env condition state = .ok (.bool boolean) runtime.state)
+      (boundary : GeneratedExpressionPrefixEnd child map cx before initial
+        (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2
+        (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1 (.bool boolean) runtime)
+      (step : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
+      RecursiveIfCursorStep cx results inner selected source before built initial start map required runtime
+  | join {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+      {condition : Expr} {yes : Core.Block} {no : Option Core.Block} {origin : OriginId} {state : St}
+      {source : StmtSource cfg env (.ifS condition yes no origin) state} {before built : LS}
+      {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+      (joinBlock : BlockId) (fuel : Nat)
+      (evaluated : execStmt fuel cfg env (.ifS condition yes no origin) state = .ok (.normal .unit) runtime.state)
+      (step : ∀ targetFuel, DemandInstructionStep cx targetFuel runtime ⟨(joinBlock, 0), runtime.frame, runtime.state⟩)
+      (post : GeneratedStatementPrefixEnd source map cx before initial built none (.normal .unit)
+        ⟨(joinBlock, 0), runtime.frame, runtime.state⟩) :
       RecursiveIfCursorStep cx results inner selected source before built initial start map required runtime
   | branch {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
       {condition : Expr} {yes : Core.Block} {no : Option Core.Block} {origin : OriginId} {state middle : St}
@@ -70,10 +103,13 @@ theorem RecursiveIfCursor.succ {cfg : Cfg} {cx : FnCtx} {results : List Ty} {roo
     (demanded : RecursiveIfCursor cx results depth selected source before built initial start map required runtime) :
     RecursiveIfCursor cx results (depth + 1) selected source before built initial start map required runtime := by
   induction depth generalizing env statement state before built initial start map required runtime with
-  | zero => exact .base (.scalar demanded)
+  | zero => exact .scalar demanded
   | succ depth ih =>
     cases demanded with
-    | base cursor => exact .base cursor
+    | scalar cursor => exact .scalar cursor
+    | condition child canonical demanded progress => exact .condition child canonical demanded progress
+    | fork child boolean fuel canonical evaluated boundary step => exact .fork child boolean fuel canonical evaluated boundary step
+    | join joinBlock fuel evaluated step post => exact .join joinBlock fuel evaluated step post
     | branch child boolean fuel conditionCanonical evaluated indexEq found branch canonical demanded =>
       apply RecursiveIfCursorStep.branch child boolean fuel conditionCanonical evaluated indexEq found branch canonical
       apply demanded.mapCursor

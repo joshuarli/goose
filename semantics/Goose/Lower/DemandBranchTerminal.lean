@@ -66,6 +66,39 @@ theorem RecursiveLoopIfCursor.excludes_maximal_terminal {cfg : Cfg} {cx : FnCtx}
       intro statement state source before built initial start map required runtime cursor term terminal fuel maximal
       exact ih cursor terminal maximal
 
+theorem RecursiveIfCursor.excludes_maximal_terminal {cfg : Cfg} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat} (depth : Nat) :
+    ∀ {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+      {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+      {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap}
+      {runtime : DemandRuntimePoint}, RecursiveIfCursor cx results depth selected source before built initial start map required runtime →
+      ∀ {term : Term}, instAt cx.fn runtime.point = some (.term term) → ∀ {fuel : Nat},
+      (∀ next, ¬ DemandInstructionStep cx fuel runtime next) → False := by
+  induction depth with
+  | zero =>
+    intro env selected statement state source before built initial start map required runtime cursor term terminal fuel maximal
+    exact ScalarAssignmentStatementPrefixCursor.excludes_maximal_terminal cursor terminal maximal
+  | succ depth ih =>
+    intro env selected statement state source before built initial start map required runtime cursor term terminal fuel maximal
+    cases cursor with
+    | scalar cursor => exact ScalarAssignmentStatementPrefixCursor.excludes_maximal_terminal cursor terminal maximal
+    | condition child canonical demanded progress =>
+      cases progress with
+      | inl instruction =>
+        obtain ⟨id, op, instruction⟩ := instruction
+        cases instruction.symm.trans terminal
+      | inr step =>
+        obtain ⟨next, step⟩ := step
+        exact maximal next (step fuel)
+    | fork child boolean sourceFuel canonical evaluated boundary step =>
+      obtain ⟨next, step⟩ := step
+      exact maximal next (step fuel)
+    | join joinBlock sourceFuel evaluated step post => exact maximal _ (step fuel)
+    | branch child boolean sourceFuel conditionCanonical evaluated indexEq found branch canonical demanded =>
+      apply demanded.excludes_maximal_terminal ?_ terminal maximal
+      intro statement state source before built initial start map required runtime cursor term terminal fuel maximal
+      exact ih cursor terminal maximal
+
 theorem WhileStatementPrefixCursor.excludes_maximal_terminal {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
@@ -82,5 +115,6 @@ theorem WhileStatementPrefixCursor.excludes_maximal_terminal {cfg : Cfg} {env : 
 
 #print axioms GeneratedGenericBlockPrefixDemand.excludes_maximal_terminal
 #print axioms RecursiveLoopIfCursor.excludes_maximal_terminal
+#print axioms RecursiveIfCursor.excludes_maximal_terminal
 #print axioms WhileStatementPrefixCursor.excludes_maximal_terminal
 end Goose.Lower

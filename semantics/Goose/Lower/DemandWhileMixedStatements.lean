@@ -88,7 +88,7 @@ theorem accepted_generated_recursive_if_statements_prepend {cfg : Cfg} {env : En
         (@WhileMixedStatementCursor cfg env cx results root owner selected) := by
       apply GeneratedStatementPrefixFamily.mapCursor
         (accepted_generated_recursive_if_none_prefix_family selected depth condition yes origin bounded branchFamily noValue
-          (accepted_generated_control_prefix_family selected none form))
+          (accepted_generated_control_progress_prefix_family selected none form))
       intro statement state source before built initial start map required runtime cursor
       exact .recursive (depth + 1) cursor
     have stopped : GeneratedStoppedStatementPrefixFamily cx results selected none (.ifS condition yes none origin) :=
@@ -119,7 +119,7 @@ theorem accepted_generated_recursive_if_statements_prepend {cfg : Cfg} {env : En
         (@WhileMixedStatementCursor cfg env cx results root owner selected) := by
       apply GeneratedStatementPrefixFamily.mapCursor
         (accepted_generated_recursive_if_some_prefix_family selected depth condition yes no origin yesBounded noBounded
-          yesFamily noFamily yesNoValue noNoValue (accepted_generated_control_prefix_family selected none form))
+          yesFamily noFamily yesNoValue noNoValue (accepted_generated_control_progress_prefix_family selected none form))
       intro statement state source before built initial start map required runtime cursor
       exact .recursive (depth + 1) cursor
     have stopped : GeneratedStoppedStatementPrefixFamily cx results selected none (.ifS condition yes (some no) origin) :=

@@ -14,7 +14,7 @@ theorem accepted_generated_recursive_if_some_prefix_family {cfg : Cfg} {env : En
     (yesFamily : RecursiveIfBranchFamily cx results selected depth yes)
     (noFamily : RecursiveIfBranchFamily cx results selected depth no)
     (yesNoValue : yes.value = none) (noNoValue : no.value = none)
-    (conditionFamily : GeneratedExpressionPrefixFamily cx results selected none condition (@CanonicalExpressionPrefixCursor cfg env cx)) :
+    (conditionFamily : GeneratedExpressionPrefixFamily cx results selected none condition (@GeneratedControlProgressCursor cfg env cx)) :
     GeneratedStatementPrefixFamily cx results selected none (.ifS condition yes (some no) origin)
       (@RecursiveIfCursor cfg cx results root owner (depth + 1) env selected) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps
@@ -22,7 +22,7 @@ theorem accepted_generated_recursive_if_some_prefix_family {cfg : Cfg} {env : En
   obtain ⟨child, childType, canonical, progress⟩ := accepted_generated_if_condition_prefix source selected owned occurrence
     rows coverage admitted bounded realized input extended conditionFamily steps
   cases progress with
-  | interior demanded => exact .interior (.base (.conditionalElse (.condition child canonical demanded)))
+  | interior cursor => exact .interior (.condition child canonical cursor.demanded cursor.progress)
   | @complete fuel consumed remaining current value count executed residual evaluated boundary =>
     have typed := (child.result fuel value evaluated).typed
     rw [childType] at typed
@@ -37,7 +37,11 @@ theorem accepted_generated_recursive_if_some_prefix_family {cfg : Cfg} {env : En
       generated_if_some_fork lowered boundary.post.pp extended
     have cell := boundary.post.has ((lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1, .val (.bool boolean)) (by simp)
     rcases residual.uncons with ⟨_, rfl⟩ | ⟨rest, next, restCount, first, suffix⟩
-    · exact .interior (.base (.conditionalElse (.fork child boolean fuel canonical evaluated boundary)))
+    · have step : ∃ next, ∀ targetFuel, DemandInstructionStep cx targetFuel reached next := by
+        refine ⟨⟨(if boolean then yesBlock else noBlock, 0), reached.frame, reached.state⟩, ?_⟩
+        intro targetFuel
+        exact generated_if_branch_step boolean forkRun boundary.post.pp forkExtended cell targetFuel
+      exact .interior (.fork child boolean fuel canonical evaluated boundary step)
     · obtain ⟨stepFuel, actual⟩ := runtimeStep_demandInstructionStep first
       have equal := actual.deterministic (generated_if_branch_step (state := current.state) boolean forkRun boundary.post.pp forkExtended cell stepFuel)
       have nextEq : next = ⟨(if boolean then yesBlock else noBlock, 0), current.frame, current.state⟩ := by
@@ -64,7 +68,7 @@ theorem accepted_generated_recursive_if_some_prefix_family {cfg : Cfg} {env : En
       rcases branchProgress with ⟨branch, ⟨index, found, indexEq, branchCanonical⟩, demanded⟩ | ⟨branchCount, remaining, final, sourceFuel, branchCountEq, branchExecuted, branchResidual, sourceDone, joinStep, finalPost⟩
       · exact .interior (.branch child boolean fuel canonical evaluated indexEq found branch branchCanonical demanded)
       · rcases branchResidual.uncons with ⟨_, rfl⟩ | ⟨rest', next', restCount', last, afterJoin⟩
-        · exact .interior (.base (.conditionalElse (.join noEnd.blocks.size sourceFuel sourceDone joinStep finalPost)))
+        · exact .interior (.join noEnd.blocks.size sourceFuel sourceDone joinStep finalPost)
         · obtain ⟨lastFuel, actualLast⟩ := runtimeStep_demandInstructionStep last
           have equalLast := actualLast.deterministic (joinStep lastFuel)
           have nextEq : next' = ⟨(noEnd.blocks.size, 0), final.frame, final.state⟩ := by cases next'; exact equalLast
