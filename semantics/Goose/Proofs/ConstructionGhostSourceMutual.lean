@@ -282,6 +282,9 @@ inductive ValueAggregate : Expr → List Expr → Prop
   | record (id : Goose.Core.StructId) (fields : TyList) (operands : List Expr) :
       ValueAggregate (.structLit (.structT id fields) operands) operands
 
+def logicalExpression (isAnd : Bool) (first second : Expr) : Expr :=
+  if isAnd then .and first second else .or first second
+
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
   | timeout (path : List Nat) (operation : SourceOperation α) (before : ExecutionState) :
@@ -313,6 +316,35 @@ inductive SourceHistory (config : EvalConfig) :
           visit.before visit.outcome) :
       SourceHistory config (fuel + 1) path (.value environment expression) before
         (evalValue (fuel + 1) config environment expression before)
+  | comparison {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operation : Goose.Core.CmpOp}
+      {first second : Expr} {before : ExecutionState}
+      (left : SourceHistory config fuel (path ++ [0]) (.value environment first) before
+        (evalValue fuel config environment first before))
+      (right : ∀ value middle, evalValue fuel config environment first before = .ok value middle →
+        SourceHistory config fuel (path ++ [1]) (.value environment second) middle
+          (evalValue fuel config environment second middle)) :
+      SourceHistory config (fuel + 1) path (.value environment (.cmp operation first second)) before
+        (evalValue (fuel + 1) config environment (.cmp operation first second) before)
+  | binary {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operation : Goose.Core.BinOp}
+      {first second : Expr} {origin : Goose.Core.OriginId} {before : ExecutionState}
+      (left : SourceHistory config fuel (path ++ [0]) (.value environment first) before
+        (evalValue fuel config environment first before))
+      (right : ∀ value middle ty number ready, evalValue fuel config environment first before = .ok value middle →
+        expectInt value middle = .ok (ty, number) ready →
+        SourceHistory config fuel (path ++ [1]) (.value environment second) ready
+          (evalValue fuel config environment second ready)) :
+      SourceHistory config (fuel + 1) path (.value environment (.bin operation first second origin)) before
+        (evalValue (fuel + 1) config environment (.bin operation first second origin) before)
+  | logical {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {isAnd : Bool}
+      {first second : Expr} {before : ExecutionState}
+      (left : SourceHistory config fuel (path ++ [0]) (.value environment first) before
+        (evalValue fuel config environment first before))
+      (right : ∀ value middle ready, evalValue fuel config environment first before = .ok value middle →
+        expectBool value middle = .ok isAnd ready →
+        SourceHistory config fuel (path ++ [1]) (.value environment second) ready
+          (evalValue fuel config environment second ready)) :
+      SourceHistory config (fuel + 1) path (.value environment (logicalExpression isAnd first second)) before
+        (evalValue (fuel + 1) config environment (logicalExpression isAnd first second) before)
   | singleton {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -507,7 +539,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | valueBytes | builderArray | aggregate => rfl
+  | valueBytes | builderArray | aggregate | comparison | binary | logical => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]
@@ -657,6 +689,18 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (shape : ValueAggregate expression operands)
       (children : ∀ operand ∈ operands, SupportedOperation config (.value environment operand)) :
       SupportedOperation config (.value environment expression)
+  | comparison (environment : RuntimeActivation) (operation : Goose.Core.CmpOp) (first second : Expr)
+      (left : SupportedOperation config (.value environment first))
+      (right : SupportedOperation config (.value environment second)) :
+      SupportedOperation config (.value environment (.cmp operation first second))
+  | binary (environment : RuntimeActivation) (operation : Goose.Core.BinOp) (first second : Expr)
+      (origin : Goose.Core.OriginId) (left : SupportedOperation config (.value environment first))
+      (right : SupportedOperation config (.value environment second)) :
+      SupportedOperation config (.value environment (.bin operation first second origin))
+  | logical (environment : RuntimeActivation) (isAnd : Bool) (first second : Expr)
+      (left : SupportedOperation config (.value environment first))
+      (right : SupportedOperation config (.value environment second)) :
+      SupportedOperation config (.value environment (logicalExpression isAnd first second))
   | singleton (environment : RuntimeActivation) (operand : Expr)
       (child : SupportedOperation config (.value environment operand)) :
       SupportedOperation config (.value environment (.values [operand]))
@@ -789,6 +833,21 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute] at child
           rw [← visit_executes replay visit member]
           exact child
+      | comparison environment operation first second leftSupported rightSupported =>
+          have left := ih (.value environment first) (path ++ [0]) before leftSupported
+          refine .comparison left ?_
+          intro value middle result
+          exact ih (.value environment second) (path ++ [1]) middle rightSupported
+      | binary environment operation first second origin leftSupported rightSupported =>
+          have left := ih (.value environment first) (path ++ [0]) before leftSupported
+          refine .binary left ?_
+          intro value middle ty number ready result checked
+          exact ih (.value environment second) (path ++ [1]) ready rightSupported
+      | logical environment isAnd first second leftSupported rightSupported =>
+          have left := ih (.value environment first) (path ++ [0]) before leftSupported
+          refine .logical left ?_
+          intro value middle ready result checked
+          exact ih (.value environment second) (path ++ [1]) ready rightSupported
       | singleton environment operand childSupported =>
           have child := ih (.value environment operand) (path ++ [0]) before childSupported
           simpa [execute, evalValue, bind] using (SourceHistory.singleton child)
@@ -1366,6 +1425,52 @@ theorem witness_nestedArray : ∃ after,
 #print axioms witness_nonfixedElement
 
 #print axioms witness_elementSourceCall
+
+private def comparisonWitness : Expr := .cmp .eq (.call 0 [] 0) (.call 0 [] 0)
+private def shortCircuitWitness : Expr := .and (.bool false) (.call 0 [] 0)
+
+private theorem sideEffectValue_supported : SupportedOperation sideEffectConfig (.value witnessEnvironment (.call 0 [] 0)) :=
+  .valueCall witnessEnvironment 0 0 sideEffectContext sideEffectImplementation rfl rfl rfl
+    (sideEffectCallee_supported witnessEnvironment)
+
+theorem witness_comparisonCalls : ∃ after,
+    evalValue 40 sideEffectConfig witnessEnvironment comparisonWitness .initial = .stop (.fault .shape) after ∧
+    after.construction.stdout.data.toList = [120, 10, 120, 10] ∧
+    SourceHistory sideEffectConfig 40 [] (.value witnessEnvironment comparisonWitness) .initial (.stop (.fault .shape) after) := by
+  have supported : SupportedOperation sideEffectConfig (.value witnessEnvironment comparisonWitness) :=
+    .comparison witnessEnvironment .eq _ _ sideEffectValue_supported sideEffectValue_supported
+  have history := history_exists 40 sideEffectConfig (.value witnessEnvironment comparisonWitness) [] .initial supported
+  refine ⟨witnessState (evalValue 40 sideEffectConfig witnessEnvironment comparisonWitness .initial), ?_, ?_, ?_⟩
+  · unfold witnessState comparisonWitness sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · unfold witnessState comparisonWitness sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · have actual : evalValue 40 sideEffectConfig witnessEnvironment comparisonWitness .initial =
+        .stop (.fault .shape) (witnessState (evalValue 40 sideEffectConfig witnessEnvironment comparisonWitness .initial)) := by
+      unfold witnessState comparisonWitness sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+      cbv
+    change SourceHistory sideEffectConfig 40 [] (.value witnessEnvironment comparisonWitness) .initial
+      (evalValue 40 sideEffectConfig witnessEnvironment comparisonWitness .initial) at history
+    rw [actual] at history
+    exact history
+
+theorem witness_shortCircuitSkipsCall :
+    evalValue 40 sideEffectConfig witnessEnvironment shortCircuitWitness .initial = .ok (.bool false) .initial ∧
+    SourceHistory sideEffectConfig 40 [] (.value witnessEnvironment shortCircuitWitness) .initial (.ok (.bool false) .initial) := by
+  have supported : SupportedOperation sideEffectConfig (.value witnessEnvironment shortCircuitWitness) :=
+    .logical witnessEnvironment true (.bool false) (.call 0 [] 0) (.value witnessEnvironment (.boolean false)) sideEffectValue_supported
+  have history := history_exists 40 sideEffectConfig (.value witnessEnvironment shortCircuitWitness) [] .initial supported
+  have actual : evalValue 40 sideEffectConfig witnessEnvironment shortCircuitWitness .initial = .ok (.bool false) .initial := by
+    unfold sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment shortCircuitWitness
+    cbv
+  refine ⟨actual, ?_⟩
+  change SourceHistory sideEffectConfig 40 [] (.value witnessEnvironment shortCircuitWitness) .initial
+    (evalValue 40 sideEffectConfig witnessEnvironment shortCircuitWitness .initial) at history
+  rw [actual] at history
+  exact history
+
+#print axioms witness_comparisonCalls
+#print axioms witness_shortCircuitSkipsCall
 
 #print axioms witness_fillSourceOnce
 
