@@ -6,9 +6,10 @@ open Goose.Core Goose.GIR Goose.Core.Sound
 
 structure GeneratedControlProgressCursor {cfg : Cfg} {env : Env} (cx : FnCtx)
     {expression : Expr} {state : St} (source : ExprSource cfg env expression state)
-    (_before _built : LS) (_initial : GIR.Frame) (_start : Pt) (map _required : RetainedSsaMap)
+    (before _built : LS) (initial : GIR.Frame) (_start : Pt) (map _required : RetainedSsaMap)
     (runtime : DemandRuntimePoint) : Prop where
   demanded : CanonicalExpressionDemand map cx source runtime
+  same : Same before.vals.size initial runtime.frame
   progress : (∃ id op, instAt cx.fn runtime.point = some (.def id op)) ∨
     ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next
 
@@ -27,7 +28,7 @@ theorem accepted_generated_shortCircuit_progress_family {cfg : Cfg} {env : Env} 
       coverage admitted bounded realized input extended steps
   refine ⟨owned, coverage, ?_⟩
   cases decomposition.progress with
-  | interior cursor => exact .interior ⟨.child metadata cursor.demanded, cursor.progress⟩
+  | interior cursor => exact .interior ⟨.child metadata cursor.demanded, cursor.same, cursor.progress⟩
   | @complete leftFuel leftCount remaining middle leftValue count leftTrace residual leftDone leftBoundary =>
     have typed := (left.result leftFuel leftValue leftDone).typed
     rw [leftType] at typed
@@ -42,7 +43,7 @@ theorem accepted_generated_shortCircuit_progress_family {cfg : Cfg} {env : Env} 
       have cell' : reached.frame.vals[(lowerExpr a le before).1]? = some (.val (.bool (path.leftValue isAnd))) := by
         simpa only [pathValue] using cell
       let forked := demandShortCircuitFork isAnd a le before
-      refine .interior ⟨.child metadata (.exit leftBoundary.demanded), Or.inr ?_⟩
+      refine .interior ⟨.child metadata (.exit leftBoundary.demanded), leftBoundary.post.same, Or.inr ?_⟩
       refine ⟨⟨path.target forked.1.1 forked.1.2.1, path.frame reached.frame forked.1.2.2 isAnd, reached.state⟩, ?_⟩
       intro fuel
       exact shortCircuit_control_step path (show scFork isAnd (lowerExpr a le before).1 le (lowerExpr a le before).2 = (forked.1, forked.2) from rfl)
@@ -87,6 +88,12 @@ theorem accepted_generated_shortCircuit_progress_family {cfg : Cfg} {env : Env} 
           change (lowerExpr a le before).2.vals.size ≤ (demandShortCircuitFork isAnd a le before).2.vals.size
           rw [valsEq]
           omega
+        have beforeRight : before.vals.size ≤ (demandShortCircuitRightBefore isAnd a le before).vals.size := by
+          change before.vals.size ≤ (demandShortCircuitFork isAnd a le before).2.vals.size
+          rw [valsEq]
+          have monotone : before.vals.size ≤ (lowerExpr a le before).2.vals.size := by
+            simpa only [le] using leftBoundary.post.mono
+          omega
         have rightRealized : map.Realizes cfg.mod right.world env ⟨entry.point, entry.frame, middle.state⟩ := by
           simpa only [RetainedSsaMap.Realizes, stateEq] using rightDemand.operands
         have rightInput : GeneratedPrefixInput cfg env cx results loop right.typingEnv right.rootsEnv
@@ -103,7 +110,10 @@ theorem accepted_generated_shortCircuit_progress_family {cfg : Cfg} {env : Env} 
         have rightDecomposed := rightFamily right rightOwned rightOccurrence rightRows coverage rightAdmitted rightBounded
           rightRealized rightInput rightExtended rightSteps
         cases rightDecomposed.progress with
-        | interior cursor => exact .interior ⟨.child rightMetadata cursor.demanded, cursor.progress⟩
+        | interior cursor =>
+          have rightSame : Same (demandShortCircuitRightBefore isAnd a le before).vals.size middle.frame reached.frame := by
+            simpa only [frameEq] using cursor.same
+          exact .interior ⟨.child rightMetadata cursor.demanded, leftBoundary.post.same.trans rightSame beforeRight, cursor.progress⟩
         | @complete rightFuel rightCount remaining boundary rightValue rightCountEq rightTrace residual rightDone rightBoundary =>
           have typed := (right.result rightFuel rightValue rightDone).typed
           rw [rightType] at typed
@@ -113,7 +123,9 @@ theorem accepted_generated_shortCircuit_progress_family {cfg : Cfg} {env : Env} 
             have jumpExtended := generated_shortCircuit_jump_extended (right := b) leftBoundary.post.pp extended
             have cell := rightBoundary.post.has
               ((lowerExpr b le (demandShortCircuitRightBefore isAnd a le before)).1, .val (.bool rightValue)) (by simp [le])
-            refine .interior ⟨.child rightMetadata (.exit rightBoundary.demanded), Or.inr ?_⟩
+            have rightSame : Same (demandShortCircuitRightBefore isAnd a le before).vals.size middle.frame reached.frame := by
+              simpa only [frameEq] using rightBoundary.post.same
+            refine .interior ⟨.child rightMetadata (.exit rightBoundary.demanded), leftBoundary.post.same.trans rightSame beforeRight, Or.inr ?_⟩
             refine ⟨⟨((demandShortCircuitFork isAnd a le before).1.2.1, 0), reached.frame.set (demandShortCircuitFork isAnd a le before).1.2.2 (.val (.bool rightValue)), reached.state⟩, ?_⟩
             intro fuel
             exact shortCircuit_join_step (state := reached.state)
@@ -147,7 +159,7 @@ theorem accepted_generated_control_progress_prefix_family {cfg : Cfg} {env : Env
   | scalar form =>
     apply GeneratedExpressionPrefixFamily.mapCursor (accepted_generated_scalar_definition_prefix_family selected loop form)
     intro expression state source before built initial start map required runtime cursor
-    exact ⟨cursor.demanded, Or.inl cursor.instruction⟩
+    exact ⟨cursor.demanded, cursor.same, Or.inl cursor.instruction⟩
   | and first second firstIH secondIH =>
     exact accepted_generated_shortCircuit_progress_family selected loop true _ _ firstIH secondIH
   | or first second firstIH secondIH =>
@@ -156,41 +168,46 @@ theorem accepted_generated_control_progress_prefix_family {cfg : Cfg} {env : Env
     apply GeneratedExpressionPrefixFamily.mapCursor (accepted_generated_not_prefix_family selected loop _ _ ih)
     intro expression state source before built initial start map required runtime cursor
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
+    have same := cursor.same (by intro expression state child before built initial start map required runtime cursor; exact cursor.same)
     cases cursor with
-    | child child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.progress⟩
-    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, Or.inl ⟨_, _, site.instruction⟩⟩
+    | child child metadata owned occurrence rows coverage cursor => exact ⟨demanded, same, cursor.progress⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, same, Or.inl ⟨_, _, site.instruction⟩⟩
   | unary operation origin child ih =>
     apply GeneratedExpressionPrefixFamily.mapCursor (accepted_generated_unary_prefix_family selected loop operation _ origin _ ih)
     intro expression state source before built initial start map required runtime cursor
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
+    have same := cursor.same (by intro expression state child before built initial start map required runtime cursor; exact cursor.same)
     cases cursor with
-    | child child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.progress⟩
-    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, Or.inl ⟨_, _, site.instruction⟩⟩
+    | child child metadata owned occurrence rows coverage cursor => exact ⟨demanded, same, cursor.progress⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, same, Or.inl ⟨_, _, site.instruction⟩⟩
   | convert kind target origin child ih =>
     apply GeneratedExpressionPrefixFamily.mapCursor (accepted_generated_convert_prefix_family selected loop kind target _ origin _ ih)
     intro expression state source before built initial start map required runtime cursor
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
+    have same := cursor.same (by intro expression state child before built initial start map required runtime cursor; exact cursor.same)
     cases cursor with
-    | child child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.progress⟩
-    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, Or.inl ⟨_, _, site.instruction⟩⟩
+    | child child metadata owned occurrence rows coverage cursor => exact ⟨demanded, same, cursor.progress⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, same, Or.inl ⟨_, _, site.instruction⟩⟩
   | binary operation origin first second firstIH secondIH =>
     apply GeneratedExpressionPrefixFamily.mapCursor
       (accepted_generated_binary_prefix_family selected loop operation _ _ origin _ _ firstIH secondIH)
     intro expression state source before built initial start map required runtime cursor
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded) (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
+    have same := cursor.same (by intro expression state child before built initial start map required runtime cursor; exact cursor.same) (by intro expression state child before built initial start map required runtime cursor; exact cursor.same)
     cases cursor with
-    | left child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.progress⟩
-    | right child metadata owned occurrence rows coverage leftPost cursor => exact ⟨demanded, cursor.progress⟩
-    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, Or.inl ⟨_, _, site.instruction⟩⟩
+    | left child metadata owned occurrence rows coverage cursor => exact ⟨demanded, same, cursor.progress⟩
+    | right child metadata owned occurrence rows coverage leftPost cursor => exact ⟨demanded, same, cursor.progress⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, same, Or.inl ⟨_, _, site.instruction⟩⟩
   | compare operation first second firstIH secondIH =>
     apply GeneratedExpressionPrefixFamily.mapCursor
       (accepted_generated_compare_prefix_family selected loop operation _ _ _ _ firstIH secondIH)
     intro expression state source before built initial start map required runtime cursor
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded) (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
+    have same := cursor.same (by intro expression state child before built initial start map required runtime cursor; exact cursor.same) (by intro expression state child before built initial start map required runtime cursor; exact cursor.same)
     cases cursor with
-    | left child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.progress⟩
-    | right child metadata owned occurrence rows coverage leftPost cursor => exact ⟨demanded, cursor.progress⟩
-    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, Or.inl ⟨_, _, site.instruction⟩⟩
+    | left child metadata owned occurrence rows coverage cursor => exact ⟨demanded, same, cursor.progress⟩
+    | right child metadata owned occurrence rows coverage leftPost cursor => exact ⟨demanded, same, cursor.progress⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, same, Or.inl ⟨_, _, site.instruction⟩⟩
 
 #print axioms accepted_generated_control_progress_prefix_family
 
