@@ -25,6 +25,28 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (origin : Goose.Core.OriginId)
       (body : FuelSupport config fuel (.activationBody activation (.mk scope statements none))) :
       FuelSupport config (fuel + 1) (.activation activation (.mk scope statements none) origin)
+  | dereferencePlace (fuel : Nat) (environment : RuntimeActivation) (operand : Expr)
+      (child : FuelSupport config fuel (.value environment operand)) :
+      FuelSupport config (fuel + 1) (.place environment (.deref operand))
+  | block (fuel : Nat) (environment : RuntimeActivation) (scope : Nat) (statements : List Stmt)
+      (body : ∀ scopedEnvironment, FuelSupport config fuel (.statements scopedEnvironment statements)) :
+      FuelSupport config (fuel + 1) (.block environment (.mk scope statements none))
+  | loopBody (fuel : Nat) (environment : RuntimeActivation) (body : Block)
+      (child : FuelSupport config fuel (.block environment body)) :
+      FuelSupport config (fuel + 1) (.loopBody environment body)
+  | whileLoop (fuel : Nat) (environment : RuntimeActivation) (condition : Expr) (body : Block)
+      (conditionChild : FuelSupport config fuel (.value environment condition))
+      (bodyChild : FuelSupport config fuel (.loopBody environment body))
+      (next : FuelSupport config fuel (.whileLoop environment condition body)) :
+      FuelSupport config (fuel + 1) (.whileLoop environment condition body)
+  | whileStatement (fuel : Nat) (environment : RuntimeActivation) (condition : Expr) (body : Block) (origin : Goose.Core.OriginId)
+      (child : FuelSupport config fuel (.whileLoop environment condition body)) :
+      FuelSupport config (fuel + 1) (.statement environment (.while condition body origin))
+  | ifStatement (fuel : Nat) (environment : RuntimeActivation) (condition : Expr) (yes : Block) (no : Option Block)
+      (origin : Goose.Core.OriginId) (child : FuelSupport config fuel (.value environment condition))
+      (yesChild : FuelSupport config fuel (.block environment yes))
+      (noChild : ∀ block, no = some block → FuelSupport config fuel (.block environment block)) :
+      FuelSupport config (fuel + 1) (.statement environment (.ifS condition yes no origin))
   | boundActivationBody (fuel : Nat) (activation : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
       (scope : Nat) (statements : List Stmt)
       (body : ∀ environment, FuelSupport config fuel (.statements environment statements)) :
@@ -155,6 +177,34 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           simp only [execute]
           rw [activationEnter_source]
           exact .activation body
+      | dereferencePlace _ environment operand childSupported =>
+          exact .dereferencePlace (ih (.value environment operand) (path ++ [0]) before childSupported)
+      | block _ environment scope statements bodySupported =>
+          let scopedEnvironment := { environment with scopes := (scope, before.nextScope) :: environment.scopes }
+          let ready := { before with nextScope := before.nextScope + 1 }
+          have child := ih (.statements scopedEnvironment statements) (path ++ [0]) ready (bodySupported scopedEnvironment)
+          have bound : bindAll environment.act before.nextScope [] ready = .ok () ready := by simp [ready, bindAll, bind, pure]
+          obtain ⟨outcome, visits, replay, execution⟩ :=
+            Goose.Proofs.ConstructionGhostBlock.execBlock_statementReplay fuel config environment [] [] scope statements none before ready bound
+          simp only [execute]
+          rw [execution, ← replay.sound]
+          exact .block child
+      | loopBody _ environment body childSupported =>
+          exact .loopBody (ih (.block environment body) (path ++ [0]) (loopStart environment before) childSupported)
+      | whileLoop _ environment condition body conditionSupported bodySupported nextSupported =>
+          refine .whileLoop (ih (.value environment condition) (path ++ [0]) before conditionSupported) ?_ ?_
+          · intro value middle ready result checked
+            exact ih (.loopBody environment body) (path ++ [1]) ready bodySupported
+          · intro value middle ready flow after result checked loopResult continuing
+            exact ih (.whileLoop environment condition body) (path ++ [2]) after nextSupported
+      | whileStatement _ environment condition body origin childSupported =>
+          exact .whileStatement (ih (.whileLoop environment condition body) (path ++ [0]) before childSupported)
+      | ifStatement _ environment condition yes no origin childSupported yesSupported noSupported =>
+          refine .ifStatement (ih (.value environment condition) (path ++ [0]) before childSupported) ?_ ?_
+          · intro value middle ready result checked
+            exact ih (.block environment yes) (path ++ [1]) ready yesSupported
+          · intro value middle ready block result checked selected
+            exact ih (.block environment block) (path ++ [2]) ready (noSupported block selected)
       | boundActivationBody _ activation pre scope statements bodySupported =>
           simp only [execute]
           rw [boundActivationBody_source]

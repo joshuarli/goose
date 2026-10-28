@@ -7,6 +7,8 @@ mutual
 inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | base {expression : Expr} (supported : Goose.Proofs.ConstructionGhostSourceTransition.SupportedValue expression) :
       ValueSyntax config expression
+  | bytes (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
+      ValueSyntax config (.bytes ty bytes origin)
   | fill (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId)
       (fixed : (Ty.arr element count).nonfixed = false) (child : ValueSyntax config operand) :
       ValueSyntax config (.fill (.arr element count) operand origin)
@@ -23,12 +25,34 @@ inductive ArgumentSyntax (config : EvalConfig) : List Param → List Arg → Pro
   | value (parameter : Goose.Core.VarId) (parameters : List Param) (operand : Expr) (arguments : List Arg)
       (child : ValueSyntax config operand) (tail : ArgumentSyntax config parameters arguments) :
       ArgumentSyntax config (⟨parameter, .byValue⟩ :: parameters) (.byVal operand :: arguments)
+  | reference (parameter : Goose.Core.VarId) (parameters : List Param) (mutability : Goose.Core.Mutability)
+      (place : Place) (arguments : List Arg) (child : PlaceSyntax config place) (tail : ArgumentSyntax config parameters arguments) :
+      ArgumentSyntax config (⟨parameter, .byRef⟩ :: parameters) (.byRef mutability place :: arguments)
+  | construct (parameter : Goose.Core.VarId) (parameters : List Param) (operand : Expr) (arguments : List Arg)
+      (child : ValueSyntax config operand)
+      (direct : ∀ environment destination, SupportedOperation config (.builder environment destination operand))
+      (tail : ArgumentSyntax config parameters arguments) :
+      ArgumentSyntax config (⟨parameter, .byValue⟩ :: parameters) (.construct operand :: arguments)
+
+inductive PlaceSyntax (config : EvalConfig) : Place → Prop
+  | localPlace (localVar : Goose.Core.VarId) : PlaceSyntax config (.var localVar)
+  | globalPlace (global : Goose.Core.GlobalId) : PlaceSyntax config (.global global)
+  | dereference (operand : Expr) (child : ValueSyntax config operand) : PlaceSyntax config (.deref operand)
+
 end
 
 inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
   | expression (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
       StatementSyntax config (.expr operand origin)
   | printText (text : String) (origin : Goose.Core.OriginId) : StatementSyntax config (.print [.text text] origin)
+  | whileLoop (condition : Expr) (scope : Nat) (statements : List Stmt) (origin : Goose.Core.OriginId)
+      (conditionSyntax : ValueSyntax config condition)
+      (body : ∀ statement ∈ statements, StatementSyntax config statement) :
+      StatementSyntax config (.while condition (.mk scope statements none) origin)
+  | ifStatement (condition : Expr) (scope : Nat) (statements : List Stmt) (origin : Goose.Core.OriginId)
+      (conditionSyntax : ValueSyntax config condition)
+      (body : ∀ statement ∈ statements, StatementSyntax config statement) :
+      StatementSyntax config (.ifS condition (.mk scope statements none) none origin)
 
 def ClosedModule (config : EvalConfig) : Prop :=
   ∀ (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl),
@@ -38,11 +62,19 @@ def ClosedModule (config : EvalConfig) : Prop :=
 
 structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   value : ∀ environment expression, ValueSyntax config expression → FuelSupport config fuel (.value environment expression)
+  place : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.place environment place)
   arguments : ∀ environment vars parameters arguments, ArgumentSyntax config parameters arguments →
     FuelSupport config fuel (.arguments environment vars parameters arguments)
   statement : ∀ environment statement, StatementSyntax config statement → FuelSupport config fuel (.statement environment statement)
   statements : ∀ environment statements, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.statements environment statements)
+  block : ∀ environment scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
+    FuelSupport config fuel (.block environment (.mk scope statements none))
+  loopBody : ∀ environment scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
+    FuelSupport config fuel (.loopBody environment (.mk scope statements none))
+  whileLoop : ∀ environment condition scope statements, ValueSyntax config condition →
+    (∀ statement ∈ statements, StatementSyntax config statement) →
+    FuelSupport config fuel (.whileLoop environment condition (.mk scope statements none))
   activationBody : ∀ activation pre scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements none))
   activation : ∀ activation pre scope statements origin, (∀ statement ∈ statements, StatementSyntax config statement) →
@@ -61,23 +93,43 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
       · intro environment expression derivation
         cases derivation with
         | base supported => exact .legacy (fuel + 1) (.value environment supported)
+        | bytes ty bytes origin => exact .legacy (fuel + 1) (.valueBytes environment ty bytes origin)
         | fill element count operand origin fixed child =>
             exact .fill fuel environment element count origin operand fixed (previous.value environment operand child)
         | call contextId arguments origin context implementation contextFound implementationFound resultsEmpty argumentsSyntax =>
             exact .valueCallWith fuel environment contextId arguments origin context implementation contextFound implementationFound
               resultsEmpty (previous.call environment contextId arguments origin context implementation contextFound implementationFound
                 resultsEmpty argumentsSyntax)
+      · intro environment place derivation
+        cases derivation with
+        | localPlace localVar => exact .legacy (fuel + 1) (.localPlace environment localVar)
+        | globalPlace global => exact .legacy (fuel + 1) (.globalPlace environment global)
+        | dereference operand child => exact .dereferencePlace fuel environment operand (previous.value environment operand child)
       · intro environment vars parameters arguments derivation
         cases derivation with
         | nil => exact .legacy (fuel + 1) (.argumentsDone environment vars)
         | value parameter parameters operand arguments child tail =>
             exact .argumentValue fuel environment vars ⟨parameter, .byValue⟩ parameters operand arguments
               (previous.value environment operand child) (previous.arguments environment vars parameters arguments tail)
+        | reference parameter parameters mutability place arguments child tail =>
+            exact .argumentReference fuel environment vars ⟨parameter, .byRef⟩ parameters mutability place arguments
+              (previous.place environment place child) (previous.arguments environment vars parameters arguments tail)
+        | construct parameter parameters operand arguments child direct tail =>
+            exact .argumentConstruct fuel environment vars ⟨parameter, .byValue⟩ parameters operand arguments
+              (previous.value environment operand child) (fun destination => .legacy fuel (direct environment destination))
+              (previous.arguments environment vars parameters arguments tail)
       · intro environment statement derivation
         cases derivation with
         | expression operand origin child =>
             exact .expression fuel environment operand origin (previous.value environment operand child)
         | printText text origin => exact .legacy (fuel + 1) (.printText environment text origin)
+        | whileLoop condition scope statements origin conditionSyntax body =>
+            exact .whileStatement fuel environment condition (.mk scope statements none) origin
+              (previous.whileLoop environment condition scope statements conditionSyntax body)
+        | ifStatement condition scope statements origin conditionSyntax body =>
+            exact .ifStatement fuel environment condition (.mk scope statements none) none origin
+              (previous.value environment condition conditionSyntax) (previous.block environment scope statements body)
+              (fun block impossible => by cases impossible)
       · intro environment statements derivation
         cases statements with
         | nil => exact .legacy (fuel + 1) (.empty environment)
@@ -88,6 +140,13 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
               exact derivation statement (by simp [member])
             have headSupported := previous.statement environment statement head
             exact .sequence fuel environment statement rest headSupported (previous.statements environment rest tail)
+      · intro environment scope statements derivation
+        exact .block fuel environment scope statements (fun scopedEnvironment => previous.statements scopedEnvironment statements derivation)
+      · intro environment scope statements derivation
+        exact .loopBody fuel environment (.mk scope statements none) (previous.block environment scope statements derivation)
+      · intro environment condition scope statements conditionSyntax body
+        exact .whileLoop fuel environment condition (.mk scope statements none) (previous.value environment condition conditionSyntax)
+          (previous.loopBody environment scope statements body) (previous.whileLoop environment condition scope statements conditionSyntax body)
       · intro activation pre scope statements derivation
         exact .boundActivationBody fuel activation pre scope statements (fun environment => previous.statements environment statements derivation)
       · intro activation pre scope statements origin derivation
@@ -122,7 +181,9 @@ theorem syntaxModule_history (fuel : Nat) (config : EvalConfig) (closed : Closed
 private def firstContext : Context := ⟨0, "first", [], [], []⟩
 private def secondContext : Context := ⟨1, "second", [], [], []⟩
 private def firstStatements : List Stmt := [.print [.text "a"] 0,
-  .expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0, .expr (.call 1 [.byVal (.lit .i64 1)] 0) 0]
+  .ifS (.bool true) (.mk 2 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0] none) none 0,
+  .while (.bool false) (.mk 3 [.expr (.call 0 [] 0) 0] none) 0,
+  .expr (.call 1 [.byVal (.lit .i64 1)] 0) 0]
 private def secondStatements : List Stmt := [.print [.text "b"] 0, .expr (.call 0 [] 0) 0]
 private def firstImplementation : Impl := ⟨"first", #[], #[], #[], .mk 0 firstStatements none, .unknown⟩
 private def secondImplementation : Impl := ⟨"second", #[⟨0, .byValue⟩], #[],
@@ -135,9 +196,20 @@ private def witnessState : ExecutionStep α → ExecutionState
 private theorem firstStatements_syntax : ∀ statement ∈ firstStatements, StatementSyntax witnessConfig statement := by
   intro statement member
   simp only [firstStatements, List.mem_cons, List.not_mem_nil, or_false] at member
-  rcases member with rfl | rfl | rfl
+  rcases member with rfl | rfl | rfl | rfl
   · exact .printText "a" 0
-  · exact .expression _ 0 (.base (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))
+  · apply StatementSyntax.ifStatement
+    · exact .base (.boolean true)
+    · intro child childMember
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at childMember
+      subst child
+      exact .expression _ 0 (.base (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))
+  · apply StatementSyntax.whileLoop
+    · exact .base (.boolean false)
+    · intro child childMember
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at childMember
+      subst child
+      exact .expression _ 0 (.call 0 [] 0 firstContext firstImplementation rfl rfl rfl .nil)
   · exact .expression _ 0 (.call 1 _ 0 secondContext secondImplementation rfl rfl rfl
       (.value 0 [] (.lit .i64 1) [] (.base (.integer .i64 1)) .nil))
 
