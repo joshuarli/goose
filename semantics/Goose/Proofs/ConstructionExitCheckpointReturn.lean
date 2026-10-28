@@ -8,6 +8,7 @@ set_option maxHeartbeats 1200000
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionRepresentation
+open Goose.Proofs.ExitExecution
 open Goose.Proofs.ExitExecutionChecks
 
 def recursiveCheckpointConfig : EvalConfig := ⟨.release, recursiveDestinations⟩
@@ -37,6 +38,12 @@ def recursiveCheckpointBacking : OpenDestinationBacking recursiveCheckpointConfi
   bounded := by decide
   rollback := by decide
 
+def RecursiveCheckpointOutsideFrame (after : ExecutionState) : Prop :=
+  (∀ limit, limit 2 ≤ 0 → StoragePrefixesEqual limit recursiveDirectCheckpoint.construction.storage after.construction.storage) ∧
+  after.objects = recursiveDirectCheckpoint.objects ∧
+  after.objectOrdinals = recursiveDirectCheckpoint.objectOrdinals ∧
+  ∀ other, other ≠ 1 → after.construction.destinations[other]? = recursiveDirectCheckpoint.construction.destinations[other]?
+
 theorem recursive_checkpoint_direct_return :
     ∃ after : ExecutionState,
       let cleaned := { after with construction := { after.construction with
@@ -44,17 +51,21 @@ theorem recursive_checkpoint_direct_return :
       execStmt 4 recursiveCheckpointConfig recursiveCheckpointSource (.returnFrom 0 [.bytes (.varr (.int .u8)) [66] 0] 0)
         recursiveDirectCheckpoint = .escape ⟨2, .nonlocal 0⟩ [.completed 1] cleaned ∧
       finishChannels recursiveCheckpointConfig.layout [.construct 1] [.varr (.int .u8)] [.completed 1] 0 cleaned = .ok () cleaned ∧
-      Goose.Proofs.ExitExecution.LandedResultChannels cleaned [.construct 1] [.varr (.int .u8)] [.completed 1] := by
+      Goose.Proofs.ExitExecution.LandedResultChannels cleaned [.construct 1] [.varr (.int .u8)] [.completed 1] ∧
+      RecursiveCheckpointOutsideFrame after := by
   have selection : targetActivation recursiveCheckpointConfig 0 recursiveDirectCheckpoint = .ok recursiveCheckpointTarget recursiveDirectCheckpoint := by cbv
   have current : destinationCurrent recursiveDirectCheckpoint.construction 1 = .ok 1 := by cbv
-  obtain ⟨after, escaped, _, finished, landed, _⟩ := direct_byte_return_cleanup 0 recursiveCheckpointConfig
+  obtain ⟨after, escaped, _, finished, landed, prefixes, objects, ordinals, rows⟩ := direct_byte_return_cleanup 0 recursiveCheckpointConfig
     recursiveCheckpointSource recursiveCheckpointTarget 0 1 [66] 0 recursiveDirectCheckpoint recursiveCheckpointBacking
     recursive_checkpoint_source selection rfl rfl rfl rfl rfl rfl current (by decide)
   have size : recursiveDirectCheckpoint.construction.exitReservations.size = 0 := by
     rw [recursive_checkpoint_tables.1]
     rfl
-  exact ⟨after, by simpa only [size, recursiveCheckpointTarget] using escaped,
-    by simpa only [size] using finished, by simpa only [size] using landed⟩
+  refine ⟨after, by simpa only [size, recursiveCheckpointTarget] using escaped,
+    by simpa only [size] using finished, by simpa only [size] using landed, ?_⟩
+  refine ⟨?_, objects, ordinals, rows⟩
+  intro limit cutoff
+  exact prefixes limit cutoff
 
 #print axioms recursive_checkpoint_direct_return
 

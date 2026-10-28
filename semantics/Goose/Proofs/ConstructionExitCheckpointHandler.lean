@@ -1,6 +1,8 @@
 import Goose.Proofs.ConstructionExitCheckpointBranch
 import Goose.Proofs.ExitExecutionPathOutsideScopeReads
 import Goose.Proofs.ConstructionExitOutsideUnwind
+import Goose.Proofs.ConstructionExitDirectRead
+import Goose.Proofs.ConstructionExitProtectionCleanup
 
 set_option Elab.async false
 set_option maxRecDepth 2048
@@ -38,13 +40,25 @@ theorem recursive_checkpoint_outer_handler :
         (Goose.Proofs.Exit.runtimeScopeRoots recursiveCheckpointTarget 1 recursiveBeforeBranch.nextScope).contains entry.1 = false →
         (Goose.Proofs.Exit.runtimeScopeRoots recursiveOuterActivation 0 recursiveOuterEntered.nextScope).contains entry.1 = false →
         (entry ∈ final.objects ↔ entry ∈ after.objects)) ∧
-      ∀ (location : Goose.Core.Loc) (fuel : Nat),
+      (∀ (location : Goose.Core.Loc) (fuel : Nat),
         (Goose.Proofs.Exit.runtimeScopeRoots recursiveHelperActivation 0 recursiveHelperEntered.nextScope).contains location.root = false →
         (Goose.Proofs.Exit.runtimeScopeRoots recursiveCheckpointTarget 1 recursiveBeforeBranch.nextScope).contains location.root = false →
         (Goose.Proofs.Exit.runtimeScopeRoots recursiveOuterActivation 0 recursiveOuterEntered.nextScope).contains location.root = false →
         mapStepState (fun _ => ExecutionState.initial) (readLoc fuel recursiveCheckpointConfig.layout location final) =
-        mapStepState (fun _ => ExecutionState.initial) (readLoc fuel recursiveCheckpointConfig.layout location after) := by
-  obtain ⟨after, branch, landed⟩ := recursive_checkpoint_branch_escape (some recursiveOuterElse)
+        mapStepState (fun _ => ExecutionState.initial) (readLoc fuel recursiveCheckpointConfig.layout location after)) ∧
+      ∀ (retained : Goose.Core.RootInst → Prop) (limit : Nat → Nat),
+        Goose.Proofs.ConstructionRepresentation.RootedBackingObservations recursiveCheckpointConfig.layout recursiveDirectCheckpoint retained limit →
+        limit 2 ≤ 0 →
+        (∀ root, retained root →
+          (Goose.Proofs.Exit.runtimeScopeRoots recursiveHelperActivation 0 recursiveHelperEntered.nextScope).contains root = false ∧
+          (Goose.Proofs.Exit.runtimeScopeRoots recursiveCheckpointTarget 1 recursiveBeforeBranch.nextScope).contains root = false ∧
+          (Goose.Proofs.Exit.runtimeScopeRoots recursiveOuterActivation 0 recursiveOuterEntered.nextScope).contains root = false) →
+        (∀ root, retained root → ∀ value, recursiveDirectCheckpoint.objects.lookup root = some value →
+          ∀ stored, Goose.Proofs.ConstructionRepresentation.StoredOccurrence value stored → stored.destination ≠ some 1) →
+        ∀ location, retained location.root → ∀ fuel,
+          mapStepState (fun _ => ExecutionState.initial) (readLoc fuel recursiveCheckpointConfig.layout location final) =
+          mapStepState (fun _ => ExecutionState.initial) (readLoc fuel recursiveCheckpointConfig.layout location recursiveDirectCheckpoint) := by
+  obtain ⟨after, branch, landed, outsideFrame⟩ := recursive_checkpoint_branch_escape (some recursiveOuterElse)
   let cleaned := { after with construction := { after.construction with
     exitReservations := after.construction.exitReservations.set! 0 .released } }
   let innerUnwound := releaseScopeState recursiveHelperActivation 0 recursiveHelperEntered.nextScope cleaned
@@ -91,7 +105,7 @@ theorem recursive_checkpoint_outer_handler :
     dsimp only [final, recursiveOuterActivation, recursiveCheckpointTarget] at finish
     rw [finish]
     rfl
-  refine ⟨after, final, matched, rfl, ?_, ?_⟩
+  refine ⟨after, final, matched, rfl, ?_, ?_, ?_⟩
   · intro entry innerOutside branchOutside outerOutside
     change entry ∈ (releaseScopeState recursiveOuterActivation 0 recursiveOuterEntered.nextScope branchUnwound).objects ↔ entry ∈ after.objects
     rw [Goose.Proofs.Exit.runtime_release_scope_outside recursiveOuterActivation 0 recursiveOuterEntered.nextScope branchUnwound entry outerOutside]
@@ -110,6 +124,37 @@ theorem recursive_checkpoint_outer_handler :
     have frame := readLoc_construction_frame fuel recursiveCheckpointConfig.layout cleaned final location same rfl
     exact (OutsideReadResult.observation _ _ _ _ frame).trans
       (readLoc_ticket_release_observation fuel recursiveCheckpointConfig.layout after 0 location)
+  · intro retained limit valid cutoff outside names location kept fuel
+    have objects : ∀ root, retained root → final.objects.lookup root = recursiveDirectCheckpoint.objects.lookup root := by
+      intro root member
+      obtain ⟨innerOutside, branchOutside, outerOutside⟩ := outside root member
+      change (releaseScopeState recursiveOuterActivation 0 recursiveOuterEntered.nextScope branchUnwound).objects.lookup root = _
+      rw [releaseScopeState_root_lookup recursiveOuterActivation 0 recursiveOuterEntered.nextScope branchUnwound root outerOutside]
+      change (releaseScopeState recursiveCheckpointTarget 1 recursiveBeforeBranch.nextScope crossed).objects.lookup root = _
+      rw [releaseScopeState_root_lookup recursiveCheckpointTarget 1 recursiveBeforeBranch.nextScope crossed root branchOutside]
+      change (releaseScopeState recursiveHelperActivation 0 recursiveHelperEntered.nextScope cleaned).objects.lookup root = _
+      rw [releaseScopeState_root_lookup recursiveHelperActivation 0 recursiveHelperEntered.nextScope cleaned root innerOutside]
+      exact congrArg (fun entries => entries.lookup root) outsideFrame.2.1
+    have ordinals : ∀ root, retained root → final.objectOrdinals.lookup root = recursiveDirectCheckpoint.objectOrdinals.lookup root := by
+      intro root member
+      obtain ⟨innerOutside, branchOutside, outerOutside⟩ := outside root member
+      change (releaseScopeState recursiveOuterActivation 0 recursiveOuterEntered.nextScope branchUnwound).objectOrdinals.lookup root = _
+      have outerOrdinal := scope_filter_lookup_any (Goose.Proofs.Exit.runtimeScopeRoots recursiveOuterActivation 0 recursiveOuterEntered.nextScope) branchUnwound.objectOrdinals root outerOutside
+      change (releaseScopeState recursiveOuterActivation 0 recursiveOuterEntered.nextScope branchUnwound).objectOrdinals.lookup root = branchUnwound.objectOrdinals.lookup root at outerOrdinal
+      rw [outerOrdinal]
+      change (releaseScopeState recursiveCheckpointTarget 1 recursiveBeforeBranch.nextScope crossed).objectOrdinals.lookup root = _
+      have branchOrdinal := scope_filter_lookup_any (Goose.Proofs.Exit.runtimeScopeRoots recursiveCheckpointTarget 1 recursiveBeforeBranch.nextScope) crossed.objectOrdinals root branchOutside
+      change (releaseScopeState recursiveCheckpointTarget 1 recursiveBeforeBranch.nextScope crossed).objectOrdinals.lookup root = crossed.objectOrdinals.lookup root at branchOrdinal
+      rw [branchOrdinal]
+      change (releaseScopeState recursiveHelperActivation 0 recursiveHelperEntered.nextScope cleaned).objectOrdinals.lookup root = _
+      have innerOrdinal := scope_filter_lookup_any (Goose.Proofs.Exit.runtimeScopeRoots recursiveHelperActivation 0 recursiveHelperEntered.nextScope) cleaned.objectOrdinals root innerOutside
+      change (releaseScopeState recursiveHelperActivation 0 recursiveHelperEntered.nextScope cleaned).objectOrdinals.lookup root = cleaned.objectOrdinals.lookup root at innerOrdinal
+      rw [innerOrdinal]
+      exact congrArg (fun entries => entries.lookup root) outsideFrame.2.2.1
+    have rowFrame : ∀ id, id ≠ 1 → final.construction.destinations[id]? = recursiveDirectCheckpoint.construction.destinations[id]? := by
+      exact outsideFrame.2.2.2
+    exact direct_exit_outside_read fuel recursiveCheckpointConfig validated_recursive_direct_return.1
+      recursiveDirectCheckpoint final retained limit 1 valid (outsideFrame.1 limit cutoff) objects ordinals rowFrame names location kept
 
 #print axioms recursive_checkpoint_outer_handler
 

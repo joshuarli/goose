@@ -63,8 +63,9 @@ theorem recursive_checkpoint_helper_call_escape :
       invokeCall 8 recursiveCheckpointConfig recursiveCallerScope 2 [] [] 0 recursiveBeforeHelper =
         .escape ⟨2, .nonlocal 0⟩ [.completed 1]
           { unwound with activations := unwound.activations.filter (fun current => current.act != recursiveHelperActivation.act) } ∧
-      LandedResultChannels cleaned [.construct 1] [.varr (.int .u8)] [.completed 1] := by
-  obtain ⟨after, returned, finished, landed⟩ := recursive_checkpoint_direct_return
+      LandedResultChannels cleaned [.construct 1] [.varr (.int .u8)] [.completed 1] ∧
+      RecursiveCheckpointOutsideFrame after := by
+  obtain ⟨after, returned, finished, landed, outsideFrame⟩ := recursive_checkpoint_direct_return
   let cleaned := { after with construction := { after.construction with
     exitReservations := after.construction.exitReservations.set! 0 .released } }
   let unwound := releaseScopeState recursiveHelperActivation 0 recursiveHelperEntered.nextScope cleaned
@@ -93,7 +94,7 @@ theorem recursive_checkpoint_helper_call_escape :
     simp only [enterActivation, lookup]
     exact Goose.Proofs.Exit.runtime_activation_propagates recursiveCheckpointConfig.layout recursiveHelperActivation
       (recursiveHelper.results.toList.map (·.ty)) 0 _ recursiveHelperEntered unwound ⟨2, .nonlocal 0⟩ [.completed 1] body (by decide)
-  exact ⟨after, (recursive_checkpoint_call_prefix 6).escape_call _ _ escaped, landed⟩
+  exact ⟨after, (recursive_checkpoint_call_prefix 6).escape_call _ _ escaped, landed, outsideFrame⟩
 
 #print axioms recursive_checkpoint_helper_call_escape
 #print axioms recursive_checkpoint_call_prefix
