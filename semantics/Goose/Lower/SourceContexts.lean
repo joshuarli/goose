@@ -2289,7 +2289,8 @@ private theorem whileConditionData {cfg : Cfg} {env : Env} {state : St} {conditi
           (by simp [DemandNode.child?, DemandNode.children])
           (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture ∧
       child.context.mayShrink source.world.ownerP source.observation =
-        source.context.mayShrink source.world.ownerP source.observation := by
+        source.context.mayShrink source.world.ownerP source.observation ∧
+      source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]) := by
   have typed := source.typed
   have rooted := source.rooted
   have childAt : (DemandNode.statement (.while condition body origin)).child? 0 = some (.expression condition) := by
@@ -2306,9 +2307,10 @@ private theorem whileConditionData {cfg : Cfg} {env : Env} {state : St} {conditi
           (by simp [DemandNode.child?, DemandNode.children])
           (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture ∧
       child.context.mayShrink source.world.ownerP source.observation =
-        source.context.mayShrink source.world.ownerP source.observation) := by
+        source.context.mayShrink source.world.ownerP source.observation ∧
+      source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children])) := by
     intro finish roots finishRoots typed rooted effects
-    obtain ⟨child, htyping, hroots, htype, hworld, hobs, hfuture, hmay, _⟩ :=
+    obtain ⟨child, htyping, hroots, htype, hworld, hobs, hfuture, hmay, hpath, hplans, hcontext⟩ :=
       source.firstExpressionChildSource condition childAt
       (by simp [DemandNode.visibleForChild])
       (by intro x member; simp [Stmt.variables, member])
@@ -2323,7 +2325,7 @@ private theorem whileConditionData {cfg : Cfg} {env : Env} {state : St} {conditi
         | inr future => exact List.mem_append_right _ future)
       (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
       source.typingStart finish .bool source.rootsStart finishRoots roots typed rooted effects
-    exact ⟨child, htyping, hroots, htype, hworld, hobs, hfuture, hmay⟩
+    exact ⟨child, htyping, hroots, htype, hworld, hobs, hfuture, hmay, ⟨hworld, hpath, hplans, hcontext⟩⟩
   simp only [tyStmt] at typed
   inv at typed
   obtain ⟨_, ty, finish, conditionTyped, typeEq, _, _, _, _, _⟩ := typed
@@ -2343,6 +2345,15 @@ theorem StmtSource.whileConditionChild {cfg : Cfg} {env : Env} {state : St} {con
   obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := whileConditionData source
   exact ⟨child, typingEq, rootsEq, typeEq⟩
 
+theorem StmtSource.whileConditionChildAt {cfg : Cfg} {env : Env} {state : St} {condition : Expr}
+    {body : Block} {origin : OriginId}
+    (source : StmtSource cfg env (.while condition body origin) state) :
+    ∃ child : ExprSource cfg env condition state, child.typingEnv = source.typingEnv ∧
+      child.rootsEnv = source.rootsEnv ∧ child.ty = .bool ∧
+      source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]) := by
+  obtain ⟨child, typing, roots, ty, _, _, _, _, canonical⟩ := whileConditionData source
+  exact ⟨child, typing, roots, ty, canonical⟩
+
 private theorem whileBodyData {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
     {body : Block} {origin : OriginId}
     (source : StmtSource cfg env (.while condition body origin) state)
@@ -2355,8 +2366,9 @@ private theorem whileBodyData {cfg : Cfg} {env : Env} {state after : St} {condit
           (by simp [DemandNode.child?, DemandNode.children])
           (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture ∧
       child.context.mayShrink source.world.ownerP source.observation =
-        source.context.mayShrink source.world.ownerP source.observation := by
-  obtain ⟨conditionSource, typingEq, rootsEq, _, worldEq, observationEq, outputEq, mayEq⟩ := whileConditionData source
+        source.context.mayShrink source.world.ownerP source.observation ∧
+      source.BlockChildAt child 1 (by simp [DemandNode.child?, DemandNode.children]) := by
+  obtain ⟨conditionSource, typingEq, rootsEq, _, worldEq, observationEq, outputEq, mayEq, _⟩ := whileConditionData source
   have result := conditionSource.result fuel (.bool true) done
   have frame := result.frame
   rw [typingEq, rootsEq, worldEq, outputEq] at frame
@@ -2398,7 +2410,7 @@ private theorem whileBodyData {cfg : Cfg} {env : Env} {state after : St} {condit
   simp only [rpStmt] at rooted
   inv at rooted
   obtain ⟨_, conditionRoots, _, bodyRoots, low, high, bodyRooted⟩ := rooted
-  obtain ⟨child, typingEq, rootsEq, worldEq, observationEq, outputEq, shrinkEq, _, _, _⟩ := blockSourceAt source body
+  obtain ⟨child, typingEq, rootsEq, worldEq, observationEq, outputEq, shrinkEq, plansEq, pathEq, contextEq⟩ := blockSourceAt source body
     { source.typingEnv with loops := source.typingEnv.loops + 1 } (source.path ++ [1]) context
     (source.context.child_activeMatches rfl 1 (.block body) .block bodyAt phase
       source.typingEnv { source.typingEnv with loops := source.typingEnv.loops + 1 }
@@ -2407,7 +2419,7 @@ private theorem whileBodyData {cfg : Cfg} {env : Env} {state after : St} {condit
     (may ▸ source.protection) (may ▸ observed) classified
     (input.tenv_congr rfl rfl rfl (fun _ member => member)) conditionEnd bodyEnd bodyTy
     conditionRoots source.rootsEnd bodyRoots (low, high) bodyTyped bodyRooted source.effects
-  exact ⟨child, typingEq, rootsEq, worldEq, observationEq, outputEq, shrinkEq.trans may⟩
+  exact ⟨child, typingEq, rootsEq, worldEq, observationEq, outputEq, shrinkEq.trans may, ⟨worldEq, pathEq, plansEq, contextEq⟩⟩
 
 theorem StmtSource.whileBodyChild {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
     {body : Block} {origin : OriginId}
@@ -2419,7 +2431,18 @@ theorem StmtSource.whileBodyChild {cfg : Cfg} {env : Env} {state after : St} {co
   obtain ⟨child, typingEq, rootsEq, worldEq, observationEq, _⟩ := whileBodyData source fuel done
   exact ⟨child, typingEq, rootsEq, worldEq, observationEq⟩
 
-theorem StmtSource.whileAfterBody {cfg : Cfg} {env : Env} {state afterCondition after : St}
+theorem StmtSource.whileBodyChildAt {cfg : Cfg} {env : Env} {state after : St} {condition : Expr}
+    {body : Block} {origin : OriginId}
+    (source : StmtSource cfg env (.while condition body origin) state)
+    (fuel : Nat) (done : evalExpr fuel cfg env condition state = .ok (.bool true) after) :
+    ∃ child : BlockSource cfg env [] body after,
+      child.typingEnv = { source.typingEnv with loops := source.typingEnv.loops + 1 } ∧
+      child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation ∧
+      source.BlockChildAt child 1 (by simp [DemandNode.child?, DemandNode.children]) := by
+  obtain ⟨child, typing, roots, world, observation, _, _, canonical⟩ := whileBodyData source fuel done
+  exact ⟨child, typing, roots, world, observation, canonical⟩
+
+theorem StmtSource.whileAfterBodyCanonical {cfg : Cfg} {env : Env} {state afterCondition after : St}
     {condition : Expr} {body : Block} {origin : OriginId}
     (source : StmtSource cfg env (.while condition body origin) state)
     (conditionFuel bodyFuel : Nat) (flow : Flow)
@@ -2428,10 +2451,11 @@ theorem StmtSource.whileAfterBody {cfg : Cfg} {env : Env} {state afterCondition 
     (_reentry : (∃ value, flow = .normal value) ∨ flow = .cont) :
     ∃ next : StmtSource cfg env (.while condition body origin) after,
       next.typingEnv = source.typingEnv ∧ next.rootsEnv = source.rootsEnv ∧
-      next.world = source.world ∧ next.observation = source.observation := by
-  obtain ⟨conditionSource, conditionTyping, conditionRoots, _, conditionWorld, _, _, _⟩ := whileConditionData source
+      next.world = source.world ∧ next.observation = source.observation ∧
+      next.plans = source.plans ∧ next.path = source.path ∧ HEq next.context source.context := by
+  obtain ⟨conditionSource, conditionTyping, conditionRoots, _, conditionWorld, _, _, _, _⟩ := whileConditionData source
   have conditionResult := conditionSource.result conditionFuel (.bool true) conditionDone
-  obtain ⟨bodySource, bodyTyping, bodyRoots, bodyWorld, bodyObservation, bodyOutput, bodyMay⟩ := whileBodyData source conditionFuel conditionDone
+  obtain ⟨bodySource, bodyTyping, bodyRoots, bodyWorld, bodyObservation, bodyOutput, bodyMay, _⟩ := whileBodyData source conditionFuel conditionDone
   have bodyResult := bodySource.result bodyFuel flow bodyDone
   have frame := bodyResult.frame
   rw [bodyTyping, bodyRoots, bodyWorld, bodyOutput] at frame
@@ -2479,7 +2503,21 @@ theorem StmtSource.whileAfterBody {cfg : Cfg} {env : Env} {state afterCondition 
   rw [bodyWorld, bodyObservation] at classified
   have top := source.top.ext (cur' := source.rootsStart.nextVar)
     (fun root member => conditionResult.footprint.dom root (bodyResult.footprint.dom root member)) (Nat.le_refl _)
-  exact ⟨{ source with frame := input, observed := observed, classified := classified, top := top }, rfl, rfl, rfl, rfl⟩
+  exact ⟨{ source with frame := input, observed := observed, classified := classified, top := top }, rfl, rfl, rfl, rfl, rfl, rfl, HEq.rfl⟩
+
+theorem StmtSource.whileAfterBody {cfg : Cfg} {env : Env} {state afterCondition after : St}
+    {condition : Expr} {body : Block} {origin : OriginId}
+    (source : StmtSource cfg env (.while condition body origin) state)
+    (conditionFuel bodyFuel : Nat) (flow : Flow)
+    (conditionDone : evalExpr conditionFuel cfg env condition state = .ok (.bool true) afterCondition)
+    (bodyDone : execBlock bodyFuel cfg env [] body afterCondition = .ok flow after)
+    (_reentry : (∃ value, flow = .normal value) ∨ flow = .cont) :
+    ∃ next : StmtSource cfg env (.while condition body origin) after,
+      next.typingEnv = source.typingEnv ∧ next.rootsEnv = source.rootsEnv ∧
+      next.world = source.world ∧ next.observation = source.observation := by
+  obtain ⟨next, typing, roots, world, observation, _, _, _⟩ :=
+    source.whileAfterBodyCanonical conditionFuel bodyFuel flow conditionDone bodyDone _reentry
+  exact ⟨next, typing, roots, world, observation⟩
 
 theorem StmtSource.assertChild {cfg : Cfg} {env : Env} {state : St} {expr : Expr} {origin : OriginId}
     (source : StmtSource cfg env (.assertS expr origin) state) :
