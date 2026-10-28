@@ -83,6 +83,8 @@ theorem accepted_generated_call_execution_frontier {cfg : Cfg} {env : Env} {stat
     (executed : execOp targetFuel ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ frame
       (.call context (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 (some origin)) middle = .ok (.val value) after) :
     ∃ afterCall : LS, ∃ calleeFuel,
+      afterCall = (emitDef (.call context (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 (some origin))
+        (lowerEnv cfg.mod env.vars results) (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2).2 ∧
       RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ (lowerContextAt cfg.mod ctx impl) (0, 0)
         (callFrame impl middle.nextAct (env.depth + 1) values) { middle with nextAct := middle.nextAct + 1 } ∧
       runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ (0, 0)
@@ -118,7 +120,7 @@ theorem accepted_generated_call_execution_frontier {cfg : Cfg} {env : Env} {stat
       (callFrame impl middle.nextAct (env.depth + 1) values) { middle with nextAct := middle.nextAct + 1 } :=
     .call callerPoint instruction below read lookup callerEntry
   obtain ⟨calleeFuel, calleeRun⟩ := actual_call_success_callee_run below read lookup callerEntry executed
-  exact ⟨afterCall, calleeFuel, calleePoint, calleeRun, post, .define instruction executed⟩
+  exact ⟨afterCall, calleeFuel, (by rw [definition]), calleePoint, calleeRun, post, .define instruction executed⟩
 
 #print axioms accepted_generated_call_execution_frontier
 #print axioms actual_call_stopped_callee_run
