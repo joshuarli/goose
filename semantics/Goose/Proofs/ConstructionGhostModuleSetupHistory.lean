@@ -81,6 +81,35 @@ theorem runModule_entrySetupClassification (fuel : Nat) (config : EvalConfig) (b
       have terminal : terminalCall (channelsFor config.layout 0 implementation.results.toList 0 initialized) = some (.jump target kind state) := by simp [channelsResult, terminalCall]
       exact Or.inl ⟨.jump target kind state, rfl, execution.trans (by rw [globals]; exact moduleAfterGlobals_channelTerminal _ _ _ _ _ _ contextFound implementationFound terminal)⟩
 
+theorem runModule_entryActivationClassification (fuel : Nat) (config : EvalConfig) (before : ExecutionState)
+    (closed : ClosedModuleWithTails config) (context : Context) (implementation : Impl)
+    (contextFound : config.module.contexts[config.module.entry]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (entryArguments : ∀ id actual start ready,
+      getImplementation config config.module.entry start = .ok (id, actual) ready →
+      ArgumentSyntax config actual.params.toList []) :
+    ∃ globalOutcome globalVisits,
+      OperandReplay (globalInitializer (fuel + 1) config) 0 (List.range config.module.globals.size) [] before globalOutcome globalVisits ∧
+      runModule (fuel + 1) config before = moduleAfterGlobals (fuel + 1) config (discardGlobalValues globalOutcome) ∧
+      ∀ initialized, discardGlobalValues globalOutcome = .ok () initialized →
+        (∃ terminal, terminalCall (channelsFor config.layout 0 implementation.results.toList 0 initialized) = some terminal ∧
+          runModule (fuel + 1) config before = entryCallResult terminal) ∨
+        (∃ channels callReady, channelsFor config.layout 0 implementation.results.toList 0 initialized = .ok channels callReady ∧
+          CallSetupHistory fuel config ⟨0, 0, #[], [], []⟩ [config.module.globals.size, 0] config.module.entry [] channels 0 callReady ∧
+          ReachedActivationHistories fuel config ⟨0, 0, #[], [], []⟩ [config.module.globals.size, 0] config.module.entry [] channels 0 callReady ∧
+          runModule (fuel + 1) config before = entryCallResult
+            (invokeCall (fuel + 1) config ⟨0, 0, #[], [], []⟩ config.module.entry [] channels 0 callReady)) := by
+  obtain ⟨globalOutcome, globalVisits, replay, execution, classified⟩ :=
+    runModule_entrySetupClassification fuel config before closed context implementation contextFound implementationFound entryArguments
+  refine ⟨globalOutcome, globalVisits, replay, execution, ?_⟩
+  intro initialized globals
+  rcases classified initialized globals with terminal | ⟨channels, callReady, prepared, setup, moduleCall⟩
+  · exact Or.inl terminal
+  · have activation := (invokeCall_validatedActivationHistory fuel config ⟨0, 0, #[], [], []⟩
+      [config.module.globals.size, 0] config.module.entry [] channels 0 callReady closed entryArguments).2
+    exact Or.inr ⟨channels, callReady, prepared, setup, activation, moduleCall⟩
+
+#print axioms runModule_entryActivationClassification
 #print axioms runModule_entrySetupClassification
 #print axioms moduleAfterGlobals_channelTerminal
 #print axioms runModule_entrySetupHistory
