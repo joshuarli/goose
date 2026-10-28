@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedScalarLocalOutcome
+import Goose.Proofs.ConstructionAcceptedBlockTailChecks
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -59,6 +60,8 @@ theorem execStmt_acceptedScalarLocal_prefix (fuel checkFuel : Nat) (config : Eva
           (fun other => other = root ∨ live other) regions pending ∧
         AcceptedFrame config accepted next after (registerRootType types root descriptor.ty) ∧
         SourcePosition accepted next (.statements rest) ∧
+        typeStatement (checkFuel + 1) frame.typing (.letS id expression origin) frame.typingCounter =
+          .ok (next.typing, next.typingCounter) ∧
         rpStmt frame.source (.letS id expression origin) frame.rootCursor = .ok ((), rootsAfter) ∧
         GlobalEffectsAvailable frame.interpretation frame.initialized rootsAfter.eff
     | .escape .. | .jump .. => False := by
@@ -168,8 +171,16 @@ theorem execStmt_acceptedScalarLocal_prefix (fuel checkFuel : Nat) (config : Eva
         have tailPosition : SourcePosition accepted nextFrame (.statements rest) := by
           simpa [nextFrame, advanceLocalFrame, nextTyping, nextCounter] using nextPosition
         simp only [bind, execution, bound, pure]
-        exact ⟨trivial, scopeInst, descriptor, rootsAfter, extended, afterWorld, nextSource, tailPosition, rooted, effects⟩
+        have headTyped : typeStatement (checkFuel + 1) frame.typing (.letS id expression origin) frame.typingCounter =
+            .ok (nextFrame.typing, nextFrame.typingCounter) := by
+          simpa [nextFrame, advanceLocalFrame, nextTyping, nextCounter] using typed
+        exact ⟨trivial, scopeInst, descriptor, rootsAfter, extended, afterWorld, nextSource, tailPosition, headTyped, rooted, effects⟩
 
+
+def ScalarLocalReplay (frame next : ConstructionSourceFrame) (statements : List Stmt) : Prop :=
+  typeStatements frame.typingFuel frame.typing statements frame.typingCounter = .ok (next.typing, next.typingCounter) ∧
+  rpStmts frame.source statements frame.rootCursor = .ok ((), next.rootCursor) ∧ next.source = frame.source ∧
+  next.interpretation = frame.interpretation
 
 inductive ScalarLocalStatements : List Stmt → Prop
   | nil : ScalarLocalStatements []
@@ -196,7 +207,7 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
         next.initialized = frame.initialized ∧ RootTypesExtend types nextTypes ∧
         AcceptedWorld config next.initialized after ambient nextTypes nextLive regions pending ∧
         AcceptedFrame config accepted next after nextTypes ∧
-        (match outcome with | .ok flow _ => flow = .normal .unit ∧ SourcePosition accepted next (.statements []) | .stop _ _ => True | .escape .. | .jump .. => False) := by
+        (match outcome with | .ok flow _ => flow = .normal .unit ∧ SourcePosition accepted next (.statements []) ∧ ScalarLocalReplay frame next statements | .stop _ _ => True | .escape .. | .jump .. => False) := by
   induction form with
   | nil =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position available scalar
@@ -206,7 +217,12 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
       exact ⟨frame, types, live, rfl, (fun _ _ found => found), world, source, trivial⟩
     | succ fuel =>
       simp only [execStmts, pure, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, rfl, (fun _ _ found => found), world, source, trivial, position⟩
+      obtain ⟨_, _, _, typed, _⟩ := position.checked accepted frame _
+      cases depth : frame.typingFuel with
+      | zero => rw [depth] at typed; change Except.error _ = Except.ok _ at typed; cases typed
+      | succ n =>
+        have replay : ScalarLocalReplay frame frame [] := by simp [ScalarLocalReplay, depth, typeStatements, rpStmts, pure, StateT.pure, Except.pure]
+        exact ⟨frame, types, live, rfl, (fun _ _ found => found), world, source, trivial, position, replay⟩
   | cons id expression origin rest expressionForm tail ih =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position available scalar
     cases fuel with
@@ -246,7 +262,7 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
           | escape address carriers after | jump target kind after => simp only [head] at headOutcome
           | ok flow middle =>
             simp only [head] at headOutcome
-            obtain ⟨normal, scopeInst, descriptor, rootsAfter, extended, middleWorld, middleSource, middlePosition, middleRooted, middleAvailable⟩ := headOutcome
+            obtain ⟨normal, scopeInst, descriptor, rootsAfter, extended, middleWorld, middleSource, middlePosition, middleTyped, middleRooted, middleAvailable⟩ := headOutcome
             subst flow
             have sameRoots : rootsAfter = middleRoots :=
               (Prod.mk.inj (Except.ok.inj (middleRooted.symm.trans headRooted))).2
@@ -271,11 +287,67 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
             obtain ⟨finalFrame, finalTypes, finalLive, initializedEq, finalExtended, finalWorld, finalSource, finalFlow⟩ :=
               ih fuel config accepted nextFrame context middle ambient nextTypes nextLive regions pending middleWorld middleSource
                 (by simpa [nextFrame, advanceLocalFrame] using phase) middlePosition remainingAvailable remainingScalar
-            simp only [execStmts, bind, head]
-            refine ⟨finalFrame, finalTypes, finalLive, initializedEq, ?_, finalWorld, finalSource, finalFlow⟩
-            intro oldRoot ty found
-            exact finalExtended oldRoot ty (extended oldRoot ty found)
+            simp only [execStmts, bind, head] at finalFlow finalWorld finalSource ⊢
+            cases tailRun : execStmts fuel config nextFrame.interpretation.environment rest middle with
+            | stop reason after =>
+              have tailRun' : execStmts fuel config frame.interpretation.environment rest middle = .stop reason after := by
+                simpa [nextFrame, advanceLocalFrame] using tailRun
+              simp only [tailRun, tailRun'] at finalFlow finalWorld finalSource ⊢
+              exact ⟨finalFrame, finalTypes, finalLive, initializedEq,
+                (fun oldRoot ty found => finalExtended oldRoot ty (extended oldRoot ty found)), finalWorld, finalSource, trivial⟩
+            | escape address carriers after | jump target kind after => simp [tailRun] at finalFlow
+            | ok result after =>
+              have tailRun' : execStmts fuel config frame.interpretation.environment rest middle = .ok result after := by
+                simpa [nextFrame, advanceLocalFrame] using tailRun
+              simp only [tailRun, tailRun'] at finalFlow finalWorld finalSource ⊢
+              obtain ⟨normal, finalPosition, replay⟩ := finalFlow
+              refine ⟨finalFrame, finalTypes, finalLive, initializedEq,
+                (fun oldRoot ty found => finalExtended oldRoot ty (extended oldRoot ty found)), finalWorld, finalSource,
+                normal, finalPosition, ?_⟩
+              obtain ⟨typedRest, rootedRest, sourceSame, interpretationSame⟩ := replay
+              refine ⟨?_, ?_, ?_, ?_⟩
+              · rw [nesting]
+                simp only [typeStatements, bind, StateT.bind, middleTyped, Except.bind]
+                simpa [nextFrame, advanceLocalFrame] using typedRest
+              · simp only [rpStmts, bind, StateT.bind, middleRooted, Except.bind]
+                simpa [nextFrame, advanceLocalFrame] using rootedRest
+              · simpa [nextFrame, advanceLocalFrame] using sourceSame
+              · simpa [nextFrame, advanceLocalFrame] using interpretationSame
 
+theorem ScalarLocalReplay.blockTail_checked {config : EvalConfig} (accepted : AcceptedModule config)
+    (blockFrame child final : ConstructionSourceFrame) (scope fuel : Nat) (statements : List Stmt) (expression : Expr)
+    (position : SourcePosition accepted blockFrame (.block ⟨scope, statements, some expression⟩))
+    (nesting : blockFrame.typingFuel = fuel + 1)
+    (childTyping : child.typing = { blockFrame.typing with scope := scope })
+    (childFuel : child.typingFuel = fuel) (childCounter : child.typingCounter = blockFrame.typingCounter)
+    (childSource : child.source = { blockFrame.source with scopes := scope :: blockFrame.source.scopes })
+    (childCursor : child.rootCursor = blockFrame.rootCursor)
+    (replay : ScalarLocalReplay child final statements) (form : AcceptedBinaryExpression expression)
+    (available : ∀ roots rootsAfter,
+      rpExpr final.source expression final.rootCursor = .ok (roots, rootsAfter) →
+      GlobalEffectsAvailable final.interpretation final.initialized rootsAfter.eff) :
+    ∃ ty roots typingAfter rootsAfter,
+      CheckedValue { final with typingFuel := fuel } expression ty roots typingAfter rootsAfter := by
+  obtain ⟨next, typingMiddle, rootMiddle, types, typingAfter, roots, rootsAfter,
+    _, typedStatements, rootedStatements, typedTail, rootedTail⟩ :=
+    position.blockTail_checks accepted blockFrame scope fuel statements expression nesting
+  obtain ⟨typedReplay, rootedReplay, sourceSame, interpretationSame⟩ := replay
+  rw [childTyping, childFuel, childCounter] at typedReplay
+  have sameTyping : (final.typing, final.typingCounter) = (next, typingMiddle) :=
+    Except.ok.inj (typedReplay.symm.trans typedStatements)
+  obtain ⟨sameEnvironment, sameCounter⟩ := Prod.mk.inj sameTyping
+  rw [childSource, childCursor] at rootedReplay
+  have sameRoots : final.rootCursor = rootMiddle :=
+    (Prod.mk.inj (Except.ok.inj (rootedReplay.symm.trans rootedStatements))).2
+  have finalRooted : rpExpr final.source expression final.rootCursor = .ok (roots, rootsAfter) := by
+    rw [sourceSame, childSource, sameRoots]
+    exact rootedTail
+  obtain ⟨ty, singleton⟩ := typeExpr_scalar_singleton form fuel next typingMiddle typingAfter types typedTail
+  subst types
+  refine ⟨ty, roots, typingAfter, rootsAfter, ?_, finalRooted, available roots rootsAfter finalRooted⟩
+  simpa [sameEnvironment, sameCounter] using typedTail
+
+#print axioms ScalarLocalReplay.blockTail_checked
 #print axioms execStmts_scalarLocal_prefix
 #print axioms execStmt_acceptedScalarLocal_prefix
 #print axioms checkedValue_scalarLocal_prefix
