@@ -1,4 +1,4 @@
-import Goose.Lower.DemandIntegerAssignmentStopped
+import Goose.Lower.DemandScalarAssignmentStopped
 import Goose.Lower.DemandControlStatementAgreement
 import Goose.Lower.Validation.ExpressionTypingScalarOps
 

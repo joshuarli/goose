@@ -6,7 +6,7 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Proofs.Fuel
 
-inductive IntegerAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (results : List Ty) :
+inductive ScalarAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (results : List Ty) :
     {statement : Stmt} → {state : St} → StmtSource cfg env statement state →
       LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop
   | destination {place : Place} {expression : Expr} {origin : OriginId} {state : St}
@@ -15,7 +15,7 @@ inductive IntegerAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (re
       (child : PlaceSource cfg env place state) (canonical : source.PlaceChildAt child rfl)
       (demanded : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
         map.values map.runs ⟨start, initial, state⟩) :
-      IntegerAssignmentPrefixCursor cx results source before built initial start map required ⟨start, initial, state⟩
+      ScalarAssignmentPrefixCursor cx results source before built initial start map required ⟨start, initial, state⟩
   | value {place : Place} {expression : Expr} {origin : OriginId} {state after : St}
       {source : StmtSource cfg env (.assign place expression origin) state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
@@ -23,7 +23,7 @@ inductive IntegerAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (re
       (aliases : List RetainedAlias)
       (demanded : CanonicalExpressionDemand (map.addValues (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1 aliases)
         cx child runtime) :
-      IntegerAssignmentPrefixCursor cx results source before built initial start map required runtime
+      ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime
   | store {place : Place} {expression : Expr} {origin : OriginId} {state after : St}
       {source : StmtSource cfg env (.assign place expression origin) state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
@@ -35,17 +35,17 @@ inductive IntegerAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (re
       (demanded : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
         (map.addValues (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1 aliases).values
         (map.addValues (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1 aliases).runs runtime) :
-      IntegerAssignmentPrefixCursor cx results source before built initial start map required runtime
+      ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime
 
-theorem accepted_generated_integer_assignment_prefix {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+theorem accepted_generated_scalar_assignment_prefix {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (loop : Option LoopCtx) (place : Place) (form : ScalarReadPlace place) (expression : Expr) (origin : OriginId)
-    (integer : ∀ {state after : St} (source : StmtSource cfg env (.assign place expression origin) state)
-      (child : ExprSource cfg env expression after), source.AssignmentValueAt child → ∃ type, child.ty = .int type)
+    (scalar : ∀ {state after : St} (source : StmtSource cfg env (.assign place expression origin) state)
+      (child : ExprSource cfg env expression after), source.AssignmentValueAt child → child.ty = .bool ∨ ∃ type, child.ty = .int type)
     (valueFamily : GeneratedExpressionPrefixFamily cx results selected loop expression (@CanonicalExpressionPrefixCursor cfg env cx)) :
     GeneratedStatementPrefixFamily cx results selected loop (.assign place expression origin)
-      (@IntegerAssignmentPrefixCursor cfg env cx results) := by
+      (@ScalarAssignmentPrefixCursor cfg env cx results) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps
   let le := lowerEnv cfg.mod env.vars results
   let addressed := lowerPlace place le before
@@ -70,12 +70,13 @@ theorem accepted_generated_integer_assignment_prefix {cfg : Cfg} {env : Env} {cx
     have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
     subst current
     obtain ⟨child, childTyping, childRoots, childWorld, childObservation, typeEq, childAt⟩ := next 1 location state placed
-    obtain ⟨type, childType⟩ := integer source child childAt
-    have destinationType : destination.ty = .int type := typeEq.symm.trans childType
+    have destinationScalar : destination.ty = .bool ∨ ∃ type, destination.ty = .int type := by
+      rw [← typeEq]
+      exact scalar source child childAt
     have middleCarried := realized.retained addressPost.same bounded.1 bounded.2 RetainsAliases.refl
     have addressBounded := bounded.mono addressPost.mono
     obtain ⟨aliases, query, nextCoverage, nextBounded, nextAdmitted, nextRealized, childInput⟩ :=
-      accepted_assignment_scalar_value_demand source form destination destinationRoots destinationWorld destinationType placed
+      accepted_assignment_scalar_value_demand source form destination destinationRoots destinationWorld rfl destinationScalar placed
         child childAt childTyping childRoots coverage admitted addressBounded input addressPost middleCarried
     have childOwner : GeneratedSourceOwner selected child.context :=
       (owned.child rfl 1 (.expression expression) .expression rfl (by trivial)).transport
@@ -116,10 +117,10 @@ theorem accepted_generated_integer_assignment_prefix {cfg : Cfg} {env : Env} {cx
         exact .complete (by omega) (.next first (rightTrace.append (.next store (.zero _)))) afterStore prepared
           (.normal finalPost finalResult finalBounded finalDemand.operands)
 
-theorem IntegerAssignmentPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+theorem ScalarAssignmentPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
     {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
-    (cursor : IntegerAssignmentPrefixCursor cx results source before built initial start map required runtime) :
+    (cursor : ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime) :
     map.Realizes cfg.mod source.world env runtime := by
   cases cursor with
   | destination child canonical demanded =>
@@ -142,7 +143,7 @@ theorem IntegerAssignmentPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnC
         exact member
     simpa only [canonical.world] using (coverage _).realizes demanded.operands
 
-#print axioms accepted_generated_integer_assignment_prefix
-#print axioms IntegerAssignmentPrefixCursor.realizes
+#print axioms accepted_generated_scalar_assignment_prefix
+#print axioms ScalarAssignmentPrefixCursor.realizes
 
 end Goose.Lower

@@ -1,16 +1,16 @@
-import Goose.Lower.DemandIntegerAssignmentPrefix
+import Goose.Lower.DemandScalarAssignmentPrefix
 import Goose.Lower.DemandStoppedStatementFamily
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Proofs.Fuel
 
-theorem accepted_generated_integer_assignment_stopped {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+theorem accepted_generated_scalar_assignment_stopped {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (loop : Option LoopCtx) (place : Place) (form : ScalarReadPlace place) (expression : Expr) (origin : OriginId)
-    (integer : ∀ {state after : St} (source : StmtSource cfg env (.assign place expression origin) state)
-      (child : ExprSource cfg env expression after), source.AssignmentValueAt child → ∃ type, child.ty = .int type)
+    (scalar : ∀ {state after : St} (source : StmtSource cfg env (.assign place expression origin) state)
+      (child : ExprSource cfg env expression after), source.AssignmentValueAt child → child.ty = .bool ∨ ∃ type, child.ty = .int type)
     (valueFamily : GeneratedStoppedExpressionPrefixFamily cx results selected loop expression) :
     GeneratedStoppedStatementPrefixFamily cx results selected loop (.assign place expression origin) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps targetFuel stop after stopped nonTimeout
@@ -36,12 +36,13 @@ theorem accepted_generated_integer_assignment_stopped {cfg : Cfg} {env : Env} {c
     have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
     subst current
     obtain ⟨child, childTyping, childRoots, childWorld, childObservation, typeEq, childAt⟩ := next 1 location state placed
-    obtain ⟨type, childType⟩ := integer source child childAt
-    have destinationType : destination.ty = .int type := typeEq.symm.trans childType
+    have destinationScalar : destination.ty = .bool ∨ ∃ type, destination.ty = .int type := by
+      rw [← typeEq]
+      exact scalar source child childAt
     have middleCarried := realized.retained addressPost.same bounded.1 bounded.2 RetainsAliases.refl
     have addressBounded := bounded.mono addressPost.mono
     obtain ⟨aliases, query, nextCoverage, nextBounded, nextAdmitted, nextRealized, childInput⟩ :=
-      accepted_assignment_scalar_value_demand source form destination destinationRoots destinationWorld destinationType placed
+      accepted_assignment_scalar_value_demand source form destination destinationRoots destinationWorld rfl destinationScalar placed
         child childAt childTyping childRoots coverage admitted addressBounded input addressPost middleCarried
     have childOwner : GeneratedSourceOwner selected child.context :=
       (owned.child rfl 1 (.expression expression) .expression rfl (by trivial)).transport
@@ -93,6 +94,6 @@ theorem accepted_generated_integer_assignment_stopped {cfg : Cfg} {env : Env} {c
         exact .complete (by omega) (.next first (rightTrace.append (.next store (.zero _)))) afterStore prepared
           (.normal finalPost finalResult finalBounded finalDemand.operands)
 
-#print axioms accepted_generated_integer_assignment_stopped
+#print axioms accepted_generated_scalar_assignment_stopped
 
 end Goose.Lower

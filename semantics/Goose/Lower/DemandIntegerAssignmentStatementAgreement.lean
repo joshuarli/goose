@@ -13,7 +13,7 @@ inductive IntegerAssignmentStatementPrefixCursor {cfg : Cfg} {env : Env} (cx : F
       IntegerAssignmentStatementPrefixCursor cx results source before built initial start map required runtime
   | assignment {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
-      (cursor : IntegerAssignmentPrefixCursor cx results source before built initial start map required runtime) :
+      (cursor : ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime) :
       IntegerAssignmentStatementPrefixCursor cx results source before built initial start map required runtime
 
 inductive IntegerAssignmentStatements : List Stmt → Prop
@@ -62,14 +62,14 @@ theorem accepted_generated_integer_assignment_statements_agreement {cfg : Cfg} {
   | @assignment place form expression value origin rest tail ih =>
     have head : GeneratedStatementPrefixFamily cx results selected loop (.assign place expression origin)
         (@IntegerAssignmentStatementPrefixCursor cfg env cx results) := by
-      apply GeneratedStatementPrefixFamily.mapCursor (accepted_generated_integer_assignment_prefix selected loop place form expression origin
-          (fun source child _ => value.integer child) (accepted_generated_control_prefix_family selected loop value.control))
+      apply GeneratedStatementPrefixFamily.mapCursor (accepted_generated_scalar_assignment_prefix selected loop place form expression origin
+          (fun source child _ => Or.inr (value.integer child)) (accepted_generated_control_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .assignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
-        (accepted_generated_integer_assignment_stopped selected loop place form expression origin
-          (fun source child _ => value.integer child) (accepted_generated_read_stopped_expressions selected loop value.control.stopped)) ih.2⟩
+        (accepted_generated_scalar_assignment_stopped selected loop place form expression origin
+          (fun source child _ => Or.inr (value.integer child)) (accepted_generated_read_stopped_expressions selected loop value.control.stopped)) ih.2⟩
 
 theorem IntegerAssignmentStatementPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}

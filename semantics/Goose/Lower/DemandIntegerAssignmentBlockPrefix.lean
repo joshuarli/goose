@@ -128,10 +128,10 @@ theorem accepted_generated_integer_assignment_unit_block_prefix {cfg : Cfg} {env
     coverage admitted bounded realized statements post bodyBounded bodyRealized extended prefixSteps residual
 
 
-theorem IntegerAssignmentPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+theorem ScalarAssignmentPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
     {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
-    (cursor : IntegerAssignmentPrefixCursor cx results source before built initial start map required runtime) :
+    (cursor : ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime) :
     ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
   have carried := cursor.realizes
   cases cursor with
