@@ -101,10 +101,12 @@ theorem accepted_generated_global_clear_prefix {cfg : Cfg} {env : Env} {global :
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨point, frame, state⟩ reached) :
     GeneratedStatementPrefixDecomposition source selected occurrence rows map frame point
-      (GeneratedClearDemand source map required cx before
+      (fun runtime => GeneratedClearDemand source map required cx before
         (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results) before).2
         (lowerStmt loop (.clear (.global global) origin) (lowerEnv cfg.mod env.vars results) before).2 frame point
-        (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results) before).1) taken reached := by
+        (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results) before).1 runtime ∧
+        ((∃ id op, instAt cx.fn runtime.point = some (.def id op)) ∨
+          ∃ effect, instAt cx.fn runtime.point = some (.eff effect))) taken reached := by
   let le := lowerEnv cfg.mod env.vars results
   let addressed := lowerPlace (.global global) le before
   let middle : DemandRuntimePoint := ⟨(point.1, point.2 + 1), frame.set addressed.1 (.val (.ref ⟨.global global, []⟩)), state⟩
@@ -133,14 +135,16 @@ theorem accepted_generated_global_clear_prefix {cfg : Cfg} {env : Env} {global :
     simp only [execOp, execPure, pure_apply]
   refine ⟨owned, coverage, ?_⟩
   rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨length, current, rfl, actual, tail⟩
-  · exact .interior (.address canonical addressSite coverage ⟨⟨_, atPoint, related⟩, child.frame, childCarried⟩)
+  · exact .interior ⟨.address canonical addressSite coverage ⟨⟨_, atPoint, related⟩, child.frame, childCarried⟩, Or.inl ⟨_, _, addressSite.instruction⟩⟩
   · obtain ⟨actualFuel, actualStep⟩ := runtimeStep_demandInstructionStep actual
     have same := actualStep.deterministic (firstStep actualFuel)
     have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
     subst current
     rcases tail.uncons with ⟨rfl, rfl⟩ | ⟨remaining, boundary, rfl, cleared, residual⟩
-    · exact .interior (.clear canonical (.clear_auto occurrence rows addressPost.pp extended) coverage
-        addressPost placeResult ⟨⟨_, addressPost.pp, addressPost.rel⟩, placeResult.frame, middleChildCarried⟩)
+    · have site := GeneratedDemandInstruction.clear_auto occurrence rows addressPost.pp extended
+      exact .interior ⟨.clear canonical site coverage
+        addressPost placeResult ⟨⟨_, addressPost.pp, addressPost.rel⟩, placeResult.frame, middleChildCarried⟩,
+        Or.inr ⟨_, site.instruction⟩⟩
     · obtain ⟨_, _, _, _, _, _, _, evaluated, post, result, finalBounded, demanded⟩ :=
         accepted_generated_clear_runtime_step source occurrence rows coverage admitted bounded realized placed addressPost extended cleared
       have prepared : (execStmt 2 cfg env (.clear (.global global) origin) >>= prepareLoopFlow env loop) state =

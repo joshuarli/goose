@@ -14,7 +14,9 @@ inductive GeneratedGlobalClearPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) 
       {runtime : DemandRuntimePoint}
       (demanded : GeneratedClearDemand source map required cx before
         (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results) before).2 built initial start
-        (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results) before).1 runtime) :
+        (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results) before).1 runtime)
+      (instruction : (∃ id op, instAt cx.fn runtime.point = some (.def id op)) ∨
+        ∃ effect, instAt cx.fn runtime.point = some (.eff effect)) :
       GeneratedGlobalClearPrefixCursor cx results source before built initial start map required runtime
 
 theorem accepted_generated_global_clear_prefix_family {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
@@ -28,7 +30,7 @@ theorem accepted_generated_global_clear_prefix_family {cfg : Cfg} {env : Env} {c
     realized input.atPoint input.related extended steps
   refine ⟨owned, coverage, ?_⟩
   cases progress.progress with
-  | interior demanded => exact .interior (.clear demanded)
+  | interior demanded => exact .interior (.clear demanded.1 demanded.2)
   | complete count prefixSteps residual evaluated post => exact .complete count prefixSteps residual evaluated post
 
 theorem accepted_generated_global_clears_prefix {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
@@ -51,7 +53,7 @@ theorem GeneratedGlobalClearPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnC
     (demanded : GeneratedGlobalClearPrefixCursor cx results source before built initial start map required runtime) :
     ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
   cases demanded with
-  | clear demanded => exact demanded.frame
+  | clear demanded instruction => exact demanded.frame
 
 theorem GeneratedSequencePrefixCursor.globalClear_frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {map required : RetainedSsaMap} {before : LS} {loop : Option LoopCtx}
