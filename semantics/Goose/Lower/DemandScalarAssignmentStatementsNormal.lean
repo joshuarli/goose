@@ -121,6 +121,18 @@ theorem ScalarAssignmentStatements.normal {cfg : Cfg} {env : Env} {statements : 
         subst headFlow
         simp only [head] at done
         exact ih done
+  | @fieldIndexAssignment owner field form index indexForm indexOrigin expression value origin rest tail ih =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, bind_apply] at done
+      cases head : execStmt fuel cfg env (.assign (.elem (.of (.field owner field)) index indexOrigin) expression origin) state with
+      | stop stop final => simp only [head] at done; cases done
+      | ok headFlow middle =>
+        have normal := assignment_normal head
+        subst headFlow
+        simp only [head] at done
+        exact ih done
   | @fieldAssignment owner index form expression value origin rest tail ih =>
     cases fuel with
     | zero => simp [execStmts, timeout, M.stop] at done
@@ -139,6 +151,18 @@ theorem ScalarAssignmentStatements.normal {cfg : Cfg} {env : Env} {statements : 
     | succ fuel =>
       simp only [execStmts, bind_apply] at done
       cases head : execStmt fuel cfg env (.assign (.elem (.of owner) index indexOrigin) (.read read) origin) state with
+      | stop stop final => simp only [head] at done; cases done
+      | ok headFlow middle =>
+        have normal := assignment_normal head
+        subst headFlow
+        simp only [head] at done
+        exact ih done
+  | @fieldIndexReadAssignment owner read field form index indexForm indexOrigin readable origin target rest tail ih =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, bind_apply] at done
+      cases head : execStmt fuel cfg env (.assign (.elem (.of (.field owner field)) index indexOrigin) (.read read) origin) state with
       | stop stop final => simp only [head] at done; cases done
       | ok headFlow middle =>
         have normal := assignment_normal head

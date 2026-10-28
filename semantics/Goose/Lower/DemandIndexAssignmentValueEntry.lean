@@ -7,7 +7,7 @@ open Goose.Core Goose.GIR Goose.Core.Sound Goose.Proofs.Fuel
 theorem accepted_generated_index_assignment_value_entry {cfg : Cfg} {env : Env} {owner : Place} {index value : Expr}
     {origin indexOrigin : OriginId} {state viewedState indexedState after : St}
     (source : StmtSource cfg env (.assign (.elem (.of owner) index indexOrigin) value origin) state)
-    (form : ScalarReadPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
+    (form : IndexOwnerPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root source.path
       (.statement loop (.assign (.elem (.of owner) index indexOrigin) value origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
@@ -86,14 +86,14 @@ theorem accepted_generated_index_assignment_value_entry {cfg : Cfg} {env : Env} 
       (lowerExpr index (lowerEnv cfg.mod env.vars results) (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2).2 =
       lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before from rfl)).vals
   obtain ⟨valueAliases, valueQuery, valueCoverage, valueBounded, valueAdmitted, valueRealized, valueInput⟩ :=
-    accepted_assignment_index_value_demand source (.element index indexOrigin form) destination roots world rfl targetType placed
+    accepted_assignment_index_value_demand source (form.indexed index indexOrigin) destination roots world rfl targetType placed
       child childAt childTyping childRoots coverage admitted finalBounded input post finalRealized
   exact ⟨location, child, valueAliases, placed, childAt, childTyping, childRoots, valueQuery, valueCoverage, valueBounded, valueAdmitted, valueRealized, post, valueInput⟩
 
 theorem accepted_generated_index_assignment_value_prefix {cfg : Cfg} {env : Env} {owner : Place} {index value : Expr}
     {origin indexOrigin : OriginId} {state viewedState indexedState after : St}
     (source : StmtSource cfg env (.assign (.elem (.of owner) index indexOrigin) value origin) state)
-    (form : ScalarReadPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
+    (form : IndexOwnerPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root source.path
       (.statement loop (.assign (.elem (.of owner) index indexOrigin) value origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
@@ -164,7 +164,7 @@ theorem accepted_generated_index_assignment_value_prefix {cfg : Cfg} {env : Env}
 theorem accepted_generated_index_assignment_value_stopped {cfg : Cfg} {env : Env} {owner : Place} {index value : Expr}
     {origin indexOrigin : OriginId} {state viewedState indexedState after : St}
     (source : StmtSource cfg env (.assign (.elem (.of owner) index indexOrigin) value origin) state)
-    (form : ScalarReadPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
+    (form : IndexOwnerPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root source.path
       (.statement loop (.assign (.elem (.of owner) index indexOrigin) value origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
@@ -232,7 +232,7 @@ theorem accepted_generated_index_assignment_value_stopped {cfg : Cfg} {env : Env
 theorem accepted_generated_index_assignment_store_prefix {cfg : Cfg} {env : Env} {owner : Place} {index value : Expr}
     {origin indexOrigin : OriginId} {state viewedState indexedState after : St}
     (source : StmtSource cfg env (.assign (.elem (.of owner) index indexOrigin) value origin) state)
-    (form : ScalarReadPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
+    (form : IndexOwnerPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root source.path
       (.statement loop (.assign (.elem (.of owner) index indexOrigin) value origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
@@ -324,7 +324,7 @@ inductive IndexedAssignmentStoppedSuffix {cfg : Cfg} {env : Env} {statement : St
 theorem accepted_generated_index_assignment_store_stopped {cfg : Cfg} {env : Env} {owner : Place} {index value : Expr}
     {origin indexOrigin : OriginId} {state viewedState indexedState after : St}
     (source : StmtSource cfg env (.assign (.elem (.of owner) index indexOrigin) value origin) state)
-    (form : ScalarReadPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
+    (form : IndexOwnerPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root source.path
       (.statement loop (.assign (.elem (.of owner) index indexOrigin) value origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)

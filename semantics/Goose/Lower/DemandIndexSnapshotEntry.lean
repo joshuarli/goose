@@ -1,4 +1,4 @@
-import Goose.Lower.DemandIndexAssignmentStop
+import Goose.Lower.DemandIndexOwnerForm
 import Goose.Lower.DemandGeneratedSnapshotStop
 import Goose.Lower.DemandGeneratedScalarPrefix
 import Goose.Lower.DemandStoppedExpressionFamily
@@ -8,7 +8,7 @@ open Goose.Core Goose.GIR Goose.Core.Sound
 
 theorem accepted_generated_index_snapshot_entry {cfg : Cfg} {env : Env} {owner : Place} {index : Expr}
     {origin : OriginId} {state after : St} (source : PlaceSource cfg env (.elem (.of owner) index origin) state)
-    (form : ScalarReadPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS}
+    (form : IndexOwnerPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS}
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
       root source.path (.place (.elem (.of owner) index origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
@@ -58,7 +58,7 @@ theorem accepted_generated_index_snapshot_entry {cfg : Cfg} {env : Env} {owner :
     bounded.mono addressPost.mono
   obtain ⟨sample, _, _, viewed, post, _, _⟩ := accepted_generated_snapshot_runtime_step view viewOccurrence viewRows
     coverage placed addressPost addressBounded viewRealized (generated_index_view_extended extended) step
-  obtain ⟨aliases, query⟩ := source.index_scalar_view_alias form
+  obtain ⟨aliases, query⟩ := source.index_owner_view_alias form
   have entry := accepted_generated_index_entry source occurrence rows coverage admitted bounded realized query viewed post
   obtain ⟨child, childCanonical, childTyping, childRoots, childType, childRows, childCoverage, childAdmitted,
     childBounded, childPoint, childFrame⟩ := entry
@@ -75,7 +75,7 @@ theorem accepted_generated_index_snapshot_entry {cfg : Cfg} {env : Env} {owner :
 
 theorem accepted_generated_index_expression_prefix {cfg : Cfg} {env : Env} {owner : Place} {index : Expr}
     {origin : OriginId} {state after : St} (source : PlaceSource cfg env (.elem (.of owner) index origin) state)
-    (form : ScalarReadPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {rootOwner : Nat} {before : LS}
+    (form : IndexOwnerPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {rootOwner : Nat} {before : LS}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root rootOwner)
     (owned : GeneratedSourceOwner selected source.context)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
@@ -127,7 +127,7 @@ theorem accepted_generated_index_expression_prefix {cfg : Cfg} {env : Env} {owne
 
 theorem accepted_generated_index_expression_stopped {cfg : Cfg} {env : Env} {owner : Place} {index : Expr}
     {origin : OriginId} {state after : St} (source : PlaceSource cfg env (.elem (.of owner) index origin) state)
-    (form : ScalarReadPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {rootOwner : Nat} {before : LS}
+    (form : IndexOwnerPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {rootOwner : Nat} {before : LS}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root rootOwner)
     (owned : GeneratedSourceOwner selected source.context)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)

@@ -47,10 +47,22 @@ inductive ScalarAssignmentStatements (cfg : Cfg) (env : Env) : List Stmt → Pro
       (indexOrigin : OriginId) {expression : Expr} (value : ScalarControlExpression expression) (origin : OriginId)
       {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
       ScalarAssignmentStatements cfg env (.assign (.elem (.of owner) index indexOrigin) expression origin :: rest)
+  | fieldIndexAssignment {owner : Place} (field : Nat) (form : ScalarReadPlace owner) {index : Expr}
+      (indexForm : ControlPrefixExpression index) (indexOrigin : OriginId) {expression : Expr}
+      (value : ScalarControlExpression expression) (origin : OriginId)
+      {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
+      ScalarAssignmentStatements cfg env (.assign (.elem (.of (.field owner field)) index indexOrigin) expression origin :: rest)
   | fieldAssignment {owner : Place} (index : Nat) (form : ScalarReadPlace owner) {expression : Expr}
       (value : ScalarControlExpression expression) (origin : OriginId)
       {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
       ScalarAssignmentStatements cfg env (.assign (.field owner index) expression origin :: rest)
+  | fieldIndexReadAssignment {owner read : Place} (field : Nat) (form : ScalarReadPlace owner) {index : Expr}
+      (indexForm : ControlPrefixExpression index) (indexOrigin : OriginId) (readable : ScalarReadPlace read)
+      (origin : OriginId) (target : ∀ {state after : St}
+        (source : StmtSource cfg env (.assign (.elem (.of (.field owner field)) index indexOrigin) (.read read) origin) state)
+        (child : ExprSource cfg env (.read read) after), source.AssignmentValueAt child → child.ty.refTarget = true)
+      {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
+      ScalarAssignmentStatements cfg env (.assign (.elem (.of (.field owner field)) index indexOrigin) (.read read) origin :: rest)
   | indexReadAssignment {owner read : Place} (form : ScalarReadPlace owner) {index : Expr}
       (indexForm : ControlPrefixExpression index) (indexOrigin : OriginId) (readable : ScalarReadPlace read)
       (origin : OriginId) (target : ∀ {state after : St}
@@ -135,7 +147,7 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
     have head : GeneratedStatementPrefixFamily cx results selected loop (.assign (.elem (.of owner) index indexOrigin) expression origin)
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
       apply GeneratedStatementPrefixFamily.mapCursor
-        (accepted_generated_index_assignment_prefix selected loop owner form index expression indexOrigin origin
+        (accepted_generated_index_assignment_prefix selected loop owner (.scalar form) index expression indexOrigin origin
           (fun source child _ => by
             rcases value.scalar child with boolean | ⟨type, integer⟩
             · simp [boolean, Ty.refTarget]
@@ -145,7 +157,28 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
       exact .indexAssignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
-        (accepted_generated_index_assignment_stopped selected loop owner form index expression indexOrigin origin
+        (accepted_generated_index_assignment_stopped selected loop owner (.scalar form) index expression indexOrigin origin
+          (fun source child _ => by
+            rcases value.scalar child with boolean | ⟨type, integer⟩
+            · simp [boolean, Ty.refTarget]
+            · simp [integer, Ty.refTarget]) (accepted_generated_read_stopped_expressions selected loop indexForm.stopped)
+          (accepted_generated_read_stopped_expressions selected loop value.control.stopped)) ih.2⟩
+
+  | @fieldIndexAssignment owner field form index indexForm indexOrigin expression value origin rest tail ih =>
+    have head : GeneratedStatementPrefixFamily cx results selected loop (.assign (.elem (.of (.field owner field)) index indexOrigin) expression origin)
+        (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
+      apply GeneratedStatementPrefixFamily.mapCursor
+        (accepted_generated_index_assignment_prefix selected loop (.field owner field) (.field field form) index expression indexOrigin origin
+          (fun source child _ => by
+            rcases value.scalar child with boolean | ⟨type, integer⟩
+            · simp [boolean, Ty.refTarget]
+            · simp [integer, Ty.refTarget]) (accepted_generated_control_prefix_family selected loop indexForm)
+          (accepted_generated_control_prefix_family selected loop value.control))
+      intro statement state source before built initial start map required runtime cursor
+      exact .indexAssignment cursor
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+      fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
+        (accepted_generated_index_assignment_stopped selected loop (.field owner field) (.field field form) index expression indexOrigin origin
           (fun source child _ => by
             rcases value.scalar child with boolean | ⟨type, integer⟩
             · simp [boolean, Ty.refTarget]
@@ -174,13 +207,27 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
     have head : GeneratedStatementPrefixFamily cx results selected loop (.assign (.elem (.of owner) index indexOrigin) (.read read) origin)
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
       apply GeneratedStatementPrefixFamily.mapCursor
-        (accepted_generated_index_assignment_prefix selected loop owner form index (.read read) indexOrigin origin target
+        (accepted_generated_index_assignment_prefix selected loop owner (.scalar form) index (.read read) indexOrigin origin target
           (accepted_generated_control_prefix_family selected loop indexForm) (accepted_generated_read_prefix_family selected loop readable))
       intro statement state source before built initial start map required runtime cursor
       exact .indexAssignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
       fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
-        (accepted_generated_index_assignment_stopped selected loop owner form index (.read read) indexOrigin origin target
+        (accepted_generated_index_assignment_stopped selected loop owner (.scalar form) index (.read read) indexOrigin origin target
+          (accepted_generated_read_stopped_expressions selected loop indexForm.stopped)
+          (accepted_generated_read_stopped_family selected loop readable)) ih.2⟩
+
+  | @fieldIndexReadAssignment owner read field form index indexForm indexOrigin readable origin target rest tail ih =>
+    have head : GeneratedStatementPrefixFamily cx results selected loop (.assign (.elem (.of (.field owner field)) index indexOrigin) (.read read) origin)
+        (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
+      apply GeneratedStatementPrefixFamily.mapCursor
+        (accepted_generated_index_assignment_prefix selected loop (.field owner field) (.field field form) index (.read read) indexOrigin origin target
+          (accepted_generated_control_prefix_family selected loop indexForm) (accepted_generated_read_prefix_family selected loop readable))
+      intro statement state source before built initial start map required runtime cursor
+      exact .indexAssignment cursor
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+      fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
+        (accepted_generated_index_assignment_stopped selected loop (.field owner field) (.field field form) index (.read read) indexOrigin origin target
           (accepted_generated_read_stopped_expressions selected loop indexForm.stopped)
           (accepted_generated_read_stopped_family selected loop readable)) ih.2⟩
 

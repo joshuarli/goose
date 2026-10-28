@@ -57,20 +57,8 @@ theorem accepted_generated_index_field_owner_address {cfg : Cfg} {env : Env} {ow
 theorem PlaceSource.index_field_view_alias {cfg : Cfg} {env : Env} {owner : Place} {field : Nat} {index : Expr}
     {origin : OriginId} {state : St}
     (source : PlaceSource cfg env (.elem (.of (.field owner field)) index origin) state) (form : ScalarReadPlace owner) :
-    ∃ aliases, source.rootsEnv.access.aliasView (source.path ++ [0]) (.of (.field owner field)) = .ok aliases := by
-  obtain ⟨_, view, typing, roots, canonical, _⟩ := source.elemChildren origin
-  have element := tyView_accessElement (view.frame.mod_t.trans view.frame.mod_p.symm)
-    (view.frame.vars_t.trans view.frame.vars_p.symm) view.typed
-  rw [roots] at element
-  cases form with
-  | global global =>
-    refine ⟨[⟨.slice .readOnly view.element, [.global global], .operand (source.path ++ [0])⟩], ?_⟩
-    simp only [AccessEnv.aliasView, element, AccessEnv.viewRoots, AccessEnv.placeRoots, bind, pure]
-    rfl
-  | slot slot =>
-    refine ⟨[⟨.slice .readOnly view.element, [.local slot], .operand (source.path ++ [0])⟩], ?_⟩
-    simp only [AccessEnv.aliasView, element, AccessEnv.viewRoots, AccessEnv.placeRoots, bind, pure]
-    rfl
+    ∃ aliases, source.rootsEnv.access.aliasView (source.path ++ [0]) (.of (.field owner field)) = .ok aliases :=
+  source.index_owner_view_alias (.field field form)
 
 theorem accepted_generated_index_field_entry {cfg : Cfg} {env : Env} {owner : Place} {field : Nat} {index : Expr}
     {origin : OriginId} {state after : St} (source : PlaceSource cfg env (.elem (.of (.field owner field)) index origin) state)
