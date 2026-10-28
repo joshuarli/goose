@@ -22,10 +22,29 @@ theorem visit_executes {action : α → EvalM β} {offset : Nat} {operands : Lis
     subst visit
     exact head
 
+def comparisonContinuation (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (operation : Goose.Core.CmpOp) (second : Expr) (first : ExecutionStep Value) : ExecutionStep Value :=
+  match first with
+  | .ok value state => (do
+      let second ← evalValue fuel config environment second
+      let (first, second) ← comparable value second
+      pure (Value.bool (Goose.Core.evalCmp operation first second))) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+def notContinuation (source : ExecutionStep Value) : ExecutionStep Value :=
+  match source with
+  | .ok value state => (do pure (Value.bool (!(← expectBool value)))) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
 def trackedInitializer : Expr → Bool
   | .arrLit ty _ _ => !ty.nonfixed
   | .fill (.arr element count) _ _ => !(Ty.arr element count).nonfixed
   | .structLit (.structT _ _) _ => true
+  | .cmp _ _ _ | .not _ => true
   | _ => false
 
 theorem structLiteral_replay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
@@ -65,6 +84,21 @@ inductive EvaluationTree (config : EvalConfig) (environment : RuntimeActivation)
         | .stop reason after => .stop reason after
         | .escape address carriers after => .escape address carriers after
         | .jump target kind after => .jump target kind after)
+  | comparison (fuel : Nat) (path : List Nat) (operation : Goose.Core.CmpOp)
+      (first second : Expr) (before : ExecutionState)
+      (left : EvaluationTree config environment fuel (path ++ [0]) first before
+        (evalValue fuel config environment first before))
+      (right : ∀ value middle, evalValue fuel config environment first before = .ok value middle →
+        EvaluationTree config environment fuel (path ++ [1]) second middle
+          (evalValue fuel config environment second middle)) :
+      EvaluationTree config environment (fuel + 1) path (.cmp operation first second) before
+        (comparisonContinuation fuel config environment operation second
+          (evalValue fuel config environment first before))
+  | negation (fuel : Nat) (path : List Nat) (operand : Expr) (before : ExecutionState)
+      (child : EvaluationTree config environment fuel (path ++ [0]) operand before
+        (evalValue fuel config environment operand before)) :
+      EvaluationTree config environment (fuel + 1) path (.not operand) before
+        (notContinuation (evalValue fuel config environment operand before))
   | record (fuel : Nat) (path : List Nat) (id : Goose.Core.StructId) (fields : TyList)
       (operands : List Expr) (before : ExecutionState)
       (mapped : ExecutionStep (List Value)) (visits : List (Invocation Expr Value))
@@ -106,6 +140,21 @@ theorem evaluationTree_exists (fuel : Nat) (config : EvalConfig) (environment : 
           rw [← visit_executes replay visit member]
           exact ih _ _ _)
       | true => exact .opaque fuel path _ before (by simp [trackedInitializer, fixed])
+    | cmp operation first second =>
+      have execution : evalValue (fuel + 1) config environment (.cmp operation first second) before =
+          comparisonContinuation fuel config environment operation second
+            (evalValue fuel config environment first before) := by
+        simp only [evalValue, bind, comparisonContinuation]
+        cases evalValue fuel config environment first before <;> rfl
+      rw [execution]
+      exact .comparison fuel path operation first second before (ih _ _ _) (fun _ _ _ => ih _ _ _)
+    | not operand =>
+      have execution : evalValue (fuel + 1) config environment (.not operand) before =
+          notContinuation (evalValue fuel config environment operand before) := by
+        simp only [evalValue, bind, notContinuation]
+        cases evalValue fuel config environment operand before <;> rfl
+      rw [execution]
+      exact .negation fuel path operand before (ih _ _ _)
     | structLit ty operands =>
       cases ty with
       | structT id fields =>
@@ -141,6 +190,12 @@ theorem evaluationTree_sound {fuel : Nat} {config : EvalConfig} {environment : R
     change (operands.mapM (evalValue fuel config environment)) before = mapped at actual
     rw [actual]
     cases mapped <;> rfl
+  | comparison fuel path operation first second before left right =>
+    simp only [evalValue, bind, comparisonContinuation]
+    cases evalValue fuel config environment first before <;> rfl
+  | negation fuel path operand before child =>
+    simp only [evalValue, bind, notContinuation]
+    cases evalValue fuel config environment operand before <;> rfl
   | record fuel path id fields operands before mapped visits replay children =>
     simp only [evalValue, bind, pure]
     have actual := replay.execute
@@ -185,6 +240,18 @@ theorem record_source_sideEffect :
     (.structLit (.structT 0 (.cons (.int .i64) (.cons (.int .i64) .nil))) [witnessSource, .lit .i64 8]) .initial), ?_, ?_⟩ <;>
     unfold finalState witnessConfig witnessEnv witnessSource <;> cbv
 
+theorem comparison_source_sideEffect :
+    ∃ state, evalValue 31 witnessConfig witnessEnv
+      (.cmp .eq witnessSource (.blockE (.mk 1 [.print [.text "second"] 0]
+        (some (.lit .i64 7))) 0)) .initial = .ok (.bool true) state ∧
+      state.construction.stdout.data.toList =
+        [111, 110, 99, 101, 10, 115, 101, 99, 111, 110, 100, 10] := by
+  refine ⟨finalState (evalValue 31 witnessConfig witnessEnv
+    (.cmp .eq witnessSource (.blockE (.mk 1 [.print [.text "second"] 0]
+      (some (.lit .i64 7))) 0)) .initial), ?_, ?_⟩ <;>
+    unfold finalState witnessConfig witnessEnv witnessSource <;> cbv
+
+#print axioms comparison_source_sideEffect
 #print axioms record_source_sideEffect
 #print axioms fill_source_sideEffect
 #print axioms source_sideEffect
