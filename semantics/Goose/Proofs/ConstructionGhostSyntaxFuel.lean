@@ -97,6 +97,13 @@ inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
       (body : ∀ statement ∈ statements, StatementSyntax config statement) :
       StatementSyntax config (.ifS condition (.mk scope statements none) none origin)
 
+  | ifElseStatement (condition : Expr) (yesScope : Nat) (yesStatements : List Stmt)
+      (noScope : Nat) (noStatements : List Stmt) (origin : Goose.Core.OriginId)
+      (conditionSyntax : ValueSyntax config condition)
+      (yesBody : ∀ statement ∈ yesStatements, StatementSyntax config statement)
+      (noBody : ∀ statement ∈ noStatements, StatementSyntax config statement) :
+      StatementSyntax config (.ifS condition (.mk yesScope yesStatements none) (some (.mk noScope noStatements none)) origin)
+
 def ClosedModule (config : EvalConfig) : Prop :=
   ∀ (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl),
     config.module.contexts[contextId]? = some context → config.module.impls[context.impl]? = some implementation →
@@ -297,6 +304,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
             exact .ifStatement fuel environment condition (.mk scope statements none) none origin
               (previous.value environment condition conditionSyntax) (previous.block environment scope statements body)
               (fun block impossible => by cases impossible)
+        | ifElseStatement condition yesScope yesStatements noScope noStatements origin conditionSyntax yesBody noBody =>
+            exact .ifStatement fuel environment condition (.mk yesScope yesStatements none) (some (.mk noScope noStatements none)) origin
+              (previous.value environment condition conditionSyntax) (previous.block environment yesScope yesStatements yesBody)
+              (fun block same => by cases same; exact previous.block environment noScope noStatements noBody)
       · intro environment statements derivation
         cases statements with
         | nil => exact .legacy (fuel + 1) (.empty environment)
