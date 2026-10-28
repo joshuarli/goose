@@ -635,10 +635,10 @@
  },
  {
   "feature": "Byte-owner global initialization outcomes",
-  "statement": "At positive fuel, every outcome of a contiguous sequence of byte-owner global initializers preserves an accepted world. Success initializes the entire range and leaves future globals clear; a stop identifies the unfinished initializer. Escape and jump outcomes are impossible.",
-  "assumptions": "Accepted world, future-global freshness, in-bounds byte-owner global descriptors and a positive evaluator fuel.",
-  "limits": "Zero-fuel stops other than timeout, other global types and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionByteGlobalComplete.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "At every fuel, every outcome of a contiguous sequence of byte-owner global initializers preserves an accepted world. Success initializes the entire range and leaves future globals clear; a stop identifies the unfinished initializer. Escape and jump outcomes are impossible.",
+  "assumptions": "Accepted world, future-global freshness and in-bounds byte-owner global descriptors.",
+  "limits": "Other global types and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionByteGlobalComplete.lean; Goose/Proofs/ConstructionByteGlobalZeroComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Byte-owner construction stop preservation",
