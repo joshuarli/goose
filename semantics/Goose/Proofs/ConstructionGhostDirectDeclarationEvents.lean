@@ -88,9 +88,11 @@ def DirectVisitSourceEvents (config : EvalConfig) (environment : RuntimeActivati
     EventPrefix (Goose.Proofs.Exit.stepState (buildExpr sourceFuel config environment destination expression buildReady)).construction.events
       (Goose.Proofs.Exit.stepState visit.outcome).construction.events
 
-theorem statementReplay_directSourceEvents
+theorem statementReplay_directSourceEvents_guarded
     (replay : StatementReplay config environment fuel offset statements before outcome visits)
-    (supported : ∀ sourceFuel localVar expression origin, .letS localVar expression origin ∈ statements → ∀ destination,
+    (supported : ∀ sourceFuel localVar expression origin descriptor, .letS localVar expression origin ∈ statements →
+      environment.vars[localVar]? = some descriptor → descriptor.ty.nonfixed = true →
+      ordinaryProducerCount? sourceFuel ⟨config.module, environment.vars⟩ expression = none → ∀ destination,
       FuelSupport config sourceFuel (.builder environment destination expression)) :
     DirectVisitSourceEvents config environment visits := by
   intro visit member sourceFuel localVar expression origin descriptor root implementation ready buildReady destination
@@ -102,8 +104,18 @@ theorem statementReplay_directSourceEvents
     exact List.mem_of_mem_take inMapped
   exact directDeclaration_visit_sourceEvents replay visit member sourceFuel localVar expression origin descriptor root implementation
     ready buildReady destination visitFuel visitStatement found nonfixed rootResult implementationFound notNamed direct allocated
-    (supported sourceFuel localVar expression origin inStatements destination)
+    (supported sourceFuel localVar expression origin descriptor inStatements found nonfixed direct destination)
 
+theorem statementReplay_directSourceEvents
+    (replay : StatementReplay config environment fuel offset statements before outcome visits)
+    (supported : ∀ sourceFuel localVar expression origin, .letS localVar expression origin ∈ statements → ∀ destination,
+      FuelSupport config sourceFuel (.builder environment destination expression)) :
+    DirectVisitSourceEvents config environment visits :=
+  statementReplay_directSourceEvents_guarded replay
+    (fun sourceFuel localVar expression origin descriptor member found nonfixed direct destination =>
+      supported sourceFuel localVar expression origin member destination)
+
+#print axioms statementReplay_directSourceEvents_guarded
 #print axioms statementReplay_directSourceEvents
 #print axioms directDeclarationAfterBuild_sourcePrefix
 #print axioms directDeclaration_visit_sourceEvents
