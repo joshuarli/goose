@@ -753,6 +753,13 @@
   "evidence": "Goose/Proofs/ConstructionAcceptedConditionalAssign.lean; Goose/Proofs/ConstructionAcceptedGlobalAssignValidated.lean; Goose/Proofs/ConstructionAcceptedAssignConditionalModule.lean; Goose/Proofs/ConstructionAcceptedGlobalBranchAssignWitness.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "State-changing nested scalar initialization",
+  "statement": "At every fuel, a validated mixed module preserves an accepted world when scalar global initializers contain recursively nested conditionals, scalar assignments, arithmetic, comparisons, conversions and short-circuit Boolean operations. A validated witness changes an earlier global, skips one short-circuit branch, and observes the changed value in another.",
+  "assumptions": "Accepted module, supported nested scalar and byte-owner literal globals, flat global types restricted to integer or Boolean, and the specified no-tail mixed entry body and scalar types.",
+  "limits": "Calls and other expression and global forms, other entry statements and general evaluator preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedNestedComplete.lean; Goose/Proofs/ConstructionAcceptedNestedGlobalModule.lean; Goose/Proofs/ConstructionAcceptedNestedBooleanWitness.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Byte module with empty helper tail",
   "statement": "At every fuel, a validated byte-owner module ending in a call to a zero-parameter, zero-result helper with a no-tail byte-declaration body preserves an accepted world at its actual result. Checked modules with both empty and nonempty helper bodies instantiate the theorem and return successfully.",
   "assumptions": "Accepted module, byte-owner globals and entry declarations, the specified helper context, byte declarations and local types, and sufficient checker fuel.",
