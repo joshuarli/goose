@@ -435,10 +435,10 @@
  },
  {
   "feature": "Byte exit replacement ancestry",
-  "statement": "Successful byte production into a replacement destination retains its backed carrier and parent ownership through scope release. A successful fresh exit reservation has a replacement path from its saved destination to its selected open byte destination; the active ticket and path persist through successful byte construction and scope release.",
-  "assumptions": "Accepted ownership worlds, successful production or reservation, open byte backing and destination shape. The reservation result assumes an accepted world at the reserved state.",
-  "limits": "Parent authority may be abandoned or cancelled; a live receiving anchor, exit cleanup and handler landing remain open. This component does not close TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionExitByteReplacement.lean; Goose/Proofs/ConstructionExitReservationPath.lean; Goose/Proofs/ConstructionExitByteReservation.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "Successful byte production into a replacement destination retains its backed carrier and parent ownership through scope release. A successful fresh exit reservation has a replacement path from its saved destination to its selected open byte destination; the active ticket and path persist through successful byte construction and scope release. For a current open receiver with a positive count, the exact exiting parent also survives the complete packed byte build and scope release.",
+  "assumptions": "Accepted ownership worlds, successful production or reservation, open byte backing and destination shape. The reservation result assumes an accepted world at the reserved state; the live-parent case assumes the original receiver is current and open with positive count.",
+  "limits": "General parent authority may be abandoned or cancelled; exit cleanup and handler landing remain open. This component does not close TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionExitByteReplacement.lean; Goose/Proofs/ConstructionExitReservationPath.lean; Goose/Proofs/ConstructionExitByteReservation.lean; Goose/Proofs/ConstructionExitOpenReservation.lean; Goose/Proofs/ConstructionExitByteFinishParent.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted construction value representation fragment",
@@ -698,7 +698,7 @@
  },
  {
   "feature": "Accepted byte-owner declaration sequences",
-  "statement": "At every fuel and outcome, an actual sequence of checked unnamed byte-owner declarations preserves an accepted world and source frame while extending root types for completed declarations. Successful sequences return normally; escape and jump outcomes are impossible. For a validated module whose globals are byte owners and whose entry statements consist of such declarations, actual startup either stops during initialization in an accepted world or reaches the entry-body statement execution with this outcome invariant. A stop in those statements is the actual module stop with the same terminal state.",
+  "statement": "At every fuel and outcome, an actual sequence of checked unnamed byte-owner declarations preserves an accepted world and source frame while extending root types for completed declarations. Successful sequences return normally; escape and jump outcomes are impossible. For a validated module whose globals are byte owners and whose entry statements consist of such declarations, actual startup either stops in an accepted world or completes the entry statements in an accepted world and frame. Statement stops are actual module stops with the same terminal state.",
   "assumptions": "Accepted source frame, world and statement-sequence position, implementation phase, checked byte-owner declarations and unnamed results. The entry case derives these from the validated module and its declared entry body and local types, with sufficient call and checker fuel.",
   "limits": "This covers sequences consisting entirely of byte-owner declarations. The general evaluator induction and other statements remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionByteBatchComplete.lean; Goose/Proofs/ConstructionByteEntryFrameComplete.lean; Goose/Proofs/ConstructionByteEntryComplete.lean; Goose/Proofs/ConstructionByteGlobalEntryBody.lean; Goose/Proofs/ConstructionByteEntryStopped.lean; scoped Lean 4.35 closure and axiom checks."

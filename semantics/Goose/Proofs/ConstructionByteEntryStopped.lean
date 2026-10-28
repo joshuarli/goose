@@ -46,7 +46,66 @@ theorem byteEntry_statements_stopped_module (fuel : Nat) (config : EvalConfig) (
   rw [moduleStep]
   simp only [bind, callStep, finishActivation, bodyStop]
 
+theorem acceptedByteModule_stopped_or_body_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (declarations : List ByteOwnerDeclaration) (original : Context) (implementation : Impl)
+    (globals : ∀ id, id < config.module.globals.size →
+      ∃ descriptor bytes bytesOrigin, config.module.globals[id]? = some descriptor ∧
+        descriptor.ty = .varr (.int .u8) ∧ descriptor.init = .bytes (.varr (.int .u8)) bytes bytesOrigin)
+    (originalAt : config.module.contexts[config.module.entry]? = some original)
+    (implementationAt : config.module.impls[original.impl]? = some implementation)
+    (body : implementation.body.stmts = declarations.map ByteOwnerDeclaration.statement)
+    (owners : ∀ declaration ∈ declarations,
+      (implementation.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
+    (checkFuel : declarations.length ≤ 4094) :
+    (∃ stop after initialized ambient types live regions,
+      runModule (fuel + 3) config .initial = .stop stop after ∧
+      AcceptedWorld config initialized after ambient types live regions []) ∨
+    ∃ (initialized : ExecutionState) (frame next : ConstructionSourceFrame) (activation : RuntimeActivation)
+      (after : ExecutionState) (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion),
+      let environment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
+      let activated := { initialized with nextAct := initialized.nextAct + 1, activations := activation :: initialized.activations }
+      let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
+      let entryFrame := entryStatementsFrame config frame activated.nextScope
+      runModule (fuel + 3) config .initial =
+        (invokeCall (fuel + 3) config environment config.module.entry [] [] 0 >>= fun carriers => publishCarriers 0 carriers) initialized ∧
+      execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before = .ok (.normal .unit) after ∧
+      frame.source.impl = implementation ∧ next.initialized = entryFrame.initialized ∧
+      RootTypesExtend (declaredRootTypes config.module) types ∧
+      AcceptedWorld config next.initialized after [.callChannels activation []] types live regions [] ∧
+      AcceptedFrame config accepted next after types := by
+  rcases acceptedByteGlobalsEntryBodyOrStop fuel config accepted declarations original implementation globals
+      originalAt implementationAt body owners checkFuel with stopped | entry
+  · obtain ⟨stop, after, initialized, live, regions, moduleStop, bound, world⟩ := stopped
+    exact Or.inl ⟨stop, after, initialized, [], declaredRootTypes config.module, live, regions, moduleStop, world⟩
+  · obtain ⟨initialized, frame, next, activation, types, live, regions, initializedRun, moduleStep, callStep,
+      implementationEq, environmentEq, initializedEq, extended, world, source, flow⟩ := entry
+    let activated := { initialized with nextAct := initialized.nextAct + 1, activations := activation :: initialized.activations }
+    let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
+    let entryFrame := entryStatementsFrame config frame activated.nextScope
+    change AcceptedWorld config next.initialized
+      (Goose.Proofs.Exit.stepState (execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before))
+      [.callChannels activation []] types live regions [] at world
+    change AcceptedFrame config accepted next
+      (Goose.Proofs.Exit.stepState (execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before)) types at source
+    change (match execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before with
+      | .ok result _ => result = .normal .unit | .stop _ _ => True | .escape .. | .jump .. => False) at flow
+    cases outcome : execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before with
+    | stop stop after =>
+      have moduleStop := byteEntry_statements_stopped_module fuel config initialized frame activation after stop
+        environmentEq moduleStep callStep outcome
+      simp only [outcome, Goose.Proofs.Exit.stepState] at world
+      exact Or.inl ⟨stop, after, next.initialized, [.callChannels activation []], types, live, regions, moduleStop, world⟩
+    | ok result after =>
+      simp only [outcome] at flow
+      subst result
+      simp only [outcome, Goose.Proofs.Exit.stepState] at world source
+      exact Or.inr ⟨initialized, frame, next, activation, after, types, live, regions, moduleStep, outcome,
+        implementationEq, initializedEq, extended, world, source⟩
+    | escape target carriers after | jump target kind after =>
+      simp only [outcome] at flow
+
 #print axioms execActivationBody_statements_stopped
 #print axioms byteEntry_statements_stopped_module
+#print axioms acceptedByteModule_stopped_or_body_complete
 
 end Goose.Proofs.ConstructionAcceptedExecution
