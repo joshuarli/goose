@@ -7,12 +7,30 @@ open Goose.Core Goose.GIR Goose.Core.Sound
 inductive IndexedScalarPlace : Place → Prop
   | element {owner : Place} (index : Expr) (origin : OriginId) (form : ScalarReadPlace owner) :
       IndexedScalarPlace (.elem (.of owner) index origin)
+  | fieldElement {owner : Place} (field : Nat) (index : Expr) (origin : OriginId) (form : ScalarReadPlace owner) :
+      IndexedScalarPlace (.elem (.of (.field owner field)) index origin)
 
 private theorem accepted_assignment_index_place_roots {cfg : Cfg} {env : Env} {state : St} {place : Place}
     (destination : PlaceSource cfg env place state) (form : IndexedScalarPlace place) :
     destination.rootsEnv.access.placeRoots place = .ok destination.roots := by
   cases form with
   | element index origin ownerForm =>
+    have rooted := destination.rooted
+    simp only [rpPlace, rpView] at rooted
+    cases ownerForm with
+    | global global =>
+      simp only [rpPlace] at rooted
+      inv at rooted
+      obtain ⟨a, s1, ⟨reads, shape⟩, other, s2, expr, aborted, roots⟩ := rooted
+      rw [roots.2.1, shape.2.1]
+      rfl
+    | slot slot =>
+      simp only [rpPlace] at rooted
+      inv at rooted
+      obtain ⟨a, s1, ⟨reads, shape⟩, other, s2, expr, aborted, roots⟩ := rooted
+      rw [roots.2.1, shape.2.1]
+      rfl
+  | fieldElement field index origin ownerForm =>
     have rooted := destination.rooted
     simp only [rpPlace, rpView] at rooted
     cases ownerForm with
