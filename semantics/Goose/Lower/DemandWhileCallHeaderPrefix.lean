@@ -13,22 +13,22 @@ theorem accepted_generated_while_scalar_call_header_prefix_complete {cfg : Cfg} 
     (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
       { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
     (noValue : body.value = none)
-    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {cx : FnCtx} {results : List Ty} {loop : Option LoopCtx} {root : DemandNode} {owner : Nat}
     (targetConfig : cx.cfg = ⟨cfg.profile, lower cfg.mod⟩)
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (owned : GeneratedSourceOwner selected source.context) {before headerState built : LS}
     {header : BlockId} {frame : GIR.Frame}
-    (headerInput : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv headerState frame (header, 0))
+    (headerInput : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv headerState frame (header, 0))
     (headerTarget : ∃ block, cx.fn.blocks[header]? = some block ∧ block.params = [])
     (headerId : header = (newBlock [] (lowerEnv cfg.mod env.vars results) before).1.1)
     (headerEq : headerState = demandWhileHeaderBefore (lowerEnv cfg.mod env.vars results) before)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root source.path (.statement none (.while condition body origin)) before)
+      root source.path (.statement loop (.while condition body origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
     (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
     (bounded : map.Bounded headerState.vals.size)
     (realized : map.Realizes cfg.mod source.world env ⟨(header, 0), frame, state⟩)
-    (family : GeneratedExpressionPrefixFamily cx results selected none condition (@GeneratedControlProgressCursor cfg env cx))
+    (family : GeneratedExpressionPrefixFamily cx results selected loop condition (@GeneratedControlProgressCursor cfg env cx))
     (lowered : lowerWhile header (lowerExpr condition)
       (fun depth exitBlock => lowerBlock (some ⟨depth, exitBlock, .jump header⟩) [] false body)
       (lowerEnv cfg.mod env.vars results) headerState = ((), built)) (extended : ExtT built cx.fn.blocks)
@@ -96,9 +96,16 @@ theorem accepted_generated_while_scalar_call_header_prefix_complete {cfg : Cfg} 
           | @complete bodyFuel bodyConsumed bodyRest bodyPoint flow bodyCount bodySteps bodyResidual bodyDone ended =>
             have normal := ended.normal
             subst flow
+            have forkExtended : ExtT forked cx.fn.blocks := by
+              have bodyExtended := jumpExtended.of_adv (adv_emitTerm jumpRun)
+              have startExtended := bodyExtended.of_adv (advB_lowerBlock _ [] false body _ _ _ _ bodyRun)
+              rw [bodyEq] at startExtended
+              exact startExtended
+            have reentryPost := generated_while_reentry_post branch headerInput.atPoint headerInput.related boundary.post
+              forkRun forkExtended bodyEq bodyRun ended
             obtain ⟨next, typing, roots, nextWorld, observation, plans, path, context, nextInput, nextBounded, nextRealized, back⟩ :=
               accepted_generated_while_reentry source branch canonicalBranch evaluated bodyDone headerInput headerTarget bounded
-                bodyRun jumpRun jumpExtended ended
+                bodyRun jumpRun jumpExtended ended (outerPost := by cases loop <;> simp_all)
             rcases bodyResidual.uncons with ⟨zero, rfl⟩ | ⟨tail, afterBack, tailCount, backStep, backResidual⟩
             · exact Or.inl (.existing (.backEdge iterations source world child fuel bodyFuel canonical evaluated branch canonicalBranch bodyDone ended back))
             · obtain ⟨backFuel, actualBack⟩ := runtimeStep_demandInstructionStep backStep
@@ -107,13 +114,6 @@ theorem accepted_generated_while_scalar_call_header_prefix_complete {cfg : Cfg} 
               subst afterBack
               obtain ⟨nextOwned, nextAdmitted, nextOccurrence, nextRows⟩ :=
                 generated_while_reentry_context source next roots plans path context selected owned occurrence rows admitted
-              have forkExtended : ExtT forked cx.fn.blocks := by
-                have bodyExtended := jumpExtended.of_adv (adv_emitTerm jumpRun)
-                have startExtended := bodyExtended.of_adv (advB_lowerBlock _ [] false body _ _ _ _ bodyRun)
-                rw [bodyEq] at startExtended
-                exact startExtended
-              have reentryPost := generated_while_reentry_post branch headerInput.atPoint headerInput.related boundary.post
-                forkRun forkExtended bodyEq bodyRun ended
               have iteration := WhileIterations.next evaluated bodyDone (Or.inl ⟨.unit, rfl⟩) (WhileIterations.zero bodyPoint.state)
               have allIterations : WhileIterations cfg env condition body (count + 1) initialState bodyPoint.state := by
                 simpa using iterations.append iteration

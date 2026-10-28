@@ -11,22 +11,22 @@ theorem accepted_generated_while_scalar_call_header_stopped_complete {cfg : Cfg}
     (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
       { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
     (noValue : body.value = none)
-    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {cx : FnCtx} {results : List Ty} {loop : Option LoopCtx} {root : DemandNode} {owner : Nat}
     (targetConfig : cx.cfg = ⟨cfg.profile, lower cfg.mod⟩)
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (owned : GeneratedSourceOwner selected source.context) {before headerState built : LS}
     {header : BlockId} {frame : GIR.Frame}
-    (headerInput : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv headerState frame (header, 0))
+    (headerInput : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv headerState frame (header, 0))
     (headerTarget : ∃ block, cx.fn.blocks[header]? = some block ∧ block.params = [])
     (headerId : header = (newBlock [] (lowerEnv cfg.mod env.vars results) before).1.1)
     (headerEq : headerState = demandWhileHeaderBefore (lowerEnv cfg.mod env.vars results) before)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root source.path (.statement none (.while condition body origin)) before)
+      root source.path (.statement loop (.while condition body origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
     (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
     (bounded : map.Bounded headerState.vals.size)
     (realized : map.Realizes cfg.mod source.world env ⟨(header, 0), frame, state⟩)
-    (family : GeneratedStoppedExpressionPrefixFamily cx results selected none condition)
+    (family : GeneratedStoppedExpressionPrefixFamily cx results selected loop condition)
     (lowered : lowerWhile header (lowerExpr condition)
       (fun depth exitBlock => lowerBlock (some ⟨depth, exitBlock, .jump header⟩) [] false body)
       (lowerEnv cfg.mod env.vars results) headerState = ((), built)) (extended : ExtT built cx.fn.blocks)
