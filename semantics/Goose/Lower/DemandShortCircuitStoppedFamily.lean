@@ -15,7 +15,7 @@ theorem accepted_generated_shortCircuit_stopped_family {cfg : Cfg} {env : Env} {
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps targetFuel stop after stopped nonTimeout
   let le := lowerEnv cfg.mod env.vars results
   obtain ⟨left, leftTyping, leftRoots, leftType, world, path, plans, context, retained, next⟩ := source.shortCircuitChildrenDemand isAnd
-  have metadata : source.ChildAt left 0 (by cases isAnd <;> rfl) := ⟨world, path, plans, context, retained⟩
+  have metadata : source.ChildAt left 0 (by cases isAnd <;> rfl) := ⟨world, path, plans, context, leftTyping, leftRoots, retained⟩
   have leftOwned : GeneratedSourceOwner selected left.context :=
     (owned.child rfl 0 (.expression a) .expression (by cases isAnd <;> rfl) (by trivial)).transport
       plans.symm path.symm rfl context.symm

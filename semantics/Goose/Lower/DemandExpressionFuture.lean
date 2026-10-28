@@ -68,19 +68,20 @@ theorem demandContextOutputFutureEq {module : Core.Module}
   subst secondNode
   exact congrArg EvaluationContext.outputFuture (eq_of_heq same)
 
-def ExpressionFutureFrame (cfg : Cfg) (world : World) (env : Env) (point : DemandRuntimePoint) (slot : VarId) : Prop :=
-  ∃ (typing : TEnv) (roots : PEnv) (future : List VarId),
+def ExpressionFutureFrame (cfg : Cfg) (world : World) (typing : TEnv) (roots : PEnv)
+    (env : Env) (point : DemandRuntimePoint) (slot : VarId) : Prop :=
+  ∃ future : List VarId,
     slot ∈ future ∧ Core.Sound.Frame cfg.mod world typing roots env point.state future
 
 theorem CanonicalExpressionDemand.futureFrame {cfg : Cfg} {env : Env} {expression : Expr} {state : St}
     {source : ExprSource cfg env expression state} {map : RetainedSsaMap} {cx : FnCtx}
     {runtime : DemandRuntimePoint} (cursor : CanonicalExpressionDemand map cx source runtime)
     {slot : VarId} (member : slot ∈ source.context.outputFuture) :
-    ExpressionFutureFrame cfg source.world env runtime slot := by
+    ExpressionFutureFrame cfg source.world source.typingEnv source.rootsEnv env runtime slot := by
   induction cursor with
   | entry demanded =>
-    exact ⟨_, _, _, expressionContext_input_includes_output _ member, demanded.source⟩
-  | exit demanded => exact ⟨_, _, _, member, demanded.source⟩
+    exact ⟨_, expressionContext_input_includes_output _ member, demanded.source⟩
+  | exit demanded => exact ⟨_, member, demanded.source⟩
   | @child expression childExpression state childState source child index found runtime metadata demanded induction =>
     have needed : slot ∈ (source.context.child rfl index (.expression childExpression) .expression found (by trivial)).outputFuture :=
       expressionContext_childOutput_includes source.context found slot member
@@ -88,7 +89,7 @@ theorem CanonicalExpressionDemand.futureFrame {cfg : Cfg} {env : Env} {expressio
       have equality := demandContextOutputFutureEq metadata.plans metadata.path rfl metadata.context
       rw [equality]
       exact needed
-    simpa only [metadata.world] using induction childNeeded
+    simpa only [metadata.world, metadata.typing, metadata.roots] using induction childNeeded
 
 #print axioms CanonicalExpressionDemand.futureFrame
 

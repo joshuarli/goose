@@ -33,7 +33,7 @@ theorem accepted_generated_shortCircuit_left_prefix {cfg : Cfg} {env : Env} {cx 
         (cursor left before (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2
           initial start map required) taken reached := by
   obtain ⟨left, typing, roots, type, world, path, plans, context, retained, next⟩ := source.shortCircuitChildrenDemand isAnd
-  have metadata : source.ChildAt left 0 (by cases isAnd <;> rfl) := ⟨world, path, plans, context, retained⟩
+  have metadata : source.ChildAt left 0 (by cases isAnd <;> rfl) := ⟨world, path, plans, context, typing, roots, retained⟩
   have leftOwned : GeneratedSourceOwner selected left.context :=
     (owned.child rfl 0 (.expression a) .expression (by cases isAnd <;> rfl) (by trivial)).transport
       plans.symm path.symm rfl context.symm
@@ -149,7 +149,7 @@ theorem accepted_generated_shortCircuit_right_entry {cfg : Cfg} {env : Env} {a b
   obtain ⟨_, _, _, _, _, _, _, _, _, nextSource⟩ := source.shortCircuitChildrenDemand isAnd
   obtain ⟨right, typing, rightRoots, type, world, path, plans, context, retained⟩ :=
     nextSource sourceFuel (.bool isAnd) middle leftDone
-  have child : source.ChildAt right 1 (by cases isAnd <;> rfl) := ⟨world, path, plans, context, retained⟩
+  have child : source.ChildAt right 1 (by cases isAnd <;> rfl) := ⟨world, path, plans, context, typing, rightRoots, retained⟩
   have forkExtended := generated_shortCircuit_fork_extended (right := b) boundary.post.pp extended
   have ⟨_, _, _, _, _, _, _, rhsAt, _⟩ := scFork_facts
     (show scFork isAnd (lowerExpr a le before).1 le (lowerExpr a le before).2 =

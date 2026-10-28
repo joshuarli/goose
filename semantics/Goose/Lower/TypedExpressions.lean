@@ -48,6 +48,8 @@ structure ExprSource.ChildAt {cfg : Cfg} {env : Env} {expression childExpression
   plans : child.plans = source.plans
   context : HEq child.context
     (source.context.child rfl index (.expression childExpression) .expression found (by trivial))
+  typing : child.typingEnv = source.typingEnv
+  roots : child.rootsEnv = source.rootsEnv
   retained : ∀ alias ∈ source.context.retained, alias ∈ child.context.retained
 
 structure ExprResult {cfg : Cfg} {env : Env} {expr : Expr} {state : St}
@@ -431,7 +433,7 @@ theorem ExprSource.notChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St}
     typingEnd := finish, ty := .bool, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, ?_⟩⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, rfl, rfl, ?_⟩⟩
   · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -493,7 +495,7 @@ theorem ExprSource.unChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} (o
     typingEnd := finish, ty := .int intTy, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, rfl, ⟨rfl, rfl, rfl, HEq.rfl, ?_⟩⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, rfl, ⟨rfl, rfl, rfl, HEq.rfl, rfl, rfl, ?_⟩⟩
   · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -695,7 +697,7 @@ theorem ExprSource.fillChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} 
     typingEnd := finish, ty := element, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, ?_⟩⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, rfl, rfl, ?_⟩⟩
   · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -760,7 +762,7 @@ theorem ExprSource.convChild {cfg : Cfg} {env : Env} {expr : Expr} {state : St} 
     typingEnd := finish, ty := .int intTy, rootsStart := source.rootsStart, rootsEnd := rootsFinish,
     roots := roots, active := ?_, access := ?_, protection := ?_, observed := ?_,
     classified := source.classified, permission := source.permission, frame := ?_,
-    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, targetInt, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, ?_⟩⟩
+    typed := ht, rooted := hr, effects := ?_ }, rfl, rfl, intTy, targetInt, rfl, rfl, ⟨rfl, rfl, rfl, HEq.rfl, rfl, rfl, ?_⟩⟩
   · exact ec.child_activeMatches rfl 0 (.expression expr) .expression rfl (by trivial)
       source.typingEnv source.typingEnv source.active (by intro x; rfl)
   · exact (ec.child_accessMatches_iff rfl 0 (.expression expr) .expression rfl
@@ -1250,7 +1252,7 @@ theorem ExprSource.binChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     classified := source.classified, permission := source.permission, frame := hLeftInput,
     typed := hta, rooted := hra, effects := (Core.Sound.rpExpr_mono hrb).2.trans hE2 }
   have leftMetadata : source.ChildAt left 0 rfl :=
-    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+    ⟨rfl, rfl, rfl, HEq.rfl, rfl, rfl, fun alias member =>
       ec.child_retained_subset rfl 0 (.expression a) .expression rfl (by trivial) member⟩
   refine ⟨intTy, left, rfl, rfl, rfl, leftMetadata, ?_⟩
   intro n value after hdone
@@ -1303,7 +1305,7 @@ theorem ExprSource.binChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     observed := by simpa only [left, hLeftShrink, hRightShrink] using output.observed,
     classified := output.classified, permission := source.permission, frame := hFrameRight,
     typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl, rfl,
-    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+    ⟨rfl, rfl, rfl, HEq.rfl, rfl, rfl, fun alias member =>
       ec.child_retained_subset rfl 1 (.expression b) .expression rfl (by trivial) member⟩⟩
 
 theorem PlaceSource.elemChildren {cfg : Cfg} {env : Env} {view : View} {index : Expr} {state : St}
@@ -1691,7 +1693,7 @@ theorem ExprSource.cmpChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     classified := source.classified, permission := source.permission, frame := hLeftInput,
     typed := hta, rooted := hra, effects := (Core.Sound.rpExpr_mono hrb).2.trans hE2 }
   have leftMetadata : source.ChildAt left 0 rfl :=
-    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+    ⟨rfl, rfl, rfl, HEq.rfl, rfl, rfl, fun alias member =>
       ec.child_retained_subset rfl 0 (.expression a) .expression rfl (by trivial) member⟩
   refine ⟨left, rfl, rfl, leftMetadata, ?_⟩
   intro n value after hdone
@@ -1744,7 +1746,7 @@ theorem ExprSource.cmpChildren {cfg : Cfg} {env : Env} {a b : Expr} {state : St}
     observed := by simpa only [left, hLeftShrink, hRightShrink] using output.observed,
     classified := output.classified, permission := source.permission, frame := hFrameRight,
     typed := htb, rooted := hrb, effects := hE2 }, rfl, rfl,
-    ⟨rfl, rfl, rfl, HEq.rfl, fun alias member =>
+    ⟨rfl, rfl, rfl, HEq.rfl, rfl, rfl, fun alias member =>
       ec.child_retained_subset rfl 1 (.expression b) .expression rfl (by trivial) member⟩⟩
 
 theorem ExprSource.shortCircuitChildrenDemand {cfg : Cfg} {env : Env} {a b : Expr} {state : St}

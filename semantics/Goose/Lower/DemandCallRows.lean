@@ -89,7 +89,7 @@ theorem ArgSource.byVal_callChild {cfg : Cfg} {env : Env} {initial state : St}
       (root.context.child rfl index (.expression expression) .expression
         (by simp [DemandNode.child?, DemandNode.children, found]) (by trivial)) := by
     simpa only [ArgSource.MatchesContext, callArgContext] using context
-  refine ⟨world, path, plans, childContext, ?_⟩
+  refine ⟨world, path, plans, childContext, typing, roots, ?_⟩
   intro alias member
   have retained := callArgContext_retained_subset root.context index (.byVal expression) found member
   have eq := demandContextRetainedEq plans path rfl childContext
