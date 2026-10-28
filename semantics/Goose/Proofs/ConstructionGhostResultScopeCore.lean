@@ -23,6 +23,40 @@ def resultScopeStart (environment : RuntimeActivation) (scope : Nat) (before : E
   { before with nextScope := before.nextScope + 1, activations := before.activations.map (fun current =>
       if current.act == environment.act then { current with scopes := scopeEnv.scopes } else current) }
 
+
+def resultScopeAfterBind (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (channels : List Channel) (statements : List Stmt) (value : Option Expr)
+    (tailAction : RuntimeActivation → Expr → EvalM (List Carrier)) : ExecutionStep Unit → ExecutionStep (Flow × List Carrier)
+  | .ok () ready => resultScopeContinuation channels value (tailAction environment)
+      (execStmts fuel config environment statements ready)
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+theorem execResultScope_bind (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (scope : Nat)
+    (statements : List Stmt) (value : Option Expr) (tailAction : RuntimeActivation → Expr → EvalM (List Carrier))
+    (before : ExecutionState) :
+    execResultScope environment pre channels (.mk scope statements value)
+      (fun environment statements => execStmts fuel config environment statements) tailAction before =
+    withScope environment scope before.nextScope (fun _ =>
+      resultScopeAfterBind fuel config { environment with scopes := (scope, before.nextScope) :: environment.scopes }
+        channels statements value tailAction (bindAll environment.act before.nextScope pre (resultScopeStart environment scope before)))
+      (resultScopeStart environment scope before) := by
+  simp only [execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope,
+    resultScopeStart, resultScopeAfterBind, resultScopeContinuation]
+  cases result : bindAll environment.act before.nextScope pre (resultScopeStart environment scope before) with
+  | ok unit ready =>
+      cases unit
+      simp only [resultScopeStart] at result
+      simp only [result]
+      cases outcome : execStmts fuel config { environment with scopes := (scope, before.nextScope) :: environment.scopes }
+        statements ready with
+      | ok flow after => cases flow <;> cases value <;> simp_all [bind, pure] <;> rfl
+      | stop | escape | jump => simp_all [bind, pure]
+  | stop | escape | jump => simp_all only [resultScopeStart]
+
+#print axioms execResultScope_bind
 theorem execResultScope_boundReplay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (scope : Nat)
     (statements : List Stmt) (value : Option Expr) (tailAction : RuntimeActivation → Expr → EvalM (List Carrier))
