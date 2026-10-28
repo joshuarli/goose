@@ -434,6 +434,13 @@
   "evidence": "Goose/Proofs/ConstructionExitByteBacking.lean; Goose/Proofs/ConstructionExitByteProduce.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Byte exit replacement ancestry",
+  "statement": "Successful byte production into a replacement destination retains its backed carrier and parent ownership through scope release. A successful fresh exit reservation has a replacement path from its saved destination to its selected open byte destination; that path persists through immediate scope release.",
+  "assumptions": "Accepted ownership worlds, successful production or reservation, open byte backing and destination shape. The reservation result assumes an accepted world at the reserved state.",
+  "limits": "Parent authority may be abandoned or cancelled; a live receiving anchor, reservation preservation through construction and exit cleanup, and handler landing remain open. This component does not close TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionExitByteReplacement.lean; Goose/Proofs/ConstructionExitReservationPath.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted construction value representation fragment",
   "label": "model-proved",
   "theorem": "Goose.Construct.validated_implementation_typing; Goose.Proofs.ConstructionRepresentation.fixedInitializer_evaluation; Goose.Proofs.ConstructionRepresentation.accepted_integerArray_callValue",
@@ -635,10 +642,10 @@
  },
  {
   "feature": "Byte-owner global initialization outcomes",
-  "statement": "At every fuel, every outcome of a contiguous sequence of byte-owner global initializers preserves an accepted world. Success initializes the entire range and leaves future globals clear; a stop identifies the unfinished initializer. Escape and jump outcomes are impossible.",
+  "statement": "At every fuel, every outcome of a contiguous sequence of byte-owner global initializers preserves an accepted world. Success initializes the entire range and leaves future globals clear; a stop identifies the unfinished initializer. Escape and jump outcomes are impossible. A validated module with byte-owner globals has these properties from its initial state, and an initialization stop is the actual module stop.",
   "assumptions": "Accepted world, future-global freshness and in-bounds byte-owner global descriptors.",
   "limits": "Other global types and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionByteGlobalComplete.lean; Goose/Proofs/ConstructionByteGlobalZeroComplete.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Proofs/ConstructionByteGlobalComplete.lean; Goose/Proofs/ConstructionByteGlobalZeroComplete.lean; Goose/Proofs/ConstructionByteGlobalInitialComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Byte-owner construction stop preservation",
@@ -663,10 +670,10 @@
  },
  {
   "feature": "Accepted scalar value evaluation",
-  "statement": "At every fuel, checked integer literals, Boolean literals, initialized global reads, recursively nested Boolean negations, integer unary operations and conversions preserve the accepted world and source frame; every successful value satisfies its checked value invariant. Numeric aborts and operand stops are included.",
+  "statement": "At every fuel, checked integer literals, Boolean literals, initialized global reads, recursively nested Boolean negations, integer unary operations and conversions preserve the accepted world and source frame; every successful value satisfies its checked value invariant. Binary operations and comparisons over that scalar and unary fragment also preserve these invariants. Numeric aborts and operand stops are included.",
   "assumptions": "Accepted world and source frame, and a checked value expression.",
-  "limits": "Binary operations, other places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; Goose/Proofs/ConstructionAcceptedNotComplete.lean; Goose/Proofs/ConstructionAcceptedNumericComplete.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "Recursively nested binary operations, other places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; Goose/Proofs/ConstructionAcceptedNotComplete.lean; Goose/Proofs/ConstructionAcceptedNumericComplete.lean; Goose/Proofs/ConstructionAcceptedBinaryComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Stopped byte-owner local construction",
