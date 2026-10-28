@@ -24,6 +24,9 @@ inductive SourceOperation : Type → Type
   | callWith (environment : RuntimeActivation) (context : Goose.Core.ContextId) (arguments : List Arg)
       (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
   | builder (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (expression : Expr) : SourceOperation Unit
+  | bound (environment : RuntimeActivation) (count : Nat) (defaultValue : Int) (bound : Bound) : SourceOperation Int
+  | place (environment : RuntimeActivation) (place : Place) : SourceOperation Goose.Core.Loc
+  | view (environment : RuntimeActivation) (view : View) : SourceOperation RuntimeView
   | printArgument (environment : RuntimeActivation) (argument : PrintArg) : SourceOperation ByteArray
   | element (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty) (operand : Expr) : SourceOperation Unit
   | arguments (environment : RuntimeActivation) (vars : Array LocalVar) (parameters : List Param)
@@ -42,6 +45,9 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .call environment context origin => invokeCall fuel config environment context [] [] origin
   | .callWith environment context arguments origin => invokeCall fuel config environment context arguments [] origin
   | .builder environment destination expression => buildExpr fuel config environment destination expression
+  | .bound environment count defaultValue bound => evalBound fuel config environment count defaultValue bound
+  | .place environment place => evalPlace fuel config environment place
+  | .view environment view => evalView fuel config environment view
   | .printArgument environment argument => evalPrintArg fuel config environment argument
   | .element environment parent element operand => buildElement fuel config environment parent element operand
   | .arguments environment vars parameters arguments => evalArguments fuel config environment vars parameters arguments
@@ -478,6 +484,83 @@ inductive SourceHistory (config : EvalConfig) :
         { before with nextAct := before.nextAct + 1, activations := (⟨context.impl, before.nextAct, implementation.vars, [], []⟩ : RuntimeActivation) :: before.activations } outcome) :
       SourceHistory config (fuel + 2) path (.call environment contextId origin) before
         (callDeliveryResult (fuel + 1) config origin outcome)
+  | omittedBound (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (count : Nat)
+      (defaultValue : Int) (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.bound environment count defaultValue .omitted) before (.ok defaultValue before)
+  | expressionBound {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {count : Nat}
+      {defaultValue : Int} {operand : Expr} {fromEnd : Bool} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before
+        (evalValue fuel config environment operand before)) :
+      SourceHistory config (fuel + 1) path (.bound environment count defaultValue
+        (if fromEnd then .fromEnd operand else .expr operand)) before
+        (evalBound (fuel + 1) config environment count defaultValue
+          (if fromEnd then .fromEnd operand else .expr operand) before)
+  | localPlace (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId)
+      (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.place environment (.var localVar)) before
+        (evalPlace (fuel + 1) config environment (.var localVar) before)
+  | globalPlace (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (global : Goose.Core.GlobalId)
+      (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.place environment (.global global)) before
+        (evalPlace (fuel + 1) config environment (.global global) before)
+  | dereferencePlace {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before
+        (evalValue fuel config environment operand before)) :
+      SourceHistory config (fuel + 1) path (.place environment (.deref operand)) before
+        (evalPlace (fuel + 1) config environment (.deref operand) before)
+  | fieldPlace {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {owner : Place} {index : Nat} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.place environment owner) before
+        (evalPlace fuel config environment owner before)) :
+      SourceHistory config (fuel + 1) path (.place environment (.field owner index)) before
+        (evalPlace (fuel + 1) config environment (.field owner index) before)
+  | elementPlace {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {view : View} {operand : Expr}
+      {origin : Goose.Core.OriginId} {before : ExecutionState}
+      (viewChild : SourceHistory config fuel (path ++ [0]) (.view environment view) before
+        (evalView fuel config environment view before))
+      (indexChild : ∀ value ready, evalView fuel config environment view before = .ok value ready →
+        SourceHistory config fuel (path ++ [1]) (.value environment operand) ready
+          (evalValue fuel config environment operand ready)) :
+      SourceHistory config (fuel + 1) path (.place environment (.elem view operand origin)) before
+        (evalPlace (fuel + 1) config environment (.elem view operand origin) before)
+  | placeView {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {place : Place} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.place environment place) before
+        (evalPlace fuel config environment place before)) :
+      SourceHistory config (fuel + 1) path (.view environment (.of place)) before
+        (evalView (fuel + 1) config environment (.of place) before)
+  | valueView {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before
+        (evalValue fuel config environment operand before)) :
+      SourceHistory config (fuel + 1) path (.view environment (.val operand)) before
+        (evalView (fuel + 1) config environment (.val operand) before)
+  | readValue {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {place : Place} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.place environment place) before
+        (evalPlace fuel config environment place before)) :
+      SourceHistory config (fuel + 1) path (.value environment (.read place)) before
+        (evalValue (fuel + 1) config environment (.read place) before)
+  | referenceValue {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {mutability : Goose.Core.Mutability}
+      {place : Place} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.place environment place) before
+        (evalPlace fuel config environment place before)) :
+      SourceHistory config (fuel + 1) path (.value environment (.ref mutability place)) before
+        (evalValue (fuel + 1) config environment (.ref mutability place) before)
+  | lengthValue {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {view : View} {before : ExecutionState}
+      (child : SourceHistory config fuel (path ++ [0]) (.view environment view) before
+        (evalView fuel config environment view before)) :
+      SourceHistory config (fuel + 1) path (.value environment (.len view)) before
+        (evalValue (fuel + 1) config environment (.len view) before)
+  | sliceValue {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {mutability : Goose.Core.Mutability}
+      {view : View} {lo hi : Bound} {origin : Goose.Core.OriginId} {before : ExecutionState}
+      (viewChild : SourceHistory config fuel (path ++ [0]) (.view environment view) before
+        (evalView fuel config environment view before))
+      (loChild : ∀ value middle, evalView fuel config environment view before = .ok value middle →
+        SourceHistory config fuel (path ++ [1]) (.bound environment value.count 0 lo) middle
+          (evalBound fuel config environment value.count 0 lo middle))
+      (hiChild : ∀ value middle low ready, evalView fuel config environment view before = .ok value middle →
+        evalBound fuel config environment value.count 0 lo middle = .ok low ready →
+        SourceHistory config fuel (path ++ [2]) (.bound environment value.count value.count hi) ready
+          (evalBound fuel config environment value.count value.count hi ready)) :
+      SourceHistory config (fuel + 1) path (.value environment (.slice mutability view lo hi origin)) before
+        (evalValue (fuel + 1) config environment (.slice mutability view lo hi origin) before)
   | printArgumentText (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (text : String)
       (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.printArgument environment (.text text)) before (.ok text.toUTF8 before)
@@ -568,7 +651,7 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
   | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical => rfl
   | @negation fuel path environment operand before outcome child ih =>
@@ -641,6 +724,9 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
         contextFound implementationFound parametersEmpty resultsEmpty depth]
       simp only [bind, ih, callDeliveryResult]
       cases outcome <;> rfl
+  | omittedBound => simp [execute, evalBound, pure]
+  | expressionBound | localPlace | globalPlace | dereferencePlace | fieldPlace | elementPlace | placeView | valueView |
+    readValue | referenceValue | lengthValue | sliceValue => rfl
   | printArgumentText => simp [execute, evalPrintArg, pure]
   | printArgumentExpression | printArguments | printText => rfl
   | builderBytes => rfl
@@ -814,6 +900,46 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (body : ∀ act, SupportedOperation config
         (.activation ⟨context.impl, act, implementation.vars, [], []⟩ implementation.body origin)) :
       SupportedOperation config (.call environment contextId origin)
+  | omittedBound (environment : RuntimeActivation) (count : Nat) (defaultValue : Int) :
+      SupportedOperation config (.bound environment count defaultValue .omitted)
+  | expressionBound (environment : RuntimeActivation) (count : Nat) (defaultValue : Int) (operand : Expr) (fromEnd : Bool)
+      (child : SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.bound environment count defaultValue (if fromEnd then .fromEnd operand else .expr operand))
+  | localPlace (environment : RuntimeActivation) (localVar : Goose.Core.VarId) :
+      SupportedOperation config (.place environment (.var localVar))
+  | globalPlace (environment : RuntimeActivation) (global : Goose.Core.GlobalId) :
+      SupportedOperation config (.place environment (.global global))
+  | dereferencePlace (environment : RuntimeActivation) (operand : Expr)
+      (child : SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.place environment (.deref operand))
+  | fieldPlace (environment : RuntimeActivation) (owner : Place) (index : Nat)
+      (child : SupportedOperation config (.place environment owner)) :
+      SupportedOperation config (.place environment (.field owner index))
+  | elementPlace (environment : RuntimeActivation) (view : View) (operand : Expr) (origin : Goose.Core.OriginId)
+      (viewChild : SupportedOperation config (.view environment view))
+      (indexChild : SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.place environment (.elem view operand origin))
+  | placeView (environment : RuntimeActivation) (place : Place)
+      (child : SupportedOperation config (.place environment place)) :
+      SupportedOperation config (.view environment (.of place))
+  | valueView (environment : RuntimeActivation) (operand : Expr)
+      (child : SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.view environment (.val operand))
+  | readValue (environment : RuntimeActivation) (place : Place)
+      (child : SupportedOperation config (.place environment place)) :
+      SupportedOperation config (.value environment (.read place))
+  | referenceValue (environment : RuntimeActivation) (mutability : Goose.Core.Mutability) (place : Place)
+      (child : SupportedOperation config (.place environment place)) :
+      SupportedOperation config (.value environment (.ref mutability place))
+  | lengthValue (environment : RuntimeActivation) (view : View)
+      (child : SupportedOperation config (.view environment view)) :
+      SupportedOperation config (.value environment (.len view))
+  | sliceValue (environment : RuntimeActivation) (mutability : Goose.Core.Mutability) (view : View)
+      (lo hi : Bound) (origin : Goose.Core.OriginId)
+      (viewChild : SupportedOperation config (.view environment view))
+      (loChild : ∀ count, SupportedOperation config (.bound environment count 0 lo))
+      (hiChild : ∀ count, SupportedOperation config (.bound environment count count hi)) :
+      SupportedOperation config (.value environment (.slice mutability view lo hi origin))
   | printArgumentText (environment : RuntimeActivation) (text : String) :
       SupportedOperation config (.printArgument environment (.text text))
   | printArgumentExpression (environment : RuntimeActivation) (expression : Expr)
@@ -855,7 +981,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalPrintArg, buildExpr, buildElement, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, evalPrintArg, buildExpr, buildElement, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -1073,6 +1199,36 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
                   contextFound implementationFound parametersEmpty resultsEmpty full] using
                   (SourceHistory.callDepth contextFound implementationFound parametersEmpty resultsEmpty full :
                     SourceHistory config (fuel + 2) path (.call environment contextId origin) before _)
+      | omittedBound environment count defaultValue =>
+          simpa [execute, evalBound, pure] using (SourceHistory.omittedBound fuel path environment count defaultValue before)
+      | expressionBound environment count defaultValue operand fromEnd child =>
+          exact .expressionBound (ih (.value environment operand) (path ++ [0]) before child)
+      | localPlace environment localVar => exact .localPlace fuel path environment localVar before
+      | globalPlace environment global => exact .globalPlace fuel path environment global before
+      | dereferencePlace environment operand child =>
+          exact .dereferencePlace (ih (.value environment operand) (path ++ [0]) before child)
+      | fieldPlace environment owner index child =>
+          exact .fieldPlace (ih (.place environment owner) (path ++ [0]) before child)
+      | elementPlace environment view operand origin viewChild indexChild =>
+          refine .elementPlace (ih (.view environment view) (path ++ [0]) before viewChild) ?_
+          intro value ready result
+          exact ih (.value environment operand) (path ++ [1]) ready indexChild
+      | placeView environment place child =>
+          exact .placeView (ih (.place environment place) (path ++ [0]) before child)
+      | valueView environment operand child =>
+          exact .valueView (ih (.value environment operand) (path ++ [0]) before child)
+      | readValue environment place child =>
+          exact .readValue (ih (.place environment place) (path ++ [0]) before child)
+      | referenceValue environment mutability place child =>
+          exact .referenceValue (ih (.place environment place) (path ++ [0]) before child)
+      | lengthValue environment view child =>
+          exact .lengthValue (ih (.view environment view) (path ++ [0]) before child)
+      | sliceValue environment mutability view lo hi origin viewChild loChild hiChild =>
+          refine .sliceValue (ih (.view environment view) (path ++ [0]) before viewChild) ?_ ?_
+          · intro value middle result
+            exact ih (.bound environment value.count 0 lo) (path ++ [1]) middle (loChild value.count)
+          · intro value middle low ready result bounded
+            exact ih (.bound environment value.count value.count hi) (path ++ [2]) ready (hiChild value.count)
       | printArgumentText environment text =>
           simpa [execute, evalPrintArg, pure] using (SourceHistory.printArgumentText fuel path environment text before)
       | printArgumentExpression environment expression childSupported =>
@@ -1604,6 +1760,38 @@ theorem witness_printArgumentCall : ∃ after,
     exact history
 
 #print axioms witness_printArgumentCall
+
+private def boundCallWitness : Expr := .slice .readOnly
+  (.val (.fill (.arr (.int .i64) 2) (.lit .i64 7) 0)) (.expr (.call 0 [] 0)) .omitted 0
+
+theorem witness_sliceBoundCall : ∃ after,
+    evalValue 40 sideEffectConfig witnessEnvironment boundCallWitness .initial = .stop (.fault .shape) after ∧
+    after.construction.stdout.data.toList = [120, 10] ∧
+    SourceHistory sideEffectConfig 40 [] (.value witnessEnvironment boundCallWitness) .initial (.stop (.fault .shape) after) := by
+  have supported : SupportedOperation sideEffectConfig (.value witnessEnvironment boundCallWitness) := by
+    unfold boundCallWitness
+    apply SupportedOperation.sliceValue
+    · exact .valueView witnessEnvironment _ (.value witnessEnvironment (.fill (.int .i64) 2 0 rfl (.integer .i64 7)))
+    · intro count
+      exact .expressionBound witnessEnvironment count 0 (.call 0 [] 0) false sideEffectValue_supported
+    · intro count
+      exact .omittedBound witnessEnvironment count count
+  have history := history_exists 40 sideEffectConfig (.value witnessEnvironment boundCallWitness) [] .initial supported
+  refine ⟨witnessState (evalValue 40 sideEffectConfig witnessEnvironment boundCallWitness .initial), ?_, ?_, ?_⟩
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment boundCallWitness
+    cbv
+  · unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment boundCallWitness
+    cbv
+  · have actual : evalValue 40 sideEffectConfig witnessEnvironment boundCallWitness .initial =
+        .stop (.fault .shape) (witnessState (evalValue 40 sideEffectConfig witnessEnvironment boundCallWitness .initial)) := by
+      unfold witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment boundCallWitness
+      cbv
+    change SourceHistory sideEffectConfig 40 [] (.value witnessEnvironment boundCallWitness) .initial
+      (evalValue 40 sideEffectConfig witnessEnvironment boundCallWitness .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_sliceBoundCall
 
 #print axioms witness_fillSourceOnce
 
