@@ -91,6 +91,89 @@ theorem runModule_sourceForests (fuel : Nat) (config : EvalConfig) (before : Exe
 #print axioms globalReplay_materializedSourceForest
 #print axioms runModule_sourceForests
 
+def directGlobalAfterBuild (global : Goose.Core.GlobalId) (descriptor : Global) (destination : Goose.Core.DestinationId) :
+    ExecutionStep Unit → ExecutionStep Unit
+  | .ok () state => (do
+      let destination ← completedReceivingDestination destination
+      publishCarriers descriptor.org [.completed destination]
+      let value ← carrierValue (.completed destination)
+      bindRoot (.global global) value) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+def directGlobalAfterAllocation (fuel : Nat) (config : EvalConfig) (global : Goose.Core.GlobalId)
+    (descriptor : Global) (act : Goose.Core.ActId) : ExecutionStep Goose.Core.DestinationId → ExecutionStep Unit
+  | .ok destination state => directGlobalAfterBuild global descriptor destination
+      (buildExpr fuel config ⟨0, act, #[], [], []⟩ destination descriptor.init state)
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+theorem directGlobal_source (fuel : Nat) (config : EvalConfig) (global : Goose.Core.GlobalId)
+    (descriptor : Global) (before : ExecutionState)
+    (found : config.module.globals[global]? = some descriptor) (nonfixed : descriptor.ty.nonfixed = true)
+    (direct : ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = none) :
+    globalInitializer fuel config global before =
+      directGlobalAfterAllocation fuel config global descriptor before.nextAct
+        (newDestination config.layout before.nextAct descriptor.ty .value descriptor.org none
+          (producerCount? ⟨config.module, #[]⟩ descriptor.init) { before with nextAct := before.nextAct + 1 }) := by
+  simp only [globalInitializer, found, bind, freshAct, EvalM.get, EvalM.set, pure, nonfixed, ↓reduceIte,
+    materializeProducer, direct, constructLocal, directGlobalAfterAllocation, directGlobalAfterBuild]
+  cases result : newDestination config.layout before.nextAct descriptor.ty .value descriptor.org none
+    (producerCount? ⟨config.module, #[]⟩ descriptor.init) { before with nextAct := before.nextAct + 1 } with
+  | ok destination ready =>
+      simp only [EvalConfig.layout] at result
+      simp only [result, bind, pure, directGlobalAfterBuild]
+      cases built : buildExpr fuel config ⟨0, before.nextAct, #[], [], []⟩ destination descriptor.init ready with
+      | ok unit after =>
+          cases unit
+          simp only [built, bind, pure]
+          cases completed : completedReceivingDestination destination after with
+          | ok current finished =>
+              simp only [completed, bind, pure]
+              cases published : publishCarriers descriptor.org [.completed current] finished <;>
+                simp [published, bind, pure]
+          | stop | escape | jump => simp_all [bind, pure]
+      | stop | escape | jump => simp_all [bind, pure]
+  | stop | escape | jump => simp_all [bind, pure, EvalConfig.layout]
+
+def DirectSourceForest (fuel : Nat) (config : EvalConfig)
+    (visits : List (Invocation Goose.Core.GlobalId Unit)) : Prop :=
+  ∀ visit ∈ visits, ∀ descriptor,
+    config.module.globals[visit.operand]? = some descriptor → descriptor.ty.nonfixed = true →
+    ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = none →
+    let environment : RuntimeActivation := ⟨0, visit.before.nextAct, #[], [], []⟩
+    let allocated := { visit.before with nextAct := visit.before.nextAct + 1 }
+    visit.outcome = directGlobalAfterAllocation fuel config visit.operand descriptor visit.before.nextAct
+      (newDestination config.layout visit.before.nextAct descriptor.ty .value descriptor.org none
+        (producerCount? ⟨config.module, #[]⟩ descriptor.init) allocated) ∧
+    ∀ destination ready,
+      newDestination config.layout visit.before.nextAct descriptor.ty .value descriptor.org none
+        (producerCount? ⟨config.module, #[]⟩ descriptor.init) allocated = .ok destination ready →
+      SourceHistory config fuel [visit.ordinal, 0] (.builder environment destination descriptor.init) ready
+        (buildExpr fuel config environment destination descriptor.init ready)
+
+theorem globalReplay_directSourceForest {fuel : Nat} {config : EvalConfig} {offset : Nat}
+    {globals : List Goose.Core.GlobalId} {accumulator : List Unit} {before : ExecutionState}
+    {outcome : ExecutionStep (List Unit)} {visits : List (Invocation Goose.Core.GlobalId Unit)}
+    (replay : OperandReplay (globalInitializer fuel config) offset globals accumulator before outcome visits)
+    (supported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global),
+      config.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+      ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = none →
+      ∀ environment destination, SupportedOperation config (.builder environment destination descriptor.init)) :
+    DirectSourceForest fuel config visits := by
+  intro visit member descriptor found nonfixed direct
+  dsimp only
+  refine ⟨(visit_executes replay visit member).symm.trans
+    (directGlobal_source fuel config visit.operand descriptor visit.before found nonfixed direct), ?_⟩
+  intro destination ready allocated
+  exact history_exists fuel config _ _ _ (supported visit.operand descriptor found nonfixed direct _ destination)
+
+#print axioms globalReplay_directSourceForest
+
+#print axioms directGlobal_source
+
 def entryCallResult : ExecutionStep (List Carrier) → ExecutionStep Unit
   | .ok carriers state => publishCarriers 0 carriers state
   | .stop reason state => .stop reason state
@@ -160,6 +243,42 @@ theorem runModule_sourceForestsAndEntry (fuel : Nat) (config : EvalConfig) (befo
     ordered, once, execution, entry⟩
 
 #print axioms runModule_sourceForestsAndEntry
+
+theorem runModule_allSourceForestsAndEntry (fuel : Nat) (config : EvalConfig) (before : ExecutionState)
+    (fixedSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global), config.module.globals[global]? = some descriptor →
+      descriptor.ty.nonfixed = false → ∀ environment, SupportedOperation config (.value environment descriptor.init))
+    (materializedSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global) count,
+      config.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+      ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = some count →
+      ∀ environment, SupportedOperation config (.value environment descriptor.init))
+    (directSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global),
+      config.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+      ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = none →
+      ∀ environment destination, SupportedOperation config (.builder environment destination descriptor.init))
+    (entryContext : Context) (entryImplementation : Impl)
+    (contextFound : config.module.contexts[config.module.entry]? = some entryContext)
+    (implementationFound : config.module.impls[entryContext.impl]? = some entryImplementation)
+    (resultsEmpty : entryImplementation.results = #[])
+    (entrySupported : SupportedOperation config (.call ⟨0, 0, #[], [], []⟩ config.module.entry 0)) :
+    ∃ outcome visits,
+      OperandReplay (globalInitializer fuel config) 0 (List.range config.module.globals.size) [] before outcome visits ∧
+      FixedSourceForest fuel config visits ∧ MaterializedSourceForest fuel config visits ∧ DirectSourceForest fuel config visits ∧
+      visits.map Invocation.operand = (List.range config.module.globals.size).take visits.length ∧
+      (visits.map Invocation.ordinal).Nodup ∧
+      runModule fuel config before = moduleAfterGlobals fuel config (discardGlobalValues outcome) ∧
+      ∀ initialized, discardGlobalValues outcome = .ok () initialized →
+        SourceHistory config fuel [config.module.globals.size, 0]
+          (.call ⟨0, 0, #[], [], []⟩ config.module.entry 0) initialized
+          (invokeCall fuel config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 initialized) ∧
+        runModule fuel config before = entryCallResult
+          (invokeCall fuel config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 initialized) := by
+  obtain ⟨outcome, visits, replay, fixed, materialized, ordered, once, execution, entry⟩ :=
+    runModule_sourceForestsAndEntry fuel config before fixedSupported materializedSupported entryContext entryImplementation
+      contextFound implementationFound resultsEmpty entrySupported
+  exact ⟨outcome, visits, replay, fixed, materialized, globalReplay_directSourceForest replay directSupported,
+    ordered, once, execution, entry⟩
+
+#print axioms runModule_allSourceForestsAndEntry
 
 private def witnessEntry : Impl := ⟨"entry", #[], #[], #[], .mk 0 [] none, .unknown⟩
 private def witnessCallee : Impl := ⟨"source", #[], #[], #[], .mk 1 [.print [.text "x"] 0] none, .unknown⟩
@@ -300,6 +419,74 @@ theorem witness_materializedGlobal : ∃ outcome visits state,
     cbv
 
 #print axioms witness_materializedGlobal
+
+private def directGlobal : Global := ⟨"bytes", .varr (.int .u8), .immutable,
+  .bytes (.varr (.int .u8)) [65, 66] 0, 0⟩
+private def directConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[directGlobal], #[witnessEntry], #[witnessEntryContext], 0, #[], #[], #[]⟩⟩
+
+private theorem direct_descriptor (global : Goose.Core.GlobalId) (descriptor : Global)
+    (found : directConfig.module.globals[global]? = some descriptor) : descriptor = directGlobal := by
+  cases global with
+  | zero => simpa [directConfig] using found.symm
+  | succ global => simp [directConfig] at found
+
+private theorem direct_fixedSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global),
+    directConfig.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = false →
+    ∀ environment, SupportedOperation directConfig (.value environment descriptor.init) := by
+  intro global descriptor found fixed environment
+  have descriptorEq := direct_descriptor global descriptor found
+  subst descriptor
+  simp [directGlobal, Ty.nonfixed] at fixed
+
+private theorem direct_materializedSupported (fuel : Nat) : ∀ (global : Goose.Core.GlobalId) (descriptor : Global) count,
+    directConfig.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+    ordinaryProducerCount? fuel ⟨directConfig.module, #[]⟩ descriptor.init = some count →
+    ∀ environment, SupportedOperation directConfig (.value environment descriptor.init) := by
+  intro global descriptor count found nonfixed countFound environment
+  have descriptorEq := direct_descriptor global descriptor found
+  subst descriptor
+  simp [directGlobal, ordinaryProducerCount?, producerCount?, literalCount] at countFound
+
+private theorem direct_supported (fuel : Nat) : ∀ (global : Goose.Core.GlobalId) (descriptor : Global),
+    directConfig.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+    ordinaryProducerCount? fuel ⟨directConfig.module, #[]⟩ descriptor.init = none →
+    ∀ environment destination, SupportedOperation directConfig (.builder environment destination descriptor.init) := by
+  intro global descriptor found nonfixed direct environment destination
+  have descriptorEq := direct_descriptor global descriptor found
+  subst descriptor
+  exact .builderBytes environment destination (.varr (.int .u8)) [65, 66] 0
+
+private theorem direct_entrySupported : SupportedOperation directConfig (.call ⟨0, 0, #[], [], []⟩ 0 0) := by
+  apply SupportedOperation.call ⟨0, 0, #[], [], []⟩ 0 0 witnessEntryContext witnessEntry
+  · rfl
+  · rfl
+  · rfl
+  · rfl
+  · intro act
+    exact .activation _ 0 [] 0 (fun environment => .empty environment)
+
+theorem witness_directGlobal (fuel : Nat) : ∃ outcome visits,
+    OperandReplay (globalInitializer fuel directConfig) 0 (List.range directConfig.module.globals.size) [] .initial outcome visits ∧
+    DirectSourceForest fuel directConfig visits ∧
+    ∀ initialized, discardGlobalValues outcome = .ok () initialized →
+      SourceHistory directConfig fuel [directConfig.module.globals.size, 0] (.call ⟨0, 0, #[], [], []⟩ 0 0) initialized
+        (invokeCall fuel directConfig ⟨0, 0, #[], [], []⟩ 0 [] [] 0 initialized) ∧
+      runModule fuel directConfig .initial = entryCallResult
+        (invokeCall fuel directConfig ⟨0, 0, #[], [], []⟩ 0 [] [] 0 initialized) := by
+  obtain ⟨outcome, visits, replay, fixed, materialized, direct, ordered, once, execution, entry⟩ :=
+    runModule_allSourceForestsAndEntry fuel directConfig .initial direct_fixedSupported (direct_materializedSupported fuel)
+      (direct_supported fuel) witnessEntryContext witnessEntry rfl rfl rfl direct_entrySupported
+  exact ⟨outcome, visits, replay, direct, entry⟩
+
+theorem witness_directGlobal_events : ∃ state,
+    runModule 40 directConfig .initial = .ok () state ∧
+    state.construction.events = [.begin 0, .write 0 0, .write 0 1, .publish 0] := by
+  refine ⟨witnessState (runModule 40 directConfig .initial), ?_, ?_⟩ <;>
+    unfold witnessState directConfig directGlobal witnessEntry witnessEntryContext <;> cbv
+
+#print axioms witness_directGlobal
+#print axioms witness_directGlobal_events
 
 #print axioms witness_globalFillOnce
 

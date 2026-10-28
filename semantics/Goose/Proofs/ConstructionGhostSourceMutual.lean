@@ -15,6 +15,7 @@ inductive SourceOperation : Type → Type
   | activationBody (activation : RuntimeActivation) (block : Block) : SourceOperation (List Carrier)
   | activation (activation : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
   | call (environment : RuntimeActivation) (context : Goose.Core.ContextId) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
+  | builder (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (expression : Expr) : SourceOperation Unit
   | element (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty) (operand : Expr) : SourceOperation Unit
   | arguments (environment : RuntimeActivation) (vars : Array LocalVar) (parameters : List Param)
       (arguments : List Arg) : SourceOperation (List Value)
@@ -28,6 +29,7 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .activationBody activation block => execActivationBody fuel config activation [] block
   | .activation activation block origin => enterActivation fuel config activation [] block origin
   | .call environment context origin => invokeCall fuel config environment context [] [] origin
+  | .builder environment destination expression => buildExpr fuel config environment destination expression
   | .element environment parent element operand => buildElement fuel config environment parent element operand
   | .arguments environment vars parameters arguments => evalArguments fuel config environment vars parameters arguments
   | .producer environment expression => evalProduce fuel config environment [] expression
@@ -276,6 +278,11 @@ inductive SourceHistory (config : EvalConfig) :
       (origin : Goose.Core.OriginId) (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.statement environment (.print [.text text] origin)) before
         (execStmt (fuel + 1) config environment (.print [.text text] origin) before)
+  | builderBytes (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (destination : Goose.Core.DestinationId) (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+      (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.builder environment destination (.bytes ty bytes origin)) before
+        (buildExpr (fuel + 1) config environment destination (.bytes ty bytes origin) before)
   | fixedElement {fuel : Nat} {path : List Nat} {environment : RuntimeActivation}
       {parent : Goose.Core.DestinationId} {element : Ty} {operand : Expr} {before : ExecutionState}
       {outcome : ExecutionStep Value} (fixed : element.nonfixed = false)
@@ -317,7 +324,7 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
@@ -373,6 +380,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       simp only [bind, ih, callDeliveryResult]
       cases outcome <;> rfl
   | printText => rfl
+  | builderBytes => rfl
   | @fixedElement fuel path environment parent element operand before outcome fixed child ih =>
       simp only [execute] at ih ⊢
       rw [fixedElement_execution fuel config environment parent element operand before fixed, ih]
@@ -489,6 +497,9 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       SupportedOperation config (.call environment contextId origin)
   | printText (environment : RuntimeActivation) (text : String) (origin : Goose.Core.OriginId) :
       SupportedOperation config (.statement environment (.print [.text text] origin))
+  | builderBytes (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (ty : Ty)
+      (bytes : List UInt8) (origin : Goose.Core.OriginId) :
+      SupportedOperation config (.builder environment destination (.bytes ty bytes origin))
   | fixedElement (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty)
       (operand : Expr) (fixed : element.nonfixed = false)
       (child : SupportedOperation config (.value environment operand)) :
@@ -508,7 +519,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildElement, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildExpr, buildElement, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -647,6 +658,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
                   (SourceHistory.callDepth contextFound implementationFound parametersEmpty resultsEmpty full :
                     SourceHistory config (fuel + 2) path (.call environment contextId origin) before _)
       | printText environment text origin => exact .printText fuel path environment text origin before
+      | builderBytes environment destination ty bytes origin => exact .builderBytes fuel path environment destination ty bytes origin before
       | fixedElement environment parent element operand fixed childSupported =>
           have child := ih (.value environment operand) (path ++ [0]) before childSupported
           simp only [execute] at child ⊢
