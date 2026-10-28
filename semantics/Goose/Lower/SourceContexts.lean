@@ -1870,7 +1870,8 @@ private theorem ifConditionData {cfg : Cfg} {env : Env} {state : St} {condition 
           (by simp [DemandNode.child?, DemandNode.children])
           (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture ∧
       child.context.mayShrink source.world.ownerP source.observation =
-        source.context.mayShrink source.world.ownerP source.observation := by
+        source.context.mayShrink source.world.ownerP source.observation ∧
+      source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]) := by
   have typed := source.typed
   have rooted := source.rooted
   have childAt : (DemandNode.statement (.ifS condition yes no origin)).child? 0 = some (.expression condition) := by
@@ -1887,9 +1888,10 @@ private theorem ifConditionData {cfg : Cfg} {env : Env} {state : St} {condition 
           (by simp [DemandNode.child?, DemandNode.children])
           (by simp [DemandNodeHasPhase, DemandNode.phaseMatches])).outputFuture ∧
       child.context.mayShrink source.world.ownerP source.observation =
-        source.context.mayShrink source.world.ownerP source.observation) := by
+        source.context.mayShrink source.world.ownerP source.observation ∧
+      source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children])) := by
     intro finish roots finishRoots typed rooted effects
-    obtain ⟨child, htyping, hroots, htype, hworld, hobs, hfuture, hmay, _⟩ :=
+    obtain ⟨child, htyping, hroots, htype, hworld, hobs, hfuture, hmay, hpath, hplans, hcontext⟩ :=
       source.firstExpressionChildSource condition childAt
       (by simp [DemandNode.visibleForChild])
       (by intro x member; cases no <;> simp [Stmt.variables, member])
@@ -1900,7 +1902,7 @@ private theorem ifConditionData {cfg : Cfg} {env : Env} {state : St} {condition 
         cases no <;> simpa [Stmt.variables, List.append_assoc] using included)
       (by intro access parent; simp [DemandNode.childExpectation?, DemandNode.childFuture, childAt])
       source.typingStart finish .bool source.rootsStart finishRoots roots typed rooted effects
-    exact ⟨child, htyping, hroots, htype, hworld, hobs, hfuture, hmay⟩
+    exact ⟨child, htyping, hroots, htype, hworld, hobs, hfuture, hmay, ⟨hworld, hpath, hplans, hcontext⟩⟩
   cases no with
   | none =>
     simp only [tyStmt] at typed
@@ -1932,6 +1934,15 @@ theorem StmtSource.ifConditionChild {cfg : Cfg} {env : Env} {state : St} {condit
       child.rootsEnv = source.rootsEnv ∧ child.ty = .bool := by
   obtain ⟨child, typingEq, rootsEq, typeEq, _⟩ := ifConditionData source
   exact ⟨child, typingEq, rootsEq, typeEq⟩
+
+theorem StmtSource.ifConditionChildAt {cfg : Cfg} {env : Env} {state : St} {condition : Expr}
+    {yes : Block} {no : Option Block} {origin : OriginId}
+    (source : StmtSource cfg env (.ifS condition yes no origin) state) :
+    ∃ child : ExprSource cfg env condition state, child.typingEnv = source.typingEnv ∧
+      child.rootsEnv = source.rootsEnv ∧ child.ty = .bool ∧
+      source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]) := by
+  obtain ⟨child, typing, roots, ty, world, observation, future, may, canonical⟩ := ifConditionData source
+  exact ⟨child, typing, roots, ty, canonical⟩
 
 private theorem blockGam_scope {env : Env} {scope : Nat} {newScope : ScopeInst}
     {parameters : Nat → RootInst → Prop} {roots : List RootRef} {root : RootInst}
@@ -2139,7 +2150,7 @@ private theorem ifBlockAt {cfg : Cfg} {env : Env} {state after : St} {condition 
     (effects : EffLe rootFinish.eff source.world.E) :
     ∃ child : BlockSource cfg env [] block after, child.typingEnv = source.typingEnv ∧
       child.rootsEnv = source.rootsEnv ∧ child.world = source.world ∧ child.observation = source.observation := by
-  obtain ⟨conditionSource, typingEq, rootsEq, _, worldEq, observationEq, outputEq, mayEq⟩ := ifConditionData source
+  obtain ⟨conditionSource, typingEq, rootsEq, _, worldEq, observationEq, outputEq, mayEq, _⟩ := ifConditionData source
   have result := conditionSource.result fuel (.bool value) done
   have frame := result.frame
   rw [typingEq, rootsEq, worldEq, outputEq] at frame

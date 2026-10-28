@@ -73,6 +73,8 @@ inductive DemandLoweringAction.FirstChild : DemandLoweringAction → DemandLower
   | bound {parent : Bound} {child : Expr}
       (found : DemandNode.child? (.bound parent) 0 = some (.expression child)) :
       FirstChild (.bound parent) (.expression child)
+  | ifCondition (loop : Option LoopCtx) (condition : Expr) (yes : Core.Block) (no : Option Core.Block) (origin : OriginId) :
+      FirstChild (.statement loop (.ifS condition yes no origin)) (.expression condition)
   | discard (loop : Option LoopCtx) (expression : Expr) (origin : OriginId) :
       FirstChild (.statement loop (.expr expression origin)) (.expression expression)
 
