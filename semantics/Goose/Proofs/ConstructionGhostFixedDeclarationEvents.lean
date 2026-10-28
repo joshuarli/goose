@@ -91,6 +91,29 @@ theorem fixedDeclaration_visit_syntaxEvents
     visitFuel visitStatement found fixed rootResult
     ((syntaxFuel_existsWithTails sourceFuel config closed).value environment expression derivation)
 
+theorem statementReplay_fixedSourceEvents
+    (replay : StatementReplay config environment fuel offset statements before outcome visits)
+    (supported : ∀ sourceFuel localVar expression origin, .letS localVar expression origin ∈ statements →
+      FuelSupport config sourceFuel (.value environment expression)) :
+    ∀ visit ∈ visits, ∀ sourceFuel localVar expression origin descriptor root sourceReady,
+      visit.fuel = sourceFuel + 1 → visit.statement = .letS localVar expression origin →
+      environment.vars[localVar]? = some descriptor → descriptor.ty.nonfixed = false →
+      rootOf environment localVar visit.before = .ok root sourceReady →
+      SourceHistory config sourceFuel [environment.act, visit.ordinal, 0] (.value environment expression) sourceReady
+        (evalValue sourceFuel config environment expression sourceReady) ∧
+      (Goose.Proofs.Exit.stepState visit.outcome).construction.events =
+        (Goose.Proofs.Exit.stepState (evalValue sourceFuel config environment expression sourceReady)).construction.events := by
+  intro visit member sourceFuel localVar expression origin descriptor root sourceReady visitFuel visitStatement found fixed rootResult
+  have inMapped : visit.statement ∈ visits.map StatementInvocation.statement := List.mem_map_of_mem member
+  rw [replay.sourceOrder] at inMapped
+  have inStatements : .letS localVar expression origin ∈ statements := by
+    rw [← visitStatement]
+    exact List.mem_of_mem_take inMapped
+  obtain ⟨history, initial, final, retained⟩ := fixedDeclaration_visit_fuelEvents replay visit member
+    sourceFuel localVar expression origin descriptor root sourceReady visitFuel visitStatement found fixed rootResult
+    (supported sourceFuel localVar expression origin inStatements)
+  exact ⟨history, final⟩
+
 theorem execBlock_fixedSourceEvents (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (scope : Nat)
     (statements : List Stmt) (value : Option Expr) (before ready : ExecutionState)
@@ -122,17 +145,9 @@ theorem execBlock_fixedSourceEvents (fuel : Nat) (config : EvalConfig) (environm
   obtain ⟨outcome, visits, chunks, replay, forest, ordered, once, aligned, finalEq, execution⟩ :=
     execBlock_initializerEventChunks fuel config environment pre channels scope statements value before ready bound
   refine ⟨outcome, visits, chunks, replay, ordered, once, aligned, finalEq, execution, ?_⟩
-  intro visit member sourceFuel localVar expression origin descriptor root sourceReady visitFuel visitStatement found fixed rootResult
-  have inMapped : visit.statement ∈ visits.map StatementInvocation.statement := List.mem_map_of_mem member
-  rw [ordered] at inMapped
-  have inStatements : .letS localVar expression origin ∈ statements := by
-    rw [← visitStatement]
-    exact List.mem_of_mem_take inMapped
-  obtain ⟨history, initial, final, retained⟩ := fixedDeclaration_visit_fuelEvents replay visit member
-    sourceFuel localVar expression origin descriptor root sourceReady visitFuel visitStatement found fixed rootResult
-    (supported sourceFuel localVar expression origin inStatements)
-  exact ⟨history, final⟩
+  exact statementReplay_fixedSourceEvents replay supported
 
+#print axioms statementReplay_fixedSourceEvents
 #print axioms execBlock_fixedSourceEvents
 #print axioms fixedDeclaration_visit_fuelEvents
 #print axioms fixedDeclaration_visit_syntaxEvents
