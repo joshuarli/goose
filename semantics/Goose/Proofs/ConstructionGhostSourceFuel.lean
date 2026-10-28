@@ -31,6 +31,26 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | block (fuel : Nat) (environment : RuntimeActivation) (scope : Nat) (statements : List Stmt)
       (body : ∀ scopedEnvironment, FuelSupport config fuel (.statements scopedEnvironment statements)) :
       FuelSupport config (fuel + 1) (.block environment (.mk scope statements none))
+  | placeView (fuel : Nat) (environment : RuntimeActivation) (place : Place)
+      (child : FuelSupport config fuel (.place environment place)) :
+      FuelSupport config (fuel + 1) (.view environment (.of place))
+  | boundBlock (fuel : Nat) (environment : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
+      (scope : Nat) (statements : List Stmt)
+      (body : ∀ scopedEnvironment, FuelSupport config fuel (.statements scopedEnvironment statements)) :
+      FuelSupport config (fuel + 1) (.blockWith environment pre (.mk scope statements none))
+  | boundLoopBody (fuel : Nat) (environment : RuntimeActivation) (pre : List (Goose.Core.VarId × Value)) (body : Block)
+      (child : FuelSupport config fuel (.blockWith environment pre body)) :
+      FuelSupport config (fuel + 1) (.loopBodyWith environment pre body)
+  | eachLoop (fuel : Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (index : Option Goose.Core.VarId)
+      (byRef : Bool) (body : Block) (view : RuntimeView) (current : Nat)
+      (bodyChild : ∀ pre, FuelSupport config fuel (.loopBodyWith environment pre body))
+      (next : FuelSupport config fuel (.eachLoop environment localVar index byRef body view (current + 1))) :
+      FuelSupport config (fuel + 1) (.eachLoop environment localVar index byRef body view current)
+  | eachStatement (fuel : Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (index : Option Goose.Core.VarId)
+      (view : View) (byRef : Bool) (body : Block) (origin : Goose.Core.OriginId)
+      (viewChild : FuelSupport config fuel (.view environment view))
+      (loopChild : ∀ runtime, FuelSupport config fuel (.eachLoop environment localVar index byRef body runtime 0)) :
+      FuelSupport config (fuel + 1) (.statement environment (.forEach localVar index view byRef body origin))
   | loopBody (fuel : Nat) (environment : RuntimeActivation) (body : Block)
       (child : FuelSupport config fuel (.block environment body)) :
       FuelSupport config (fuel + 1) (.loopBody environment body)
@@ -189,6 +209,27 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           simp only [execute]
           rw [execution, ← replay.sound]
           exact .block child
+      | placeView _ environment place childSupported =>
+          exact .placeView (ih (.place environment place) (path ++ [0]) before childSupported)
+      | boundBlock _ environment pre scope statements bodySupported =>
+          refine .boundBlock ?_
+          intro ready bound
+          exact ih (.statements { environment with scopes := (scope, before.nextScope) :: environment.scopes } statements)
+            (path ++ [0]) ready (bodySupported _)
+      | boundLoopBody _ environment pre body childSupported =>
+          exact .boundLoopBody (ih (.blockWith environment pre body) (path ++ [0]) (loopStart environment before) childSupported)
+      | eachLoop _ environment localVar index byRef body view current bodySupported nextSupported =>
+          simp only [execute]
+          rw [Goose.Proofs.ConstructionGhostEachCore.eachCount_source]
+          refine .eachLoop ?_ ?_
+          · intro count countReady pre ready counted inside selected
+            exact ih (.loopBodyWith environment pre body) (path ++ [0]) ready (bodySupported pre)
+          · intro count countReady pre ready flow after counted inside selected result continuing
+            exact ih (.eachLoop environment localVar index byRef body view (current + 1)) (path ++ [1]) after nextSupported
+      | eachStatement _ environment localVar index view byRef body origin viewSupported loopSupported =>
+          refine .eachStatement (ih (.view environment view) (path ++ [0]) before viewSupported) ?_
+          intro runtime ready result
+          exact ih (.eachLoop environment localVar index byRef body runtime 0) (path ++ [1]) ready (loopSupported runtime)
       | loopBody _ environment body childSupported =>
           exact .loopBody (ih (.block environment body) (path ++ [0]) (loopStart environment before) childSupported)
       | whileLoop _ environment condition body conditionSupported bodySupported nextSupported =>

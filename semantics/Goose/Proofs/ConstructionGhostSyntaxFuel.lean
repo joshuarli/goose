@@ -49,6 +49,11 @@ inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
       (conditionSyntax : ValueSyntax config condition)
       (body : ∀ statement ∈ statements, StatementSyntax config statement) :
       StatementSyntax config (.while condition (.mk scope statements none) origin)
+  | eachStatement (localVar : Goose.Core.VarId) (index : Option Goose.Core.VarId) (place : Place) (byRef : Bool)
+      (scope : Nat) (statements : List Stmt) (origin : Goose.Core.OriginId)
+      (placeSyntax : PlaceSyntax config place)
+      (body : ∀ statement ∈ statements, StatementSyntax config statement) :
+      StatementSyntax config (.forEach localVar index (.of place) byRef (.mk scope statements none) origin)
   | ifStatement (condition : Expr) (scope : Nat) (statements : List Stmt) (origin : Goose.Core.OriginId)
       (conditionSyntax : ValueSyntax config condition)
       (body : ∀ statement ∈ statements, StatementSyntax config statement) :
@@ -63,6 +68,7 @@ def ClosedModule (config : EvalConfig) : Prop :=
 structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   value : ∀ environment expression, ValueSyntax config expression → FuelSupport config fuel (.value environment expression)
   place : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.place environment place)
+  placeView : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.view environment (.of place))
   arguments : ∀ environment vars parameters arguments, ArgumentSyntax config parameters arguments →
     FuelSupport config fuel (.arguments environment vars parameters arguments)
   statement : ∀ environment statement, StatementSyntax config statement → FuelSupport config fuel (.statement environment statement)
@@ -75,6 +81,13 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   whileLoop : ∀ environment condition scope statements, ValueSyntax config condition →
     (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.whileLoop environment condition (.mk scope statements none))
+  boundBlock : ∀ environment pre scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
+    FuelSupport config fuel (.blockWith environment pre (.mk scope statements none))
+  boundLoopBody : ∀ environment pre scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
+    FuelSupport config fuel (.loopBodyWith environment pre (.mk scope statements none))
+  eachLoop : ∀ environment localVar index byRef scope statements view current,
+    (∀ statement ∈ statements, StatementSyntax config statement) →
+    FuelSupport config fuel (.eachLoop environment localVar index byRef (.mk scope statements none) view current)
   activationBody : ∀ activation pre scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements none))
   activation : ∀ activation pre scope statements origin, (∀ statement ∈ statements, StatementSyntax config statement) →
@@ -105,6 +118,8 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
         | localPlace localVar => exact .legacy (fuel + 1) (.localPlace environment localVar)
         | globalPlace global => exact .legacy (fuel + 1) (.globalPlace environment global)
         | dereference operand child => exact .dereferencePlace fuel environment operand (previous.value environment operand child)
+      · intro environment place derivation
+        exact .placeView fuel environment place (previous.place environment place derivation)
       · intro environment vars parameters arguments derivation
         cases derivation with
         | nil => exact .legacy (fuel + 1) (.argumentsDone environment vars)
@@ -126,6 +141,10 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
         | whileLoop condition scope statements origin conditionSyntax body =>
             exact .whileStatement fuel environment condition (.mk scope statements none) origin
               (previous.whileLoop environment condition scope statements conditionSyntax body)
+        | eachStatement localVar index place byRef scope statements origin placeSyntax body =>
+            exact .eachStatement fuel environment localVar index (.of place) byRef (.mk scope statements none) origin
+              (previous.placeView environment place placeSyntax)
+              (fun runtime => previous.eachLoop environment localVar index byRef scope statements runtime 0 body)
         | ifStatement condition scope statements origin conditionSyntax body =>
             exact .ifStatement fuel environment condition (.mk scope statements none) none origin
               (previous.value environment condition conditionSyntax) (previous.block environment scope statements body)
@@ -147,6 +166,14 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
       · intro environment condition scope statements conditionSyntax body
         exact .whileLoop fuel environment condition (.mk scope statements none) (previous.value environment condition conditionSyntax)
           (previous.loopBody environment scope statements body) (previous.whileLoop environment condition scope statements conditionSyntax body)
+      · intro environment pre scope statements derivation
+        exact .boundBlock fuel environment pre scope statements (fun scopedEnvironment => previous.statements scopedEnvironment statements derivation)
+      · intro environment pre scope statements derivation
+        exact .boundLoopBody fuel environment pre (.mk scope statements none) (previous.boundBlock environment pre scope statements derivation)
+      · intro environment localVar index byRef scope statements view current derivation
+        exact .eachLoop fuel environment localVar index byRef (.mk scope statements none) view current
+          (fun pre => previous.boundLoopBody environment pre scope statements derivation)
+          (previous.eachLoop environment localVar index byRef scope statements view (current + 1) derivation)
       · intro activation pre scope statements derivation
         exact .boundActivationBody fuel activation pre scope statements (fun environment => previous.statements environment statements derivation)
       · intro activation pre scope statements origin derivation
