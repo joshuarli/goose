@@ -14,14 +14,14 @@ private theorem callLocal_bind_success {ε α β : Type} (first : Except ε α) 
   | error failure => cases checked
   | ok value => exact ⟨value, rfl, checked⟩
 
-theorem typeStatement_zeroArgumentRegisterCall_cursor (fuel : Nat) (environment next : TypingEnv)
+theorem typeStatement_zeroArgumentRegisterCall_cursor_nesting (fuel : Nat) (environment next : TypingEnv)
     (id contextId callOrigin origin : Nat) (before after : Nat) (context : Context) (callee : Impl) (resultTy : Ty)
     (contextAt : environment.module.contexts[contextId]? = some context)
     (calleeAt : environment.module.impls[context.impl]? = some callee)
     (parameters : callee.params = #[]) (results : callee.results = #[⟨resultTy, .register, none⟩])
     (scalar : (∃ intTy, resultTy = .int intTy) ∨ resultTy = .bool)
     (typed : typeStatement (fuel + 1) environment (.letS id (.call contextId [] callOrigin) origin) before = .ok (next, after)) :
-    after = before + 1 := by
+    after = before + 1 ∧ 3 ≤ fuel + 1 := by
   obtain ⟨descriptor, declared, scope, order⟩ := typeStatement_let_descriptor fuel environment next id
     (.call contextId [] callOrigin) origin before after typed
   subst id
@@ -79,8 +79,43 @@ theorem typeStatement_zeroArgumentRegisterCall_cursor (fuel : Nat) (environment 
         | true =>
           simp only [pure, StateT.pure, Except.pure, passing, ↓reduceIte] at remaining
           cases remaining
-          exact cursor
+          exact ⟨cursor, by omega⟩
 
+
+theorem typeStatement_zeroArgumentRegisterCall_cursor (fuel : Nat) (environment next : TypingEnv)
+    (id contextId callOrigin origin : Nat) (before after : Nat) (context : Context) (callee : Impl) (resultTy : Ty)
+    (contextAt : environment.module.contexts[contextId]? = some context)
+    (calleeAt : environment.module.impls[context.impl]? = some callee)
+    (parameters : callee.params = #[]) (results : callee.results = #[⟨resultTy, .register, none⟩])
+    (scalar : (∃ intTy, resultTy = .int intTy) ∨ resultTy = .bool)
+    (typed : typeStatement (fuel + 1) environment (.letS id (.call contextId [] callOrigin) origin) before = .ok (next, after)) :
+    after = before + 1 :=
+  (typeStatement_zeroArgumentRegisterCall_cursor_nesting fuel environment next id contextId callOrigin origin before after context callee
+    resultTy contextAt calleeAt parameters results scalar typed).1
+
+theorem SourcePosition.zeroArgumentCallLocal_nesting {config : EvalConfig} {accepted : AcceptedModule config}
+    (frame : ConstructionSourceFrame) (state : ExecutionState) (types : RootTypes)
+    (id target callOrigin origin : Nat) (rest : List Stmt) (context : Context) (callee : Impl) (ty : Ty)
+    (source : AcceptedFrame config accepted frame state types)
+    (position : SourcePosition accepted frame (.statements (.letS id (.call target [] callOrigin) origin :: rest)))
+    (contextAt : config.module.contexts[target]? = some context)
+    (calleeAt : config.module.impls[context.impl]? = some callee)
+    (parameters : callee.params = #[]) (results : callee.results = #[⟨ty, .register, none⟩])
+    (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool) : 4 ≤ frame.typingFuel := by
+  obtain ⟨_, _, _, typedAll, _⟩ := position.checked accepted frame _
+  cases nesting : frame.typingFuel with
+  | zero => rw [nesting] at typedAll; change Except.error _ = Except.ok _ at typedAll; cases typedAll
+  | succ headFuel =>
+    cases headFuel with
+    | zero => rw [nesting] at typedAll; change Except.error _ = Except.ok _ at typedAll; cases typedAll
+    | succ checkFuel =>
+      have head := position.statements_head accepted frame (.letS id (.call target [] callOrigin) origin) rest (checkFuel + 1) nesting
+      obtain ⟨next, after, _, typed, _⟩ := head.checked accepted _ _
+      have typingContext : frame.typing.module.contexts[target]? = some context := by simpa [source.compatible.module] using contextAt
+      have typingCallee : frame.typing.module.impls[context.impl]? = some callee := by simpa [source.compatible.module] using calleeAt
+      have checked := typeStatement_zeroArgumentRegisterCall_cursor_nesting checkFuel frame.typing next id target callOrigin origin
+        frame.typingCounter after context callee ty typingContext typingCallee parameters results scalar typed
+      omega
 
 theorem SourcePosition.zeroArgumentCallLocal_tail {config : EvalConfig} {accepted : AcceptedModule config}
     (frame : ConstructionSourceFrame) (state : ExecutionState) (types : RootTypes)
@@ -125,6 +160,8 @@ theorem SourcePosition.zeroArgumentCallLocal_tail {config : EvalConfig} {accepte
   refine ⟨rootsAfter, rooted, nextCursor, ?_⟩
   simpa [advanceLocalFrame, nextTyping, nextCounter] using tail
 
+#print axioms SourcePosition.zeroArgumentCallLocal_nesting
 #print axioms SourcePosition.zeroArgumentCallLocal_tail
+#print axioms typeStatement_zeroArgumentRegisterCall_cursor_nesting
 #print axioms typeStatement_zeroArgumentRegisterCall_cursor
 end Goose.Proofs.ConstructionAcceptedExecution
