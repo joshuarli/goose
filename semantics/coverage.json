@@ -526,11 +526,11 @@
  {
   "feature": "Byte-owner global initialization",
   "label": "model-proved",
-  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwner_head; Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwners; Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwners_initial",
-  "statement": "Successful initialization of a contiguous range of byte-owner globals preserves the accepted world and the absence of later global objects and ordinals. Starting from the initial state, successful initialization of an all-byte-owner global list establishes an accepted world for the full global prefix.",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwner_head; Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwners; Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwners_initial; Goose.Proofs.ConstructionAcceptedExecution.acceptedByteGlobalsReturnedEntry",
+  "statement": "Successful initialization of a contiguous range of byte-owner globals preserves the accepted world and the absence of later global objects and ordinals. Starting from the initial state, successful initialization of an all-byte-owner global list establishes an accepted world for the full global prefix. A normally returning module with such globals reaches its validated entry call with an accepted statement frame and world.",
   "assumptions": "Every global in the range has a byte-owner type and a byte literal initializer; the actual initializer execution completes successfully. The initial-state result assumes an accepted module.",
   "limits": "Other global initializer forms and preservation through an abnormal initializer outcome remain open. This result does not discharge TH-CON-01.",
-  "evidence": "ConstructionAcceptedGlobalPrefix.lean and ConstructionAcceptedByteGlobal.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "ConstructionAcceptedGlobalPrefix.lean, ConstructionAcceptedByteGlobal.lean and ConstructionAcceptedByteGlobalEntry.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted entry statement frame",
