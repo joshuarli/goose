@@ -39,6 +39,26 @@ theorem GeneratedCallArgumentRows.lookup {access : AccessEnv} {path : List Nat}
       · intro alias member
         exact List.mem_append_right _ (present alias member)
 
+theorem GeneratedCallArgumentRows.member_origin {access : AccessEnv} {path : List Nat}
+    {index : Nat} {arguments : List Arg} {ids : List ValueId} {retained : List (ValueId × RetainedAlias)}
+    (rows : GeneratedCallArgumentRows access path index arguments ids retained)
+    {id : ValueId} {alias : RetainedAlias} (member : (id, alias) ∈ retained) :
+    ∃ position argument aliases, arguments[position]? = some argument ∧ ids[position]? = some id ∧
+      access.aliasArg (path ++ [index + position]) argument = .ok aliases ∧ alias ∈ aliases := by
+  induction rows with
+  | nil => simp at member
+  | @cons index head rest value ids aliases retained query tail ih =>
+    rcases List.mem_append.mp member with current | later
+    · obtain ⟨a, present, equal⟩ := List.mem_map.mp current
+      have pairEq : value = id ∧ a = alias := Prod.mk.inj equal
+      obtain ⟨rfl, rfl⟩ := pairEq
+      exact ⟨0, head, aliases, by simp, by simp, by simpa using query, present⟩
+    · obtain ⟨position, argument, aliases, argumentAt, idAt, aliasQuery, present⟩ := ih later
+      refine ⟨Nat.succ position, argument, aliases, ?_, ?_, ?_, present⟩
+      · simpa only [List.getElem?_cons_succ] using argumentAt
+      · simpa only [List.getElem?_cons_succ] using idAt
+      · simpa only [Nat.add_assoc, Nat.add_comm 1 position, Nat.add_left_comm] using aliasQuery
+
 theorem ArgSource.byVal_callChild {cfg : Cfg} {env : Env} {initial state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
     (root : ExprSource cfg env (.call context arguments origin) initial)
@@ -56,6 +76,48 @@ theorem ArgSource.byVal_callChild {cfg : Cfg} {env : Env} {initial state : St}
   have retained := callArgContext_retained_subset root.context index (.byVal expression) found member
   have eq := demandContextRetainedEq plans path rfl childContext
   simpa only [callArgContext, ArgContext.retained, eq] using retained
+
+theorem ArgSource.byVal_callRetainsPrior {cfg : Cfg} {env : Env} {initial state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (root : ExprSource cfg env (.call context arguments origin) initial)
+    {index : Nat} {expression : Expr} (found : arguments[index]? = some (.byVal expression))
+    (child : ExprSource cfg env expression state)
+    (canonical : (ArgSource.byVal child).MatchesContext root.world root.typingEnv root.rootsEnv
+      (callArgContext root.context index (.byVal expression) found))
+    {ids : List ValueId} {prior : List (ValueId × RetainedAlias)}
+    (rows : GeneratedCallArgumentRows root.rootsEnv.access root.path 0 (arguments.take index) ids prior)
+    (shrink : cfg.mod.profile = .shrink) : ∀ cell ∈ prior, cell.2 ∈ child.context.retained := by
+  obtain ⟨plans, path, world, typing, roots, childContext⟩ := canonical
+  have childContext : HEq child.context
+      (root.context.child rfl index (.expression expression) .expression
+        (by simp [DemandNode.child?, DemandNode.children, found]) (by trivial)) := by
+    simpa only [ArgSource.MatchesContext, callArgContext] using childContext
+  have retainedEq := demandContextRetainedEq plans path rfl childContext
+  rw [retainedEq]
+  have access := root.access
+  cases contextEq : root.context with
+  | pilot profile active => exact False.elim (by rw [shrink] at profile; cases profile)
+  | @shrink planContext profile context =>
+    rw [contextEq] at access
+    have accessEq : planContext.approvals.access = root.rootsEnv.access := by
+      have moduleEq := access.2.2.1
+      have implementationEq := access.2.2.2.1
+      have contextEq := access.2.2.2.2
+      cases accessAt : planContext.approvals.access
+      rw [accessAt] at moduleEq implementationEq contextEq
+      unfold PEnv.access
+      congr 1
+    intro cell member
+    obtain ⟨earlier, argument, aliases, argumentAt, idAt, query, aliasMember⟩ := rows.member_origin member
+    have earlierBound : earlier < index := by
+      have bound := (List.getElem?_eq_some_iff.mp argumentAt).1
+      simp only [List.length_take] at bound
+      omega
+    have originalAt : arguments[earlier]? = some argument := by
+      simpa [earlierBound] using argumentAt
+    have included := callArgContext_prefix_alias context profile index (.byVal expression) found earlierBound originalAt
+      (by simpa only [accessEq, Nat.zero_add] using query) aliasMember
+    simpa only [callArgContext, ArgContext.retained, contextEq] using included
 
 theorem ArgSource.byVal_callMetadata {cfg : Cfg} {env : Env} {initial state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
@@ -103,6 +165,8 @@ theorem ArgsSource.afterHead_callChildren {n : Nat} {cfg : Cfg} {env : Env} {ini
 
 #print axioms GeneratedCallArgumentRows.length
 #print axioms GeneratedCallArgumentRows.lookup
+#print axioms GeneratedCallArgumentRows.member_origin
+#print axioms ArgSource.byVal_callRetainsPrior
 #print axioms ExprSource.callArgsCanonical
 #print axioms ArgSource.byVal_callChild
 #print axioms ArgSource.byVal_callMetadata
