@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedRecursiveCallGlobal
+import Goose.Proofs.ConstructionAcceptedRecursiveCallModule
 import Goose.Construct.Validate
 import Goose.Construct.Eval
 import Goose.Proofs.ConstructionAcceptedLocalRead
@@ -98,6 +98,27 @@ theorem nestedCall_initializer_allFuel (fuel : Nat) :
   obtain ⟨completed, types, live, ambient, extend, lower, upper, world, result⟩ := safe
   exact ⟨completed, types, live, ambient, extend, upper, world, result⟩
 
+theorem nestedCall_module_allFuel (fuel : Nat) :
+    ∃ initialized ambient types live regions,
+      AcceptedWorld ⟨.release, nestedCallModule⟩ initialized
+        (Goose.Proofs.Exit.stepState (runModule fuel ⟨.release, nestedCallModule⟩ .initial)) ambient types live regions [] ∧
+      (match runModule fuel ⟨.release, nestedCallModule⟩ .initial with
+       | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  let config : EvalConfig := ⟨.release, nestedCallModule⟩
+  let descriptor : Global := ⟨"answer", .int .i64, .immutable, .call 1 [] 0, 0⟩
+  let calleeContext : Context := ⟨1, "outer", [], [[]], []⟩
+  let entryContext : Context := ⟨0, "entry", [], [], []⟩
+  apply acceptedRecursiveCallModule_allFuel fuel config (acceptedModule config nestedCall_validated)
+    descriptor 1 0 calleeContext nestedCallOuter (by rfl) (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩)
+    (by rfl) (by rfl) (by rfl) (by rfl) nestedCall_graph entryContext nestedCallEntry (by rfl) (by rfl)
+  · exact .nil
+  · simp [nestedCallEntry, Block.stmts]
+  · simp [nestedCallEntry, Block.stmts]
+  · simp [nestedCallEntry, Block.stmts]
+  · simp [nestedCallEntry, Block.stmts]
+  · rfl
+
+#print axioms nestedCall_module_allFuel
 #print axioms nestedCall_initializer_allFuel
 #print axioms nestedCall_graph
 #print axioms validated_global_noDirectLocalRead
