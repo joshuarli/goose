@@ -675,9 +675,9 @@ theorem validated_body_scope (module : Module) (id : ImplId) (implementation : I
   · exact same
   · simp [same, reject, bind, Except.bind] at checked
 
-theorem validated_global_storageType (module : Module) (id : GlobalId) (descriptor : Global)
+private theorem validated_global_check (module : Module) (id : GlobalId) (descriptor : Global)
     (accepted : validate module = .ok ()) (present : module.globals[id]? = some descriptor) :
-    descriptor.ty.storageType = true := by
+    checkGlobal module id descriptor = .ok () := by
   unfold validate at accepted
   obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
   obtain ⟨_, _, accepted⟩ := (validation_bind_ok _ _ _).mp accepted
@@ -703,6 +703,46 @@ theorem validated_global_storageType (module : Module) (id : GlobalId) (descript
   simp only [present] at checked
   obtain ⟨value, checked, _⟩ := (validation_bind_ok _ _ _).mp checked
   cases value
+  exact checked
+
+theorem validated_global_initializer_typing (module : Module) (id : GlobalId) (descriptor : Global)
+    (accepted : validate module = .ok ()) (present : module.globals[id]? = some descriptor) :
+    ∃ ty counter,
+      typeExpr 4096 {
+        module := module, implementation := none, variables := #[], visible := [], scope := 0, loops := 0,
+        globalLimit := id } descriptor.init 0 = .ok ([ty], counter) ∧ ty.adaptsTo descriptor.ty = true := by
+  have checked := validated_global_check module id descriptor accepted present
+  unfold checkGlobal at checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  by_cases storage : descriptor.ty.storageType && descriptor.ty != .unit
+  · simp only [storage, ↓reduceIte] at checked
+    by_cases origin : descriptor.org < module.origins.size
+    · simp only [origin, ↓reduceIte] at checked
+      cases scope : scopeOrderError (exprFacts none descriptor.init).scopes 0 with
+      | some message =>
+        simp only [scope, bind, Except.bind] at checked
+        cases checked
+      | none =>
+        simp only [scope] at checked
+        obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+        obtain ⟨result, typed, checked⟩ := (validation_bind_ok _ _ _).mp checked
+        obtain ⟨types, counter⟩ := result
+        cases types with
+        | nil => cases checked
+        | cons ty rest =>
+          cases rest with
+          | nil =>
+            cases adapts : ty.adaptsTo descriptor.ty with
+            | true => exact ⟨ty, counter, typed, adapts⟩
+            | false => simp [adapts, reject] at checked
+          | cons other remaining => cases checked
+    · simp [origin, reject, bind, Except.bind] at checked
+  · simp [storage, reject, bind, Except.bind] at checked
+
+theorem validated_global_storageType (module : Module) (id : GlobalId) (descriptor : Global)
+    (accepted : validate module = .ok ()) (present : module.globals[id]? = some descriptor) :
+    descriptor.ty.storageType = true := by
+  have checked := validated_global_check module id descriptor accepted present
   unfold checkGlobal at checked
   obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
   cases storage : descriptor.ty.storageType with
