@@ -3,6 +3,7 @@ import Goose.Proofs.ConstructionMixedLocalProtectedTypes
 import Goose.Proofs.ConstructionAcceptedRegisterScopeExit
 import Goose.Proofs.ConstructionAcceptedRegisterResultTyping
 import Goose.Proofs.ConstructionAcceptedScalarResultProduce
+import Goose.Proofs.ConstructionAcceptedScopeObservation
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -10,7 +11,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionRepresentation
 
-theorem mixedLocal_registerResultBody_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+theorem mixedLocal_registerResultBody_observedWorld (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (activation : RuntimeActivation) (pre : List (Nat × Value))
     (before boundState : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -40,7 +41,10 @@ theorem mixedLocal_registerResultBody_world (fuel : Nat) (config : EvalConfig) (
     | .ok carriers after => ∃ value nextTypes nextLive nextRegions, carriers = [.register value] ∧
         ValueRepresentation ty value ∧ RootTypesExtend types nextTypes ∧
         (∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local activation.act scope id) → nextTypes root = types root) ∧
-        AcceptedWorld config config.module.globals.size after (.callChannels activation [] :: ambient) nextTypes nextLive nextRegions pending
+        AcceptedWorld config config.module.globals.size after (.callChannels activation [] :: ambient) nextTypes nextLive nextRegions pending ∧
+        (∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local activation.act scope id) →
+          after.objects.lookup root = boundState.objects.lookup root ∧
+          after.objectOrdinals.lookup root = boundState.objectOrdinals.lookup root)
     | _ => False := by
   let entryFrame := entryStatementsFrame config frame before.nextScope
   have fullInitialized : entryFrame.initialized = config.module.globals.size := by
@@ -69,8 +73,8 @@ theorem mixedLocal_registerResultBody_world (fuel : Nat) (config : EvalConfig) (
     intro declaration member
     simp [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, helperEq, results]
   obtain ⟨next, nextTypes, nextLive, nextRegions, nextInitialized, extended, finalWorld, finalSource, finalFlow,
-      sourceEq, interpretationEq, phaseEq, limitEq, finalBounded, finalProtected, finalReplay⟩ :=
-    execStmts_mixedLocal_protectedTypes_world form fuel config accepted entryFrame contextId boundState
+      sourceEq, interpretationEq, phaseEq, limitEq, finalBounded, finalProtected, finalObserved, finalReplay⟩ :=
+    execStmts_mixedLocal_observed_world form fuel config accepted entryFrame contextId boundState
       (.callChannels activation [] :: ambient) types live regions pending frameWorld source entryPhase position
       fullInitialized limit initialBound owners' scalarOwners' unnamed
   change (match execStmts fuel config entryFrame.interpretation.environment helper.body.stmts boundState with
@@ -105,7 +109,7 @@ theorem mixedLocal_registerResultBody_world (fuel : Nat) (config : EvalConfig) (
     cases fuel with
     | zero => simp [execStmts, timeout, EvalM.stop] at outcome
     | succ fuel =>
-      simp only [outcome, Goose.Proofs.Exit.stepState] at finalWorld finalSource finalReplay
+      simp only [outcome, Goose.Proofs.Exit.stepState] at finalWorld finalSource finalObserved finalReplay
       let blockFrame := implementationBodyFrame config entryFrame
       have blockPosition : SourcePosition accepted blockFrame (.block blockFrame.source.impl.body) :=
         .implementationBody entryFrame contextId entryPhase source.compatible
@@ -184,7 +188,57 @@ theorem mixedLocal_registerResultBody_world (fuel : Nat) (config : EvalConfig) (
         rw [actual]
         have released := finalWorld.releaseScope config next.initialized middle (.callChannels activation [] :: ambient)
           nextTypes nextLive nextRegions pending activation helper.body.scope before.nextScope
-        exact ⟨value, nextTypes, _, nextRegions, rfl, valid.represented, extended, unaffected, nextFull ▸ released⟩
+        refine ⟨value, nextTypes, _, nextRegions, rfl, valid.represented, extended, unaffected, nextFull ▸ released, ?_⟩
+        intro root outside
+        have scopeObserved := releaseScopeState_outsideActivation activation helper.body.scope before.nextScope middle root outside
+        have bodyObserved := finalObserved root (by simpa [entryFrame, entryStatementsFrame, blockStatementsFrame,
+          RootInterpretation.enterScope, environment] using outside)
+        exact ⟨scopeObserved.1.trans bodyObserved.1, scopeObserved.2.trans bodyObserved.2⟩
+
+theorem mixedLocal_registerResultBody_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (activation : RuntimeActivation) (pre : List (Nat × Value))
+    (before boundState : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (contextId : Nat) (context : Context) (helper : Impl) (ty : Ty) (expression : Expr)
+    (helperAt : config.module.impls[context.impl]? = some helper)
+    (helperEq : frame.source.impl = helper) (phase : frame.phase = .implementation contextId)
+    (environment : frame.interpretation.environment = activation) (channels : activation.channels = [.register ty])
+    (results : helper.results = #[⟨ty, .register, none⟩])
+    (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool)
+    (tail : helper.body.value = some expression) (shape : AcceptedBinaryExpression expression)
+    (initialized : frame.initialized = config.module.globals.size)
+    (bound : bindAll activation.act before.nextScope pre
+      (ownershipResultScopeState activation helper.body.scope before) = .ok () boundState)
+    (world : AcceptedWorld config config.module.globals.size boundState (.callChannels activation [] :: ambient) types live regions pending)
+    (source : AcceptedFrame config accepted (entryStatementsFrame config frame before.nextScope) boundState types)
+    (position : SourcePosition accepted (entryStatementsFrame config frame before.nextScope) (.statements helper.body.stmts))
+    (form : MixedLocalStatements helper.body.stmts)
+    (owners : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ helper.body.stmts →
+      (helper.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
+    (scalarOwners : ∀ id expression origin, .letS id expression origin ∈ helper.body.stmts →
+      AcceptedBinaryExpression expression → ∀ descriptor, helper.vars[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool) :
+    match execActivationBody (fuel + 1) config activation pre helper.body before with
+    | .stop _ after => ∃ nextTypes nextLive nextRegions, RootTypesExtend types nextTypes ∧
+        (∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local activation.act scope id) → nextTypes root = types root) ∧
+        AcceptedWorld config config.module.globals.size after (.callChannels activation [] :: ambient) nextTypes nextLive nextRegions pending
+    | .ok carriers after => ∃ value nextTypes nextLive nextRegions, carriers = [.register value] ∧
+        ValueRepresentation ty value ∧ RootTypesExtend types nextTypes ∧
+        (∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local activation.act scope id) → nextTypes root = types root) ∧
+        AcceptedWorld config config.module.globals.size after (.callChannels activation [] :: ambient) nextTypes nextLive nextRegions pending
+    | _ => False := by
+  have result := mixedLocal_registerResultBody_observedWorld fuel config accepted frame activation pre before boundState ambient types
+    live regions pending contextId context helper ty expression helperAt helperEq phase environment channels results scalar tail shape
+    initialized bound world source position form owners scalarOwners
+  cases outcome : execActivationBody (fuel + 1) config activation pre helper.body before with
+  | stop reason after => simpa only [outcome] using result
+  | escape target carriers after => simpa only [outcome] using result
+  | jump target kind after => simpa only [outcome] using result
+  | ok carriers after =>
+    simp only [outcome] at result ⊢
+    obtain ⟨value, nextTypes, nextLive, nextRegions, eq, represented, extended, protectedTypes, finalWorld, observations⟩ := result
+    exact ⟨value, nextTypes, nextLive, nextRegions, eq, represented, extended, protectedTypes, finalWorld⟩
 
 #print axioms mixedLocal_registerResultBody_world
+#print axioms mixedLocal_registerResultBody_observedWorld
 end Goose.Proofs.ConstructionAcceptedExecution
