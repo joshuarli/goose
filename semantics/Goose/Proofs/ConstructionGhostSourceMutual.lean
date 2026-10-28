@@ -499,6 +499,22 @@ inductive SourceHistory (config : EvalConfig) :
           (execStmts fuel config { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements ready)) :
       SourceHistory config (fuel + 1) path (.boundActivationBody activation pre (.mk scope statements none)) before
         (boundActivationBodyResult fuel config activation pre scope statements before)
+  | boundActivationTail (fuel : Nat) (path : List Nat) (activation : RuntimeActivation)
+      (pre : List (Goose.Core.VarId × Value)) (scope : Nat) (statements : List Stmt) (tail : Expr) (before : ExecutionState)
+      (body : ∀ ready, bindAll activation.act before.nextScope pre (resultScopeStart activation scope before) = .ok () ready →
+        SourceHistory config fuel (path ++ [0])
+          (.statements { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements) ready
+          (execStmts fuel config { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements ready))
+      (tailChild : ∀ ready value after planned tokens prepared,
+        bindAll activation.act before.nextScope pre (resultScopeStart activation scope before) = .ok () ready →
+        execStmts fuel config { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements ready =
+          .ok (.normal value) after →
+        completionChannelSetup activation.channels (expressionOrigin tail) after = .ok (planned, tokens) prepared →
+        SourceHistory config fuel (path ++ [1])
+          (.producerWith { activation with scopes := (scope, before.nextScope) :: activation.scopes } planned tail) prepared
+          (evalProduce fuel config { activation with scopes := (scope, before.nextScope) :: activation.scopes } planned tail prepared)) :
+      SourceHistory config (fuel + 1) path (.boundActivationBody activation pre (.mk scope statements (some tail))) before
+        (execActivationBody (fuel + 1) config activation pre (.mk scope statements (some tail)) before)
   | boundActivation {fuel : Nat} {path : List Nat} {activation : RuntimeActivation}
       {pre : List (Goose.Core.VarId × Value)} {block : Block} {origin : Goose.Core.OriginId} {before : ExecutionState}
       (body : ∀ implementation, config.module.impls[activation.implementation]? = some implementation →
@@ -904,7 +920,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall => rfl
+  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]

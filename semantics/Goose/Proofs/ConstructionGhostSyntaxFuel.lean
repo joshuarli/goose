@@ -70,6 +70,25 @@ def ClosedModule (config : EvalConfig) : Prop :=
     ∃ scope statements, implementation.body = .mk scope statements none ∧
       ∀ statement ∈ statements, StatementSyntax config statement
 
+inductive TailSyntax (config : EvalConfig) : Option Expr → Prop
+  | none : TailSyntax config none
+  | call (contextId : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
+      (argumentsSyntax : ∀ id implementation start lookupReady,
+        getImplementation config contextId start = .ok (id, implementation) lookupReady →
+        ArgumentSyntax config implementation.params.toList arguments) :
+      TailSyntax config (some (.call contextId arguments origin))
+
+def ClosedModuleWithTails (config : EvalConfig) : Prop :=
+  ∀ (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl),
+    config.module.contexts[contextId]? = some context → config.module.impls[context.impl]? = some implementation →
+    ∃ scope statements tail, implementation.body = .mk scope statements tail ∧
+      (∀ statement ∈ statements, StatementSyntax config statement) ∧ TailSyntax config tail
+
+theorem closedModule_withTails (config : EvalConfig) (closed : ClosedModule config) : ClosedModuleWithTails config := by
+  intro contextId context implementation found implemented
+  obtain ⟨scope, statements, body, derivation⟩ := closed contextId context implementation found implemented
+  exact ⟨scope, statements, none, body, derivation, .none⟩
+
 theorem implementation_lookup_source (config : EvalConfig) (contextId : Goose.Core.ContextId)
     (before ready : ExecutionState) (id : Goose.Core.ImplId) (implementation : Impl)
     (lookup : getImplementation config contextId before = .ok (id, implementation) ready) :
@@ -112,6 +131,18 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements none))
   activation : ∀ activation pre scope statements origin, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.boundActivation activation pre (.mk scope statements none) origin)
+  activationBodyTail : ∀ activation pre scope statements contextId arguments origin,
+    (∀ statement ∈ statements, StatementSyntax config statement) →
+    (∀ id implementation start lookupReady,
+      getImplementation config contextId start = .ok (id, implementation) lookupReady →
+      ArgumentSyntax config implementation.params.toList arguments) →
+    FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements (some (.call contextId arguments origin))))
+  activationTail : ∀ activation pre scope statements contextId arguments tailOrigin origin,
+    (∀ statement ∈ statements, StatementSyntax config statement) →
+    (∀ id implementation start lookupReady,
+      getImplementation config contextId start = .ok (id, implementation) lookupReady →
+      ArgumentSyntax config implementation.params.toList arguments) →
+    FuelSupport config fuel (.boundActivation activation pre (.mk scope statements (some (.call contextId arguments tailOrigin))) origin)
   producerCall : ∀ environment channels contextId arguments origin,
     (∀ id implementation start lookupReady,
       getImplementation config contextId start = .ok (id, implementation) lookupReady →
@@ -127,7 +158,7 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     implementation.results = #[] → ArgumentSyntax config implementation.params.toList arguments →
     FuelSupport config fuel (.callWith environment contextId arguments origin)
 
-theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedModule config) : SyntaxFuel config fuel := by
+theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : ClosedModuleWithTails config) : SyntaxFuel config fuel := by
   induction fuel with
   | zero =>
       constructor <;> intros <;> exact .timeout _
@@ -211,6 +242,13 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
         exact .boundActivationBody fuel activation pre scope statements (fun environment => previous.statements environment statements derivation)
       · intro activation pre scope statements origin derivation
         exact .boundActivation fuel activation pre scope statements origin (previous.activationBody activation pre scope statements derivation)
+      · intro activation pre scope statements contextId arguments origin derivation argumentSyntax
+        exact .boundActivationTail fuel activation pre scope statements (.call contextId arguments origin)
+          (fun environment => previous.statements environment statements derivation)
+          (fun environment channels => previous.producerCall environment channels contextId arguments origin argumentSyntax)
+      · intro activation pre scope statements contextId arguments tailOrigin origin derivation argumentSyntax
+        exact .boundActivationWithTail fuel activation pre scope statements (.call contextId arguments tailOrigin) origin
+          (previous.activationBodyTail activation pre scope statements contextId arguments tailOrigin derivation argumentSyntax)
       · intro environment channels contextId arguments origin argumentSyntax
         exact .producerChannelCall fuel environment channels contextId arguments origin
           (fun selected => previous.channelCall environment contextId arguments selected origin argumentSyntax)
@@ -223,16 +261,27 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
           obtain ⟨context, contextFound, idEqual, implementationFound⟩ :=
             implementation_lookup_source config contextId start lookupReady id implementation lookup
           subst id
-          obtain ⟨scope, statements, body, derivation⟩ := closed contextId context implementation contextFound implementationFound
+          obtain ⟨scope, statements, tail, body, derivation, tailDerivation⟩ := closed contextId context implementation contextFound implementationFound
           rw [body]
-          exact previous.activation ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements origin derivation
+          cases tailDerivation with
+          | none => exact previous.activation ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements origin derivation
+          | call tailContext tailArguments tailOrigin tailArgumentsSyntax =>
+              exact previous.activationTail ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements
+                tailContext tailArguments tailOrigin origin derivation tailArgumentsSyntax
       · intro environment contextId arguments origin context implementation contextFound implementationFound resultsEmpty argumentsSyntax
-        obtain ⟨scope, statements, body, derivation⟩ := closed contextId context implementation contextFound implementationFound
+        obtain ⟨scope, statements, tail, body, derivation, tailDerivation⟩ := closed contextId context implementation contextFound implementationFound
         apply FuelSupport.callWith fuel environment contextId arguments origin context implementation contextFound implementationFound
           resultsEmpty (previous.arguments environment implementation.vars implementation.params.toList arguments argumentsSyntax)
         intro act pre
         rw [body]
-        exact previous.activation ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements origin derivation
+        cases tailDerivation with
+        | none => exact previous.activation ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements origin derivation
+        | call tailContext tailArguments tailOrigin tailArgumentsSyntax =>
+            exact previous.activationTail ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements
+              tailContext tailArguments tailOrigin origin derivation tailArgumentsSyntax
+
+theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedModule config) : SyntaxFuel config fuel :=
+  syntaxFuel_existsWithTails fuel config (closedModule_withTails config closed)
 
 theorem syntaxModule_history (fuel : Nat) (config : EvalConfig) (closed : ClosedModule config)
     (entryContext : Context) (entryImplementation : Impl) (noGlobals : config.module.globals.size = 0)

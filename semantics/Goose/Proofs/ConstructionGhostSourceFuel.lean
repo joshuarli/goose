@@ -73,6 +73,15 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (scope : Nat) (statements : List Stmt)
       (body : ∀ environment, FuelSupport config fuel (.statements environment statements)) :
       FuelSupport config (fuel + 1) (.boundActivationBody activation pre (.mk scope statements none))
+  | boundActivationTail (fuel : Nat) (activation : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
+      (scope : Nat) (statements : List Stmt) (tail : Expr)
+      (body : ∀ environment, FuelSupport config fuel (.statements environment statements))
+      (tailChild : ∀ environment channels, FuelSupport config fuel (.producerWith environment channels tail)) :
+      FuelSupport config (fuel + 1) (.boundActivationBody activation pre (.mk scope statements (some tail)))
+  | boundActivationWithTail (fuel : Nat) (activation : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
+      (scope : Nat) (statements : List Stmt) (tail : Expr) (origin : Goose.Core.OriginId)
+      (body : FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements (some tail)))) :
+      FuelSupport config (fuel + 1) (.boundActivation activation pre (.mk scope statements (some tail)) origin)
   | boundActivation (fuel : Nat) (activation : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
       (scope : Nat) (statements : List Stmt) (origin : Goose.Core.OriginId)
       (body : FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements none))) :
@@ -272,6 +281,18 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           intro ready bound
           exact ih (.statements { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements)
             (path ++ [0]) ready (bodySupported _)
+      | boundActivationTail _ activation pre scope statements tail bodySupported tailSupported =>
+          refine .boundActivationTail fuel path activation pre scope statements tail before ?_ ?_
+          · intro ready bound
+            exact ih (.statements { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements)
+              (path ++ [0]) ready (bodySupported _)
+          · intro ready value after planned tokens prepared bound body setup
+            exact ih (.producerWith { activation with scopes := (scope, before.nextScope) :: activation.scopes } planned tail)
+              (path ++ [1]) prepared (tailSupported _ planned)
+      | boundActivationWithTail _ activation pre scope statements tail origin bodySupported =>
+          refine .boundActivation ?_
+          intro implementation found
+          exact ih (.boundActivationBody activation pre (.mk scope statements (some tail))) (path ++ [0]) before bodySupported
       | boundActivation _ activation pre scope statements origin bodySupported =>
           refine .boundActivation ?_
           intro implementation found

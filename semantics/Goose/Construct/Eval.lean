@@ -183,17 +183,18 @@ def withExitChannels (source activation : RuntimeActivation) (operands : List Ex
   | .jump target kind state' => .jump target kind state'
 
 
+def completionChannelSetup (channels : List Channel) (origin : OriginId) : EvalM (List Channel × List ExitReservationId) := do
+  let planned ← channels.mapM fun channel => match channel with
+    | .construct incoming => do
+        let token ← liftConstruction origin (waitExitDestination incoming)
+        pure (Channel.completion token, some token)
+    | .register ty => pure (Channel.register ty, none)
+    | .completion _ => fault .flow
+  pure (planned.map Prod.fst, planned.filterMap Prod.snd)
+
 def withCompletionChannels (channels : List Channel) (origin : OriginId)
     (action : List Channel → EvalM (List Carrier)) : EvalM (List Carrier) := fun state =>
-  let setup : EvalM (List Channel × List ExitReservationId) := do
-    let planned ← channels.mapM fun channel => match channel with
-      | .construct incoming => do
-          let token ← liftConstruction origin (waitExitDestination incoming)
-          pure (Channel.completion token, some token)
-      | .register ty => pure (Channel.register ty, none)
-      | .completion _ => fault .flow
-    pure (planned.map Prod.fst, planned.filterMap Prod.snd)
-  match setup state with
+  match completionChannelSetup channels origin state with
   | .ok (planned, tokens) prepared =>
       let finish := fun (cancel : Bool) (carriers : List Carrier)
           (result : ExecutionState → ExecutionStep (List Carrier)) (state' : ExecutionState) =>
