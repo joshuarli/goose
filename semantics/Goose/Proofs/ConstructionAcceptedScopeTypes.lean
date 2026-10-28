@@ -57,8 +57,25 @@ theorem AcceptedFrame.enterScope_uninitializedTypes {config : EvalConfig} {accep
         simp only [rootOf, declared, active, pure]
       exact source.uninitializedTypes id uninitialized _ prior
 
+theorem AcceptedFrame.registerLocal_preserves_other_uninitializedTypes
+    {config : EvalConfig} {accepted : AcceptedModule config}
+    {frame : ConstructionSourceFrame} {state : ExecutionState} {types : RootTypes}
+    (source : AcceptedFrame config accepted frame state types) (id other : Nat) (root otherRoot : Goose.Core.RootInst)
+    (ty : Ty) (different : other ≠ id)
+    (uninitialized : frame.rootCursor.nextVar ≤ other ∨ other ∈ frame.source.initializing)
+    (resolved : rootOf frame.interpretation.environment id state = .ok root state)
+    (otherResolved : rootOf frame.interpretation.environment other state = .ok otherRoot state) :
+    registerRootType types root ty otherRoot = none := by
+  have rootsDifferent : otherRoot ≠ root := by
+    intro equal
+    subst otherRoot
+    exact different (rootOf_variable_injective frame.interpretation other id state root otherResolved resolved)
+  simp only [registerRootType, rootsDifferent, ↓reduceIte]
+  exact source.uninitializedTypes other uninitialized otherRoot otherResolved
+
 #print axioms AcceptedWorld.freshScope_localType
 #print axioms AcceptedWorld.enterScope_localType
 #print axioms AcceptedFrame.enterScope_uninitializedTypes
+#print axioms AcceptedFrame.registerLocal_preserves_other_uninitializedTypes
 
 end Goose.Proofs.ConstructionAcceptedExecution

@@ -517,9 +517,9 @@
  {
   "feature": "Uninitialized local types at fresh scope entry",
   "label": "model-proved",
-  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.AcceptedWorld.enterScope_localType; Goose.Proofs.ConstructionAcceptedExecution.AcceptedFrame.enterScope_uninitializedTypes",
-  "statement": "Entering a newly allocated scope gives its locals fresh root types and preserves the absence of registered types for uninitialized locals from outer scopes.",
-  "assumptions": "An accepted world and source frame, the actual fresh scope instance, and the source cursor's uninitialized-local condition.",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.AcceptedWorld.enterScope_localType; Goose.Proofs.ConstructionAcceptedExecution.AcceptedFrame.enterScope_uninitializedTypes; Goose.Proofs.ConstructionAcceptedExecution.AcceptedFrame.registerLocal_preserves_other_uninitializedTypes",
+  "statement": "Entering a newly allocated scope gives its locals fresh root types and preserves the absence of registered types for uninitialized locals from outer scopes. Registering a local preserves that absence for every other uninitialized local.",
+  "assumptions": "An accepted world and source frame, the actual fresh scope instance, and the source cursor's uninitialized-local condition. Registration uses distinct source variable IDs and their resolved local roots.",
   "limits": "This is one field of scope-frame preservation; the mutual evaluator induction and TH-CON-01 remain open.",
   "evidence": "ConstructionAcceptedScopeTypes.lean; scoped Lean 4.35 closure and axiom checks."
  },
