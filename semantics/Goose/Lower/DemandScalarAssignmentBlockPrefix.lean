@@ -154,6 +154,11 @@ theorem ScalarAssignmentStatementPrefixCursor.frame {cfg : Cfg} {env : Env} {cx 
     cases cursor with
     | clear demanded => cases demanded with
       | atFrame frame => exact ⟨_, _, _, frame⟩
+  | fieldAssignment cursor =>
+    cases cursor with
+    | scalar cursor => exact cursor.frame
+    | address child canonical frame =>
+      exact ⟨_, _, _, by simpa only [canonical.world] using frame⟩
   | assignment cursor => exact cursor.frame
 
 theorem GeneratedSequencePrefixCursor.scalar_assignment_frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
