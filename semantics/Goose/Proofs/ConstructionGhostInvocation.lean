@@ -25,7 +25,23 @@ theorem visit_executes {action : α → EvalM β} {offset : Nat} {operands : Lis
 def trackedInitializer : Expr → Bool
   | .arrLit ty _ _ => !ty.nonfixed
   | .fill (.arr element count) _ _ => !(Ty.arr element count).nonfixed
+  | .structLit (.structT _ _) _ => true
   | _ => false
+
+theorem structLiteral_replay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (id : Goose.Core.StructId) (fields : TyList) (operands : List Expr) (before : ExecutionState) :
+    ∃ mapped visits,
+      OperandReplay (evalValue fuel config environment) 0 operands [] before mapped visits ∧
+      evalValue (fuel + 1) config environment (.structLit (.structT id fields) operands) before =
+        match mapped with
+        | .ok values after => .ok (.record id values.toArray) after
+        | .stop reason after => .stop reason after
+        | .escape address carriers after => .escape address carriers after
+        | .jump target kind after => .jump target kind after := by
+  obtain ⟨visits, replay⟩ := mapM_replay (evalValue fuel config environment) operands before
+  refine ⟨_, visits, replay, ?_⟩
+  simp only [evalValue, bind, pure]
+  cases (operands.mapM (evalValue fuel config environment)) before <;> rfl
 
 inductive EvaluationTree (config : EvalConfig) (environment : RuntimeActivation) :
     Nat → List Nat → Expr → ExecutionState → ExecutionStep Value → Prop
@@ -46,6 +62,18 @@ inductive EvaluationTree (config : EvalConfig) (environment : RuntimeActivation)
       EvaluationTree config environment (fuel + 1) path (.arrLit ty operands origin) before
         (match mapped with
         | .ok values after => .ok (.fixed values.toArray) after
+        | .stop reason after => .stop reason after
+        | .escape address carriers after => .escape address carriers after
+        | .jump target kind after => .jump target kind after)
+  | record (fuel : Nat) (path : List Nat) (id : Goose.Core.StructId) (fields : TyList)
+      (operands : List Expr) (before : ExecutionState)
+      (mapped : ExecutionStep (List Value)) (visits : List (Invocation Expr Value))
+      (replay : OperandReplay (evalValue fuel config environment) 0 operands [] before mapped visits)
+      (children : ∀ visit ∈ visits, EvaluationTree config environment fuel (visit.path path)
+        visit.operand visit.before visit.outcome) :
+      EvaluationTree config environment (fuel + 1) path (.structLit (.structT id fields) operands) before
+        (match mapped with
+        | .ok values after => .ok (.record id values.toArray) after
         | .stop reason after => .stop reason after
         | .escape address carriers after => .escape address carriers after
         | .jump target kind after => .jump target kind after)
@@ -78,6 +106,15 @@ theorem evaluationTree_exists (fuel : Nat) (config : EvalConfig) (environment : 
           rw [← visit_executes replay visit member]
           exact ih _ _ _)
       | true => exact .opaque fuel path _ before (by simp [trackedInitializer, fixed])
+    | structLit ty operands =>
+      cases ty with
+      | structT id fields =>
+        obtain ⟨mapped, visits, replay, execution⟩ := structLiteral_replay fuel config environment id fields operands before
+        rw [execution]
+        cases mapped <;> exact .record fuel path id fields operands before _ visits replay (fun visit member => by
+          rw [← visit_executes replay visit member]
+          exact ih _ _ _)
+      | _ => exact .opaque fuel path _ before (by rfl)
     | fill ty operand origin =>
       cases ty with
       | arr element count =>
@@ -100,6 +137,12 @@ theorem evaluationTree_sound {fuel : Nat} {config : EvalConfig} {environment : R
     have notTrue : ¬ ty.nonfixed = true := by simp [fixed]
     rw [ite_eq_right notTrue]
     simp only [bind, pure]
+    have actual := replay.execute
+    change (operands.mapM (evalValue fuel config environment)) before = mapped at actual
+    rw [actual]
+    cases mapped <;> rfl
+  | record fuel path id fields operands before mapped visits replay children =>
+    simp only [evalValue, bind, pure]
     have actual := replay.execute
     change (operands.mapM (evalValue fuel config environment)) before = mapped at actual
     rw [actual]
@@ -133,6 +176,16 @@ theorem fill_source_sideEffect :
     (.fill (.arr (.int .i64) 2) witnessSource 0) .initial), ?_, ?_⟩ <;>
     unfold finalState witnessConfig witnessEnv witnessSource <;> cbv
 
+theorem record_source_sideEffect :
+    ∃ state, evalValue 31 witnessConfig witnessEnv
+      (.structLit (.structT 0 (.cons (.int .i64) (.cons (.int .i64) .nil))) [witnessSource, .lit .i64 8]) .initial =
+        .ok (.record 0 #[.int .i64 7, .int .i64 8]) state ∧
+      state.construction.stdout.data.toList = [111, 110, 99, 101, 10] := by
+  refine ⟨finalState (evalValue 31 witnessConfig witnessEnv
+    (.structLit (.structT 0 (.cons (.int .i64) (.cons (.int .i64) .nil))) [witnessSource, .lit .i64 8]) .initial), ?_, ?_⟩ <;>
+    unfold finalState witnessConfig witnessEnv witnessSource <;> cbv
+
+#print axioms record_source_sideEffect
 #print axioms fill_source_sideEffect
 #print axioms source_sideEffect
 end Goose.Proofs.ConstructionGhostInvocation
