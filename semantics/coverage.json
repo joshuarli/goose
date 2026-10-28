@@ -588,11 +588,11 @@
  {
   "feature": "Mixed expression and global-clear statement prefixes",
   "label": "model-proved",
-  "theorem": "Goose.Lower.accepted_generated_control_statements_prefix; Goose.Lower.GeneratedSequencePrefixCursor.control_realizes; Goose.Lower.accepted_generated_control_block_statements_prefix",
-  "statement": "Finite successful generated prefixes of mixed expression statements and global clears decompose through the actual statement sequence and retain the source world's demand map. The same family applies after actual block-scope entry.",
+  "theorem": "Goose.Lower.accepted_generated_control_statements_prefix; Goose.Lower.GeneratedSequencePrefixCursor.control_realizes; Goose.Lower.accepted_generated_control_block_statements_prefix; Goose.Lower.accepted_generated_control_statements_agreement",
+  "statement": "Finite successful generated prefixes of mixed expression statements and global clears decompose through the actual statement sequence and retain the source world's demand map. The same family applies after actual block-scope entry, and the same statement fragment also has non-timeout stop reflection.",
   "assumptions": "Accepted sources and generated occurrences, realized and bounded retained map, builder extension, and the stated expression fragment. Block entry uses the generated statement-body prefix interface.",
   "limits": "Block values and exit, assignments, control statements, calls, stops and whole-module cursor reconstruction remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandControlStatementPrefix.lean and its expression and sequence dependencies; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Lower/DemandControlStatementPrefix.lean; Goose/Lower/DemandControlStatementAgreement.lean and their expression and sequence dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted byte-owner allocation timeout",
