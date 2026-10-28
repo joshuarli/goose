@@ -103,12 +103,12 @@ theorem waitExitDestination_ambient (state : ConstructionState) (incoming : Nat)
 
 #print axioms waitExitDestination_ambient
 
-theorem captured_frames_push_waiting (state : ConstructionState) (ambient : OwnershipAmbient)
-    (incoming : Nat)
+theorem captured_frames_push_reservation (state : ConstructionState) (ambient : OwnershipAmbient)
+    (appended : ExitReservation)
     (unreferenced : ReservationTokenUnreferenced state.exitReservations.size ambient)
     (valid : OwnershipCapturedReceivingFrames state ambient) :
-    OwnershipCapturedReceivingFrames { state with exitReservations := state.exitReservations.push (.waiting incoming) } ambient := by
-  let after := { state with exitReservations := state.exitReservations.push (.waiting incoming) }
+    OwnershipCapturedReceivingFrames { state with exitReservations := state.exitReservations.push appended } ambient := by
+  let after := { state with exitReservations := state.exitReservations.push appended }
   have oldTicket (token : Nat) (reservation : ExitReservation) (different : token ≠ state.exitReservations.size)
       (present : after.exitReservations[token]? = some reservation) : state.exitReservations[token]? = some reservation := by
     simpa [after, Array.getElem?_push, different] using present
@@ -169,6 +169,15 @@ theorem captured_frames_push_waiting (state : ConstructionState) (ambient : Owne
         exact head.2 member
       exact channel outer outside c different (valid.1 c member)
 
+
+
+
+theorem captured_frames_push_waiting (state : ConstructionState) (ambient : OwnershipAmbient)
+    (incoming : Nat)
+    (unreferenced : ReservationTokenUnreferenced state.exitReservations.size ambient)
+    (valid : OwnershipCapturedReceivingFrames state ambient) :
+    OwnershipCapturedReceivingFrames { state with exitReservations := state.exitReservations.push (.waiting incoming) } ambient := by
+  exact captured_frames_push_reservation state ambient (.waiting incoming) unreferenced valid
 
 theorem waitExitDestination_context (before : ExecutionState) (incoming : Nat) (ambient : OwnershipAmbient)
     (valid : OwnershipExecutionContext before ambient) (history : ReservationReferencesBounded before.construction ambient) :
@@ -233,6 +242,7 @@ theorem waitExitDestination_context (before : ExecutionState) (incoming : Nat) (
   · exact ⟨valid.runtime.activations, valid.runtime.breaks⟩
   · exact ⟨valid.identities.activations, valid.identities.breaks⟩
 
+#print axioms captured_frames_push_reservation
 #print axioms waitExitDestination_context
 
 #print axioms captured_frames_push_waiting

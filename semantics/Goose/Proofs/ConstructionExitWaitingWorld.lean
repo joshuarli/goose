@@ -12,13 +12,13 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ExitExecution
 
-theorem waiting_value_backing (layout : LayoutEnv) (before : ExecutionState) (incoming : Nat)
+theorem appended_ticket_value_backing (layout : LayoutEnv) (before : ExecutionState) (reservation : ExitReservation)
     (value : Value) (backed : ValueStorageBacked layout before value) :
     ValueStorageBacked layout { before with construction := { before.construction with
-      exitReservations := before.construction.exitReservations.push (.waiting incoming) } } value := by
+      exitReservations := before.construction.exitReservations.push reservation } } value := by
   have storedBacking (stored : StoredValue) (backed : StoredValueBacking layout before stored) :
       StoredValueBacking layout { before with construction := { before.construction with
-        exitReservations := before.construction.exitReservations.push (.waiting incoming) } } stored := by
+        exitReservations := before.construction.exitReservations.push reservation } } stored := by
     cases backed with
     | detached storage element present detached type interval => exact .detached storage element present detached type interval
     | named id storage destination count present named binding backing type start progress element elementType interval =>
@@ -33,16 +33,29 @@ theorem waiting_value_backing (layout : LayoutEnv) (before : ExecutionState) (in
   | array values children ih => exact .array values ih
   | record id values children ih => exact .record id values ih
 
-theorem waiting_stored_observation (layout : LayoutEnv) (before : ExecutionState) (incoming : Nat)
+theorem appended_ticket_stored_observation (layout : LayoutEnv) (before : ExecutionState) (reservation : ExitReservation)
     (limit : Nat → Nat) (stored : StoredValue) (observed : StoredBackingObservation layout before limit stored) :
     StoredBackingObservation layout { before with construction := { before.construction with
-      exitReservations := before.construction.exitReservations.push (.waiting incoming) } } limit stored := by
+      exitReservations := before.construction.exitReservations.push reservation } } limit stored := by
   let waited := { before with construction := { before.construction with
-    exitReservations := before.construction.exitReservations.push (.waiting incoming) } }
+    exitReservations := before.construction.exitReservations.push reservation } }
   obtain ⟨storage, run, fuel, finish, found, sampled, measured, lower, upper⟩ := observed.observed
   change StoredBackingObservation layout waited limit stored
   refine ⟨storage, run, fuel, finish, found, ?_, measured, lower, upper⟩
   exact sampledStored_storage_transport stored before waited storage storage run found found rfl (by intros; rfl) sampled
+
+
+theorem waiting_value_backing (layout : LayoutEnv) (before : ExecutionState) (incoming : Nat)
+    (value : Value) (backed : ValueStorageBacked layout before value) :
+    ValueStorageBacked layout { before with construction := { before.construction with
+      exitReservations := before.construction.exitReservations.push (.waiting incoming) } } value := by
+  exact appended_ticket_value_backing layout before (.waiting incoming) value backed
+
+theorem waiting_stored_observation (layout : LayoutEnv) (before : ExecutionState) (incoming : Nat)
+    (limit : Nat → Nat) (stored : StoredValue) (observed : StoredBackingObservation layout before limit stored) :
+    StoredBackingObservation layout { before with construction := { before.construction with
+      exitReservations := before.construction.exitReservations.push (.waiting incoming) } } limit stored := by
+  exact appended_ticket_stored_observation layout before (.waiting incoming) limit stored observed
 
 theorem waitExitDestination_acceptedWorld (config : EvalConfig) (initialized : Nat)
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
@@ -116,6 +129,8 @@ theorem checked_numeric_operands_after_wait (fuel : Nat) (config : EvalConfig) (
 
 #print axioms checked_numeric_operands_after_wait
 
+#print axioms appended_ticket_value_backing
+#print axioms appended_ticket_stored_observation
 #print axioms waitExitDestination_acceptedWorld
 
 end Goose.Proofs.ConstructionAcceptedExecution
