@@ -31,6 +31,26 @@ theorem callArgsFuture_priorSliceHolder {m : Core.Module} {plans : Array (Array 
     simp only [callArgsFuture, List.mem_append, List.mem_flatMap]
     exact Or.inl (Or.inl ⟨.byRef borrow (.var slot), member, by simp [Arg.sliceHolderVariables, lookup, Place.variables]⟩)
 
+theorem callArgContext_priorSliceHolder_output {m : Core.Module} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
+    {tenv : TEnv} {penv : PEnv} {env : Env}
+    (context : EvaluationContext m plans path (.expression (.call contextId arguments origin)) .expression)
+    (active : context.ActiveMatches tenv) (access : context.AccessMatches tenv penv)
+    (variables : tenv.vars = env.vars) {slot : VarId} {lv : LocalVar}
+    {mutability : Mutability} {element : Ty} (variableAt : env.vars[slot]? = some lv)
+    (variableType : lv.ty = .slice mutability element) (visible : slot ∈ tenv.visible)
+    {index priorIndex : Nat} {borrow : Mutability} {argument : Arg}
+    (current : arguments[index]? = some argument)
+    (found : arguments[priorIndex]? = some (.byRef borrow (.var slot))) (prior : priorIndex < index) :
+    slot ∈ (callArgContext context index argument current).outputFuture := by
+  cases context with
+  | pilot profile activeVariables =>
+    cases argument <;> simp [callArgContext, ArgContext.outputFuture, EvaluationContext.child,
+      EvaluationContext.outputFuture, DemandNode.visibleAfter, DemandNode.visibleForChild, (active slot).2 visible]
+  | @shrink pc profile context =>
+    rw [callArgContext_shrinkOutputFuture context profile index argument (arguments.drop (index + 1)) current rfl]
+    exact callArgsFuture_priorSliceHolder (.shrink profile context) active access variables variableAt variableType visible found (by omega)
+
 theorem callArgContext_priorSliceHolder {m : Core.Module} {plans : Array (Array DemandPoint)}
     {path : List Nat} {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
     {tenv : TEnv} {penv : PEnv} {env : Env}
@@ -44,14 +64,7 @@ theorem callArgContext_priorSliceHolder {m : Core.Module} {plans : Array (Array 
     (found : arguments[priorIndex]? = some (.byRef borrow (.var slot))) (prior : priorIndex < index) :
     slot ∈ (callArgContext context index argument current).inputFuture := by
   rw [callArgContext_input_output]
-  apply List.mem_append_right
-  cases context with
-  | pilot profile activeVariables =>
-    cases argument <;> simp [callArgContext, ArgContext.outputFuture, EvaluationContext.child,
-      EvaluationContext.outputFuture, DemandNode.visibleAfter, DemandNode.visibleForChild, (active slot).2 visible]
-  | @shrink pc profile context =>
-    rw [callArgContext_shrinkOutputFuture context profile index argument (arguments.drop (index + 1)) current rfl]
-    exact callArgsFuture_priorSliceHolder (.shrink profile context) active access variables variableAt variableType visible found (by omega)
+  exact List.mem_append_right _ (callArgContext_priorSliceHolder_output context active access variables variableAt variableType visible current found prior)
 
 theorem demandContextInputFutureEq {module : Core.Module}
     {firstPlans secondPlans : Array (Array DemandPoint)} {firstPath secondPath : List Nat}
@@ -130,6 +143,29 @@ theorem SliceSlotAliasAt.ofLaterReferenceArgument {cfg : Cfg} {env : Env} {initi
   have childAnnotation : child.rootsEnv.ann slot = some alias.roots := by simpa only [roots] using annotation
   have result := SliceSlotAliasAt.ofFrame child.frame childVisible childNeeded variableAt scope variableType childAnnotation aliasType cell
   simpa only [world] using result
+
+
+theorem SliceSlotAliasAt.ofLaterArgumentOutputFrame {cfg : Cfg} {plans : Array (Array DemandPoint)}
+    {path : List Nat} {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
+    {tenv : TEnv} {penv : PEnv} {env : Env} {world : World} {state : St} {frame : GIR.Frame} {id : ValueId}
+    {alias : RetainedAlias} {slot : VarId} {si : ScopeInst} {lv : LocalVar} {mutability : Mutability} {element : Ty}
+    {index priorIndex : Nat} {borrow : Mutability} {argument : Arg}
+    (context : EvaluationContext cfg.mod plans path (.expression (.call contextId arguments origin)) .expression)
+    (active : context.ActiveMatches tenv) (access : context.AccessMatches tenv penv)
+    (current : arguments[index]? = some argument)
+    (source : Core.Sound.Frame cfg.mod world tenv penv env state (callArgContext context index argument current).outputFuture)
+    (visible : slot ∈ tenv.visible) (variableAt : env.vars[slot]? = some lv)
+    (scope : env.scopes.lookup lv.scope = some si) (variableType : lv.ty = .slice mutability element)
+    (annotation : penv.ann slot = some alias.roots) (aliasType : alias.ty = .slice mutability element)
+    (cell : frame.vals[id]? = some (.val (.ref ⟨.local env.act si slot, []⟩)))
+    (found : arguments[priorIndex]? = some (.byRef borrow (.var slot))) (prior : priorIndex < index) :
+    SliceSlotAliasAt cfg.mod world env state.store frame id alias mutability element := by
+  have needed := callArgContext_priorSliceHolder_output context active access source.vars_t
+    variableAt variableType visible current found prior
+  exact SliceSlotAliasAt.ofFrame source visible needed variableAt scope variableType annotation aliasType cell
+
+#print axioms callArgContext_priorSliceHolder_output
+#print axioms SliceSlotAliasAt.ofLaterArgumentOutputFrame
 
 #print axioms demandContextInputFutureEq
 #print axioms SliceSlotAliasAt.ofLaterValueArgument
