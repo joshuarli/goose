@@ -4,7 +4,7 @@ import Goose.Proofs.ConstructionGhostCallHistoryInversion
 namespace Goose.Proofs.ConstructionGhostCallSetupHistory
 open Goose.Construct Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostArguments
 open Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostCallHistoryInversion
-open Goose.Proofs.ConstructionGhostCallSetup Goose.Proofs.ConstructionGhostSourceFuel
+open Goose.Proofs.ConstructionGhostCallSetup Goose.Proofs.ConstructionGhostSourceFuel Goose.Proofs.ConstructionGhostCallActivation
 open Goose.Proofs.ConstructionGhostSyntaxFuel
 
 theorem call_arguments_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
@@ -73,6 +73,33 @@ theorem invokeCall_validatedSetupHistory (fuel : Nat) (config : EvalConfig) (env
   have history := fuelHistory_exists (fuel + 1) config (.channelCall environment context arguments channels origin) path before support
   exact invokeCall_setupHistory fuel config environment path context arguments channels origin before history
 
+theorem invokeCall_validatedActivationHistory (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
+    (origin : Goose.Core.OriginId) (before : ExecutionState) (closed : ClosedModuleWithTails config)
+    (argumentsSyntax : ∀ id implementation start lookupReady,
+      getImplementation config context start = .ok (id, implementation) lookupReady →
+      ArgumentSyntax config implementation.params.toList arguments) :
+    CallSetupHistory fuel config environment path context arguments channels origin before ∧
+    ∀ id implementation lookupReady callableChannels argumentsReady values valuesReady refreshed activationReady,
+      getImplementation config context before = .ok (id, implementation) lookupReady →
+      channels.length = implementation.results.size →
+      prepareCallableChannels environment channels implementation origin lookupReady = .ok callableChannels argumentsReady →
+      evalArguments fuel config environment implementation.vars implementation.params.toList arguments argumentsReady = .ok values valuesReady →
+      refreshCallableChannels callableChannels origin valuesReady = .ok refreshed activationReady →
+      activationReady.activations.length < Goose.Core.maxCallDepth →
+      let activation : RuntimeActivation := ⟨id, activationReady.nextAct, implementation.vars, [], refreshed⟩
+      let activated := { activationReady with nextAct := activationReady.nextAct + 1, activations := activation :: activationReady.activations }
+      let pre := (implementation.params.toList.zip values).map fun (parameter, value) => (parameter.var, value)
+      SourceHistory config fuel (path ++ [1]) (.boundActivation activation pre implementation.body origin) activated
+        (enterActivation fuel config activation pre implementation.body origin activated) := by
+  have support := (syntaxFuel_existsWithTails (fuel + 1) config closed).channelCall environment context arguments channels origin argumentsSyntax
+  have history := fuelHistory_exists (fuel + 1) config (.channelCall environment context arguments channels origin) path before support
+  refine ⟨invokeCall_setupHistory fuel config environment path context arguments channels origin before history, ?_⟩
+  intro id implementation lookupReady callableChannels argumentsReady values valuesReady refreshed activationReady lookup arity prepared argumentResult refresh depth
+  exact call_activation_history history fuel environment context arguments channels origin lookupReady argumentsReady valuesReady activationReady
+    id implementation callableChannels refreshed values rfl rfl lookup arity prepared argumentResult refresh depth
+
+#print axioms invokeCall_validatedActivationHistory
 #print axioms invokeCall_validatedSetupHistory
 #print axioms invokeCall_setupHistory
 #print axioms call_arguments_history
