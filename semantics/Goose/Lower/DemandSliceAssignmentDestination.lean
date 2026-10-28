@@ -28,7 +28,7 @@ theorem accepted_generated_slice_assignment_destination_prefix {cfg : Cfg} {env 
         destination.context.inputFuture map.values map.runs reached ∧
       ∃ next, ∀ fuel, DemandInstructionStep cx fuel reached next := by
   obtain ⟨location, point, frame, alias, destination, canonical, placed, executed, traversal, post, query,
-    child, childAt, childOwner, valueOccurrence, valueRows, nextCoverage, nextBounded, nextAdmitted, nextRealized, nextInput⟩ :=
+    child, childTyping, childRoots, childAt, childOwner, valueOccurrence, valueRows, nextCoverage, nextBounded, nextAdmitted, nextRealized, nextInput⟩ :=
     accepted_generated_slice_assignment_entry source slice selected owned occurrence rows coverage admitted bounded realized input extended
   exact ⟨destination, canonical, traversal.runtimePrefix_invariant (by omega) steps,
     traversal.runtimePrefix_next beforeAddress steps⟩

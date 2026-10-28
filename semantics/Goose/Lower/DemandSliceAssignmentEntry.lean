@@ -32,6 +32,7 @@ theorem accepted_generated_slice_assignment_entry {cfg : Cfg} {env : Env} {state
       Post cfg env cx before initial (lowerPlace (.deref reference) le before).2 frame point [(id, .val (.ref location))] ∧
       source.rootsEnv.access.aliasPlace (source.path ++ [0]) (.deref reference) = .ok [alias] ∧
       ∃ child : ExprSource cfg env value state,
+        child.typingEnv = source.typingEnv ∧ child.rootsEnv = source.rootsEnv ∧
         source.AssignmentValueAt child ∧ GeneratedSourceOwner selected child.context ∧
         ∃ valueOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn le root child.path (.expression value)
             (lowerPlace (.deref reference) le before).2,
@@ -61,7 +62,7 @@ theorem accepted_generated_slice_assignment_entry {cfg : Cfg} {env : Env} {state
     accepted_assignment_value_demand_of_retained source child childAt childTyping childRoots coverage admitted
       (bounded.mono post.mono) input post sourceQuery sourceRetained
   exact ⟨location, point, frame, alias, destination, canonical, placed, steps, traversal, post, sourceQuery,
-    child, childAt, childOwner, valueOccurrence, valueRows, nextCoverage, nextBounded, nextAdmitted, nextRealized, nextInput⟩
+    child, childTyping, childRoots, childAt, childOwner, valueOccurrence, valueRows, nextCoverage, nextBounded, nextAdmitted, nextRealized, nextInput⟩
 
 #print axioms accepted_generated_slice_assignment_entry
 end Goose.Lower
