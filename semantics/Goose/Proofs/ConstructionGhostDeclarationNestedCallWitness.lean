@@ -1,10 +1,11 @@
-import Goose.Proofs.ConstructionGhostDeclarationNestedCall
+import Goose.Proofs.ConstructionGhostCallStatementPaths
 
 namespace Goose.Proofs.ConstructionGhostDeclarationNestedCallWitness
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSyntaxFuel
 open Goose.Proofs.ConstructionGhostStatements Goose.Proofs.ConstructionGhostDeclarationReplay
 open Goose.Proofs.ConstructionGhostDeclarationNestedCall Goose.Proofs.ConstructionGhostResultScope
 open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostDeclarationOnce
+open Goose.Proofs.ConstructionGhostCallStatementPaths Goose.Proofs.ConstructionGhostStatementPaths
 
 private def expression : Expr := .bytes (.varr (.int .u8)) [65, 66] 0
 private def statements : List Stmt := [.letS 0 expression 0]
@@ -98,5 +99,62 @@ theorem nestedCall_occurrence : DeclarationOccurrence 35 config scopedEnvironmen
     cbv
 
 #print axioms nestedCall_occurrence
+private theorem argumentsSyntax : ∀ id actualImplementation start finish,
+    getImplementation config 0 start = .ok (id, actualImplementation) finish →
+    ArgumentSyntax config actualImplementation.params.toList [] := by
+  intro id actualImplementation start finish lookup
+  obtain ⟨actualContext, found, idEq, implFound⟩ := implementation_lookup_source config 0 start finish id actualImplementation lookup
+  have contextEq : actualContext = context := by simpa [config] using found.symm
+  subst actualContext
+  subst id
+  have implEq : actualImplementation = implementation := by simpa [config, context] using implFound.symm
+  subst actualImplementation
+  exact .nil
+
+theorem nestedCall_actualPaths : ∃ outcome visits,
+    StatementReplay config scopedEnvironment 37 0 statements ready outcome visits ∧ visits ≠ [] ∧
+    (∀ visit ∈ visits, ∃ suffix, StatementPath 0 suffix visit.ordinal ∧
+      SourceHistory config visit.fuel ([1, 0, 0] ++ suffix)
+        (.statement scopedEnvironment visit.statement) visit.before visit.outcome) ∧
+    (∀ visit ∈ visits, ∀ sourceFuel localVar value statementOrigin,
+      visit.fuel = sourceFuel + 1 → visit.statement = .letS localVar value statementOrigin →
+      ∃ suffix, StatementPath 0 suffix visit.ordinal ∧ ∀ destination sourceReady,
+        DeclarationOccurrence sourceFuel config scopedEnvironment localVar value statementOrigin visit.before destination sourceReady →
+        match destination with
+        | none => SourceHistory config sourceFuel (([1, 0, 0] ++ suffix) ++ [0])
+            (.value scopedEnvironment value) sourceReady (evalValue sourceFuel config scopedEnvironment value sourceReady)
+        | some destination => SourceHistory config sourceFuel (([1, 0, 0] ++ suffix) ++ [0])
+            (.builder scopedEnvironment destination value) sourceReady (buildExpr sourceFuel config scopedEnvironment destination value sourceReady)) := by
+  have support := (syntaxFuel_existsWithTails 40 config closed).channelCall caller 0 [] [] 0 argumentsSyntax
+  have history := Goose.Proofs.ConstructionGhostSourceFuel.fuelHistory_exists 40 config _ [] before support
+  have lookup : getImplementation config 0 before = .ok (0, implementation) before := by
+    simp [getImplementation, config, context, bind, pure]
+  have prepared : prepareCallableChannels caller [] implementation 0 before = .ok [] before := by
+    simp [prepareCallableChannels, implementation, bind, pure]
+  have arguments : evalArguments 39 config caller implementation.vars implementation.params.toList [] before = .ok [] before := by
+    simp [evalArguments, implementation, pure]
+  have refresh : Goose.Proofs.ConstructionGhostCallActivation.refreshCallableChannels [] 0 before = .ok [] before := by
+    simp [Goose.Proofs.ConstructionGhostCallActivation.refreshCallableChannels, pure]
+  have depth : before.activations.length < Goose.Core.maxCallDepth := by simp [before, Goose.Core.maxCallDepth]
+  have bound : bindAll activation.act activated.nextScope [] (resultScopeStart activation 0 activated) = .ok () ready := by
+    simp [ready, bindAll, bind, pure]
+  obtain ⟨outcome, visits, replay, once, paths, classification, declarationPaths⟩ :=
+    call_statementPaths 37 config caller [] 0 [] [] 0 before before before before before ready 0 implementation [] [] []
+      history lookup rfl rfl prepared arguments refresh depth 0 statements none rfl closed statementSyntax bound
+  refine ⟨outcome, visits, replay, ?_, ?_, ?_⟩
+  · intro empty
+    subst visits
+    cases replay
+  · simpa [scopedEnvironment, activation, activated, before] using paths
+  · intro visit member sourceFuel localVar value statementOrigin visitFuel visitStatement
+    obtain ⟨suffix, suffixPath, children⟩ := declarationPaths visit member sourceFuel localVar value statementOrigin visitFuel visitStatement
+    refine ⟨suffix, suffixPath, ?_⟩
+    intro destination sourceReady occurrence
+    have occurrence' := occurrence
+    simp only [scopedEnvironment, activation, activated, before] at occurrence'
+    have child := children destination sourceReady occurrence'
+    cases destination <;> simpa [scopedEnvironment, activation, activated, before, List.append_assoc] using child
+
+#print axioms nestedCall_actualPaths
 #print axioms nestedCall_nonempty
 end Goose.Proofs.ConstructionGhostDeclarationNestedCallWitness
