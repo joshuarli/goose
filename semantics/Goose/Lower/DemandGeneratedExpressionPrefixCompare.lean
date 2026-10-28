@@ -65,6 +65,8 @@ inductive GeneratedExpressionPrefixCompareCursor {cfg : Cfg} {env : Env} (cx : F
         root child.path (.expression b) (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2)
       (rows : GeneratedDemandRows cfg.mod child.rootsEnv.access occurrence required)
       (coverage : map.Covers required)
+      (leftPost : ∃ cells, Post cfg env cx before initial
+        (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2 middleFrame middle cells)
       (demanded : rightCursor child (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2
         (lowerExpr b (lowerEnv cfg.mod env.vars results) (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2).2
         middleFrame middle map required runtime) :
@@ -81,6 +83,7 @@ inductive GeneratedExpressionPrefixCompareCursor {cfg : Cfg} {env : Env} (cx : F
       (admitted : map.Admitted cfg.mod.profile source.context.retained)
       (bounded : map.Bounded (lowerExpr b (lowerEnv cfg.mod env.vars results)
         (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2).2.vals.size)
+      (same : Same before.vals.size initial runtime.frame)
       (demanded : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
         map.values map.runs runtime) :
       GeneratedExpressionPrefixCompareCursor cx results selected leftCursor rightCursor source before
@@ -106,8 +109,26 @@ theorem canonical
     CanonicalExpressionDemand map cx source runtime := by
   cases cursor with
   | left child metadata owned occurrence rows coverage demanded => exact .child metadata (leftDemand child demanded)
-  | right child metadata owned occurrence rows coverage demanded => exact .child metadata (rightDemand child demanded)
-  | operation child metadata owned site coverage admitted bounded demanded => exact .child metadata (.exit demanded)
+  | right child metadata owned occurrence rows coverage leftPost demanded => exact .child metadata (rightDemand child demanded)
+  | operation child metadata owned site coverage admitted bounded same demanded => exact .child metadata (.exit demanded)
+
+theorem same
+    (leftSame : ∀ {expression : Expr} {state : St} (child : ExprSource cfg env expression state)
+      {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint},
+      leftCursor child before built initial start map required runtime → Same before.vals.size initial runtime.frame)
+    (rightSame : ∀ {expression : Expr} {state : St} (child : ExprSource cfg env expression state)
+      {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint},
+      rightCursor child before built initial start map required runtime → Same before.vals.size initial runtime.frame)
+    (cursor : GeneratedExpressionPrefixCompareCursor cx results selected leftCursor rightCursor source before built initial start map required runtime) :
+    Same before.vals.size initial runtime.frame := by
+  cases cursor with
+  | left child metadata owned occurrence rows coverage demanded => exact leftSame child demanded
+  | right child metadata owned occurrence rows coverage leftPost demanded =>
+    obtain ⟨_, post⟩ := leftPost
+    exact post.same.trans (rightSame child demanded) post.mono
+  | operation child metadata owned site coverage admitted bounded same demanded => exact same
+
+#print axioms GeneratedExpressionPrefixCompareCursor.same
 
 theorem realizes
     (leftDemand : ∀ {expression : Expr} {state : St} (child : ExprSource cfg env expression state)
@@ -201,7 +222,7 @@ theorem accepted_generated_compare_prefix_family {cfg : Cfg} {env : Env} {cx : F
       rightRealized rightInput rightExtended residual
     cases rightDecomposed.progress with
     | interior demanded =>
-      exact .interior (.right right rightMetadata rightOwned rightOccurrence rightRows coverage demanded)
+      exact .interior (.right right rightMetadata rightOwned rightOccurrence rightRows coverage ⟨_, leftBoundary.post⟩ demanded)
     | @complete rightFuel rightCount remaining boundary rightValue count rightTrace residual rightDone rightBoundary =>
       have leftTyped := (left.result leftFuel leftValue leftDone).typed
       have rightTyped := (right.result rightFuel rightValue rightDone).typed
@@ -236,7 +257,7 @@ theorem accepted_generated_compare_prefix_family {cfg : Cfg} {env : Env} {cx : F
       have currentRealized : map.Realizes cfg.mod source.world env boundary := by
         simpa only [RetainedSsaMap.Realizes, rightMetadata.world] using rightBoundary.demanded.operands
       rcases residual.uncons with ⟨rfl, rfl⟩ | ⟨rest, current, rfl, actual, tail⟩
-      · exact .interior (.operation right rightMetadata owned site coverage admitted rightBoundary.bounded rightBoundary.demanded)
+      · exact .interior (.operation right rightMetadata owned site coverage admitted rightBoundary.bounded combinedPost.same rightBoundary.demanded)
       · obtain ⟨_, _, _, _, _, _, value, _, _, _, _, done, finalBoundary⟩ :=
           accepted_generated_scalar_runtime_step (.compare operation a b) inputs source evaluated
             site coverage combinedPost rightBoundary.bounded currentRealized actual

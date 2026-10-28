@@ -42,21 +42,21 @@ theorem accepted_generated_scalar_definition_prefix_family {cfg : Cfg} {env : En
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
     cases cursor with
     | child child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.instruction⟩
-    | operation child metadata owned site coverage admitted bounded carried => exact ⟨demanded, _, _, site.instruction⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, _, _, site.instruction⟩
   | unary operation origin child ih =>
     apply GeneratedExpressionPrefixFamily.mapCursor (accepted_generated_unary_prefix_family selected loop operation _ origin _ ih)
     intro expression state source before built initial start map required runtime cursor
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
     cases cursor with
     | child child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.instruction⟩
-    | operation child metadata owned site coverage admitted bounded carried => exact ⟨demanded, _, _, site.instruction⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, _, _, site.instruction⟩
   | convert kind target origin child ih =>
     apply GeneratedExpressionPrefixFamily.mapCursor (accepted_generated_convert_prefix_family selected loop kind target _ origin _ ih)
     intro expression state source before built initial start map required runtime cursor
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
     cases cursor with
     | child child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.instruction⟩
-    | operation child metadata owned site coverage admitted bounded carried => exact ⟨demanded, _, _, site.instruction⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, _, _, site.instruction⟩
   | binary operation origin first second firstIH secondIH =>
     apply GeneratedExpressionPrefixFamily.mapCursor
       (accepted_generated_binary_prefix_family selected loop operation _ _ origin _ _ firstIH secondIH)
@@ -73,8 +73,8 @@ theorem accepted_generated_scalar_definition_prefix_family {cfg : Cfg} {env : En
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded) (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
     cases cursor with
     | left child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.instruction⟩
-    | right child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.instruction⟩
-    | operation child metadata owned site coverage admitted bounded carried => exact ⟨demanded, _, _, site.instruction⟩
+    | right child metadata owned occurrence rows coverage leftPost cursor => exact ⟨demanded, cursor.instruction⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, _, _, site.instruction⟩
 
 #print axioms accepted_generated_scalar_definition_prefix_family
 end Goose.Lower
