@@ -2481,17 +2481,18 @@ theorem rpBound_callsIncluded {env : PEnv} {bound : Bound} {before after : RStat
     before.eff.calls ⊆ after.eff.calls :=
   (rp_effects_retained.2.2.2.2.2.2.2.2.2.2.2 env bound before result after checked).2
 
-theorem contextRootFactsAt_bodyRoots (module : Module) (context : Context)
+theorem contextRootFactsAt_bodyEffects (module : Module) (context : Context)
     (aliases : List (RootRef × RootRef)) (calls : List (ContextId × List (List RootRef)))
     (escaping : Array (List (Nat × List (List RootRef)))) (names : Array (List RootRef))
     (facts : ContextRootFactsAt module context aliases calls escaping names) :
-    ∃ implementation bodyContext actualEscapes value state,
+    ∃ implementation bodyContext actualEscapes value state effects,
       module.impls[context.impl]? = some implementation ∧
       parameterBodyRootContext module implementation context = .ok bodyContext ∧
       bodyTargets module = .ok actualEscapes ∧
       (rpBlockValue { mod := module, impl := implementation, ctx := bodyContext, scopes := [], escaping := escaping, targetEscapes := actualEscapes, aliases := aliases, calleeNames := names }
         [] implementation.body).run ⟨implementation.params.size, {}, []⟩ = .ok (value, state) ∧
-      state.eff.calls ⊆ calls := by
+      state.eff.calls ⊆ calls ∧ EffectTargetsIncluded state.eff effects ∧
+      checkSummary module implementation context effects = .ok () := by
   obtain ⟨facts, checked, factCalls⟩ := facts
   unfold checkContextFacts at checked
   cases present : module.impls[context.impl]? with
@@ -2528,14 +2529,30 @@ theorem contextRootFactsAt_bodyRoots (module : Module) (context : Context)
             let actual ← liftV (environment.access.blockResultRoots implementation.body)
             liftV (checkResultChannels environment actual)) := by
         retain_effect_targets [exact retains_producerCapacities _ _ _]
-      have included := (continuation state () final remaining).2
-      obtain ⟨token, _, returned⟩ := (rootFacts_bind_success _ _ _).mp checked
+      have included := continuation state () final remaining
+      obtain ⟨token, summary, returned⟩ := (rootFacts_bind_success _ _ _).mp checked
       cases token
       change Except.ok final.eff = Except.ok facts at returned
       have same := Except.ok.inj returned
       have callsSame : final.eff.calls = calls := by rw [same, factCalls]
-      exact ⟨implementation, bodyContext, actualEscapes, value, state, rfl, closed, rfl, replay,
-        by simpa only [callsSame] using included⟩
+      exact ⟨implementation, bodyContext, actualEscapes, value, state, final.eff, rfl, closed, rfl, replay,
+        by simpa only [callsSame] using included.2, included.1, summary⟩
+
+
+theorem contextRootFactsAt_bodyRoots (module : Module) (context : Context)
+    (aliases : List (RootRef × RootRef)) (calls : List (ContextId × List (List RootRef)))
+    (escaping : Array (List (Nat × List (List RootRef)))) (names : Array (List RootRef))
+    (facts : ContextRootFactsAt module context aliases calls escaping names) :
+    ∃ implementation bodyContext actualEscapes value state,
+      module.impls[context.impl]? = some implementation ∧
+      parameterBodyRootContext module implementation context = .ok bodyContext ∧
+      bodyTargets module = .ok actualEscapes ∧
+      (rpBlockValue { mod := module, impl := implementation, ctx := bodyContext, scopes := [], escaping := escaping, targetEscapes := actualEscapes, aliases := aliases, calleeNames := names }
+        [] implementation.body).run ⟨implementation.params.size, {}, []⟩ = .ok (value, state) ∧
+      state.eff.calls ⊆ calls := by
+  obtain ⟨implementation, bodyContext, actualEscapes, value, state, effects, present, closed, targets, rooted,
+    included, _, _⟩ := contextRootFactsAt_bodyEffects module context aliases calls escaping names facts
+  exact ⟨implementation, bodyContext, actualEscapes, value, state, present, closed, targets, rooted, included⟩
 
 private def RecordsCall (called : Nat × List (List RootRef)) (action : P α) : Prop :=
   ∀ before result after, action before = .ok (result, after) → called ∈ after.eff.calls
