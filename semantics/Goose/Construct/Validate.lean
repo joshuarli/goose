@@ -612,6 +612,53 @@ theorem validated_implementation_unit_typing (module : Module) (id : ImplId) (im
   · cases checked
 
 
+theorem validated_implementation_register_typing (module : Module) (id : ImplId) (implementation : Impl)
+    (accepted : validate module = .ok ()) (present : module.impls[id]? = some implementation)
+    (ty : Ty) (result : implementation.results = #[⟨ty, .register, none⟩])
+    (tail : implementation.body.value.isSome = true) :
+    ∃ source declared, typeBlock 4096 {
+      module := module
+      implementation := some implementation
+      variables := implementation.vars
+      visible := List.range implementation.params.size
+      scope := implementation.body.scope
+      loops := 0
+      use := if implementation.results.isEmpty then .ordinary else .result
+      request := .value
+      resultRequests := implementation.results.toList.map (·.request)
+      globalLimit := module.globals.size } implementation.body implementation.params.size =
+        .ok ([source], declared) ∧ source.passesTo ty = true := by
+  have checked := validated_implementation_check module id implementation accepted present
+  unfold checkImplementation at checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+  dsimp only [] at checked
+  split at checked
+  · split at checked
+    · cases checked
+    · obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+      obtain ⟨_, _, checked⟩ := (validation_bind_ok _ _ _).mp checked
+      obtain ⟨⟨bodyTypes, declared⟩, replay, remaining⟩ := (validation_bind_ok _ _ _).mp checked
+      simp only [result, tail] at remaining
+      unfold checkResultValues at remaining
+      cases bodyTypes with
+      | nil =>
+        simp [result, Goose.Core.reject, bind, Except.bind] at remaining
+        split at remaining <;> cases remaining
+      | cons source rest =>
+        cases rest with
+        | cons other rest =>
+          simp [result, Goose.Core.reject, bind, Except.bind] at remaining
+          split at remaining <;> cases remaining
+        | nil =>
+          cases passes : source.passesTo ty with
+          | false =>
+            simp [result, passes, Goose.Core.reject, bind, Except.bind] at remaining
+            split at remaining <;> cases remaining
+          | true => exact ⟨source, declared, replay, passes⟩
+  · cases checked
+
 private theorem validated_parameter_check (module : Module) (id : ImplId) (implementation : Impl)
     (index : Nat) (bound : index < implementation.params.size) (accepted : validate module = .ok ())
     (present : module.impls[id]? = some implementation) : checkParameter module implementation index = .ok () := by
