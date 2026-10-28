@@ -25,6 +25,27 @@ def SplitCallRetained.Realizes (map : SplitCallRetained) (m : Core.Module) (worl
     (point : DemandRuntimePoint) : Prop :=
   map.ordinary.Realizes m world env point ∧ SliceSlotArgumentCells.Realizes map.slots m world env point
 
+def SplitRequiredOperandsAt (required : RetainedSsaMap) (m : Core.Module) (world : World) (env : Env)
+    (point : DemandRuntimePoint) : Prop :=
+  (∀ cell ∈ required.values, ValueAliasAt m world env point.state.store point.frame cell.1 cell.2 ∨
+    ∃ slot : SliceSlotArgumentCell, (slot.value, slot.alias) = cell ∧
+      SliceSlotAliasAt m world env point.state.store point.frame slot.value slot.alias slot.mutability slot.element) ∧
+  (∀ cell ∈ required.runs, RunAliasAt m world env point.state.store point.frame cell.1 cell.2)
+
+theorem SplitCallRetained.Covers.realizes {map : SplitCallRetained} {required : RetainedSsaMap}
+    {m : Core.Module} {world : World} {env : Env} {point : DemandRuntimePoint}
+    (coverage : map.Covers required) (realized : map.Realizes m world env point) :
+    SplitRequiredOperandsAt required m world env point := by
+  constructor
+  · intro cell member
+    rcases coverage.1 cell member with ordinary | ⟨slot, present, same⟩
+    · exact Or.inl (realized.1.1 cell ordinary)
+    · exact Or.inr ⟨slot, same, realized.2 slot present⟩
+  · intro cell member
+    exact realized.1.2 cell (coverage.2 cell member)
+
+#print axioms SplitCallRetained.Covers.realizes
+
 theorem SplitCallRetained.argumentCoverage {m : Core.Module} {access : AccessEnv} {function : Func} {le : LEnv}
     {root : DemandNode} {path : List Nat} {before : LS} {context : ContextId} {arguments : List Arg}
     {origin : OriginId} {index : Nat} {argument : Arg}
@@ -75,6 +96,55 @@ theorem SplitCallRetained.byValAdmission {cfg : Cfg} {env : Env} {initial state 
       (cell.value, cell.alias) (slotSubset cell member)
 
 #print axioms SplitCallRetained.byValAdmission
+
+theorem SplitCallRetained.byValCursor {cfg : Cfg} {env : Env} {initialState state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (root : ExprSource cfg env (.call context arguments origin) initialState)
+    {index : Nat} {expression : Expr} (found : arguments[index]? = some (.byVal expression))
+    (child : ExprSource cfg env expression state)
+    (canonical : (ArgSource.byVal child).MatchesContext root.world root.typingEnv root.rootsEnv
+      (callArgContext root.context index (.byVal expression) found))
+    {cx : FnCtx} {before built : LS} {initial : GIR.Frame} {start : Pt}
+    {map required : RetainedSsaMap} {values : List (ValueId × RetainedAlias)}
+    {slots : List SliceSlotArgumentCell} {runtime : DemandRuntimePoint}
+    (cursor : GeneratedControlProgressCursor cx child before built initial start
+      ⟨values ++ map.values, map.runs⟩ required runtime)
+    (checked : ∀ cell ∈ slots, cell.Checked root index initial)
+    (bounded : ∀ cell ∈ slots, cell.value < before.vals.size) :
+    (⟨⟨values ++ map.values, map.runs⟩, slots⟩ : SplitCallRetained).Realizes cfg.mod root.world env runtime := by
+  have world : child.world = root.world := canonical.2.2.1
+  constructor
+  · simpa only [RetainedSsaMap.Realizes, world] using cursor.demanded.carried
+  · exact SliceSlotArgumentCells.ofLaterValueCursor root found child canonical cursor slots checked bounded
+
+#print axioms SplitCallRetained.byValCursor
+
+theorem SplitCallRetained.byReferenceCursor {cfg : Cfg} {env : Env} {initialState state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (root : ExprSource cfg env (.call context arguments origin) initialState)
+    {index : Nat} {place : Place} {borrow : Mutability} (found : arguments[index]? = some (.byRef borrow place))
+    (child : PlaceSource cfg env place state)
+    (target : child.ty.refTarget = true ∨ (child.ty.isSlice = true ∧ child.mutable = true ∧ place.sliceArg = true))
+    (canonical : (ArgSource.byRef borrow child target).MatchesContext root.world root.typingEnv root.rootsEnv
+      (callArgContext root.context index (.byRef borrow place) found))
+    {cx : FnCtx} {before : LS} {initial : GIR.Frame} {runtime : DemandRuntimePoint}
+    {map : RetainedSsaMap} {values : List (ValueId × RetainedAlias)} {slots : List SliceSlotArgumentCell}
+    (demanded : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
+        (values ++ map.values) map.runs runtime ∨
+      DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
+        (values ++ map.values) map.runs runtime)
+    (same : Same before.vals.size initial runtime.frame)
+    (checked : ∀ cell ∈ slots, cell.Checked root index initial)
+    (bounded : ∀ cell ∈ slots, cell.value < before.vals.size) :
+    (⟨⟨values ++ map.values, map.runs⟩, slots⟩ : SplitCallRetained).Realizes cfg.mod root.world env runtime := by
+  have world : child.world = root.world := canonical.2.2.1
+  constructor
+  · rcases demanded with input | output
+    · simpa only [RetainedSsaMap.Realizes, world] using input.operands
+    · simpa only [RetainedSsaMap.Realizes, world] using output.operands
+  · exact SliceSlotArgumentCells.ofLaterReferenceCursor root found child target canonical demanded same slots checked bounded
+
+#print axioms SplitCallRetained.byReferenceCursor
 
 theorem SplitCallRetained.bounded_mono {map : SplitCallRetained} {before after : ValueId}
     (bounded : map.Bounded before) (larger : before ≤ after) : map.Bounded after :=
