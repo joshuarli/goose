@@ -62,7 +62,7 @@ theorem SliceSlotArgumentCell.ofReference {cfg : Cfg} {env : Env} {initial state
     {fuel : Nat} {location : Loc} (placed : evalPlace fuel cfg env (.var slot) state = .ok location after)
     {cx : FnCtx} {before built : LS} {initialFrame frame : GIR.Frame} {point : Pt} {id : ValueId}
     (post : Post cfg env cx before initialFrame built frame point [(id, .val (.ref location))]) :
-    ∃ cell : SliceSlotArgumentCell, cell.value = id ∧ cell.Checked root (index + 1) frame ∧
+    ∃ cell : SliceSlotArgumentCell, cell.value = id ∧ cell.argument = index ∧ cell.Checked root (index + 1) frame ∧
       SliceSlotAliasAt cfg.mod root.world env after.store frame id cell.alias mutability element := by
   obtain ⟨plans, path, world, typing, roots, childContext⟩ := canonical
   have typed := child.typed
@@ -109,7 +109,7 @@ theorem SliceSlotArgumentCell.ofReference {cfg : Cfg} {env : Env} {initial state
       rfl
     subst slotLoc
     let cell : SliceSlotArgumentCell := ⟨id, index, slot, si, lv, borrow, mutability, element, alias⟩
-    refine ⟨cell, rfl, ?_, ?_⟩
+    refine ⟨cell, rfl, rfl, ?_, ?_⟩
     · exact ⟨found, by change index < index + 1; omega, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, by simpa [locationEq] using valueAt⟩
     · simpa only [world] using (show SliceSlotAliasAt cfg.mod child.world env after.store frame id alias mutability element from
         ⟨location, backing, start, length, valueAt, slotPath, slotStored, referenceTyped, aliasType, aliasAt⟩)

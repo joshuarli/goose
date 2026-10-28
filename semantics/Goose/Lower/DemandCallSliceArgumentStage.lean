@@ -32,7 +32,7 @@ theorem accepted_generated_call_slice_argument {cfg : Cfg} {env : Env} {initialS
       DemandRuntimePrefix cx length ⟨start, initial, state⟩ ⟨point, frame, state⟩ ∧
       Post cfg env cx stage initial (lowerArg (.byRef borrow (.var slot)) (lowerEnv cfg.mod env.vars results) stage).2
         frame point [(id, .val (.ref location))] ∧
-      cell.value = id ∧ cell.Checked source (index + 1) frame ∧
+      cell.value = id ∧ cell.argument = index ∧ cell.Checked source (index + 1) frame ∧
       SliceSlotAliasAt cfg.mod source.world env state.store frame id cell.alias mutability element := by
   let le := lowerEnv cfg.mod env.vars results
   let stage := (lowerArgs (arguments.take index) le before).2
@@ -51,8 +51,8 @@ theorem accepted_generated_call_slice_argument {cfg : Cfg} {env : Env} {initialS
       [((lowerArg (.byRef borrow (.var slot)) le stage).1, .val (.ref location))] := by
     rw [argEq]
     exact post
-  obtain ⟨cell, cellValue, checked, alias⟩ := SliceSlotArgumentCell.ofReference source found child target canonical type placed finalPost
-  refine ⟨location, length + 1, point, frame, cell, ?_, .next ((firstStep 0).runtime) tail, finalPost, cellValue, checked, alias⟩
+  obtain ⟨cell, cellValue, cellIndex, checked, alias⟩ := SliceSlotArgumentCell.ofReference source found child target canonical type placed finalPost
+  refine ⟨location, length + 1, point, frame, cell, ?_, .next ((firstStep 0).runtime) tail, finalPost, cellValue, cellIndex, checked, alias⟩
   simp [evalArg, bind_apply, placed, pure_apply]
 
 #print axioms accepted_generated_call_slice_argument
