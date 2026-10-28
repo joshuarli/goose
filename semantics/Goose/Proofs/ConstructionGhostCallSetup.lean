@@ -2,6 +2,7 @@ import Goose.Proofs.ConstructionGhostCallActivation
 
 namespace Goose.Proofs.ConstructionGhostCallSetup
 open Goose.Construct Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
+open Goose.Proofs.ConstructionGhostArguments
 
 def terminalCall {α : Type} : ExecutionStep α → Option (ExecutionStep (List Carrier))
   | .ok _ _ => none
@@ -124,6 +125,54 @@ theorem callAfterArguments_classification (fuel : Nat) (config : EvalConfig) (id
       exact Or.inl ⟨.jump target kind state, by simp [refresh, terminalCall],
         callAfterArguments_refreshTerminal fuel config id implementation channels callableChannels origin values before _ (by simp [refresh, terminalCall])⟩
 
+theorem invokeCall_setupClassification (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel) (origin : Goose.Core.OriginId)
+    (before : ExecutionState) :
+    (∃ terminal, terminalCall (getImplementation config context before) = some terminal ∧
+      invokeCall (fuel + 1) config environment context arguments channels origin before = terminal) ∨
+    (∃ id implementation lookupReady, getImplementation config context before = .ok (id, implementation) lookupReady ∧
+      channels.length ≠ implementation.results.size ∧
+      invokeCall (fuel + 1) config environment context arguments channels origin before = .stop (.fault .arity) lookupReady) ∨
+    (∃ id implementation lookupReady terminal, getImplementation config context before = .ok (id, implementation) lookupReady ∧
+      channels.length = implementation.results.size ∧
+      terminalCall (prepareCallableChannels environment channels implementation origin lookupReady) = some terminal ∧
+      invokeCall (fuel + 1) config environment context arguments channels origin before = terminal) ∨
+    (∃ id implementation lookupReady callableChannels argumentsReady outcome visits,
+      getImplementation config context before = .ok (id, implementation) lookupReady ∧
+      channels.length = implementation.results.size ∧
+      prepareCallableChannels environment channels implementation origin lookupReady = .ok callableChannels argumentsReady ∧
+      ArgumentReplay config environment implementation.vars fuel 0 implementation.params.toList arguments argumentsReady outcome visits ∧
+      invokeCall (fuel + 1) config environment context arguments channels origin before =
+        callArgumentsContinuation fuel config id implementation channels callableChannels origin outcome) := by
+  cases lookup : getImplementation config context before with
+  | ok pair lookupReady =>
+      obtain ⟨id, implementation⟩ := pair
+      by_cases arity : channels.length = implementation.results.size
+      · cases prepared : prepareCallableChannels environment channels implementation origin lookupReady with
+        | ok callableChannels argumentsReady =>
+            obtain ⟨outcome, visits, replay, ordered, once, execution⟩ := invokeCall_argumentReplay fuel config environment context
+              arguments channels origin before lookupReady argumentsReady id implementation callableChannels lookup arity prepared
+            exact Or.inr (Or.inr (Or.inr ⟨id, implementation, lookupReady, callableChannels, argumentsReady, outcome, visits,
+              rfl, arity, prepared, replay, execution⟩))
+        | stop reason state =>
+            exact Or.inr (Or.inr (Or.inl ⟨id, implementation, lookupReady, .stop reason state, rfl, arity, (by simp [prepared, terminalCall]),
+              invokeCall_preparationTerminal fuel config environment context arguments channels origin before lookupReady id implementation _ lookup arity (by simp [prepared, terminalCall])⟩))
+        | escape address carriers state =>
+            exact Or.inr (Or.inr (Or.inl ⟨id, implementation, lookupReady, .escape address carriers state, rfl, arity, (by simp [prepared, terminalCall]),
+              invokeCall_preparationTerminal fuel config environment context arguments channels origin before lookupReady id implementation _ lookup arity (by simp [prepared, terminalCall])⟩))
+        | jump target kind state =>
+            exact Or.inr (Or.inr (Or.inl ⟨id, implementation, lookupReady, .jump target kind state, rfl, arity, (by simp [prepared, terminalCall]),
+              invokeCall_preparationTerminal fuel config environment context arguments channels origin before lookupReady id implementation _ lookup arity (by simp [prepared, terminalCall])⟩))
+      · exact Or.inr (Or.inl ⟨id, implementation, lookupReady, rfl, arity,
+          invokeCall_arityFault fuel config environment context arguments channels origin before lookupReady id implementation lookup arity⟩)
+  | stop reason state => exact Or.inl ⟨.stop reason state, rfl,
+      invokeCall_lookupTerminal fuel config environment context arguments channels origin before _ (by simp [lookup, terminalCall])⟩
+  | escape address carriers state => exact Or.inl ⟨.escape address carriers state, rfl,
+      invokeCall_lookupTerminal fuel config environment context arguments channels origin before _ (by simp [lookup, terminalCall])⟩
+  | jump target kind state => exact Or.inl ⟨.jump target kind state, rfl,
+      invokeCall_lookupTerminal fuel config environment context arguments channels origin before _ (by simp [lookup, terminalCall])⟩
+
+#print axioms invokeCall_setupClassification
 #print axioms callAfterArguments_classification
 #print axioms invokeCall_argumentsTerminal
 #print axioms callAfterArguments_refreshTerminal
