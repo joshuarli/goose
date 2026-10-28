@@ -1,4 +1,8 @@
 import Goose.Proofs.ConstructionAcceptedParameterizedFrameEffects
+import Goose.Proofs.ConstructionAcceptedParameterizedRecursiveGraph
+import Goose.Proofs.ConstructionAcceptedRecursiveLocalCallEvaluation
+import Goose.Proofs.ConstructionAcceptedSingleScalarGlobal
+import Goose.Proofs.ConstructionAcceptedModuleFromGlobals
 import Goose.Proofs.ConstructionAcceptedNestedGlobal
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -84,6 +88,87 @@ theorem parameterCycle_recursive_tail_checked :
       bodyFrame body contextAt calleeAt (by rfl) (Or.inl ⟨.i64, rfl⟩) requests (by simpa [parameterCycleHelper, initialized] using effects)
   exact ⟨frame, tailRoots, tailTypingAfter, tailRootsAfter, checked⟩
 
+theorem parameterCycle_graph : ParameterizedRegisterTailGraph parameterCycleConfig .i64 := by
+  intro target context implementation parameter contextAt implementationAt parameters mode results
+  cases target with
+  | zero =>
+    simp [parameterCycleConfig, parameterCycleModule] at contextAt
+    subst context
+    simp [parameterCycleConfig, parameterCycleModule] at implementationAt
+    subst implementation
+    simp [parameterCycleEntry] at parameters
+  | succ target =>
+    cases target with
+    | zero =>
+      simp [parameterCycleConfig, parameterCycleModule] at contextAt
+      subst context
+      simp [parameterCycleConfig, parameterCycleModule] at implementationAt
+      subst implementation
+      have same : parameter = ⟨0, .byValue⟩ := by simpa [parameterCycleHelper] using parameters.symm
+      subst parameter
+      refine ⟨⟨"value", .int .i64, .immutable, 0, 0⟩, parameterCycleSummary, 1, 0,
+        ⟨1, "cycle", [], [[]], []⟩, parameterCycleHelper, ⟨0, .byValue⟩,
+        ⟨"value", .int .i64, .immutable, 0, 0⟩, .read (.var 0), ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+      all_goals first | rfl | simp [parameterCycleSummary] | exact .scalar (.numeric (.scalar (.scalar (.localRead 0))))
+    | succ target => simp [parameterCycleConfig, parameterCycleModule] at contextAt
+
+theorem parameterCycle_argumentGraph : RegisterCallGraphWithCallLocals parameterCycleConfig (.int .i64) := by
+  intro target context implementation contextAt implementationAt parameters results
+  cases target with
+  | zero =>
+    simp [parameterCycleConfig, parameterCycleModule] at contextAt
+    subst context
+    simp [parameterCycleConfig, parameterCycleModule] at implementationAt
+    subst implementation
+    simp [parameterCycleEntry] at results
+  | succ target =>
+    cases target with
+    | zero =>
+      simp [parameterCycleConfig, parameterCycleModule] at contextAt
+      subst context
+      simp [parameterCycleConfig, parameterCycleModule] at implementationAt
+      subst implementation
+      simp [parameterCycleHelper] at parameters
+    | succ target => simp [parameterCycleConfig, parameterCycleModule] at contextAt
+
+theorem parameterCycle_module_allFuel (fuel : Nat) :
+    ∃ initialized ambient types live regions,
+      AcceptedWorld parameterCycleConfig initialized (Goose.Proofs.Exit.stepState (runModule fuel parameterCycleConfig .initial)) ambient types live regions [] ∧
+      (match runModule fuel parameterCycleConfig .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  let accepted := acceptedModule parameterCycleConfig parameterCycle_validated
+  let descriptor : Global := ⟨"answer", .int .i64, .immutable, .call 1 [.byVal (.lit .i64 7)] 0, 0⟩
+  have initial : InitialGlobalsOutcome fuel parameterCycleConfig := by
+    apply singleScalarInitialGlobalsOutcome fuel parameterCycleConfig accepted descriptor (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩)
+    intro names roots typingAfter rootsAfter frame activated world source checked
+    cases fuel with
+    | zero =>
+      simp only [evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
+      exact ⟨declaredRootTypes parameterCycleModule, (fun _ => False), [], (fun _ _ found => found), world, source.futureGlobals, trivial⟩
+    | succ fuel =>
+      let context : Context := ⟨1, "cycle", [], [[]], []⟩
+      let parameter : Param := ⟨0, .byValue⟩
+      have form : UnaryRegisterExpression parameterCycleConfig .i64 (.lit .i64 7) :=
+        .scalar (.numeric (.scalar (.scalar (.integer .i64 7))))
+      obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, finalSource, clear, observed, result⟩ :=
+        invokeCall_parameterizedGraph_allFuel fuel parameterCycleConfig .i64 accepted parameterCycle_graph parameterCycle_argumentGraph
+          frame activated [] (declaredRootTypes parameterCycleModule) (fun _ => False) [] [] 1 0 context parameterCycleHelper parameter (.lit .i64 7)
+          world source (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) form 4094 (by rfl) roots typingAfter rootsAfter checked
+      obtain ⟨valueTypes, valueLive, valueAmbient, valueExtend, valueActs, valueScopes, valueWorld, valueClear, valueResult⟩ :=
+        evalValue_registerCall_withArguments_fromInvoke fuel parameterCycleConfig 0 frame.interpretation.environment activated []
+          (declaredRootTypes parameterCycleModule) [] [] 1 context parameterCycleHelper [.byVal (.lit .i64 7)] (.int .i64) 0
+          (by rfl) (by rfl) (by rfl) ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, clear, result⟩
+      exact ⟨valueTypes, valueLive, valueAmbient, valueExtend, valueWorld, valueClear, valueResult⟩
+  apply acceptedModuleFromGlobals_allFuel fuel parameterCycleConfig accepted ⟨0, "entry", [], [], []⟩ parameterCycleEntry initial (by rfl) (by rfl)
+  · exact .nil
+  · simp [parameterCycleEntry, Block.stmts]
+  · simp [parameterCycleEntry, Block.stmts]
+  · simp [parameterCycleEntry, Block.stmts]
+  · simp [parameterCycleEntry, Block.stmts]
+  · rfl
+
+#print axioms parameterCycle_module_allFuel
+#print axioms parameterCycle_argumentGraph
+#print axioms parameterCycle_graph
 #print axioms parameterCycle_recursive_tail_checked
 #print axioms parameterCycle_callee_source
 #print axioms parameterCycle_actual_timeout
