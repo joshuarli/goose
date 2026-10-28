@@ -1,0 +1,56 @@
+import Goose.Proofs.ConstructionAcceptedByteBodyFinish
+import Goose.Proofs.ConstructionAcceptedByteReturnTimeout
+
+namespace Goose.Proofs.ConstructionAcceptedExecution
+open Goose.Construct
+open Goose.Core (OriginId RootInst)
+open Goose.Proofs.ConstructionRepresentation
+open Goose.Proofs.ConstructionExecutionOwnership
+open Goose.Proofs.ConstructionExecutionProtocol
+open Goose.Proofs.ExitExecution
+
+theorem byteBody_lowFuel_world (config : EvalConfig) (initialized : Nat)
+    (activation : RuntimeActivation) (scope id : Nat) (bytes : List UInt8) (origin : OriginId)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion)
+    (channels : activation.channels = [.construct id])
+    (world : AcceptedWorld config initialized before (.callChannels activation [] :: ambient) types live regions [])
+    (history : ReservationReferencesBounded before.construction (.callChannels activation [] :: ambient))
+    (noRetained : completedCarrierIds (OwnershipAmbient.retained (.callChannels activation [] :: ambient)) = [])
+    (ready : OpenDestinationBacking config.layout before id (.varr (.int .u8)) 0)
+    (current : destinationCurrent before.construction id = .ok id) :
+    let scopedState := ownershipResultScopeState activation scope before
+    let final := { scopedState with construction := { scopedState.construction with
+      exitReservations := scopedState.construction.exitReservations.push .released } }
+    execActivationBody 0 config activation [] ⟨scope, [], some (.bytes (.varr (.int .u8)) bytes origin)⟩ before = .stop .timeout before ∧
+    execActivationBody 1 config activation [] ⟨scope, [], some (.bytes (.varr (.int .u8)) bytes origin)⟩ before = .stop .timeout scopedState ∧
+    execActivationBody 2 config activation [] ⟨scope, [], some (.bytes (.varr (.int .u8)) bytes origin)⟩ before = .stop .timeout final ∧
+    AcceptedWorld config initialized scopedState (.callChannels activation [] :: ambient) types live regions [] ∧
+    AcceptedWorld config initialized final (.returned [] :: .callChannels activation [] :: ambient) types live regions [] := by
+  let scopedState := ownershipResultScopeState activation scope before
+  let final := { scopedState with construction := { scopedState.construction with
+    exitReservations := scopedState.construction.exitReservations.push .released } }
+  have scopedWorld := acceptedWorld_resultScope config initialized before (.callChannels activation [] :: ambient)
+    types live regions [] activation scope world
+  let scopedReady : OpenDestinationBacking config.layout scopedState id (.varr (.int .u8)) 0 :=
+    { ready with present := ready.present, bytes := ready.bytes }
+  have timed := withCompletion_byteReceiver_timeouts config initialized
+    { activation with scopes := (scope, before.nextScope) :: activation.scopes } id bytes origin scopedState
+    (.callChannels activation [] :: ambient) types live regions scopedWorld history noRetained scopedReady current
+  have bound : bindAll activation.act before.nextScope [] scopedState = .ok () scopedState := by simp [bindAll, bind, pure]
+  have normal : execStmts 1 config { activation with scopes := (scope, before.nextScope) :: activation.scopes }
+    [] scopedState = .ok (.normal .unit) scopedState := by simp [execStmts, pure]
+  have body := execActivationBody_bound_channelTail 1 config activation [] scope []
+    (.bytes (.varr (.int .u8)) bytes origin) before scopedState scopedState bound normal
+  simp only [channels, expressionOrigin] at body
+  simp only [channels] at timed
+  rw [timed.2.1] at body
+  refine ⟨?_, ?_, ?_, scopedWorld, timed.2.2⟩
+  · simp [execActivationBody, Goose.Construct.timeout, EvalM.stop]
+  · simp [execActivationBody, execResultScope, freshScope, EvalM.get, EvalM.set, bindAll,
+      withScope, execStmts, Goose.Construct.timeout, EvalM.stop, bind, pure,
+      ownershipResultScopeState]
+  · simpa [final] using body
+
+#print axioms byteBody_lowFuel_world
+end Goose.Proofs.ConstructionAcceptedExecution
