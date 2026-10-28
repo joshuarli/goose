@@ -1,5 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedParameterizedCallTailEffects
-import Goose.Proofs.ConstructionAcceptedScalarBinaryCallEffects
+import Goose.Proofs.ConstructionAcceptedParameterizedRegisterBinaryCallTail
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -44,16 +43,11 @@ theorem acceptedSingleByValueBoundBinaryCallTail (config : EvalConfig) (accepted
         (registerRootType types root descriptor.ty) (fun other => other = root ∨ live other) regions pending ∧
       AcceptedFrame config accepted (entryStatementsFrame config frame state.nextScope) after (registerRootType types root descriptor.ty) ∧
       CheckedValue (entryStatementsFrame config frame state.nextScope) (.call tailTarget [.byVal (.bin operation left right operandOrigin)] tailOrigin) ty roots typingAfter rootsAfter := by
-  refine acceptedSingleByValueBoundCallTail_noParameterBody config accepted caller state ambient types live regions pending
-    target origin context implementation parameter descriptor argument value ty summary contextAt implementationAt parameters declared
-    scalar represented pointers known ?_ results tailTarget tailOrigin tailContext tailCallee [.byVal (.bin operation left right operandOrigin)]
-    body tailContextAt tailCalleeAt tailResults scalarTy world source outerTy outerRoots outerTypingAfter outerRootsAfter checked
-  intro bodySource before after result sourceModule sourceImpl clear rooted
-  rw [body] at rooted
-  exact
-    scalarBinaryCallTail_noParameter bodySource implementation.body.scope tailTarget tailOrigin operandOrigin operation left right tailContext tailCallee
-      tailParameter tailSummary before after result tailForm (by simpa [sourceModule] using tailContextAt)
-      (by simpa [sourceModule] using tailCalleeAt) tailParameters tailKnown clear rooted
+  exact acceptedSingleByValueBoundRegisterBinaryCallTail config accepted caller state ambient types live regions pending target origin
+    context implementation parameter descriptor argument value ty summary .i64 contextAt implementationAt parameters declared scalar
+    represented pointers known results tailTarget tailOrigin operandOrigin operation left right tailContext tailCallee tailParameter tailSummary
+    body tailContextAt tailCalleeAt (.operand (.scalar tailForm)) tailParameters tailKnown tailResults scalarTy world source
+    outerTy outerRoots outerTypingAfter outerRootsAfter checked
 
 #print axioms acceptedSingleByValueBoundBinaryCallTail
 end Goose.Proofs.ConstructionAcceptedExecution

@@ -16,8 +16,8 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionRepresentation
 
-theorem invokeCall_parameterizedScalarSummaryGraph_allFuel (fuel : Nat) (config : EvalConfig) (integer : Goose.Core.IntTy)
-    (accepted : AcceptedModule config) (graph : ParameterizedScalarSummaryRegisterGraph config integer)
+theorem invokeCall_parameterizedRegisterSummaryGraph_allFuel (fuel : Nat) (config : EvalConfig) (integer : Goose.Core.IntTy)
+    (accepted : AcceptedModule config) (graph : ParameterizedRegisterSummaryRegisterGraph config integer)
     (argumentGraph : RegisterCallGraphWithCallLocals config (.int integer)) :
     ∀ (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -126,7 +126,7 @@ theorem invokeCall_parameterizedScalarSummaryGraph_allFuel (fuel : Nat) (config 
                   body tailContextAt tailCalleeAt tailResults (Or.inl ⟨integer, rfl⟩) argumentWorld argumentSource
                   (.int integer) roots typingAfter rootsAfter checked)
                 (fun ⟨argumentForm, tailSummary, tailKnown⟩ => by
-                  rcases argumentForm with sameArgument | ⟨operation, left, right, operandOrigin, sameArgument, scalarForm⟩
+                  rcases argumentForm with sameArgument | ⟨operation, left, right, operandOrigin, sameArgument⟩
                   · subst tailArgument
                     exact acceptedSingleByValueBoundLocalCallTail config accepted caller after argumentAmbient argumentTypes argumentLive regions pending
                       target origin context implementation parameter descriptor argument value (.int integer) summary contextAt implementationAt
@@ -135,11 +135,11 @@ theorem invokeCall_parameterizedScalarSummaryGraph_allFuel (fuel : Nat) (config 
                       body tailContextAt tailCalleeAt tailParameters tailKnown tailResults (Or.inl ⟨integer, rfl⟩) argumentWorld argumentSource
                       (.int integer) roots typingAfter rootsAfter checked
                   · subst tailArgument
-                    exact acceptedSingleByValueBoundBinaryCallTail config accepted caller after argumentAmbient argumentTypes argumentLive regions pending
-                      target origin context implementation parameter descriptor argument value (.int integer) summary contextAt implementationAt
+                    exact acceptedSingleByValueBoundRegisterBinaryCallTail config accepted caller after argumentAmbient argumentTypes argumentLive regions pending
+                      target origin context implementation parameter descriptor argument value (.int integer) summary integer contextAt implementationAt
                       parameters declared (Or.inl ⟨integer, descriptorTy⟩) (by simpa [descriptorTy] using representation)
                       (by simpa [descriptorTy] using pointers) known results tailTarget tailOrigin operandOrigin operation left right tailContext tailCallee tailParameter tailSummary
-                      body tailContextAt tailCalleeAt scalarForm tailParameters tailKnown tailResults (Or.inl ⟨integer, rfl⟩) argumentWorld argumentSource
+                      body tailContextAt tailCalleeAt tailForm tailParameters tailKnown tailResults (Or.inl ⟨integer, rfl⟩) argumentWorld argumentSource
                       (.int integer) roots typingAfter rootsAfter checked)
               obtain ⟨calleeFrame, actual, boundState, tailRoots, tailTypingAfter, tailRootsAfter, sameImpl, initialized, environment,
                 act, emptyScopes, channels, activationImpl, activationVars, bound, boundExtended, boundWorld, boundSource, tailChecked⟩ := tailBound
@@ -243,6 +243,35 @@ theorem invokeCall_parameterizedScalarSummaryGraph_allFuel (fuel : Nat) (config 
 
 
 
+
+
+theorem invokeCall_parameterizedScalarSummaryGraph_allFuel (fuel : Nat) (config : EvalConfig) (integer : Goose.Core.IntTy)
+    (accepted : AcceptedModule config) (graph : ParameterizedScalarSummaryRegisterGraph config integer)
+    (argumentGraph : RegisterCallGraphWithCallLocals config (.int integer)) :
+    ∀ (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (target origin : Nat) (context : Context) (implementation : Impl) (parameter : Param) (argument : Expr)
+    (world : AcceptedWorld config caller.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted caller state types)
+    (contextAt : config.module.contexts[target]? = some context)
+    (implementationAt : config.module.impls[context.impl]? = some implementation)
+    (parameters : implementation.params = #[parameter]) (mode : parameter.mode = .byValue)
+    (results : implementation.results = #[⟨.int integer, .register, none⟩])
+    (form : RegisterArithmeticExpression config integer argument) (checkFuel : Nat) (nesting : caller.typingFuel = checkFuel + 2)
+    (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue caller (.call target [.byVal argument] origin) (.int integer) roots typingAfter rootsAfter),
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := invokeCall fuel config caller.interpretation.environment target [.byVal argument] [.register (.int integer)] origin state
+      RootTypesExtend types nextTypes ∧ state.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      state.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config caller.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      AcceptedFrame config accepted caller (Goose.Proofs.Exit.stepState outcome) nextTypes ∧
+      FutureGlobalsClear config caller.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      EarlierCallerObservations state.nextAct state (Goose.Proofs.Exit.stepState outcome) types nextTypes ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation (.int integer) value
+       | .stop .. => True | .escape .. | .jump .. => False) := by
+  exact invokeCall_parameterizedRegisterSummaryGraph_allFuel fuel config integer accepted graph.toRegisterSummaryGraph argumentGraph
 
 theorem invokeCall_parameterizedLocalSummaryGraph_allFuel (fuel : Nat) (config : EvalConfig) (integer : Goose.Core.IntTy)
     (accepted : AcceptedModule config) (graph : ParameterizedLocalSummaryRegisterGraph config integer)
@@ -416,6 +445,7 @@ theorem invokeCall_parameterizedGraph_allFuel (fuel : Nat) (config : EvalConfig)
        | .stop .. => True | .escape .. | .jump .. => False) := by
   exact invokeCall_parameterizedGeneralGraph_allFuel fuel config integer accepted graph.toGraph argumentGraph
 
+#print axioms invokeCall_parameterizedRegisterSummaryGraph_allFuel
 #print axioms invokeCall_parameterizedScalarSummaryGraph_allFuel
 #print axioms invokeCall_parameterizedLocalSummaryGraph_allFuel
 #print axioms invokeCall_parameterizedSummaryGraph_allFuel
