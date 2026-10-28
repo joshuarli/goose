@@ -57,6 +57,12 @@ inductive GeneratedDemandRows (m : Core.Module) (access : AccessEnv) :
       {live : (lowerExpr condition le before).2.cur.isSome = true} {required : RetainedSsaMap}
       (rows : GeneratedDemandRows m access occurrence required) :
       GeneratedDemandRows m access (.ifThen occurrence live) required
+  | ifElse {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {loop : Option LoopCtx} {condition : Expr} {yes no : Core.Block} {origin : OriginId}
+      {occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.ifS condition yes (some no) origin)) before}
+      {live : (lowerExpr condition le before).2.cur.isSome = true} {required : RetainedSsaMap}
+      (rows : GeneratedDemandRows m access occurrence required) :
+      GeneratedDemandRows m access (.ifElse occurrence live) required
   | index {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {view : View} {index : Expr} {origin : OriginId}
       {occurrence : GeneratedDemandOccurrence m function le root path (.place (.elem view index origin)) before}

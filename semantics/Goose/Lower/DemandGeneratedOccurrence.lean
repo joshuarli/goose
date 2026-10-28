@@ -127,6 +127,15 @@ inductive GeneratedDemandOccurrence (m : Core.Module) :
       GeneratedDemandOccurrence m function le root (path ++ [1]) (.block loop [] false yes)
         { (fork (lowerExpr condition le before).1 le (lowerExpr condition le before).2).2 with
           cur := some (fork (lowerExpr condition le before).1 le (lowerExpr condition le before).2).1.1 }
+  | ifElse {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {loop : Option LoopCtx} {condition : Expr} {yes no : Core.Block} {origin : OriginId}
+      (occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.ifS condition yes (some no) origin)) before)
+      (live : (lowerExpr condition le before).2.cur.isSome = true) :
+      GeneratedDemandOccurrence m function le root (path ++ [2]) (.block loop [] false no)
+        { (lowerBlock loop [] false yes le
+            { (fork (lowerExpr condition le before).1 le (lowerExpr condition le before).2).2 with
+              cur := some (fork (lowerExpr condition le before).1 le (lowerExpr condition le before).2).1.1 }).2 with
+          cur := some (fork (lowerExpr condition le before).1 le (lowerExpr condition le before).2).1.2 }
   | index {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {view : View} {index : Expr} {origin : OriginId}
       (occurrence : GeneratedDemandOccurrence m function le root path (.place (.elem view index origin)) before) :
@@ -202,6 +211,7 @@ theorem GeneratedDemandOccurrence.source {m : Core.Module} {function : Func} {le
   | @shortCircuitRight function le root path before isAnd left right occurrence live induction =>
     cases isAnd <;> exact induction.snoc 1 rfl
   | ifThen occurrence live induction => exact induction.snoc 1 rfl
+  | ifElse occurrence live induction => exact induction.snoc 2 rfl
   | index occurrence induction => exact induction.snoc 1 rfl
   | sliceLower occurrence induction => exact induction.snoc 1 rfl
   | sliceUpper occurrence induction => exact induction.snoc 2 rfl
