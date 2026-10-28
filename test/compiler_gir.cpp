@@ -446,6 +446,32 @@ CoreModule CoreLengthModule(CoreType::Kind kind) {
     return core;
 }
 
+void ImplementationOriginsComeFromVariables() {
+    for (bool hasVariable : { false, true }) {
+        CoreModule core;
+        core.files = { "origin.goose" };
+        auto i64 = core.IntType(CoreIntTy::I64);
+        auto origin = CoreOrigin { 0, 1, CoreOriginKind::Let };
+        CoreImpl implementation;
+        implementation.name = "main";
+        implementation.body.scope = 0;
+        if (hasVariable)
+            implementation.vars = { CoreVar { "unused", i64, CoreVarKind::Let, 0, origin } };
+        CoreStmt evaluate;
+        evaluate.kind = CoreStmtKind::Expr;
+        evaluate.expr = CoreInt(i64, "7");
+        evaluate.org = origin;
+        implementation.body.stmts.push_back(std::move(evaluate));
+        core.impls.push_back(std::move(implementation));
+        core.contexts = { CoreContext { .impl = 0 } };
+        core.entry = 0;
+        auto high = GirLowerer(core, core.files, { origin },
+            [](const CoreOrigin &) { return 0; }).Lower();
+        assert(Code(high) == "");
+        assert(high.funcs[0].org == (hasVariable ? 0 : -1));
+    }
+}
+
 void DirectOwnerLengthsUseArrayLength() {
     for (auto kind : { CoreType::Arr, CoreType::Grow, CoreType::GrowShrink, CoreType::Limited }) {
         auto core = CoreLengthModule(kind);
@@ -9016,6 +9042,7 @@ int main() {
     RejectsElementsThatDoNotTopTheirStack();
     PilotAndShrinkModuleShapesStayDistinct();
     CoreShrinkPushAndSummaryCarryOriginsAndShrinks();
+    ImplementationOriginsComeFromVariables();
     DirectOwnerLengthsUseArrayLength();
     CoreShrinkOperationTagsAndPlaceTypingAreCanonical();
     CoreShrinkOperationsLowerToVerifiedGir();

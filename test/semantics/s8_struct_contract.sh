@@ -71,7 +71,7 @@ expect_legacy_run() {
     fi
 }
 
-expect_export() {
+expect_export() (
     label=$1
     shift
     log=$work/$label.log
@@ -80,9 +80,9 @@ expect_export() {
         cat "$log" >&2
         exit 1
     fi
-}
+)
 
-expect_semantics_line() {
+expect_semantics_line() (
     label=$1
     expected_status=$2
     expected_line=$3
@@ -101,7 +101,7 @@ expect_semantics_line() {
         cat "$log" >&2
         exit 1
     fi
-}
+)
 
 expect_semantics_prefix() {
     label=$1
@@ -131,7 +131,7 @@ expect_semantics_prefix() {
     esac
 }
 
-expect_semantics_outcome() {
+expect_semantics_outcome() (
     label=$1
     outcome=$2
     abort_kind=$3
@@ -161,7 +161,7 @@ expect_semantics_outcome() {
         cat "$log" >&2
         exit 1
     fi
-}
+)
 
 expect_struct_artifact() {
     label=$1
@@ -186,7 +186,10 @@ expect_struct_artifact() {
         cat "$work/$label-lowered.high.json" >&2
         exit 1
     fi
-    cmp "$high" "$work/$label-lowered.high.json"
+    expect_semantics_line "$label-lowered-validate" 0 '["ok"]' \
+        gir-validate "$work/$label-lowered.high.json"
+    expect_semantics_outcome "$label-lowered-run" "$outcome" "$abort_kind" \
+        "$expected_output" "$semantics" gir-run "$work/$label-lowered.high.json"
     expect_semantics_line "$label-gir-validate" 0 '["ok"]' gir-validate "$high"
     expect_semantics_outcome "$label-gir-run" "$outcome" "$abort_kind" \
         "$expected_output" "$semantics" gir-run "$high"
@@ -468,8 +471,6 @@ fi
 cmp "$root/test/expected/flat_struct_fields.out" "$work/alignment.out"
 
 if [ -x "$semantics" ]; then
-    # Lean decodes and validates C++ Core, evaluates both Core and GIR, lowers Core
-    # to the same GIR-H bytes, reencodes C++ GIR-H, and checks their outcomes agree.
 expected_run='["done",["returned"],"1 42 7\n"]'
 expect_semantics_line core-validate 0 '["ok"]' validate "$work/struct.core.json"
 expect_semantics_line core-run 0 "$expected_run" run "$work/struct.core.json"
@@ -480,7 +481,8 @@ if ! "$semantics" lower "$work/struct.core.json" >"$work/lean-lowered.high.json"
     cat "$work/lean-lowered.high.json" >&2
     exit 1
 fi
-cmp "$work/struct.high.json" "$work/lean-lowered.high.json"
+expect_semantics_line lowered-validate 0 '["ok"]' gir-validate "$work/lean-lowered.high.json"
+expect_semantics_line lowered-run 0 "$expected_run" gir-run "$work/lean-lowered.high.json"
 expect_semantics_line gir-validate 0 '["ok"]' gir-validate "$work/struct.high.json"
 expect_semantics_line gir-run 0 "$expected_run" gir-run "$work/struct.high.json"
 if ! "$semantics" gir-reencode "$work/struct.high.json" >"$work/lean-reencoded.high.json" \

@@ -3398,7 +3398,7 @@ fn load(text: u8[:]) -> User[>..], u8[] {
         lineno++;
         if it.len > 0 { users.push(parse_record(it, lineno)); }
     };
-    return users, "";
+    return users[..], "";
 }
 
 fn parse_record(line: u8[:], lineno: i64) -> User {

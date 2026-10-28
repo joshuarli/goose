@@ -1,119 +1,62 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** paused 2026-10-18 at the owner's `$campaign-winddown` request. Start no work until resumed. Pushes remain unauthorized.
-**Branch:** `master`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
+**Status:** resumed 2026-10-25 at the owner's request. Recovery, integration, cleanup, and local verification are active. Pushes remain unauthorized.
+**Branch:** `goose-ir`. **Upstream base:** `46356c26a94f0e1723b3b61ad56b93a7da70878f`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
-## Winddown handoff
+## Recovery checkpoint (2026-10-25)
 
-### Resume
+The former `goose-ir` tip `d440b9ab` predates the October 18 integration work.
+Recover the coherent `resume-summary-cpp-qualification` snapshot at `355a8928`,
+which includes semantic checkpoint `330a9e17` and the production capacity-summary repair.
+Both histories are retained. The existing CI files stay unchanged.
+An independent source and history review found the older branch's fixes present in this snapshot.
 
-Prompt: `Resume the paused campaign in docs/design/goose-ir-campaign.md. Begin with its remaining obligations and preserve its qualification boundaries.`
+The Core summary unit, saved GIR reservation unit, and native semantic audit pass on resume.
+The audit lists 171 claims with only `propext`, `Classical.choice`, and `Quot.sound`.
+All nine construction source fixtures pass exact output, status, and event comparisons.
+The resumed compiler and semantic sources match their retained build inputs.
+The rebuilt compiler passes the baseline's 678 native cases, 798 JIT cases,
+bootstrap, rejection checks, and documentation examples. The struct harness changed during
+that run and is rechecked separately through `--only extra/s8_struct_contract`.
+These checks do not close the remaining proof gates.
 
-First command, from the Goose repository:
+The source repairs on `campaign/lean435` are already incorporated or superseded.
+Retain that branch and its worktree for the incomplete paranoid audit.
+The [Lean audit handoff](lean-435-paranoid-root-handoff.md) records 456 unqualified root pairs
+and the limits of the existing acceptance logs. Preserve its exports and continuation inputs.
+The repository pins Lean 4.35.0. The external managed default remains outside this recovery.
 
-```sh
-git show master:docs/design/goose-ir-campaign.md
-```
+Recovery fixes add seven missing expected-output fixtures and restore function origins
+to the specified first-variable-or-none rule. The origin regression fails before the fix
+and passes afterward. The Core summary and GIR units pass.
 
-Read the parked source before assembling it. These commands inspect the two central contracts without starting a build:
+The struct harness validates and executes both lowerings against the same exact expected
+outcome and stdout. C++ uses direct array-length instructions and reuses slot values,
+while Lean emits snapshots. Byte equality between these independent lowerings is not a
+qualification claim. Deterministic C++ exports and canonical GIR reencoding remain checked.
+Subshells isolate helper variables so nested checks cannot corrupt the fixture's paths or outcome.
+The pilot GIR golden now includes the production slot-root annotations.
 
-```sh
-git show campaign/winddown-source-ownership-core16:semantics/Goose/Proofs/OwnershipExecutionEvaluationContractFamily.lean
-git show resume-root-authority-contract:semantics/Goose/Proofs/SourceRootAuthorityContractState.lean
-```
+Cleanup removes 12.66 GB of reproducible binaries and build scratch from the winddown archive.
+Source, input packets, results, logs, proof exports, and active worktrees are retained.
+The three orphan sibling directories now live under `.work/archive/rfc9/`.
+Their BCE and name-cursor fixes are already integrated. Their older typechecker experiments
+are superseded. Retained root-owned compiler artifacts could not be removed without elevated access.
+The original sibling paths are gone. No branch is deleted and nothing is pushed.
 
-Recreate a removed checkout from its recorded branch under `.work/wt/` only after an explicit resume. Its useful artifacts are optional. Source recovery does not require an artifact cache or a live process.
+The imported snapshot has 33 pre-existing trailing-whitespace findings.
+The recovery edits pass `git diff --check resume-summary-cpp-qualification`.
+No formatter runs.
 
-### State
-
-The latest integrated proof checkpoint is `7c2f4cc7`, following the compiler capacity-summary repair at `355a8928` and its qualification record `e5acc39d`. The 23-file exit packet proves actual after-operand nearest-handler catch or actual root stop, with stdout and exact lexical object-binding deletion. Its six existing-file changes expose 14 proof helpers. No language or evaluator contract changed. The exact 144-module Lean 4.35 union matches the integrated source; 213 fresh axiom outputs use only the standard three axioms. The selected 138-module closure has no raised heartbeat or recursion-depth options. The six additional regression imports retain two pre-existing local recursion-depth settings.
-
-The stronger storage/event refinement is parked, not included in `7c2f4cc7`. Whole TH-CON-01 and TH-EXIT-01 remain open. There is no known new focused regression on `master`; there are explicit unfinished proof and qualification obligations. Exact root source does not compile under Lean 4.34 because a pre-existing proof helper uses a Lean 4.35 API. `semantics/lean-toolchain` already selects 4.35.0. Use the installed explicit 4.35 tools for source checks while the managed default remains 4.34.1.
-
-The qualified production compiler is `355a8928`. The fresh native semantic oracle and 171-claim audit are qualified for `330a9e17`. Their model definitions are unchanged by the later proof packet. Do not describe that older executable as a fresh executable of the complete `7c2f4cc7` proof source. A final combined executable qualification remains a resume task.
-
-The Lean 4.35 source and installation exist at commit `eb6cafb7290e8bd5f2937522d8d804f58f02bafc`; the source checkout is clean. The upgrade is **not finished** and the default was not activated. Reused export identifiers invalidated the earlier 161,793-root claim. The [corrected root-audit handoff](lean-435-paranoid-root-handoff.md) commits the exact 456 names without matching all-kernel evidence and explains why the remaining census is not immutable qualification. Treat these names as missing evidence, not 456 proof rejections.
-
-### Open lanes and parked source
-
-All lanes stopped. Their coherent source components and explicit drafts are committed. No new lane was launched after winddown began.
-
-| Workstream | Reviewed source commit | Remaining obligation |
-| --- | --- | --- |
-| Shared ownership contract | `a35750a0` | Actual prepared argument-group restoration and full positive-fuel family |
-| Evaluator | checked `9050b6c5`; unchecked legacy `82ac9d04` | One same-23 rooted joint induction and root/global assembly |
-| Values and push | source snapshot below | Current physical-hit to captured source-root projection |
-| Native writes and alias facts | `b906fe2e` | Current binding preservation and captured-home mutation authority |
-| Exit ticket cleanup | `6e0af300` | Lower-action ticket-stage history and named/inactive-target chronology |
-| Build and carriers | `0bc2c91a` | General receiving lineage and if/block carrier contraction |
-| Root authority | `681fdf59` | Same-23 wrapper, physical alias bridge, current bindings and geometry |
-| Byte encoding | `d0406c25` | Joint source encoding, owner publication and retained same-backing prefix order |
-| Exit storage and events | `e38855b4`; WIP `06e2bbeb` | Final event-edge/ancestor join, accepted landing and physical byte protection |
-| Statement stop events | `032f8dbd` preserves earlier checked replay | New 53-edge event-prefix theorem not proved |
-
-The exit lane's committed detailed handoff is available on `campaign/construction-delivery` at `docs/design/goose-ir-exit-unwind-handoff.md`. Its WIP event module is under `semantics/wip/`, outside ordinary proof imports. A bounded statement stop-event attempt failed at `globalNext`; a second scratch attempt was stopped without a proof result. No RED production event theorem was integrated.
-
-The following preservation branches keep exact source supersets from the private snapshots. They include extra sources and sometimes drafts. Only the separately named selected closures were checked. A source-superset count is not a qualification count. All except the explicitly stated Core16 4.35 receipt were checked under Lean 4.34.1. Rebuild and verify the assembled current source before integrating it.
-
-| Source snapshot branch | Commit | Recorded scope |
-| --- | --- | --- |
-| `campaign/winddown-source-ownership-core16` | `eee5bad2` | 13 selected roots, 302 imports, Lean 4.35; five inherited heartbeat overrides remain |
-| `campaign/winddown-source-ownership-main` | `2a57fbd8` | nine paired successor components and native call helpers; 54 checked sources and 13 separately parked legacy drafts |
-| `campaign/winddown-source-ownership-values` | `7cce934f` | 39 Core16 roots, 390 imports, 123 audits; three additional parent-authority modules checked separately |
-| `campaign/winddown-source-ownership-writes` | `2dd62858` | 52 sources, 366 imports, 123 audits after current slice-cell contents correction |
-| `campaign/winddown-source-ownership-cleanup` | `c74aedb7` | 49-root aggregate, 379 imports; four later native ticket-stage helpers checked separately |
-| `campaign/winddown-source-ownership-builders` | `f287c31a` | 28-root earlier packet; final native/call/resultLocal components checked in separate closures |
-| `campaign/winddown-source-root-authority` | `39d916fe` | ten contract component modules, 86 declarations; same-23 preservation wrapper unwritten |
-| `campaign/winddown-source-outside-v4` | `23169ef9` | encoding/renewal packet plus fresh publication components; joint source geometry open |
-| `campaign/winddown-source-exit-refinements` | `17191b74` | six post-integration storage/event modules checked under Lean 4.34; event-edge WIP remains |
-| `campaign/winddown-source-ownership-call-all` | `7a024ecf` | native call preparation all-outcome receipt; joint argument restoration open |
-
-Three renewal proofs fail at the default 200,000 heartbeats: `ConstructionExecutionOwnershipSuccessorRenewInactive`, `OwnershipRenewalSourceRolesExecution`, and `OwnershipScopeDesignRenewal`. Two other inherited overrides, in Builders and Carriers, passed deletion-only probes. Those probes did not produce a new coherent artifact closure. Do not integrate the 94-module shared dependency packet as default-budget qualified. Two older AcceptedSelect/AcceptedOperands fixtures and the older Carriers source also retain explicit larger budgets; the new Source component checks do not justify calling those older files default-budget checks.
-
-### Cleanup and retained worktrees
-
-The coordinator preserved 142 dirty or ignored-source checkouts in explicit archival commits, without changing source bytes. Those commits preserve inherited and unfinished work and make no integration or qualification claim. The parked-branch appendix below records every branch not merged into `master`.
-
-Cleanup removed 224 clean checkouts. Their checkout allocation was 11,839,744 KiB, about 11.3 GiB. Useful ignored files, logs, caches, binaries and failed-run evidence were moved to `.work/archive/winddown-2026-10-18/<old-checkout-name>/`, preserving their former relative paths. For example, an old `<checkout>/.work/tmp/` is now `<archive>/<checkout-name>/.work/tmp/`. These archived artifacts are optional evidence and acceleration inputs. Revalidate source and recursive-import identity before any reuse. Some inherited caches contain symlinks and are not qualified merely because they were preserved.
-
-Six linked worktrees remain in addition to the integration checkout. Each is clean and explicitly allowed by the closeout guard:
-
-| Path relative to repository | Branch or HEAD | Current consumer |
-| --- | --- | --- |
-| `.work/wt/accelerate-perf-baseline` | `campaign/accelerate-perf-baseline` at `24ba0840` | baseline production binary for resumed compiler resource comparisons |
-| `.work/wt/aincrad3-goose-master-8eb50c00` | `detached` at `8eb50c00` | external Aincrad3 build consumer; original checkout path is a symlink |
-| `.work/wt/aincrad3-goose-storage-whole-region` | `fix/linux-whole-region-advice` at `b7b9e0e3` | external Aincrad3 storage comparison consumer; original checkout path is a symlink |
-| `.work/wt/resume-lean435` | `campaign/lean435` at `59f2f537` | original-input all-kernel audit exports and remaining qualification reproduction |
-| `.work/wt/resume-repaired-model-integration` | `resume-repaired-model-integration` at `330a9e17` | qualified semantic oracle and reusable incremental native build artifacts |
-| `.work/wt/resume-summary-cpp-qualification` | `resume-summary-cpp-qualification` at `355a8928` | qualified production compiler binaries and resource reproduction |
-
-The two Aincrad3 linked checkouts were relocated under Goose's `.work/wt/`. Their original paths under `/home/josh/d/aincrad3/.work/wt/` are symlinks to the retained clean checkouts, preserving external build consumers. No branch was deleted. Root-level `.work/tmp/evaluator-core16-*` artifacts remain optional; the corresponding source is also committed on the snapshot branch above.
-
-### Not started
-
-Resume in this order:
-
-1. Repair qualification evidence and classify the 456 uncovered original roots using actual declaration names and immutable input identity. Four time-conversion roots include closed rational-decision proofs that exhaust nanoda resources. The exact Nano private-proof diagnostic observed a 64 MiB stack and overflowed; the Millisecond diagnostic reached its bounded cutoff. No supported configuration remedy was established. Do not claim the older 128 or 256 MiB probes reached nanoda. Activate the managed toolchain only after the original all-kernel requirement is met, then notify the owner that the update is finished.
-2. Remove inherited heartbeat exceptions before shared-packet integration. Preserve the private contract's real obligations and all regression fixtures.
-3. Implement one same-23 lower-fuel joint induction, with accepted module and internally derived current RootAuthority, bindings, normal-result origins and computed continuation groups. Seed actual initial state and assemble globals with the legitimate same-fuel list induction. Restore prepared `firstChannels` after actual arguments. No post-hoc theorem using an already completed family and no external ownership certificate can replace this work.
-4. Derive physical hits through the actual receiving birth/slot and captured source cursor. Follow current reference-to-slice CELL contents, not historical direct argument roots. Discharge native alias restrictions from the actual converged checker context. Finish named ticket chronology, inactive catchers, producer contraction, publication and interruption prefixes from that same joint state.
-5. Compose the parked actual storage/event refinements with accepted source coverage and payload landing. Derive retained same-backing roots occupy the protected prefix; disjoint intervals alone do not justify suffix truncation. A stop preserves its actual prefix and does not promise cleanup after abort.
-6. Build a fresh combined native semantic executable after the relevant proof source integrates. Run its exact 171-claim audit and focused production comparisons. Widen resource checks only when source changes require them.
-
-No product or protocol decision is waiting on the owner. These are unfinished proof, evidence-identity and verification tasks.
-
-### Verified at winddown
-
-The integrated 23-file packet passed exact-source Lean 4.35 checks and standard-axiom audits. Compiler qualification and measured resource results below remain scoped to their nominated artifacts. No formatter, CI change or push was run. Repository-wide tests and a fresh native executable of `7c2f4cc7` were not run during winddown.
-
-All retained worktree status checks pass. `.work/` is ignored through `.git/info/exclude` and resides on ext4, not tmpfs. Removed checkouts have no registration left. Source branches and the two central resume inspection commands are readable from a clean environment. No campaign-owned build, test, checker, watcher or scheduled loop remains. The configured Stop command was inspected and already has a trusted hash in Codex configuration; this API session cannot open the interactive `/hooks` UI. The closeout command is exercised directly before stopping.
-
-The original toolchain export census used filenames and timestamps as part of its evidence join. That limitation is explicit in the committed audit handoff; it is not a passed immutable qualification gate.
+Next delivery: complete the remaining construction and exit execution proofs,
+demand-invariant transfer, and paranoid audit before final campaign qualification.
+Whole-execution construction and exit proofs, demand-invariant transfer, and paranoid
+qualification remain open. Historical source receipts below keep their stated scope.
 
 ## Current checkpoint
 
-The qualified C++ construction packet is `355a8928`, including the receiving-capacity abort-summary repair. Semantic checkpoint `330a9e17` includes full accepted-Core-to-GIR validation and the carried-named-ticket repair. All 2,630 Goose modules plus Main qualify under Lean 4.35; a fresh native executable passes the 171-claim audit. The 41-case model matrix, 328 sanitized native configurations, and nine standard-source fixtures agree exactly. Proof checkpoint `7c2f4cc7` adds source-checked nearest-handler unwinds. Whole-evaluation ownership and exit proofs, explicit demand-invariant transfer, and paranoid qualification remain open. Fresh compiler correctness and memory checks pass. CPU samples satisfy the requested minimum-versus-spread rule, with slower observed medians recorded below.
+The last fully qualified C++ construction packet is `d5861339`. Semantic checkpoint `330a9e17` includes full accepted-Core-to-GIR validation and the carried-named-ticket repair. All 2,630 Goose modules plus Main qualify under Lean 4.35; a fresh native executable passes the 171-claim audit. The 41-case model matrix, 328 sanitized native configurations, and nine standard-source fixtures agree exactly. Whole-evaluation ownership and exit proofs, explicit demand-invariant transfer, and paranoid qualification remain open. The production capacity-summary repair passes focused C++ and Lean controls; fresh compiler and resource qualification remain required.
 
 ### Evidence by scope
 
@@ -163,7 +106,7 @@ The fresh native `goose-semantics` for `330a9e17` passes its actual 171-entry au
 
 The executable passes 328 exact comparisons over 41 cases and both numeric profiles, including Core/GIR execution, writer roundtrips, and agreement checks. The unchanged `d5861339` production compiler passes 328 ASan/UBSan configurations and the nine-fixture source CLI trace suite against this fresh oracle, including rejection and trace-I/O controls. All 82 fresh C++ Core/GIR exports are byte-identical to the tested packet inputs. Canonical Lean Writer output has one fewer terminal newline; no input or observable event was normalized. Case 41 at equal fuel 30 remains inconclusive because the evaluators count different work.
 
-The permanent argument-renewal and carried-named-ticket regressions pass the fresh CLI in both profiles. The carried-ticket fixture faults with `flow` in the frozen `8d2137f6` executable and now returns `AB\n` with exact events `begin 0, begin 1, write 1 0, write 0 0, publish 0, publish 1`. Its exact nested value-break form is unsupported by the source frontend. A C++ Core builder reproduces its original wire module exactly, but direct GIR lowering rejects its unknown summary. Running the real production summarizer produces independently accepted GIR whose model and eight sanitized native configurations agree with the accepted original Core. At `d5861339`, that summarized Core is rejected with `V-SUMMARY` because receiving-capacity uncertainty was omitted from its abort effect. The repair at `355a8928` makes receiving-capacity uncertainty an abort effect. Its summarized Core now validates in both profiles, and Core, GIR, and all eight sanitized native configurations preserve the exact original events. No validator rule changed.
+The permanent argument-renewal and carried-named-ticket regressions pass the fresh CLI in both profiles. The carried-ticket fixture faults with `flow` in the frozen `8d2137f6` executable and now returns `AB\n` with exact events `begin 0, begin 1, write 1 0, write 0 0, publish 0, publish 1`. Its exact nested value-break form is unsupported by the source frontend. A C++ Core builder reproduces its original wire module exactly, but direct GIR lowering rejects its unknown summary. Running the real production summarizer produces independently accepted GIR whose model and eight sanitized native configurations agree with the accepted original Core. At `d5861339`, that summarized Core is rejected with `V-SUMMARY` because receiving-capacity uncertainty was omitted from its abort effect. A production summarizer fix is under review; no validator relaxation is proposed.
 
 The older executable and results under `resume-candidate-integration/.work/tmp/native-current/` remain historical evidence for `8d2137f6`.
 
@@ -171,22 +114,7 @@ Full paranoid qualification remains incomplete. Monolithic nanoda checks exceede
 
 #### Integrated C++ candidate
 
-The current `355a8928` packet passes fresh serial Debug and Release builds, `compiler_core`, and `compiler_gir_reservations`. All 82 new Core and GIR exports match the qualified semantic inputs byte-for-byte. The 328 sanitized native configurations and 36 source-fixture runs pass. The semantic Main import closure is unchanged from `330a9e17`; the new capacity checks are separate and pass their 13 standard-axiom audits.
-
-Resource checks compare Release builds using Clang 23.1.3 with identical flags against baseline `24ba0840` on `world-core-continue.goose`. Five alternating `-O1 --check` memory pairs give baseline peak RSS 1,583,368–1,585,840 KiB and candidate 1,685,588–1,687,800 KiB. The worst ratio is 1.065956, below the 1.10 limit. Process tracing shows one shared-address-space thread and no child process. Release binary sizes are 5,637,480 and 10,452,944 bytes respectively; no size threshold is defined.
-
-Five alternating CPU pairs per operation pass every pre- and post-measurement readiness check. Both sides complete the expected compiler work without errors. Emitted C is stable within each side and passes Clang syntax checking.
-
-| Operation | Baseline CPU median (range), seconds | Candidate CPU median (range), seconds | Median change |
-| --- | --- | --- | --- |
-| `-O2 --check` | 5.820947 (5.598243–6.016318) | 6.179190 (5.992327–6.532208) | +6.15% |
-| `-O2 --standalone` | 7.346339 (7.196523–7.628438) | 7.947687 (7.642447–8.178382) | +8.19% |
-
-Neither minimum increase exceeds the observed candidate spread: checking increases 0.394084 seconds against a 0.539881-second spread; emission increases 0.445924 seconds against 0.535935 seconds. This satisfies the owner's minimum-versus-spread rule. Emission is slower in all five paired samples, so the result does not establish unchanged speed. A separate profile has 873 samples and none lost. The largest symbol, `IfExpr::CgAny`, accounts for 8.69% of sampled cycles in a distributed single-core workload. Reproduction scripts and raw samples are under `resume-summary-cpp-qualification/.work/tmp/`, including `run_five_memory_pairs.py` and `cpu-current-resource/cpu_gate.py`. The latter script's range-overlap label is distinct from the owner's minimum-versus-spread rule used here.
-
-The following receipts describe the earlier construction packet.
-
-The earlier packet `d5861339` integrates limited receiving construction, staged storage, and private cursor validation. Review found that `LocalGet` and `LocalSet` could bypass cursor protection. Both now reject private inline cursor members with `GIR-V090`, with negative controls that accepted before the fix. All three focused GIR units pass on the integrated commit. The candidate also passed a fresh serial Debug build, both GIR source scripts, and four numeric and optimization configurations of 56 sanitized receiving-lifetime guards. Those checks do not establish the remaining semantic or performance gates.
+The current packet `d5861339` integrates limited receiving construction, staged storage, and private cursor validation. Review found that `LocalGet` and `LocalSet` could bypass cursor protection. Both now reject private inline cursor members with `GIR-V090`, with negative controls that accepted before the fix. All three focused GIR units pass on the integrated commit. The candidate also passed a fresh serial Debug build, both GIR source scripts, and four numeric and optimization configurations of 56 sanitized receiving-lifetime guards. Those checks do not establish the remaining semantic or performance gates.
 
 Fresh exports from this packet passed 82 independent Core/GIR comparisons across 41 cases and both numeric profiles at sufficient fuel. All 328 ASan/UBSan native configurations matched exact status, stdout, diagnostics, and construction events. The nine standard-source fixtures also passed fresh CLI and semantic comparisons, including trace I/O controls. These comparisons used an explicit Lean 4.35 Main runner; they do not establish a fresh native semantic executable for the combined proof candidate. The runners and results are under `resume-cpp-integration/.work/tmp` (`run-native328-current.py`, `native328-current`, and `cpp-current-packet`).
 
@@ -851,7 +779,7 @@ The most common exact multi-feature sets are `string-value + struct` (7 programs
 - Nonlocal-target ids under stable naming come from the target's context key, not its declaration key: the legacy protocol distinguishes target specializations, and two contexts of one target need distinct ids.
 - A reference to a slice variable (a `T[:]&` parameter, or a captured slice variable after closure conversion) is outside `core-pilot` for now: the exporter reports it unsupported. Writing a slice through such a reference is a stored reference, which needs content roots in the annotation and in the safety invariant; adding that while the safety proof is in progress would move its target. It returns as item `S4` after `T1`, because the `order` fuzz lane relies on it.
 - `return`, `break` and `continue` inside an expression block are outside `core-pilot`: the Lean validator rejects them and the exporter reports them unsupported. Modelling them needs a body result threaded through expression evaluation, which the pilot's proofs do not need.
-- The GIR-H wire encoding is defined by the Lean lane, and the Lean lowering's output for each Core golden is the golden the C++ lowering must reproduce byte for byte. One reference lowering makes the C++ lowering instance-checkable by comparison instead of only by behaviour.
+- Historical lowering comparison: the original plan required C++ and Lean to reproduce the same GIR bytes. The 2026-10-25 recovery supersedes that policy for independently optimized lowering. Each emitted module must validate and agree with Core on the checked fixture outcomes. Canonical reencoding and deterministic exports remain byte comparisons. These finite checks do not prove the C++ lowerer correct.
 - `V-ROOT` no longer requires a same-scope root to be declared first. The compiler accepts rebinding a reference to a later-declared variable of its own scope, and that is safe because a scope's variables end together; the stricter rule would have rejected valid programs for no safety gain.
 - Unary minus on an unsigned type is a compile error in Goose. The numeric model keeps a total definition for it; the Lean validator rejects it under `V-TYPE`.
 - The checker already groups roots into classes: one helper called with many distinct globals and many locals at different depths gets two specializations, not one per call site. The synthetic family therefore has to vary the dimensions that do multiply specializations; `B1`'s dimension attribution on Aincrad3 says which those are, and `B5` builds its members from that.
@@ -946,249 +874,3 @@ the pending statuses in the paused handoff above.)*
 - `semantics/coverage.json`: theorems passing, parked, and the reviewer's answers.
 - Whether to make units or sharing the default (`X4`), and whether to wire the Lean build and the scale harness into CI (P13).
 - Parked items, each with its finding and branch.
-
-## Parked branches at winddown
-
-Every branch not merged into `master` is listed here for recovery. Unreviewed inherited branches are parked source, not integration candidates without review. Recreate their checkout under `.work/wt/` only when needed. Optional old artifacts follow the archive mapping above.
-
-| Branch | Preserved HEAD |
-| --- | --- |
-| `backup/master-before-upstream-20261010` | `3a25b43c` |
-| `bookkeeping/gs-003-diverging-dead-code/base` | `6417b91e` |
-| `bookkeeping/gs-004-default-init-order/base` | `3a25b43c` |
-| `campaign/accelerate-closing-record` | `9104b147` |
-| `campaign/accelerate-flow-produce` | `f9f67840` |
-| `campaign/accelerate-gir-parity` | `770e0c29` |
-| `campaign/accelerate-joint-args` | `4c0e5dd9` |
-| `campaign/accelerate-loop-preflight` | `a6e3dab8` |
-| `campaign/accelerate-native-current` | `563e0b7a` |
-| `campaign/accelerate-perf-baseline` | `24ba0840` |
-| `campaign/accelerate-perf-candidate` | `563e0b7a` |
-| `campaign/accelerate-ready-read-expressions` | `ca2c45f4` |
-| `campaign/accelerate-ready-read-statements` | `dc6ebbba` |
-| `campaign/accelerate-runtime435` | `39c338ff` |
-| `campaign/accelerate-touch-call` | `258c3333` |
-| `campaign/accelerate-touch-ops` | `432397f3` |
-| `campaign/accelerate-typed-lineage` | `5d63431f` |
-| `campaign/assigned-origins` | `639ab02c` |
-| `campaign/call-observed-captured` | `66cf248c` |
-| `campaign/call-transport-policy` | `563e0b7a` |
-| `campaign/canonical-call-regions` | `459657e1` |
-| `campaign/channel-provenance` | `4608ba7e` |
-| `campaign/channel-renew-transport` | `d96ce5c4` |
-| `campaign/compiler-closing` | `264b5864` |
-| `campaign/construction-accepted-typing` | `f9cff830` |
-| `campaign/construction-delivery` | `1850aecb` |
-| `campaign/construction-flow-frame` | `65145412` |
-| `campaign/construction-flow-values` | `581293f7` |
-| `campaign/construction-no-grow` | `93dd9fd8` |
-| `campaign/construction-no-jump` | `835e71e0` |
-| `campaign/construction-output-handoff` | `c52878e8` |
-| `campaign/construction-query-source` | `cb608211` |
-| `campaign/consumed-access` | `bda7d503` |
-| `campaign/consumed-arguments` | `98162d57` |
-| `campaign/consumed-control` | `72973271` |
-| `campaign/consumed-mutations` | `d91959a1` |
-| `campaign/cpp-closing` | `bff0b04e` |
-| `campaign/discharge-fixed-call` | `01f574f2` |
-| `campaign/fixed-call-low` | `e0a6e05f` |
-| `campaign/flow-value-block-proof` | `763f764f` |
-| `campaign/inline-result-types` | `69e6a471` |
-| `campaign/lean435` | `59f2f537` |
-| `campaign/native-regions-aligned` | `3dcced50` |
-| `campaign/occurrence-access` | `2f543d2a` |
-| `campaign/occurrence-api` | `e6fcdfba` |
-| `campaign/occurrence-closing` | `325d66a4` |
-| `campaign/occurrence-control` | `8e62299e` |
-| `campaign/occurrence-lists_calls` | `fc67d084` |
-| `campaign/occurrence-mutations` | `b7049aa4` |
-| `campaign/occurrence-scalars` | `eda29f2d` |
-| `campaign/ownership-landing-raw-roles` | `75a95057` |
-| `campaign/ownership-named-source` | `f6b228c7` |
-| `campaign/ready-control` | `102fa79f` |
-| `campaign/ready-read-recorder` | `d47dd7c4` |
-| `campaign/receiving-scope-context` | `fa9cd801` |
-| `campaign/resume-activation-projection` | `d583a338` |
-| `campaign/resume-call-contents` | `4f704569` |
-| `campaign/resume-call-footprint` | `9a536f93` |
-| `campaign/resume-call-summary` | `f753bafd` |
-| `campaign/resume-caller-alias-integration` | `1c029fb0` |
-| `campaign/resume-candidate-integration` | `72516be9` |
-| `campaign/resume-canonical-controls` | `dcaf7573` |
-| `campaign/resume-canonical-ordinary` | `2b716e24` |
-| `campaign/resume-exit-cleanup-frames` | `a38caeee` |
-| `campaign/resume-exit-let-build` | `181c9c54` |
-| `campaign/resume-exit-producers` | `2e4ff434` |
-| `campaign/resume-exit-statements` | `84f5fd57` |
-| `campaign/resume-exit-values` | `cbee907b` |
-| `campaign/resume-exit435` | `d1bef37d` |
-| `campaign/resume-fill-validation` | `20090c65` |
-| `campaign/resume-gir-model-integration` | `663858ad` |
-| `campaign/resume-ownership-builders` | `6bca7cbd` |
-| `campaign/resume-ownership-cleanup` | `6e0af300` |
-| `campaign/resume-ownership-contract` | `9ec12001` |
-| `campaign/resume-ownership-statements` | `8891dfa4` |
-| `campaign/resume-ownership-value-effects` | `6d5e27ee` |
-| `campaign/resume-ownership-values` | `4cf17491` |
-| `campaign/resume-ownership-writes` | `b906fe2e` |
-| `campaign/resume-owning-evaluator` | `2cae80cf` |
-| `campaign/resume-projection-statements` | `83af636c` |
-| `campaign/resume-reservation-instances` | `e462d048` |
-| `campaign/resume-touch-classifier` | `c5193291` |
-| `campaign/resume-validation435` | `d4193cb0` |
-| `campaign/resume-writer-induction` | `b8ca7223` |
-| `campaign/resume-writer-ledger` | `670b7213` |
-| `campaign/root-recipe-bounds` | `62e157b6` |
-| `campaign/runtime-closing` | `b7f74fe5` |
-| `campaign/runtime-identities` | `e7ce1199` |
-| `campaign/simulation-consumer` | `e706660d` |
-| `campaign/source-canonical-facts` | `f381f2ff` |
-| `campaign/source-canonical-root-floors` | `106293bb` |
-| `campaign/source-closing` | `ec2cdaf0` |
-| `campaign/source-value-shapes-read-recipes` | `22d61c97` |
-| `campaign/source-value-shapes-recipes` | `a0fbaab3` |
-| `campaign/source-value-type-shapes` | `7c74f6c4` |
-| `campaign/typed-recipe-tail` | `d5181102` |
-| `campaign/winddown-source-exit-refinements` | `17191b74` |
-| `campaign/winddown-source-outside-v4` | `23169ef9` |
-| `campaign/winddown-source-ownership-builders` | `f287c31a` |
-| `campaign/winddown-source-ownership-call-all` | `7a024ecf` |
-| `campaign/winddown-source-ownership-cleanup` | `c74aedb7` |
-| `campaign/winddown-source-ownership-core16` | `eee5bad2` |
-| `campaign/winddown-source-ownership-main` | `2a57fbd8` |
-| `campaign/winddown-source-ownership-values` | `7cce934f` |
-| `campaign/winddown-source-ownership-writes` | `2dd62858` |
-| `campaign/winddown-source-root-authority` | `39d916fe` |
-| `experiment/emitted-body-diagnostics` | `6be31c0c` |
-| `feat-semantic-linter` | `6d538382` |
-| `fix/codegen-local-name-cursor-rfc9-fork` | `54f1a765` |
-| `fix/gs-002-callee-local-provenance` | `cd00459d` |
-| `fix/gs-003-diverging-dead-code` | `3a25b43c` |
-| `fix/gs-004-default-init-order` | `4a2c8bf5` |
-| `fix/lint-facts-limit-512mib` | `0c127337` |
-| `fix/lint-root-depthkey-context` | `6be31c0c` |
-| `fix/linux-whole-region-advice` | `b7b9e0e3` |
-| `fuzzygoose` | `592aee41` |
-| `goose-ir` | `d440b9ab` |
-| `goose-ir-finish-construct-backend` | `7d0fd296` |
-| `goose-ir-finish-construct-core` | `1a45de91` |
-| `goose-ir-finish-construct-execution-proofs` | `23b835ec` |
-| `goose-ir-finish-construct-gir` | `6a44eb49` |
-| `goose-ir-finish-lower` | `f43df235` |
-| `goose-ir-finish-lower-call` | `dad0c5e3` |
-| `goose-ir-finish-lower-each` | `ff5320f4` |
-| `goose-ir-finish-lower-source-contexts` | `9174eac7` |
-| `goose-ir-finish-lower-validation` | `0c91823e` |
-| `goose-ir-finish-perf-base` | `24ba0840` |
-| `goose-ir-parity-base` | `011acacf` |
-| `goose-ir-resume-call-content-flow` | `efa717aa` |
-| `goose-ir-resume-cfg` | `59e756cc` |
-| `goose-ir-resume-closure-loop` | `25294ef3` |
-| `goose-ir-resume-completion-lifecycle` | `ba6c815e` |
-| `goose-ir-resume-construction-ownership` | `c55cbd3c` |
-| `goose-ir-resume-construction-wire-docs` | `b56ad812` |
-| `goose-ir-resume-content-flow-source-proof` | `c03e2f20` |
-| `goose-ir-resume-context-lowering` | `8c64fe79` |
-| `goose-ir-resume-cpp-integrate` | `a25b99e4` |
-| `goose-ir-resume-destination-protocol` | `ea368462` |
-| `goose-ir-resume-dominance` | `4daf8f04` |
-| `goose-ir-resume-each-prefix` | `cbca6f42` |
-| `goose-ir-resume-emission-metadata` | `1c85d1eb` |
-| `goose-ir-resume-emitted-typing` | `f339107d` |
-| `goose-ir-resume-empty-content-parity` | `4e06cf52` |
-| `goose-ir-resume-execution-begins` | `3200b711` |
-| `goose-ir-resume-execution-prefix` | `72882ad6` |
-| `goose-ir-resume-expression-contents` | `a648b6c1` |
-| `goose-ir-resume-expression-typing` | `99d152c5` |
-| `goose-ir-resume-fixture-typing` | `ee00c277` |
-| `goose-ir-resume-frag-equations` | `4be44c77` |
-| `goose-ir-resume-frame-migration` | `cbacbd8d` |
-| `goose-ir-resume-fuel-bound` | `8ec0b9ad` |
-| `goose-ir-resume-fuel-control` | `38fdb862` |
-| `goose-ir-resume-fuel-control-blocks` | `7d5c0fa4` |
-| `goose-ir-resume-fuel-control-branches` | `4750a263` |
-| `goose-ir-resume-fuel-control-range` | `aedb0919` |
-| `goose-ir-resume-fuel-expressions` | `bd88c458` |
-| `goose-ir-resume-fuel-mutations` | `fecf23dd` |
-| `goose-ir-resume-fuel-statements` | `7d82b344` |
-| `goose-ir-resume-global-control` | `6dd39afb` |
-| `goose-ir-resume-global-read` | `b09a2860` |
-| `goose-ir-resume-interrupted-regressions` | `fe047321` |
-| `goose-ir-resume-join-contents` | `7a38f662` |
-| `goose-ir-resume-metadata-control` | `71a16296` |
-| `goose-ir-resume-metadata-each` | `d7b15e2d` |
-| `goose-ir-resume-metadata-profile` | `68b48096` |
-| `goose-ir-resume-named-reservation-proofs` | `f3e312f0` |
-| `goose-ir-resume-native-check` | `e8c62acf` |
-| `goose-ir-resume-native-integrate` | `d0ab28da` |
-| `goose-ir-resume-native-trace` | `5cd10010` |
-| `goose-ir-resume-ownership-cancel-source` | `16a1ff5d` |
-| `goose-ir-resume-ownership-design` | `9a4892c4` |
-| `goose-ir-resume-permission-control` | `ce934485` |
-| `goose-ir-resume-permission-control-graph` | `780527b7` |
-| `goose-ir-resume-permission-control-scopes` | `db65a97e` |
-| `goose-ir-resume-permission-induction` | `a07b4c3f` |
-| `goose-ir-resume-permission-preservation` | `057e8492` |
-| `goose-ir-resume-permission-references` | `ab7c5446` |
-| `goose-ir-resume-permission-storage` | `bfc6d15e` |
-| `goose-ir-resume-print-sources` | `9e0a5d03` |
-| `goose-ir-resume-progress-verifier` | `e1896db3` |
-| `goose-ir-resume-protocol-attach` | `ffbbe99d` |
-| `goose-ir-resume-protocol-exit-landing` | `cef199a8` |
-| `goose-ir-resume-protocol-open` | `e785cd11` |
-| `goose-ir-resume-protocol-publish` | `ba9fa8f0` |
-| `goose-ir-resume-protocol-writes` | `7a56afa9` |
-| `goose-ir-resume-provenance-convergence` | `98b08c10` |
-| `goose-ir-resume-range-execution` | `b198f81e` |
-| `goose-ir-resume-range-sources` | `9cf69883` |
-| `goose-ir-resume-receiving-lifecycle` | `f23ed735` |
-| `goose-ir-resume-reflection-blocks` | `6fe8daab` |
-| `goose-ir-resume-reflection-leaves` | `fd3a3f7f` |
-| `goose-ir-resume-reflection-output` | `27fcf621` |
-| `goose-ir-resume-reflection-places` | `a9236294` |
-| `goose-ir-resume-renewal-prefix` | `57f84a65` |
-| `goose-ir-resume-replacement-demand` | `dd69cb28` |
-| `goose-ir-resume-replacement-sites` | `8aabfa68` |
-| `goose-ir-resume-reservation-cap-begins` | `a7f1b2e9` |
-| `goose-ir-resume-result-origins` | `d58f4b5f` |
-| `goose-ir-resume-returnfree-typing` | `8cd3f155` |
-| `goose-ir-resume-runtime-check` | `8c2001c2` |
-| `goose-ir-resume-runtime-integrate` | `22499b63` |
-| `goose-ir-resume-runtime-lifecycle` | `4afeb17a` |
-| `goose-ir-resume-runtime-union-check` | `f474496e` |
-| `goose-ir-resume-scope-migration` | `7be1b496` |
-| `goose-ir-resume-scopes` | `514ca8a2` |
-| `goose-ir-resume-semantic-check2` | `09374665` |
-| `goose-ir-resume-snapshot-control` | `fdc8a27a` |
-| `goose-ir-resume-source-root-bounds` | `e86445b4` |
-| `goose-ir-resume-source-statement-typing` | `834d1376` |
-| `goose-ir-resume-source-symbols` | `9e010f5b` |
-| `goose-ir-resume-storage-source` | `37c40e25` |
-| `goose-ir-resume-storage-walk` | `d5fb09ae` |
-| `goose-ir-resume-storage-walk-loops` | `a34c299d` |
-| `goose-ir-resume-summary` | `ea6ab62c` |
-| `goose-ir-resume-summary-mutations` | `e85c77ff` |
-| `goose-ir-resume-target-frames` | `69736d42` |
-| `goose-ir-resume-trace-fixtures` | `d4e198cb` |
-| `goose-ir-resume-typed-fixtures` | `ed14693f` |
-| `goose-ir-resume-validation` | `85bf75a1` |
-| `goose-ir-resume-whole-replacement` | `928fb58a` |
-| `goose-ir-source-ready-seeds` | `94ec9947` |
-| `goose-ir-source-root-ceilings` | `561a0f52` |
-| `goose-ir-view-source-only` | `733bfc0c` |
-| `integrate/upstream-20261010` | `c01d8f9d` |
-| `perf/rfc9-bce-upstream-qualification` | `23366273` |
-| `qualify/upstream-fee060c-20261011` | `ad8f2a87` |
-| `resume-carried-named-fix` | `cac36059` |
-| `resume-root-authority-contract` | `681fdf59` |
-| `resume-summary-abort-parity` | `581d0b8f` |
-| `review/cached-callee-references` | `925d52bb` |
-| `review/pr18-latest` | `a3556c11` |
-| `review/reordered-reference-fields` | `865b1aa6` |
-| `upstream-pr/cached-callee-references` | `298bd817` |
-| `upstream-pr/gs-004-reordered-reference-initializers` | `81004d20` |
-| `upstream-pr/native-package-rebuild-stamp` | `8a3637b1` |
-| `upstream-pr/native-stack-bounds-main-thread-musl` | `7cd75268` |
-| `upstream-pr/reordered-reference-fields` | `d68e4427` |
-
-Campaign log: 2026-10-18 paused by owner request; integrated `7c2f4cc7`, preserved partial and inherited source, removed 224 checkouts, retained six clean consumers, and left full ownership/exit and toolchain qualification explicitly open.

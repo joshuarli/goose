@@ -2973,7 +2973,7 @@ private:
         f.blocks = std::move(blocks);
         f.roots = Roots(contextIndex, implIndex);
         f.summary = impl.summary;
-        f.org = functionOrigin;
+        f.org = !impl.vars.empty() ? Org(impl.vars[0].org) : -1;
         f.key = core.contexts[contextIndex].stablekey;
         f.module = core.contexts[contextIndex].module;
         return f;
