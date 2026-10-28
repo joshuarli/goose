@@ -40,11 +40,26 @@ def notContinuation (source : ExecutionStep Value) : ExecutionStep Value :=
   | .escape address carriers state => .escape address carriers state
   | .jump target kind state => .jump target kind state
 
+def shortCircuitContinuation (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (isAnd : Bool) (second : Expr) (first : ExecutionStep Value) : ExecutionStep Value :=
+  match first with
+  | .ok value state => (do
+      let selected ← expectBool value
+      if selected == isAnd then
+        pure (Value.bool (← expectBool (← evalValue fuel config environment second)))
+      else pure (Value.bool selected)) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+def shortCircuitExpr (isAnd : Bool) (first second : Expr) : Expr :=
+  if isAnd then .and first second else .or first second
+
 def trackedInitializer : Expr → Bool
   | .arrLit ty _ _ => !ty.nonfixed
   | .fill (.arr element count) _ _ => !(Ty.arr element count).nonfixed
   | .structLit (.structT _ _) _ => true
-  | .cmp _ _ _ | .not _ => true
+  | .cmp _ _ _ | .not _ | .and _ _ | .or _ _ => true
   | _ => false
 
 theorem structLiteral_replay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
@@ -84,6 +99,17 @@ inductive EvaluationTree (config : EvalConfig) (environment : RuntimeActivation)
         | .stop reason after => .stop reason after
         | .escape address carriers after => .escape address carriers after
         | .jump target kind after => .jump target kind after)
+  | shortCircuit (fuel : Nat) (path : List Nat) (isAnd : Bool)
+      (first second : Expr) (before : ExecutionState)
+      (left : EvaluationTree config environment fuel (path ++ [0]) first before
+        (evalValue fuel config environment first before))
+      (right : ∀ value middle ready, evalValue fuel config environment first before = .ok value middle →
+        expectBool value middle = .ok isAnd ready →
+        EvaluationTree config environment fuel (path ++ [1]) second ready
+          (evalValue fuel config environment second ready)) :
+      EvaluationTree config environment (fuel + 1) path (shortCircuitExpr isAnd first second) before
+        (shortCircuitContinuation fuel config environment isAnd second
+          (evalValue fuel config environment first before))
   | comparison (fuel : Nat) (path : List Nat) (operation : Goose.Core.CmpOp)
       (first second : Expr) (before : ExecutionState)
       (left : EvaluationTree config environment fuel (path ++ [0]) first before
@@ -140,6 +166,26 @@ theorem evaluationTree_exists (fuel : Nat) (config : EvalConfig) (environment : 
           rw [← visit_executes replay visit member]
           exact ih _ _ _)
       | true => exact .opaque fuel path _ before (by simp [trackedInitializer, fixed])
+    | and first second =>
+      have execution : evalValue (fuel + 1) config environment (.and first second) before =
+          shortCircuitContinuation fuel config environment true second
+            (evalValue fuel config environment first before) := by
+        simp only [evalValue, bind, shortCircuitContinuation]
+        cases evalValue fuel config environment first before <;> simp [bind]
+        all_goals split <;> simp_all
+        all_goals split <;> simp_all
+      rw [execution]
+      exact .shortCircuit fuel path true first second before (ih _ _ _) (fun _ _ _ _ _ => ih _ _ _)
+    | or first second =>
+      have execution : evalValue (fuel + 1) config environment (.or first second) before =
+          shortCircuitContinuation fuel config environment false second
+            (evalValue fuel config environment first before) := by
+        simp only [evalValue, bind, shortCircuitContinuation]
+        cases evalValue fuel config environment first before <;> simp [bind]
+        all_goals split <;> simp_all
+        all_goals split <;> simp_all
+      rw [execution]
+      exact .shortCircuit fuel path false first second before (ih _ _ _) (fun _ _ _ _ _ => ih _ _ _)
     | cmp operation first second =>
       have execution : evalValue (fuel + 1) config environment (.cmp operation first second) before =
           comparisonContinuation fuel config environment operation second
@@ -190,6 +236,11 @@ theorem evaluationTree_sound {fuel : Nat} {config : EvalConfig} {environment : R
     change (operands.mapM (evalValue fuel config environment)) before = mapped at actual
     rw [actual]
     cases mapped <;> rfl
+  | shortCircuit fuel path isAnd first second before left right =>
+    cases isAnd <;> simp only [shortCircuitExpr, Bool.false_eq_true, ↓reduceIte, evalValue, bind, shortCircuitContinuation]
+    all_goals cases evalValue fuel config environment first before <;> simp [bind]
+    all_goals split <;> simp_all
+    all_goals split <;> simp_all
   | comparison fuel path operation first second before left right =>
     simp only [evalValue, bind, comparisonContinuation]
     cases evalValue fuel config environment first before <;> rfl
@@ -251,6 +302,14 @@ theorem comparison_source_sideEffect :
       (some (.lit .i64 7))) 0)) .initial), ?_, ?_⟩ <;>
     unfold finalState witnessConfig witnessEnv witnessSource <;> cbv
 
+theorem shortCircuit_skips_source :
+    evalValue 31 witnessConfig witnessEnv
+      (.and (.bool false) (.blockE (.mk 1 [.print [.text "skipped"] 0]
+        (some (.bool true))) 0)) .initial = .ok (.bool false) .initial := by
+  unfold witnessConfig witnessEnv
+  cbv
+
+#print axioms shortCircuit_skips_source
 #print axioms comparison_source_sideEffect
 #print axioms record_source_sideEffect
 #print axioms fill_source_sideEffect
