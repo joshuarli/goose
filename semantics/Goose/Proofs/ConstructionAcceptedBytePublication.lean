@@ -102,7 +102,7 @@ theorem publish_direct_packed_backing (layout : LayoutEnv) (origin : Goose.Core.
     (ty : destination.capability.logicalType = .varr (.int .u8))
     (executed : publishCarriers origin [.completed id] before = .ok () after) :
     ∃ value, storedDestination id after = .ok value after ∧ StoredValueBacking layout after value ∧
-      value.storage = storageId ∧ value.destination = some id := by
+      value.storage = storageId ∧ value.destination = some id ∧ value.ty = .varr (.int .u8) := by
   have inside := (Array.getElem?_eq_some_iff.mp present).1
   have storageInside := (Array.getElem?_eq_some_iff.mp stored).1
   simp only [publishCarriers, List.mapM_cons, List.mapM_nil, bind, pure, List.filterMap_cons,
@@ -124,7 +124,7 @@ theorem publish_direct_packed_backing (layout : LayoutEnv) (origin : Goose.Core.
       Array.getElem?_setIfInBounds_self_of_lt inside
     have bytes : (before.construction.storage.set! storageId { storage with publishedCount := count })[storageId]? =
         some { storage with publishedCount := count } := Array.getElem?_setIfInBounds_self_of_lt storageInside
-    refine ⟨value, ?_, ?_, rfl, rfl⟩
+    refine ⟨value, ?_, ?_, rfl, rfl, rfl⟩
     · simp [storedDestination, getDestination, EvalM.get, bind, pure,
         inside, DestinationBacking.receiverStorage,
         progressCount, ty, value]
@@ -151,7 +151,7 @@ theorem allocated_published_byteOwner_backing (fuel : Nat) (config : EvalConfig)
     (published : publishCarriers origin [.completed id] built = .ok () final) :
     ∃ value, storedDestination id final = .ok value final ∧
       StoredValueBacking config.layout final value ∧ value.storage = before.construction.storage.size ∧
-      value.destination = some id := by
+      value.destination = some id ∧ value.ty = .varr (.int .u8) := by
   obtain ⟨ready⟩ := newDestination_initial_backing config.layout environment.act (.varr (.int .u8)) .value
     origin (some bytes.length) before allocated id (.int .u8) rfl created
   obtain ⟨initial, initialPresent, packed, request, backing, use⟩ := newDestination_byteOwner_packed_value config.layout
@@ -174,10 +174,10 @@ theorem allocated_published_byteOwner_backing (fuel : Nat) (config : EvalConfig)
       ⟨destination.capability.start + (if destination.layout == .packed && destination.capability.request == .value then 4 else 0),
         bytes.length, .int .u8⟩ := by
     simpa only [packed', request', beq_self_eq_true, Bool.true_and, ↓reduceIte, Nat.zero_add] using interval
-  obtain ⟨value, sampled, backed, identity, named⟩ := publish_direct_packed_backing config.layout origin id
+  obtain ⟨value, sampled, backed, identity, named, valueType⟩ := publish_direct_packed_backing config.layout origin id
     before.construction.storage.size bytes.length built final destination storage present stored' direct'
     (by simpa only [Nat.zero_add] using progress) receiver' packed' interval' ty published
-  exact ⟨value, sampled, backed, identity, named⟩
+  exact ⟨value, sampled, backed, identity, named, valueType⟩
 
 #print axioms finished_byteOwner_geometry
 #print axioms buildExpr_byteOwner_geometry

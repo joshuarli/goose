@@ -12,9 +12,10 @@ theorem evalValue_byteOwner_world (fuel : Nat) (config : EvalConfig) (initialize
     (world : AcceptedWorld config initialized before ambient types live regions pending)
     (executed : evalValue (fuel + 2) config environment (.bytes (.varr (.int .u8)) bytes origin) before = .ok value after) :
     AcceptedWorld config initialized after ambient types live regions pending ∧
+      Nonempty (FreshDestinationFrame before after) ∧
       ∃ stored, value = .stored stored ∧ StoredValueBacking config.layout after stored ∧
         stored.storage = before.construction.storage.size ∧
-        stored.destination = some before.construction.destinations.size := by
+        stored.destination = some before.construction.destinations.size ∧ stored.ty = .varr (.int .u8) := by
   simp only [evalValue, Ty.nonfixed, constructLocal, producerCount?, literalCount, bind, ↓reduceIte] at executed
   cases created : newDestination (LayoutEnv.ofModule config.module) environment.act (.varr (.int .u8)) .value origin none
       (some bytes.length) before with
@@ -84,14 +85,14 @@ theorem evalValue_byteOwner_world (fuel : Nat) (config : EvalConfig) (initialize
             | ok result final =>
               cases result
               simp only [published, pure, carrierValue, bind] at executed
-              obtain ⟨finalWorld, stored, sampled, backed, storage, named⟩ :=
+              obtain ⟨finalWorld, finalFrame, stored, sampled, backed, storage, named, valueType⟩ :=
                 allocated_published_byteOwner_world fuel config initialized environment bytes origin before allocated built final
                   before.construction.destinations.size ambient types live regions pending world created constructed published
               simp only [sampled, ExecutionStep.ok.injEq] at executed
               obtain ⟨sameValue, sameState⟩ := executed
               subst after
               subst value
-              exact ⟨finalWorld, stored, rfl, backed, storage, named⟩
+              exact ⟨finalWorld, finalFrame, stored, rfl, backed, storage, named, valueType⟩
 
 #print axioms evalValue_byteOwner_world
 

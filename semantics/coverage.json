@@ -508,11 +508,11 @@
  {
   "feature": "Published byte owner ownership source state",
   "label": "model-proved",
-  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.allocated_published_byteOwner_sourceState; Goose.Proofs.ConstructionAcceptedExecution.allocated_published_byteOwner_world; Goose.Proofs.ConstructionAcceptedExecution.evalValue_byteOwner_world",
-  "statement": "Actual fresh byte-owner evaluation preserves the accepted world with existing receiving regions and pending carriers, including ownership source invariants, and yields a backed stored value with fresh storage identity.",
-  "assumptions": "An accepted world and successful byte-owner evaluation. The allocation-to-publication intermediate result uses its actual successful steps.",
-  "limits": "Accepted source-frame and checked-value correspondence and preservation for other construction forms remain open; this result does not discharge TH-CON-01.",
-  "evidence": "ConstructionAcceptedByteSource.lean, ConstructionAcceptedByteFrame.lean and ConstructionAcceptedByteEvaluation.lean; scoped Lean 4.35 closure and axiom checks."
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.allocated_published_byteOwner_sourceState; Goose.Proofs.ConstructionAcceptedExecution.allocated_published_byteOwner_world; Goose.Proofs.ConstructionAcceptedExecution.evalValue_byteOwner_world; Goose.Proofs.ConstructionAcceptedExecution.evalValue_checkedByteOwner_world",
+  "statement": "Actual fresh byte-owner evaluation preserves the accepted world with existing receiving regions and pending carriers, preserves the accepted source frame, and yields a checked backed value with fresh storage identity.",
+  "assumptions": "An accepted world and successful byte-owner evaluation; the checked result also assumes an accepted source frame and successful source checks. The allocation-to-publication intermediate result uses its actual successful steps.",
+  "limits": "General evaluator fault freedom and preservation for other construction forms remain open; this result does not discharge TH-CON-01.",
+  "evidence": "ConstructionAcceptedByteSource.lean, ConstructionAcceptedByteFrame.lean, ConstructionAcceptedByteEvaluation.lean and ConstructionAcceptedByteChecked.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Published owner storage from fresh allocation",

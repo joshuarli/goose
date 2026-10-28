@@ -272,9 +272,11 @@ theorem allocated_published_byteOwner_world (fuel : Nat) (config : EvalConfig) (
       .ok () built)
     (published : publishCarriers origin [.completed id] built = .ok () final) :
     AcceptedWorld config initialized final ambient types live regions pending ∧
+      Nonempty (FreshDestinationFrame before final) ∧
       ∃ value, storedDestination id final = .ok value final ∧
         Goose.Proofs.ConstructionRepresentation.StoredValueBacking config.layout final value ∧
-        value.storage = before.construction.storage.size ∧ value.destination = some id := by
+        value.storage = before.construction.storage.size ∧ value.destination = some id ∧
+        value.ty = .varr (.int .u8) := by
   have freshId := newDestination_fresh_id config.layout environment.act (.varr (.int .u8)) .value origin
     (some bytes.length) before allocated id created
   subst id
@@ -309,7 +311,7 @@ theorem allocated_published_byteOwner_world (fuel : Nat) (config : EvalConfig) (
     (by simpa only [Nat.zero_add] using builtProgress) builtPacked published
   have source := allocated_published_byteOwner_sourceState fuel config initialized environment bytes origin before allocated built final
     before.construction.destinations.size ambient types live regions pending world created constructed published
-  refine ⟨finalFrame.acceptedWorld config initialized ambient types live regions pending world source, ?_⟩
+  refine ⟨finalFrame.acceptedWorld config initialized ambient types live regions pending world source, ⟨finalFrame⟩, ?_⟩
   exact allocated_published_byteOwner_backing fuel config initialized environment bytes origin before allocated built final
     before.construction.destinations.size ambient types live regions pending world created constructed published
 
