@@ -1,5 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedUnaryCallComplete
-import Goose.Proofs.ConstructionAcceptedScalarGlobalEvaluation
+import Goose.Proofs.ConstructionAcceptedSingleScalarGlobal
 import Goose.Proofs.ConstructionAcceptedModuleFromGlobals
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -14,31 +14,15 @@ theorem unaryCallInitialGlobalsOutcome (fuel : Nat) (config : EvalConfig) (accep
     (descriptorType : descriptor.ty = .int integer)
     (form : UnaryRegisterExpression config integer descriptor.init)
     (graph : RegisterCallGraphWithCallLocals config (.int integer)) : InitialGlobalsOutcome fuel config := by
-  obtain ⟨completed, types, live, ambient, extend, lower, upper, world, final⟩ :=
-    initGlobals_scalar_fromEvaluation fuel 0 config accepted .initial [] (declaredRootTypes config.module) (fun _ => False)
-      descriptor (initial_acceptedWorld config accepted.accepted) (futureGlobalsClear_initial config) present
-      (Or.inl ⟨integer, descriptorType⟩) (by
-        intro names roots typingAfter rootsAfter frame activated activeWorld frameSource checked
-        have checked' : CheckedValue frame descriptor.init (.int integer) roots typingAfter rootsAfter := by simpa [descriptorType] using checked
-        obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, world, source, clear, observed, result⟩ :=
-          evalValue_unaryRegisterExpression config integer form fuel accepted frame activated [] (declaredRootTypes config.module)
-            (fun _ => False) [] [] graph activeWorld frameSource roots typingAfter rootsAfter checked'
-        refine ⟨nextTypes, nextLive, nextAmbient, extend, world, clear, ?_⟩
-        rw [descriptorType]
-        exact result)
-  have range : List.range config.module.globals.size = [0] := by simp [size]
-  refine ⟨completed, types, live, ambient, [], by omega, ?_, ?_⟩
-  · simpa only [range] using world
-  · cases run : initGlobals fuel config [0] .initial with
-    | ok value after =>
-      simp only [run, Goose.Proofs.Exit.stepState] at final
-      simp only [range, run, Goose.Proofs.Exit.stepState]
-      exact ⟨final.1, by simpa [size] using final.2.1, trivial, by simpa [size] using final.2.2⟩
-    | stop reason after =>
-      simp only [run, Goose.Proofs.Exit.stepState] at final
-      simp only [range, run, Goose.Proofs.Exit.stepState]
-      exact ⟨by omega, by simp [runModule, range, run, bind]⟩
-    | escape address carriers after | jump destination kind after => simp only [run] at final
+  apply singleScalarInitialGlobalsOutcome fuel config accepted descriptor size present (Or.inl ⟨integer, descriptorType⟩)
+  intro names roots typingAfter rootsAfter frame activated activeWorld frameSource checked
+  have checked' : CheckedValue frame descriptor.init (.int integer) roots typingAfter rootsAfter := by simpa [descriptorType] using checked
+  obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, world, source, clear, observed, result⟩ :=
+    evalValue_unaryRegisterExpression config integer form fuel accepted frame activated [] (declaredRootTypes config.module)
+      (fun _ => False) [] [] graph activeWorld frameSource roots typingAfter rootsAfter checked'
+  refine ⟨nextTypes, nextLive, nextAmbient, extend, world, clear, ?_⟩
+  rw [descriptorType]
+  exact result
 
 theorem acceptedUnaryCallModule_allFuel (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (descriptor : Global) (integer : Goose.Core.IntTy)

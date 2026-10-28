@@ -1,5 +1,7 @@
 import Goose.Proofs.ConstructionAcceptedBinaryRegisterCall
 import Goose.Proofs.ConstructionAcceptedNestedGlobal
+import Goose.Proofs.ConstructionAcceptedSingleScalarGlobal
+import Goose.Proofs.ConstructionAcceptedModuleFromGlobals
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -78,6 +80,32 @@ theorem binaryCall_evaluation_allFuel (fuel : Nat) :
       left right binaryCall_graph world source roots typingAfter rootsAfter checked
   exact ⟨nextTypes, nextLive, nextAmbient, finalWorld, clear, result⟩
 
+theorem binaryCall_module_allFuel (fuel : Nat) :
+    ∃ initialized ambient types live regions,
+      AcceptedWorld binaryCallConfig initialized (Goose.Proofs.Exit.stepState (runModule fuel binaryCallConfig .initial)) ambient types live regions [] ∧
+      (match runModule fuel binaryCallConfig .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  let accepted := acceptedModule binaryCallConfig binaryCall_validated
+  let descriptor : Global := ⟨"answer", .int .i64, .immutable, binaryCallExpression, 0⟩
+  have initial : InitialGlobalsOutcome fuel binaryCallConfig := by
+    apply singleScalarInitialGlobalsOutcome fuel binaryCallConfig accepted descriptor (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩)
+    intro names roots typingAfter rootsAfter frame activated world source checked
+    have left : UnaryRegisterExpression binaryCallConfig .i64 (.call 1 [] 0) :=
+      .call 1 0 ⟨1, "leaf", [], [[]], []⟩ binaryCallLeaf rfl rfl rfl rfl
+    have right : UnaryRegisterExpression binaryCallConfig .i64 (.lit .i64 3) :=
+      .scalar (.numeric (.scalar (.scalar (.integer .i64 3))))
+    obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, finalSource, clear, observed, result⟩ :=
+      evalValue_binary_unaryRegister fuel binaryCallConfig .i64 accepted frame activated [] (declaredRootTypes binaryCallModule)
+        (fun _ => False) [] [] .add (.call 1 [] 0) (.lit .i64 3) 0 left right binaryCall_graph world source roots typingAfter rootsAfter checked
+    exact ⟨nextTypes, nextLive, nextAmbient, extend, finalWorld, clear, result⟩
+  apply acceptedModuleFromGlobals_allFuel fuel binaryCallConfig accepted ⟨0, "entry", [], [], []⟩ binaryCallEntry initial (by rfl) (by rfl)
+  · exact .nil
+  · simp [binaryCallEntry, Block.stmts]
+  · simp [binaryCallEntry, Block.stmts]
+  · simp [binaryCallEntry, Block.stmts]
+  · simp [binaryCallEntry, Block.stmts]
+  · rfl
+
+#print axioms binaryCall_module_allFuel
 #print axioms binaryCall_evaluation_allFuel
 #print axioms binaryCall_result
 #print axioms binaryCall_validated

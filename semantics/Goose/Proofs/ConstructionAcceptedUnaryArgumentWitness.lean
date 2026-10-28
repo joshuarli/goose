@@ -1,7 +1,7 @@
 import Goose.Proofs.ConstructionAcceptedUnaryArgumentSource
 import Goose.Proofs.ConstructionAcceptedNestedGlobal
 import Goose.Proofs.ConstructionAcceptedIdentityUnaryCall
-import Goose.Proofs.ConstructionAcceptedScalarGlobalEvaluation
+import Goose.Proofs.ConstructionAcceptedSingleScalarGlobal
 import Goose.Proofs.ConstructionAcceptedModuleFromGlobals
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -104,34 +104,17 @@ theorem unaryArgument_module_allFuel (fuel : Nat) :
   let accepted := acceptedModule unaryArgumentConfig unaryArgument_validated
   let descriptor : Global := ⟨"answer", .int .i64, .immutable, .call 1 [.byVal unaryArgumentExpression] 0, 0⟩
   have initial : InitialGlobalsOutcome fuel unaryArgumentConfig := by
-    obtain ⟨completed, types, live, ambient, extend, lower, upper, world, final⟩ :=
-      initGlobals_scalar_fromEvaluation fuel 0 unaryArgumentConfig accepted .initial [] (declaredRootTypes unaryArgumentModule) (fun _ => False)
-        descriptor (initial_acceptedWorld unaryArgumentConfig unaryArgument_validated) (futureGlobalsClear_initial unaryArgumentConfig) (by rfl)
-        (Or.inl ⟨.i64, rfl⟩) (by
-          intro names roots typingAfter rootsAfter frame activated activeWorld frameSource checked
-          let context : Context := ⟨1, "identity", [], [[]], []⟩
-          let parameter : Param := ⟨0, .byValue⟩
-          let localDescriptor : LocalVar := ⟨"value", .int .i64, .immutable, 0, 0⟩
-          obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, clear, result⟩ :=
-            evalValue_identityUnary_allFuel frame activated [] (declaredRootTypes unaryArgumentModule) (fun _ => False) [] []
-              1 0 context unaryArgumentCallee parameter localDescriptor unaryArgumentExpression .i64 4094 fuel unaryArgument_form unaryArgument_graph
-              activeWorld frameSource (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl)
-              (.int .i64) roots typingAfter rootsAfter checked
-          exact ⟨nextTypes, nextLive, nextAmbient, extend, finalWorld, clear, result⟩)
-    have size : unaryArgumentConfig.module.globals.size = 1 := rfl
-    have range : List.range unaryArgumentConfig.module.globals.size = [0] := by simp [size]
-    refine ⟨completed, types, live, ambient, [], by omega, ?_, ?_⟩
-    · simpa only [range] using world
-    · cases run : initGlobals fuel unaryArgumentConfig [0] .initial with
-      | ok value after =>
-        simp only [run, Goose.Proofs.Exit.stepState] at final
-        simp only [range, run, Goose.Proofs.Exit.stepState]
-        exact ⟨final.1, by simpa [size] using final.2.1, trivial, by simpa [size] using final.2.2⟩
-      | stop reason after =>
-        simp only [run, Goose.Proofs.Exit.stepState] at final
-        simp only [range, run, Goose.Proofs.Exit.stepState]
-        exact ⟨by omega, by simp [runModule, range, run, bind]⟩
-      | escape address carriers after | jump destination kind after => simp only [run] at final
+    apply singleScalarInitialGlobalsOutcome fuel unaryArgumentConfig accepted descriptor (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩)
+    intro names roots typingAfter rootsAfter frame activated activeWorld frameSource checked
+    let context : Context := ⟨1, "identity", [], [[]], []⟩
+    let parameter : Param := ⟨0, .byValue⟩
+    let localDescriptor : LocalVar := ⟨"value", .int .i64, .immutable, 0, 0⟩
+    obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, clear, result⟩ :=
+      evalValue_identityUnary_allFuel frame activated [] (declaredRootTypes unaryArgumentModule) (fun _ => False) [] []
+        1 0 context unaryArgumentCallee parameter localDescriptor unaryArgumentExpression .i64 4094 fuel unaryArgument_form unaryArgument_graph
+        activeWorld frameSource (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl) (by rfl)
+        (.int .i64) roots typingAfter rootsAfter checked
+    exact ⟨nextTypes, nextLive, nextAmbient, extend, finalWorld, clear, result⟩
   apply acceptedModuleFromGlobals_allFuel fuel unaryArgumentConfig accepted
     ⟨0, "entry", [], [], []⟩ unaryArgumentEntry initial (by rfl) (by rfl)
   · exact .nil
