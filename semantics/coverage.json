@@ -435,10 +435,10 @@
  },
  {
   "feature": "Byte exit replacement ancestry",
-  "statement": "Successful byte production into a replacement destination retains its backed carrier and parent ownership through scope release. A successful fresh exit reservation has a replacement path from its saved destination to its selected open byte destination; the active ticket and path persist through successful byte construction and scope release. For a current open receiver with a positive count, actual single-channel setup and byte return cleanup retain the exact exiting parent and backed carrier, the receiver still resolves to itself, and the replacement carrier is ready to land. Captured receiving, reservation and runtime frames survive singleton cleanup and unwind.",
+  "statement": "Successful byte production into a replacement destination retains its backed carrier and parent ownership through scope release. A successful fresh exit reservation has a replacement path from its saved destination to its selected open byte destination; the active ticket and path persist through successful byte construction and scope release. For a current open receiver with a positive count, actual single-channel setup and byte return cleanup retain the exact exiting parent and backed carrier, the receiver still resolves to itself, and the replacement carrier actually lands after singleton cleanup and unwind. Captured receiving, reservation and runtime frames survive this path.",
   "assumptions": "Accepted ownership worlds, successful production or reservation, open byte backing and destination shape. The reservation result assumes an accepted world at the reserved state; the live-parent case assumes the original receiver is current and open with positive count.",
-  "limits": "General parent authority may be abandoned or cancelled; ownership context after cleanup, handler landing and result normalization remain open. This component does not close TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionExitByteReplacement.lean; Goose/Proofs/ConstructionExitReservationPath.lean; Goose/Proofs/ConstructionExitByteReservation.lean; Goose/Proofs/ConstructionExitOpenReservation.lean; Goose/Proofs/ConstructionExitByteFinishParent.lean; Goose/Proofs/ConstructionExitSingleCleanup.lean; Goose/Proofs/ConstructionExitByteSetup.lean; Goose/Proofs/ConstructionExitReceiverCurrent.lean; Goose/Proofs/ConstructionExitReceiverParent.lean; Goose/Proofs/ConstructionExitReplacementOffset.lean; Goose/Proofs/ConstructionExitByteReady.lean; Goose/Proofs/ConstructionExitByteRuntime.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "General parent authority may be abandoned or cancelled; handler completion and result normalization remain open. This component does not close TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionExitByteReplacement.lean; Goose/Proofs/ConstructionExitReservationPath.lean; Goose/Proofs/ConstructionExitByteReservation.lean; Goose/Proofs/ConstructionExitOpenReservation.lean; Goose/Proofs/ConstructionExitByteFinishParent.lean; Goose/Proofs/ConstructionExitSingleCleanup.lean; Goose/Proofs/ConstructionExitByteSetup.lean; Goose/Proofs/ConstructionExitReceiverCurrent.lean; Goose/Proofs/ConstructionExitReceiverParent.lean; Goose/Proofs/ConstructionExitReplacementOffset.lean; Goose/Proofs/ConstructionExitByteReady.lean; Goose/Proofs/ConstructionExitByteRuntime.lean; Goose/Proofs/ConstructionExitByteLand.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted construction value representation fragment",
@@ -704,6 +704,13 @@
   "evidence": "Goose/Proofs/ConstructionAcceptedScopeWorld.lean; Goose/Proofs/ConstructionByteEntryScopeWorld.lean; Goose/Proofs/ConstructionAcceptedActivationWorld.lean; Goose/Proofs/ConstructionByteModuleCompletedWorld.lean; Goose/Proofs/ConstructionByteModuleLowFuel.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Scalar entry module world preservation",
+  "statement": "At every fuel, a validated module with byte-owner globals and a no-tail entry body consisting of recursive scalar expression statements preserves an accepted world at the actual module result, whether it stops or returns normally. Escape and jump outcomes are impossible.",
+  "assumptions": "Accepted module and the specified byte-owner globals and scalar entry statements.",
+  "limits": "Tail expressions, mixed declaration bodies, other statement and global forms, and general construction trace claims remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedScalarControl.lean; Goose/Proofs/ConstructionAcceptedScalarGlobalRun.lean; Goose/Proofs/ConstructionAcceptedScalarModule.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Stopped byte-owner local construction",
   "statement": "At every fuel, an actual stop in local construction of a byte owner preserves the accepted world and source frame, including a fresh receiving region when allocation succeeded.",
   "assumptions": "Accepted world and source frame before construction. Allocation and byte expression origins may differ.",
@@ -735,9 +742,9 @@
  },
  {
   "feature": "Indexed assignment demand prerequisites",
-  "statement": "An accepted indexed local or global assignment retains its destination alias and value demand. Successful prefixes and non-timeout stops agree through owner addressing, snapshot, index evaluation and bounds check, value evaluation, and store. These cases compose into mixed unit and value blocks.",
-  "assumptions": "Accepted indexed source and generated occurrence, local or global owner, supported index and value expressions, related builder and retained demand.",
-  "limits": "Indexed owners are local slots or globals; nested projections, other statement forms, timeout reflection and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "statement": "An accepted indexed assignment retains its destination alias and value demand. Successful prefixes and non-timeout stops agree through owner addressing, snapshot, index evaluation and bounds check, value evaluation, and store. Local and global owners, including their array fields, compose into mixed unit and value blocks.",
+  "assumptions": "Accepted indexed source and generated occurrence, local or global owner or its field, supported index and value expressions, related builder and retained demand.",
+  "limits": "Deeper projections, other statement forms, timeout reflection and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandAssignmentIndexAlias.lean; Goose/Lower/DemandIndexAssignmentPrefix.lean; Goose/Lower/DemandIndexAssignmentStopped.lean; Goose/Lower/DemandScalarAssignmentStatementAgreement.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
@@ -868,14 +875,14 @@
   "feature": "Mixed scalar assignment statement agreement",
   "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, local or global clears and assignments to local or global places, their fields or indexed elements. Assignment values include literals, local or global reads, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
   "assumptions": "Accepted source and generated sequence, related builder, admitted bounded realized retained map, generated rows and builder extension. Direct read assignments require a reference-target type proof, derivable from the local or global declaration.",
-  "limits": "Field and indexed destinations cover one projection; direct-read sources are local or global places. Other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "limits": "Indexed destinations include array fields of local or global owners; deeper projections and direct-read sources beyond local or global places remain open. Other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandScalarAssignmentExpressions.lean; Goose/Lower/DemandScalarAssignmentStatementAgreement.lean; Goose/Lower/DemandScalarClear.lean; Goose/Lower/DemandReadAssignmentTyping.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Mixed scalar assignment block agreement",
   "statement": "Successful generated prefixes and non-timeout stops agree with source execution through scope entry, mixed statement sequences and scope exit for blocks containing supported scalar assignments, including a supported final scalar or short-circuit expression. Intermediate successful prefixes preserve the accepted frame.",
   "assumptions": "Accepted block source, generated block and statement rows, related builder, admitted bounded realized retained map and builder extension.",
-  "limits": "No loop context in the stop theorems; direct read assignments require a reference-target type proof. Assignments use supported expressions and local or global destinations, including one field or index projection. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "limits": "No loop context in the stop theorems; direct read assignments require a reference-target type proof. Assignments use supported expressions and local or global destinations, including fields, indexed elements and indexed array fields. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandScalarAssignmentBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentUnitBlock.lean; Goose/Lower/DemandScalarAssignmentValueBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentValueBlock.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
