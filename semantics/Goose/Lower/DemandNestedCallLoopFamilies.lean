@@ -1,4 +1,5 @@
 import Goose.Lower.DemandWhileCallStoppedFamily
+import Goose.Lower.DemandNestedCallIfFamily
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -34,6 +35,26 @@ theorem accepted_generated_bounded_nested_call_loop_statements {cfg : Cfg} {env 
           intro statement state source before built initial start map required runtime cursor
           exact NestedCallLoopCursor.ofMixed depth cursor)
     · exact fun {state} => original.2 (state := state)
+  | @conditional depth env condition yes origin conditionForm yesForm noValue later tail yesIH tailIH =>
+    intro caller results root owner selected before loop bindings want block
+    have branchFamily : ∀ (middle : St) (before : LS),
+        ReachableSequencePrefixFamily (env := { env with scopes := (yes.scope, middle.nextScope) :: env.scopes })
+          ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before loop [] false yes yes.stmts
+          (@NestedCallLoopCursor cfg caller results root owner depth { env with scopes := (yes.scope, middle.nextScope) :: env.scopes } loop selected) ∧
+        ReachableStoppedSequencePrefixFamily (env := { env with scopes := (yes.scope, middle.nextScope) :: env.scopes })
+          ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before loop [] false yes yes.stmts := by
+      intro middle before
+      exact yesIH middle selected before loop [] false yes
+    have head : ReachableStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop (.ifS condition yes none origin)
+        (@NestedCallLoopCursor cfg caller results root owner (depth + 1) env loop selected) :=
+      accepted_generated_nested_call_if_none_prefix_family loop selected depth condition yes origin yesForm branchFamily noValue
+      (accepted_generated_control_progress_prefix_family selected loop conditionForm)
+    have stopped : ReachableStoppedStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop (.ifS condition yes none origin) :=
+      accepted_generated_nested_call_if_none_stopped_family loop selected depth condition yes origin yesForm branchFamily noValue
+      (accepted_generated_read_stopped_expressions selected loop conditionForm.stopped)
+    have suffix := tailIH selected before loop bindings want block
+    exact ⟨accepted_generated_reachable_sequence_prefix_cons selected before loop bindings want block _ head suffix.1,
+      accepted_generated_reachable_stopped_sequence_cons selected before loop bindings want block stopped suffix.2⟩
   | @loop depth env condition body origin conditionForm bodyForm noValue later tail bodyIH tailIH =>
     intro caller results root owner selected before loop bindings want block
     have families : ∀ (middle : St) (before : LS) (innerLoop : Option LoopCtx),

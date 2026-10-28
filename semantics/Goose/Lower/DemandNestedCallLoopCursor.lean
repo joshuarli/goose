@@ -23,6 +23,14 @@ inductive NestedCallLoopCursorStep {cfg : Cfg} (caller : Func) (results : List T
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
       (cursor : WhileCallStatementCursor caller results selected source before built initial start map required runtime) :
       NestedCallLoopCursorStep caller results inner loop selected source before built initial start map required runtime
+  | conditional {env : Env} {loop : Option LoopCtx} {selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner}
+      {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+      {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+      (cursor : RecursiveLoopIfCursorStep ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results loop
+        (fun {_innerEnv} innerSelected {_innerStatement} {_innerState} innerSource innerBefore innerBuilt innerInitial innerStart innerMap innerRequired innerRuntime =>
+          inner loop innerSelected innerSource innerBefore innerBuilt innerInitial innerStart innerMap innerRequired innerRuntime)
+        selected source before built initial start map required runtime) :
+      NestedCallLoopCursorStep caller results inner loop selected source before built initial start map required runtime
   | body {env : Env} {loop : Option LoopCtx} {selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner}
       {condition : Expr} {body : Core.Block} {origin : OriginId} {state current middle : St} {count : Nat}
       {source : StmtSource cfg env (.while condition body origin) state} {before built branchStart headerState : LS}
@@ -70,6 +78,18 @@ theorem NestedCallLoopCursor.succ {cfg : Cfg} {env : Env} {caller : Func} {resul
     cases cursor with
     | mixed cursor => exact .mixed cursor
     | existing cursor => exact .existing cursor
+    | conditional cursor =>
+      apply NestedCallLoopCursorStep.conditional
+      cases cursor with
+      | scalar cursor => exact .scalar cursor
+      | condition child canonical demanded progress => exact .condition child canonical demanded progress
+      | fork child boolean fuel canonical evaluated boundary step => exact .fork child boolean fuel canonical evaluated boundary step
+      | join joinBlock fuel evaluated step post => exact .join joinBlock fuel evaluated step post
+      | branch child boolean fuel conditionCanonical evaluated indexEq found branch canonical demanded =>
+        apply RecursiveLoopIfCursorStep.branch child boolean fuel conditionCanonical evaluated indexEq found branch canonical
+        apply demanded.mapCursor
+        intro statement innerState source before built initial start map required runtime cursor
+        exact ih cursor
     | body iterations active world child fuel conditionCanonical evaluated branch canonical demanded =>
       apply NestedCallLoopCursorStep.body iterations active world child fuel conditionCanonical evaluated branch canonical
       apply demanded.mapCursor
@@ -92,6 +112,21 @@ theorem NestedCallLoopCursor.excludes_maximal_terminal {cfg : Cfg} {env : Env} {
     cases cursor with
     | mixed cursor => exact cursor.excludes_maximal_terminal terminal maximal
     | existing cursor => exact cursor.excludes_maximal_terminal terminal maximal
+    | conditional cursor =>
+      cases cursor with
+      | scalar cursor => exact ScalarAssignmentStatementPrefixCursor.excludes_maximal_terminal cursor terminal maximal
+      | condition child canonical demanded progress =>
+        rcases progress with ⟨id, op, instruction⟩ | ⟨next, step⟩
+        · cases instruction.symm.trans terminal
+        · exact maximal next (step fuel)
+      | fork child boolean sourceFuel canonical evaluated boundary step =>
+        obtain ⟨next, step⟩ := step
+        exact maximal next (step fuel)
+      | join joinBlock sourceFuel evaluated step post => exact maximal _ (step fuel)
+      | branch child boolean sourceFuel conditionCanonical evaluated indexEq found branch canonical demanded =>
+        apply demanded.excludes_maximal_terminal ?_ terminal maximal
+        intro statement innerState source before built initial start map required runtime cursor term terminal fuel maximal
+        exact ih cursor terminal maximal
     | body iterations active world child sourceFuel conditionCanonical evaluated branch canonical demanded =>
       apply demanded.excludes_maximal_terminal ?_ terminal maximal
       intro statement innerState source before built initial start map required runtime cursor term terminal fuel maximal
