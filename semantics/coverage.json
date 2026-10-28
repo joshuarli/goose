@@ -488,6 +488,15 @@
   "evidence": "ConstructionAcceptedFreshness.lean, ConstructionAcceptedStaticBytes.lean and ConstructionAcceptedFreshnessChecks.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Published owner storage from fresh allocation",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_publishedOwner_storage",
+  "statement": "A stored value sampled from a published fresh receiver retains the storage row allocated by its actual newDestination operation and names that destination.",
+  "assumptions": "An accepted world, successful fresh allocation, an ownership source extension to the published state, and the actual storedDestination result.",
+  "limits": "The evaluator induction must establish the source extension or follow landing successors for the intervening construction. This result does not discharge TH-CON-01.",
+  "evidence": "ConstructionAcceptedOwnerLineage.lean; scoped Lean 4.35 closure and axiom check."
+ },
+ {
   "feature": "Receiver storage identity across completed carrier landing",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ExitExecution.CompletedCarrierLandingFrame.receiverStorage; Goose.Proofs.ExitExecution.landCarriersInto_construct_receiverStorage",
