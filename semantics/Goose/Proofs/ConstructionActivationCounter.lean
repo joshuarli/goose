@@ -46,6 +46,81 @@ theorem counter_lift (origin : Goose.Core.OriginId) (action : ConstructionM α) 
   intro state
   cases result : action state.construction <;> simp [liftConstruction, result, Goose.Proofs.Exit.stepState]
 
+theorem counter_withScope (environment : RuntimeActivation) (scope scopeInst : Nat) (action : EvalM α)
+    (preserved : PreservesActivationCounter action) : PreservesActivationCounter (withScope environment scope scopeInst action) := by
+  intro state
+  have after := preserved state
+  cases result : action state with
+  | ok value final =>
+    simpa [withScope, result, releaseScope, releaseScopeState, EvalM.get, EvalM.set, bind,
+      Goose.Proofs.Exit.stepState] using after
+  | stop reason final => simpa [withScope, result, Goose.Proofs.Exit.stepState] using after
+  | escape target carriers final =>
+    simpa [withScope, result, releaseScope, releaseScopeState, EvalM.get, EvalM.set, bind,
+      Goose.Proofs.Exit.stepState] using after
+  | jump target kind final =>
+    simpa [withScope, result, releaseScope, releaseScopeState, EvalM.get, EvalM.set, bind,
+      Goose.Proofs.Exit.stepState] using after
+
+#print axioms counter_withScope
+theorem counter_finishActivation (layout : LayoutEnv) (activation : RuntimeActivation) (types : List Ty)
+    (origin : Goose.Core.OriginId) (action : EvalM (List Carrier))
+    (preserved : PreservesActivationCounter action)
+    (finishPreserved : ∀ carriers, PreservesActivationCounter (finishChannels layout activation.channels types carriers origin)) :
+    PreservesActivationCounter (finishActivation layout activation types origin action) := by
+  intro state
+  have prior := preserved state
+  cases result : action state with
+  | ok carriers final =>
+    simp only [result, Goose.Proofs.Exit.stepState] at prior
+    let trimmed : ExecutionState := { final with activations := final.activations.filter (fun current => current.act != activation.act) }
+    have after := finishPreserved carriers trimmed
+    cases finished : finishChannels layout activation.channels types carriers origin trimmed <;>
+      simp only [finished, Goose.Proofs.Exit.stepState] at after <;>
+      simpa [finishActivation, result, trimmed, finished, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
+  | stop reason final => simpa [finishActivation, result, Goose.Proofs.Exit.stepState] using prior
+  | jump target kind final => simpa [finishActivation, result, Goose.Proofs.Exit.stepState] using prior
+  | escape target carriers final =>
+    simp only [result, Goose.Proofs.Exit.stepState] at prior
+    by_cases caught : target.activation = activation.act
+    · let trimmed : ExecutionState := { final with activations := final.activations.filter (fun current => current.act != activation.act) }
+      have after := finishPreserved carriers trimmed
+      cases finished : finishChannels layout activation.channels types carriers origin trimmed <;>
+        simp only [finished, Goose.Proofs.Exit.stepState] at after <;>
+        simpa [finishActivation, result, caught, trimmed, finished, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
+    · simpa [finishActivation, result, caught, Goose.Proofs.Exit.stepState] using prior
+
+#print axioms counter_finishActivation
+theorem counter_protectDestination (origin : Goose.Core.OriginId) (destination : Goose.Core.DestinationId)
+    (action : EvalM α) (preserved : PreservesActivationCounter action)
+    (cleanup : ∀ carriers, PreservesActivationCounter (cleanupReceivingDestination origin destination carriers)) :
+    PreservesActivationCounter (protectDestination origin destination action) := by
+  intro state
+  have prior := preserved state
+  cases result : action state with
+  | ok value final => simpa [protectDestination, result, Goose.Proofs.Exit.stepState] using prior
+  | stop reason final => simpa [protectDestination, result, Goose.Proofs.Exit.stepState] using prior
+  | escape target carriers final =>
+    simp only [result, Goose.Proofs.Exit.stepState] at prior
+    have after := cleanup carriers final
+    cases cleaned : cleanupReceivingDestination origin destination carriers final <;>
+      simp only [cleaned, Goose.Proofs.Exit.stepState] at after <;>
+      simpa [protectDestination, result, cleaned, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
+  | jump target kind final =>
+    simp only [result, Goose.Proofs.Exit.stepState] at prior
+    cases kind with
+    | breakValue carriers =>
+      have after := cleanup carriers final
+      cases cleaned : cleanupReceivingDestination origin destination carriers final <;>
+        simp only [cleaned, Goose.Proofs.Exit.stepState] at after <;>
+        simpa [protectDestination, result, cleaned, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
+    | continueLoop =>
+      have after := cleanup [] final
+      cases cleaned : cleanupReceivingDestination origin destination [] final <;>
+        simp only [cleaned, Goose.Proofs.Exit.stepState] at after <;>
+        simpa [protectDestination, result, cleaned, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
+
+#print axioms counter_protectDestination
 structure EvaluationPreservesActivationCounter (fuel : Nat) (config : EvalConfig) : Prop where
   value : ∀ environment expression, PreservesActivationCounter (evalValue fuel config environment expression)
   bound : ∀ environment count defaultValue operand, PreservesActivationCounter (evalBound fuel config environment count defaultValue operand)
