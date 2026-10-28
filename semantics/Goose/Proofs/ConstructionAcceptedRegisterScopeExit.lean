@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedParameterScopeExit
+import Goose.Proofs.ConstructionAcceptedChannelScopeExit
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -18,13 +18,12 @@ theorem execActivationBody_bound_registerTail (fuel : Nat) (config : EvalConfig)
       | .stop reason after => .stop reason after
       | .escape target carriers after => .escape target carriers (releaseScopeState activation scope before.nextScope after)
       | .jump target kind after => .jump target kind (releaseScopeState activation scope before.nextScope after) := by
-  simp only [ownershipResultScopeState, beq_iff_eq] at bound
-  simp only [channels] at normal ⊢
-  cases produced : withCompletionChannels [.register ty] (expressionOrigin expression)
-      (fun channels => evalProduce fuel config
-        { activation with scopes := (scope, before.nextScope) :: activation.scopes, channels := [.register ty] } channels expression) middle <;>
-    simp [execActivationBody, execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope,
-      bound, channels, normal, produced, releaseScope]
+  cases activation with
+  | mk implementation act vars scopes actualChannels =>
+    simp only at channels
+    subst actualChannels
+    exact execActivationBody_bound_channelTail fuel config ⟨implementation, act, vars, scopes, [.register ty]⟩
+      pre scope statements expression before boundState middle bound normal
 
 #print axioms execActivationBody_bound_registerTail
 end Goose.Proofs.ConstructionAcceptedExecution
