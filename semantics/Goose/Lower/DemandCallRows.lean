@@ -59,6 +59,24 @@ theorem GeneratedCallArgumentRows.member_origin {access : AccessEnv} {path : Lis
       · simpa only [List.getElem?_cons_succ] using idAt
       · simpa only [Nat.add_assoc, Nat.add_comm 1 position, Nat.add_left_comm] using aliasQuery
 
+theorem GeneratedCallArgumentRows.snoc {access : AccessEnv} {path : List Nat}
+    {index : Nat} {arguments : List Arg} {ids : List ValueId} {retained : List (ValueId × RetainedAlias)}
+    (rows : GeneratedCallArgumentRows access path index arguments ids retained)
+    {argument : Arg} {id : ValueId} {aliases : List RetainedAlias}
+    (query : access.aliasArg (path ++ [index + arguments.length]) argument = .ok aliases) :
+    GeneratedCallArgumentRows access path index (arguments ++ [argument]) (ids ++ [id])
+      (retained ++ aliases.map (fun alias => (id, alias))) := by
+  induction rows with
+  | nil index =>
+    simpa using (GeneratedCallArgumentRows.cons query (GeneratedCallArgumentRows.nil (index + 1)))
+  | @cons index head rest value ids priorAliases retained priorQuery tail ih =>
+    have nextQuery : access.aliasArg (path ++ [(index + 1) + rest.length]) argument = .ok aliases := by
+      have equal : index + (head :: rest).length = (index + 1) + rest.length := by simp; omega
+      rw [← equal]
+      exact query
+    have next := ih nextQuery
+    simpa only [List.cons_append, List.append_assoc] using (GeneratedCallArgumentRows.cons priorQuery next)
+
 theorem ArgSource.byVal_callChild {cfg : Cfg} {env : Env} {initial state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
     (root : ExprSource cfg env (.call context arguments origin) initial)
@@ -76,6 +94,27 @@ theorem ArgSource.byVal_callChild {cfg : Cfg} {env : Env} {initial state : St}
   have retained := callArgContext_retained_subset root.context index (.byVal expression) found member
   have eq := demandContextRetainedEq plans path rfl childContext
   simpa only [callArgContext, ArgContext.retained, eq] using retained
+
+theorem ExprSource.callArgumentAlias {cfg : Cfg} {env : Env} {state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) state)
+    {index : Nat} {argument : Arg} (found : arguments[index]? = some argument)
+    (shrink : cfg.mod.profile = .shrink) :
+    ∃ aliases, source.rootsEnv.access.aliasArg (source.path ++ [index]) argument = .ok aliases := by
+  have access := source.access
+  cases contextEq : source.context with
+  | pilot profile active => exact False.elim (by rw [shrink] at profile; cases profile)
+  | @shrink planContext profile context =>
+    rw [contextEq] at access
+    have accessEq : planContext.approvals.access = source.rootsEnv.access := by
+      have moduleEq := access.2.2.1
+      have implementationEq := access.2.2.2.1
+      have contextEq := access.2.2.2.2
+      cases accessAt : planContext.approvals.access
+      rw [accessAt] at moduleEq implementationEq contextEq
+      unfold PEnv.access
+      congr 1
+    simpa only [accessEq] using context.call_argument_alias index argument found
 
 theorem ArgSource.byVal_callRetainsPrior {cfg : Cfg} {env : Env} {initial state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
@@ -165,8 +204,10 @@ theorem ArgsSource.afterHead_callChildren {n : Nat} {cfg : Cfg} {env : Env} {ini
 
 #print axioms GeneratedCallArgumentRows.length
 #print axioms GeneratedCallArgumentRows.lookup
+#print axioms GeneratedCallArgumentRows.snoc
 #print axioms GeneratedCallArgumentRows.member_origin
 #print axioms ArgSource.byVal_callRetainsPrior
+#print axioms ExprSource.callArgumentAlias
 #print axioms ExprSource.callArgsCanonical
 #print axioms ArgSource.byVal_callChild
 #print axioms ArgSource.byVal_callMetadata

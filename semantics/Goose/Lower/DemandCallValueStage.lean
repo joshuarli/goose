@@ -105,5 +105,115 @@ theorem accepted_generated_call_value_stage {cfg : Cfg} {env : Env} {initialStat
       (@GeneratedControlProgressCursor cfg env cx) := accepted_generated_control_progress_prefix_family selected loop form
   exact (family child childOwner childOccurrence childRows childCoverage childAdmitted bounded childRealized childInput childExtended steps).progress
 
+theorem accepted_generated_call_value_finish {cfg : Cfg} {env : Env} {initialState state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) initialState)
+    {index : Nat} {expression : Expr} (found : arguments[index]? = some (.byVal expression))
+    (child : ExprSource cfg env expression state)
+    (canonical : (ArgSource.byVal child).MatchesContext source.world source.typingEnv source.rootsEnv
+      (callArgContext source.context index (.byVal expression) found))
+    {cx : FnCtx} {results : List Ty} {before : LS} {initial : GIR.Frame} {map : RetainedSsaMap}
+    {prior : List (ValueId × RetainedAlias)}
+    (tracked : GeneratedCallArgumentRows source.rootsEnv.access source.path 0 (arguments.take index)
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).1 prior)
+    {aliases : List RetainedAlias}
+    (query : source.rootsEnv.access.aliasArg (source.path ++ [index]) (.byVal expression) = .ok aliases)
+    {value : Val} {runtime : DemandRuntimePoint}
+    (boundary : GeneratedExpressionPrefixEnd child ⟨prior ++ map.values, map.runs⟩ cx
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2 initial
+      (lowerExpr expression (lowerEnv cfg.mod env.vars results)
+        (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).2
+      (lowerExpr expression (lowerEnv cfg.mod env.vars results)
+        (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).1 value runtime) :
+    let id := (lowerExpr expression (lowerEnv cfg.mod env.vars results)
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).1
+    let nextPrior := prior ++ aliases.map (fun alias => (id, alias))
+    GeneratedCallArgumentRows source.rootsEnv.access source.path 0 (arguments.take (index + 1))
+      (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).1 nextPrior ∧
+    (⟨nextPrior ++ map.values, map.runs⟩ : RetainedSsaMap).Realizes cfg.mod source.world env runtime ∧
+    (⟨nextPrior ++ map.values, map.runs⟩ : RetainedSsaMap).Bounded
+      (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).2.vals.size := by
+  let le := lowerEnv cfg.mod env.vars results
+  let beforeArg := (lowerArgs (arguments.take index) le before).2
+  let id := (lowerExpr expression le beforeArg).1
+  let newRows := aliases.map (fun alias => (id, alias))
+  have bound : index < arguments.length := (List.getElem?_eq_some_iff.mp found).1
+  have takeEq : arguments.take (index + 1) = arguments.take index ++ [.byVal expression] := by
+    rw [List.take_add_one, found]
+    simp
+  have argsEq : lowerArgs (arguments.take (index + 1)) le before =
+      ((lowerArgs (arguments.take index) le before).1 ++ [id], (lowerExpr expression le beforeArg).2) := by
+    rw [takeEq, lowerArgs_append_run]
+    simp [lowerArgs, lowerArg, bind_run, pure_run, beforeArg, id]
+  have nextTracked := tracked.snoc (argument := .byVal expression) (id := id) (by simpa [List.length_take, Nat.min_eq_left (Nat.le_of_lt bound)] using query)
+  have childAt := ArgSource.byVal_callChild source found child canonical
+  obtain ⟨typing, roots⟩ := ArgSource.byVal_callMetadata source found child canonical
+  have childQuery : child.rootsEnv.access.aliasExpr child.path expression = .ok aliases := by
+    simpa only [roots, childAt.path, AccessEnv.aliasArg] using query
+  have produced := boundary.canonical aliases childQuery
+  have realized : (⟨newRows ++ (prior ++ map.values), map.runs⟩ : RetainedSsaMap).Realizes cfg.mod child.world env runtime :=
+    RetainedSsaMap.addValues_realizes boundary.demanded.operands produced
+  have nextRealized : (⟨(prior ++ newRows) ++ map.values, map.runs⟩ : RetainedSsaMap).Realizes cfg.mod source.world env runtime := by
+    rw [← childAt.world]
+    constructor
+    · intro cell member
+      apply realized.1 cell
+      rcases List.mem_append.mp member with old | existing
+      · rcases List.mem_append.mp old with previous | added
+        · exact List.mem_append_right _ (List.mem_append_left _ previous)
+        · exact List.mem_append_left _ added
+      · exact List.mem_append_right _ (List.mem_append_right _ existing)
+    · exact realized.2
+  have fresh : id < (lowerExpr expression le beforeArg).2.vals.size := boundary.post.lt (id, .val value) (by simp [id, beforeArg, le])
+  have nextBounded : (⟨(prior ++ newRows) ++ map.values, map.runs⟩ : RetainedSsaMap).Bounded
+      (lowerExpr expression le beforeArg).2.vals.size := by
+    constructor
+    · intro cell member
+      simp only [List.mem_append] at member
+      rcases member with (old | added) | old
+      · exact boundary.bounded.1 cell (List.mem_append_left _ old)
+      · obtain ⟨alias, _, rfl⟩ := List.mem_map.mp added
+        exact fresh
+      · exact boundary.bounded.1 cell (List.mem_append_right _ old)
+    · exact boundary.bounded.2
+  refine ⟨?_, nextRealized, ?_⟩
+  · rw [argsEq, takeEq]
+    simpa [List.length_take, Nat.min_eq_left (Nat.le_of_lt bound), id, newRows] using nextTracked
+  · rw [argsEq]
+    exact nextBounded
+
+theorem accepted_generated_call_value_next_input {cfg : Cfg} {env : Env} {initialState state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) initialState)
+    {index : Nat} {expression : Expr} (found : arguments[index]? = some (.byVal expression))
+    (child : ExprSource cfg env expression state)
+    {cx : FnCtx} {results : List Ty} {before : LS} {loop : Option LoopCtx} {initial : GIR.Frame} {start : Pt}
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2 initial start)
+    {map : RetainedSsaMap} {value : Val} {runtime : DemandRuntimePoint}
+    (boundary : GeneratedExpressionPrefixEnd child map cx
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2 initial
+      (lowerExpr expression (lowerEnv cfg.mod env.vars results)
+        (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).2
+      (lowerExpr expression (lowerEnv cfg.mod env.vars results)
+        (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).1 value runtime) :
+    GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
+      (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).2 runtime.frame runtime.point := by
+  let le := lowerEnv cfg.mod env.vars results
+  let beforeArg := (lowerArgs (arguments.take index) le before).2
+  have takeEq : arguments.take (index + 1) = arguments.take index ++ [.byVal expression] := by
+    rw [List.take_add_one, found]
+    simp
+  have nextBuilder : (lowerArgs (arguments.take (index + 1)) le before).2 = (lowerExpr expression le beforeArg).2 := by
+    rw [takeEq, lowerArgs_append_run]
+    simp [lowerArgs, lowerArg, bind_run, pure_run, beforeArg]
+  rw [nextBuilder]
+  have advance := advB_lowerExpr expression le beforeArg _ _ rfl
+  exact ⟨input.metadata, input.loops, boundary.post.pp, boundary.post.rel, input.moduleEq, input.resultsEq,
+    input.depth, (by cases loop <;> exact input.targets), input.counter.afterPost (boundary.post.sub (by simp)),
+    input.generated.lowerExpr expression rfl, input.frames.mono advance.ext⟩
+
 #print axioms accepted_generated_call_value_stage
+#print axioms accepted_generated_call_value_finish
+#print axioms accepted_generated_call_value_next_input
 end Goose.Lower
