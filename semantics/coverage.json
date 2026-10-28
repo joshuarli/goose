@@ -694,6 +694,15 @@
   "evidence": "Goose/Lower/DemandStoppedControlValueBlock.lean and its stopped-body and value-suffix dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Generated assignment demand sites",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.generated_assignment_place_extended; Goose.Lower.GeneratedAssignmentStoreSite.instruction; Goose.Lower.GeneratedAssignmentStoreSite.valueRows",
+  "statement": "Generated assignment occurrences identify the destination and right-hand side, retain the destination aliases in the value's demand rows, and identify the generated store instruction after the value.",
+  "assumptions": "Generated assignment occurrence and demand rows, a successful destination-alias query, current builder point and function extension.",
+  "limits": "Accepted source child reconstruction, operand execution, store preservation, aborts and assignment prefix composition remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandGeneratedAssignment.lean and occurrence and row definitions; scoped Lean 4.35 closure and downstream block closure."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",

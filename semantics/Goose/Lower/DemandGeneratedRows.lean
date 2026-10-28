@@ -111,6 +111,19 @@ inductive GeneratedDemandRows (m : Core.Module) (access : AccessEnv) :
       {occurrence : GeneratedDemandOccurrence m function le root path (.block loop parameters want block) before}
       {required : RetainedSsaMap} (rows : GeneratedDemandRows m access occurrence required) :
       GeneratedDemandRows m access (.blockValue occurrence valueAt) required
+  | assignmentPlace {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {loop : Option LoopCtx} {place : Place} {value : Expr} {origin : OriginId}
+      {occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.assign place value origin)) before}
+      {required : RetainedSsaMap} (rows : GeneratedDemandRows m access occurrence required) :
+      GeneratedDemandRows m access (.assignmentPlace occurrence) required
+  | assignmentValue {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {loop : Option LoopCtx} {place : Place} {value : Expr} {origin : OriginId}
+      {occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.assign place value origin)) before}
+      {required : RetainedSsaMap} {aliases : List RetainedAlias}
+      (rows : GeneratedDemandRows m access occurrence required)
+      (query : access.aliasPlace (path ++ [0]) place = .ok aliases) :
+      GeneratedDemandRows m access (.assignmentValue occurrence)
+        (required.addValues (lowerPlace place le before).1 aliases)
   | clearPlace {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {loop : Option LoopCtx} {place : Place} {origin : OriginId}
       {occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.clear place origin)) before}

@@ -167,6 +167,14 @@ inductive GeneratedDemandOccurrence (m : Core.Module) :
       (valueAt : block.value = some expression) :
       GeneratedDemandOccurrence m function le root (path ++ [block.stmts.length]) (.expression expression)
         (lowerStmts loop block.stmts le (demandBlockStatementsBefore le before parameters block)).2
+  | assignmentPlace {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {loop : Option LoopCtx} {place : Place} {value : Expr} {origin : OriginId}
+      (occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.assign place value origin)) before) :
+      GeneratedDemandOccurrence m function le root (path ++ [0]) (.place place) before
+  | assignmentValue {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {loop : Option LoopCtx} {place : Place} {value : Expr} {origin : OriginId}
+      (occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.assign place value origin)) before) :
+      GeneratedDemandOccurrence m function le root (path ++ [1]) (.expression value) (lowerPlace place le before).2
   | clearPlace {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
       {loop : Option LoopCtx} {place : Place} {origin : OriginId}
       (occurrence : GeneratedDemandOccurrence m function le root path (.statement loop (.clear place origin)) before) :
@@ -210,6 +218,8 @@ theorem GeneratedDemandOccurrence.source {m : Core.Module} {function : Func} {le
     simp only [DemandLoweringAction.node, DemandNode.child?, DemandNode.children]
     rw [List.getElem?_append_right (by simp)]
     simp only [List.length_map, Nat.sub_self, List.getElem?_cons_zero, Option.join_some, valueAt, Option.map_some]
+  | assignmentPlace occurrence induction => exact induction.snoc 0 rfl
+  | assignmentValue occurrence induction => exact induction.snoc 1 rfl
   | clearPlace occurrence induction => exact induction.snoc 0 rfl
 
 end Goose.Lower
