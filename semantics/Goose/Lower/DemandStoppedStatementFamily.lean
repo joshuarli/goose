@@ -1,3 +1,4 @@
+import Goose.Lower.DemandExpressionStatementEntry
 import Goose.Lower.DemandReadStoppedFamily
 import Goose.Lower.DemandControlStatementPrefix
 
@@ -44,32 +45,9 @@ theorem accepted_generated_expression_statement_stopped_family {cfg : Cfg} {env 
     (childFamily : GeneratedStoppedExpressionPrefixFamily cx results selected loop expression) :
     GeneratedStoppedStatementPrefixFamily cx results selected loop (.expr expression origin) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps targetFuel stop after stopped nonTimeout
-  obtain ⟨child, typing, roots, canonical⟩ := source.exprChild
-  have childOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root child.path (.expression expression) before := by
-    rw [canonical.path]
-    exact .first occurrence (.discard loop expression origin)
-  have childRows : GeneratedDemandRows cfg.mod child.rootsEnv.access childOccurrence required := by
-    have inherited : GeneratedDemandRows cfg.mod source.rootsEnv.access (.first occurrence (.discard loop expression origin)) required := .first (first := .discard loop expression origin) rows
-    simpa only [roots, canonical.path] using inherited
-  have childOwner : GeneratedSourceOwner selected child.context :=
-    (owned.child rfl 0 (.expression expression) .expression rfl (by trivial)).transport
-      canonical.plans.symm canonical.path.symm rfl canonical.context.symm
-  have childAdmitted : map.Admitted cfg.mod.profile child.context.retained := by
-    rw [demandContextRetainedEq canonical.plans canonical.path rfl canonical.context]
-    intro profile alias member
-    exact source.context.child_retained_subset rfl 0 (.expression expression) .expression rfl (by trivial)
-      (admitted profile alias member)
-  have childRealized : map.Realizes cfg.mod child.world env ⟨start, initial, state⟩ := by
-    simpa only [RetainedSsaMap.Realizes, canonical.world] using realized
-  have childInput : GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv before initial start := by
-    rw [typing, roots]
-    exact input
-  have lowered : (lowerStmt loop (.expr expression origin) (lowerEnv cfg.mod env.vars results) before).2 =
-      (lowerExpr expression (lowerEnv cfg.mod env.vars results) before).2 := by
-    simp only [lowerStmt, bind_run, pure_run]
-  have childExtended := extended
-  rw [lowered] at childExtended
+  obtain ⟨child, typing, roots, canonical, childOccurrence, childRows, childOwner, childAdmitted,
+    childRealized, childInput, childExtended, lowered⟩ :=
+    accepted_generated_expression_statement_entry source selected owned occurrence rows admitted realized input extended
   have childProgress := childFamily child childOwner childOccurrence childRows coverage childAdmitted bounded
     childRealized childInput childExtended steps stopped nonTimeout
   cases childProgress with
