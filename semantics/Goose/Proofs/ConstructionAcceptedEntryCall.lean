@@ -33,7 +33,7 @@ theorem AcceptedFrame.emptyVisible_activations {config : EvalConfig} {accepted :
     rw [visible] at member
     cases member
 
-theorem acceptedEntryPushedStatements (config : EvalConfig) (accepted : AcceptedModule config)
+theorem acceptedEntryPushedStatements_withInitialized (config : EvalConfig) (accepted : AcceptedModule config)
     (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config config.module.globals.size state ambient types live regions pending) :
@@ -42,7 +42,7 @@ theorem acceptedEntryPushedStatements (config : EvalConfig) (accepted : Accepted
       let scopeState := { activated with nextScope := activated.nextScope + 1 }
       let after := ownershipResultScopeState activation frame.source.impl.body.scope activated
       let next := entryStatementsFrame config frame activated.nextScope
-      frame.interpretation.environment = activation ∧ activation.act = state.nextAct ∧
+      frame.initialized = config.module.globals.size ∧ frame.interpretation.environment = activation ∧ activation.act = state.nextAct ∧
       activation.scopes = [] ∧ activation.channels = [] ∧
       freshAct state = .ok activation.act { state with nextAct := state.nextAct + 1 } ∧
       freshScope activated = .ok activated.nextScope scopeState ∧
@@ -98,11 +98,37 @@ theorem acceptedEntryPushedStatements (config : EvalConfig) (accepted : Accepted
   have actualWorld := acceptedWorld_resultScope config frame.initialized
     { pushed with nextAct := pushed.nextAct + 1 } (.callChannels activation [] :: ambient) types live regions pending
     activation frame.source.impl.body.scope frameWorld
-  refine ⟨frame, activation, environment, rfl, rfl, rfl, ?_, fresh, actualWorld, actualSource, position, phase,
+  refine ⟨frame, activation, initialized, environment, rfl, rfl, rfl, ?_, fresh, actualWorld, actualSource, position, phase,
     frameParameters, frameResults, original, originalAt, ?_, rfl, ?_⟩
   · rfl
   · simpa only [sameImpl] using implementationAt
   · simp only [sameImpl, activation]
+
+theorem acceptedEntryPushedStatements (config : EvalConfig) (accepted : AcceptedModule config)
+    (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config config.module.globals.size state ambient types live regions pending) :
+    ∃ (frame : ConstructionSourceFrame) (activation : RuntimeActivation),
+      let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
+      let scopeState := { activated with nextScope := activated.nextScope + 1 }
+      let after := ownershipResultScopeState activation frame.source.impl.body.scope activated
+      let next := entryStatementsFrame config frame activated.nextScope
+      frame.interpretation.environment = activation ∧ activation.act = state.nextAct ∧
+      activation.scopes = [] ∧ activation.channels = [] ∧
+      freshAct state = .ok activation.act { state with nextAct := state.nextAct + 1 } ∧
+      freshScope activated = .ok activated.nextScope scopeState ∧
+      AcceptedWorld config next.initialized after (.callChannels activation [] :: ambient) types live regions pending ∧
+      AcceptedFrame config accepted next after types ∧
+      SourcePosition accepted next (.statements frame.source.impl.body.stmts) ∧
+      frame.phase = .implementation config.module.entry ∧ frame.source.impl.params = #[] ∧ frame.source.impl.results = #[] ∧
+      ∃ original, config.module.contexts[config.module.entry]? = some original ∧
+        config.module.impls[original.impl]? = some frame.source.impl ∧
+        activation.implementation = original.impl ∧ activation.vars = frame.source.impl.vars := by
+  obtain ⟨frame, activation, initialized, environment, act, scopes, channels, freshActed, freshScope,
+    frameWorld, source, position, phase, parameters, results, original, originalAt, implementationAt, implId, vars⟩ :=
+    acceptedEntryPushedStatements_withInitialized config accepted state ambient types live regions pending world
+  exact ⟨frame, activation, environment, act, scopes, channels, freshActed, freshScope,
+    frameWorld, source, position, phase, parameters, results, original, originalAt, implementationAt, implId, vars⟩
 
 #print axioms AcceptedFrame.emptyVisible_activations
 #print axioms acceptedEntryPushedStatements
