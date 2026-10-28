@@ -5,6 +5,29 @@ import Goose.Proofs.ConstructionAcceptedScalarLocalCursor
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 
+theorem typeExpr_registerCall_result_general (fuel : Nat) (environment : TypingEnv) (contextId origin : Nat)
+    (context : Context) (callee : Impl) (arguments : List Arg) (resultTy : Ty) (before after : Nat) (types : List Ty)
+    (contextAt : environment.module.contexts[contextId]? = some context)
+    (calleeAt : environment.module.impls[context.impl]? = some callee)
+    (results : callee.results = #[⟨resultTy, .register, none⟩])
+    (scalar : (∃ intTy, resultTy = .int intTy) ∨ resultTy = .bool)
+    (requests : environment.resultRequests = [] ∨ environment.resultRequests = [.register])
+    (checked : typeExpr (fuel + 1) environment (.call contextId arguments origin) before = .ok (types, after)) :
+    types = [resultTy] := by
+  rcases requests with requests | requests <;> rcases scalar with ⟨intTy, rfl⟩ | rfl <;>
+    simp only [typeExpr, contextAt, calleeAt, bind, StateT.bind] at checked <;>
+    cases args : typeArguments fuel environment callee callee.params.toList arguments before with
+    | error failure => simp only [args, Except.bind, reduceCtorEq] at checked
+    | ok result =>
+      obtain ⟨token, middle⟩ := result
+      cases token
+      simp [args, results, requests, Ty.nonfixed, bind, StateT.bind, pure, StateT.pure, Except.pure] at checked
+      simp only [Except.bind, StateT.pure] at checked
+      cases checked
+      rfl
+
+
+
 theorem typeExpr_registerCall_result (fuel : Nat) (environment : TypingEnv) (contextId origin : Nat)
     (context : Context) (callee : Impl) (arguments : List Arg) (resultTy : Ty) (before after : Nat) (types : List Ty)
     (contextAt : environment.module.contexts[contextId]? = some context)
@@ -13,18 +36,9 @@ theorem typeExpr_registerCall_result (fuel : Nat) (environment : TypingEnv) (con
     (scalar : (∃ intTy, resultTy = .int intTy) ∨ resultTy = .bool)
     (requests : environment.resultRequests = [])
     (checked : typeExpr (fuel + 1) environment (.call contextId arguments origin) before = .ok (types, after)) :
-    types = [resultTy] := by
-  rcases scalar with ⟨intTy, rfl⟩ | rfl <;>
-    simp only [typeExpr, contextAt, calleeAt, bind, StateT.bind] at checked <;>
-    cases args : typeArguments fuel environment callee callee.params.toList arguments before with
-    | error failure => simp only [args, Except.bind, reduceCtorEq] at checked
-    | ok result =>
-      obtain ⟨unit, middle⟩ := result
-      cases unit
-      simp [args, results, requests, Ty.nonfixed, bind, StateT.bind, pure, StateT.pure, Except.pure] at checked
-      simp only [Except.bind, StateT.pure, Except.pure] at checked
-      cases checked
-      rfl
+    types = [resultTy] :=
+  typeExpr_registerCall_result_general fuel environment contextId origin context callee arguments resultTy before after types
+    contextAt calleeAt results scalar (Or.inl requests) checked
 
 private theorem registerLocal_bind_success {ε α β : Type} (first : Except ε α) (next : α → Except ε β)
     (result : β) (checked : first.bind next = .ok result) :
@@ -89,5 +103,19 @@ theorem typeStatement_registerCall_result (fuel : Nat) (environment next : Typin
         exact ⟨descriptor, declared, rfl, equal.symm⟩
 
 #print axioms typeStatement_registerCall_result
+theorem typeExpr_registerCall_tail_result (fuel : Nat) (environment : TypingEnv) (contextId origin : Nat)
+    (context : Context) (callee : Impl) (arguments : List Arg) (resultTy : Ty) (before after : Nat) (types : List Ty)
+    (contextAt : environment.module.contexts[contextId]? = some context)
+    (calleeAt : environment.module.impls[context.impl]? = some callee)
+    (results : callee.results = #[⟨resultTy, .register, none⟩])
+    (scalar : (∃ intTy, resultTy = .int intTy) ∨ resultTy = .bool)
+    (requests : environment.resultRequests = [.register])
+    (checked : typeExpr (fuel + 1) environment (.call contextId arguments origin) before = .ok (types, after)) :
+    types = [resultTy] :=
+  typeExpr_registerCall_result_general fuel environment contextId origin context callee arguments resultTy before after types
+    contextAt calleeAt results scalar (Or.inr requests) checked
+
+#print axioms typeExpr_registerCall_result_general
+#print axioms typeExpr_registerCall_tail_result
 #print axioms typeExpr_registerCall_result
 end Goose.Proofs.ConstructionAcceptedExecution
