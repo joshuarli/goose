@@ -52,10 +52,10 @@ theorem rpExpr_singleByValue_noParameter {env : PEnv} {target : Goose.Core.Conte
   · exact clear id prior
   · exact mapped id call
 
-theorem rpArgs_singleByValue_accessTargets {env : PEnv} {expression : Expr} {before middle after : RState}
+theorem rpArgs_singleByValue_state {env : PEnv} {expression : Expr} {before middle after : RState}
     {roots : List RootRef} {argumentRoots : List (List RootRef)}
     (operand : rpExpr env expression before = .ok (roots, middle))
-    (checked : rpArgs env [.byVal expression] before = .ok (argumentRoots, after)) : after.eff.accessTargets = middle.eff.accessTargets := by
+    (checked : rpArgs env [.byVal expression] before = .ok (argumentRoots, after)) : after.eff.accessTargets = middle.eff.accessTargets ∧ after.nextVar = middle.nextVar := by
   simp only [rpArgs, operand, bind, StateT.bind, Except.bind] at checked
   repeat' first
     | split at checked
@@ -71,8 +71,17 @@ theorem rpArgs_singleByValue_accessTargets {env : PEnv} {expression : Expr} {bef
   split at retainedEq <;> simp_all [pure, StateT.pure, Except.pure]
   cases retainedEq
   cases interiorEq
-  change addTargets middle.eff.reads [] ++ addTargets middle.eff.writes [] ++ addTargets middle.eff.grows [] ++ addTargets middle.eff.shrinks [] = middle.eff.accessTargets
-  simp [Eff.accessTargets, addTargets]
+  constructor
+  · change addTargets middle.eff.reads [] ++ addTargets middle.eff.writes [] ++ addTargets middle.eff.grows [] ++ addTargets middle.eff.shrinks [] = middle.eff.accessTargets
+    simp [Eff.accessTargets, addTargets]
+  · rfl
+
+
+theorem rpArgs_singleByValue_accessTargets {env : PEnv} {expression : Expr} {before middle after : RState}
+    {roots : List RootRef} {argumentRoots : List (List RootRef)}
+    (operand : rpExpr env expression before = .ok (roots, middle))
+    (checked : rpArgs env [.byVal expression] before = .ok (argumentRoots, after)) : after.eff.accessTargets = middle.eff.accessTargets := by
+  exact (rpArgs_singleByValue_state operand checked).1
 
 theorem rpExpr_scalarLocalCall_noParameter {env : PEnv} {target : Goose.Core.ContextId} {context : Context} {callee : Impl}
     {parameter : Param} {localId origin : Nat} {descriptor : LocalVar} {before after : RState} {roots : List RootRef}
@@ -119,6 +128,7 @@ theorem scalarLocalCallTail_noParameter (source : PEnv) (scope target origin loc
 
 #print axioms scalarLocalCallTail_noParameter
 #print axioms rpExpr_scalarLocalCall_noParameter
+#print axioms rpArgs_singleByValue_state
 #print axioms rpArgs_singleByValue_accessTargets
 #print axioms rpExpr_singleByValue_noParameter
 #print axioms rpExpr_singleByValue_accessUpper
