@@ -1,6 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedBlockTailChecks
 import Goose.Proofs.ConstructionByteReplay
-import Goose.Proofs.ConstructionScalarTailExecution
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -90,61 +89,6 @@ theorem byteBody_checkedTail_afterNormal (fuel checkFuel : Nat) (config : EvalCo
     exact ⟨next, nextTypes, nextLive, nextRegions, roots, rootsAfter, nextWorld,
       nextSource.withTypingFuel (checkFuel + 1), checked, interpretationEq, initializedEq⟩
 
-theorem byteBody_scalarTail_afterNormal (fuel checkFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (blockFrame : ConstructionSourceFrame) (scope : Nat) (declarations : List ByteOwnerDeclaration) (expression : Expr)
-    (context : Nat) (before after activationBefore : ExecutionState) (activation : RuntimeActivation) (ambient : Goose.Proofs.ConstructionExecutionOwnership.OwnershipAmbient)
-    (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
-    (blockPosition : SourcePosition accepted blockFrame (.block ⟨scope, declarations.map ByteOwnerDeclaration.statement, some expression⟩))
-    (nesting : blockFrame.typingFuel = checkFuel + 2)
-    (world : AcceptedWorld config (blockStatementsFrame blockFrame scope (checkFuel + 1)).initialized before ambient types live regions pending)
-    (source : AcceptedFrame config accepted (blockStatementsFrame blockFrame scope (checkFuel + 1)) before types)
-    (phase : blockFrame.phase = .implementation context)
-    (owners : ∀ declaration ∈ declarations,
-      ((blockStatementsFrame blockFrame scope (checkFuel + 1)).typing.variables[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
-    (unnamed : ∀ declaration ∈ declarations,
-      ((blockStatementsFrame blockFrame scope (checkFuel + 1)).source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none)
-    (enoughFuel : declarations.length + 2 ≤ fuel + 1) (enoughCheck : declarations.length ≤ checkFuel)
-    (finalCounter : Nat)
-    (bodyUnit : typeBlock blockFrame.typingFuel blockFrame.typing ⟨scope, declarations.map ByteOwnerDeclaration.statement, some expression⟩ blockFrame.typingCounter =
-      .ok ([.unit], finalCounter))
-    (available : ∀ rootMiddle roots rootsAfter,
-      rpStmts { blockFrame.source with scopes := scope :: blockFrame.source.scopes } (declarations.map ByteOwnerDeclaration.statement) blockFrame.rootCursor = .ok ((), rootMiddle) →
-      rpExpr { blockFrame.source with scopes := scope :: blockFrame.source.scopes } expression rootMiddle = .ok (roots, rootsAfter) →
-      GlobalEffectsAvailable blockFrame.interpretation blockFrame.initialized rootsAfter.eff)
-    (form : AcceptedBinaryExpression expression) (channels : activation.channels = [])
-    (scopeState : before = Goose.Proofs.ConstructionExecutionOwnership.ownershipResultScopeState activation scope activationBefore)
-    (environment : blockFrame.interpretation.environment =
-      { activation with scopes := (scope, activationBefore.nextScope) :: activation.scopes })
-    (normal : execStmts (fuel + 1) config (blockStatementsFrame blockFrame scope (checkFuel + 1)).interpretation.environment
-      (declarations.map ByteOwnerDeclaration.statement) before = .ok (.normal .unit) after) :
-    ∃ (next : ConstructionSourceFrame) (nextTypes : RootTypes) (nextLive : Goose.Core.RootInst → Prop)
-      (nextRegions : List ReceivingRegion),
-      let outcome := execActivationBody (fuel + 2) config activation []
-        ⟨scope, declarations.map ByteOwnerDeclaration.statement, some expression⟩ activationBefore
-      match outcome with
-      | .stop _ final => AcceptedWorld config next.initialized final ambient nextTypes nextLive nextRegions pending
-      | .ok _ final | .escape _ _ final | .jump _ _ final =>
-        AcceptedWorld config next.initialized final ambient nextTypes
-          (fun root => nextLive root ∧ (Goose.Proofs.Exit.runtimeScopeRoots activation scope activationBefore.nextScope).contains root = false)
-          nextRegions pending := by
-  obtain ⟨next, nextTypes, nextLive, nextRegions, roots, rootsAfter, nextWorld, nextSource, checked, interpretation, initialized⟩ :=
-    byteBody_checkedTail_afterNormal (fuel + 1) checkFuel config accepted blockFrame scope declarations expression context
-      before after ambient types live regions pending blockPosition nesting world source phase owners unnamed enoughFuel enoughCheck
-      finalCounter bodyUnit available normal
-  refine ⟨next, nextTypes, nextLive, nextRegions, ?_⟩
-  have env : ({ next with typingFuel := checkFuel + 1 } : ConstructionSourceFrame).interpretation.environment =
-      { activation with scopes := (scope, activationBefore.nextScope) :: activation.scopes } := by
-    simpa only [interpretation] using environment
-  have execution : execStmts (fuel + 1) config
-      ({ next with typingFuel := checkFuel + 1 } : ConstructionSourceFrame).interpretation.environment
-      (declarations.map ByteOwnerDeclaration.statement)
-      (Goose.Proofs.ConstructionExecutionOwnership.ownershipResultScopeState activation scope activationBefore) = .ok (.normal .unit) after := by
-    simpa only [interpretation, scopeState, blockStatementsFrame] using normal
-  exact checkedScalarTail_activation_world form fuel config accepted { next with typingFuel := checkFuel + 1 }
-    activation scope (declarations.map ByteOwnerDeclaration.statement) activationBefore after ambient nextTypes nextLive nextRegions pending
-    channels env execution nextWorld nextSource .unit roots finalCounter rootsAfter checked
-
-#print axioms byteBody_scalarTail_afterNormal
 #print axioms byteBody_checkedTail_afterNormal
 #print axioms SourcePosition.blockTail_checkedUnit_afterReplay
 end Goose.Proofs.ConstructionAcceptedExecution
