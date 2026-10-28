@@ -20,42 +20,8 @@ theorem accepted_generated_read_stopped_family {cfg : Cfg} {env : Env} {cx : FnC
   have childRows : GeneratedDemandRows cfg.mod child.rootsEnv.access childOccurrence required := by
     have inherited : GeneratedDemandRows cfg.mod source.rootsEnv.access (.first occurrence (.expressionPlace rfl)) required := .first (first := .expressionPlace rfl) rows
     simpa only [roots, metadata.path] using inherited
-  obtain ⟨location, placed, post, firstStep⟩ : ∃ location : Loc,
-      evalPlace 1 cfg env place state = .ok location state ∧
-      Post cfg env cx before initial addressed.2 (initial.set addressed.1 (.val (.ref location)))
-        (start.1, start.2 + 1) [(addressed.1, .val (.ref location))] ∧
-      ∀ fuel, DemandInstructionStep cx fuel ⟨start, initial, state⟩
-        ⟨(start.1, start.2 + 1), initial.set addressed.1 (.val (.ref location)), state⟩ := by
-    cases form with
-    | global global =>
-      have site := GeneratedDemandInstruction.globalAddress_auto childOccurrence childRows input.atPoint
-        (generated_read_place_extended extended)
-      have post := (Post.def_leaf (Post.init input.related input.atPoint)
-        (show emitDef (.globalAddr global) le before = (addressed.1, addressed.2) from rfl)
-        (generated_read_place_extended extended) (.val (.ref ⟨.global global, []⟩))).1
-      refine ⟨⟨.global global, []⟩, ?_, post, ?_⟩
-      · simp only [evalPlace, pure_apply]
-      · intro fuel
-        apply DemandInstructionStep.definition site.instruction
-        simp only [execOp, execPure, pure_apply]
-    | slot slot =>
-      have typed := child.typed
-      simp only [tyPlace] at typed
-      obtain ⟨binding, next, checked, resultType⟩ := (st_bind_ok _ _ _ _).1 typed
-      have visible := ((varOf_ok child.typingEnv slot child.typingStart (binding, next)).1 checked).1
-      obtain ⟨binding, scope, old, variableAt, scopeAt, parameter, stored, shape⟩ := child.frame.bindings slot visible
-      let location : Loc := ⟨.local env.act scope slot, []⟩
-      have site := GeneratedDemandInstruction.slotAddress_auto childOccurrence childRows input.atPoint
-        (generated_read_place_extended extended)
-      have post := (Post.def_leaf (Post.init input.related input.atPoint)
-        (show emitDef (.slotAddr slot) le before = (addressed.1, addressed.2) from rfl)
-        (generated_read_place_extended extended) (.val (.ref location))).1
-      refine ⟨location, ?_, post, ?_⟩
-      · simp [evalPlace, rootOf, variableAt, scopeAt, location, bind_apply, pure_apply]
-      · intro fuel
-        apply DemandInstructionStep.definition site.instruction
-        simp only [execOp, execPure, slotRoot_eq input.related]
-        simp [rootOf, variableAt, scopeAt, location, bind_apply, pure_apply]
+  obtain ⟨location, placed, post, firstStep⟩ := accepted_generated_scalar_place_address child form
+    childOccurrence childRows input.atPoint input.related (generated_read_place_extended extended)
   let middle : DemandRuntimePoint := ⟨(start.1, start.2 + 1), initial.set addressed.1 (.val (.ref location)), state⟩
   have carried := realized.retained post.same bounded.1 bounded.2 RetainsAliases.refl
   rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨length, current, rfl, actual, tail⟩
