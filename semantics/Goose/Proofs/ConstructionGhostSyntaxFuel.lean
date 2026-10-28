@@ -2,7 +2,7 @@ import Goose.Proofs.ConstructionGhostSourceFuel
 
 namespace Goose.Proofs.ConstructionGhostSyntaxFuel
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceFuel
-open Goose.Proofs.ConstructionGhostSourceTransition Goose.Proofs.ConstructionGhostRegisterProducer
+open Goose.Proofs.ConstructionGhostSourceTransition Goose.Proofs.ConstructionGhostRegisterProducer Goose.Proofs.ConstructionGhostScalarProducer
 
 mutual
 inductive ValueSyntax (config : EvalConfig) : Expr → Prop
@@ -85,6 +85,8 @@ def ClosedModule (config : EvalConfig) : Prop :=
 inductive TailSyntax (config : EvalConfig) : Option Expr → Prop
   | none : TailSyntax config none
   | value (expression : Expr) (supported : SupportedValue expression) : TailSyntax config (some expression)
+  | scalar (expression : Expr) (shape : ScalarExpression expression) (derivation : ValueSyntax config expression) :
+      TailSyntax config (some expression)
   | call (contextId : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
       (argumentsSyntax : ∀ id implementation start lookupReady,
         getImplementation config contextId start = .ok (id, implementation) lookupReady →
@@ -156,6 +158,16 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
       getImplementation config contextId start = .ok (id, implementation) lookupReady →
       ArgumentSyntax config implementation.params.toList arguments) →
     FuelSupport config fuel (.boundActivation activation pre (.mk scope statements (some (.call contextId arguments tailOrigin))) origin)
+  scalarBuilder : ∀ environment destination expression, ScalarExpression expression → ValueSyntax config expression →
+    FuelSupport config fuel (.builder environment destination expression)
+  scalarProducer : ∀ environment channels expression, ScalarExpression expression → ValueSyntax config expression →
+    FuelSupport config fuel (.producerWith environment channels expression)
+  activationBodyScalarTail : ∀ activation pre scope statements expression,
+    (∀ statement ∈ statements, StatementSyntax config statement) → ScalarExpression expression → ValueSyntax config expression →
+    FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements (some expression)))
+  activationScalarTail : ∀ activation pre scope statements expression origin,
+    (∀ statement ∈ statements, StatementSyntax config statement) → ScalarExpression expression → ValueSyntax config expression →
+    FuelSupport config fuel (.boundActivation activation pre (.mk scope statements (some expression)) origin)
   supportedBuilder : ∀ environment destination expression, SupportedValue expression →
     FuelSupport config fuel (.builder environment destination expression)
   supportedProducer : ∀ environment channels expression, SupportedValue expression →
@@ -281,13 +293,25 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
       · intro activation pre scope statements contextId arguments tailOrigin origin derivation argumentSyntax
         exact .boundActivationWithTail fuel activation pre scope statements (.call contextId arguments tailOrigin) origin
           (previous.activationBodyTail activation pre scope statements contextId arguments tailOrigin derivation argumentSyntax)
+      · intro environment destination expression scalar derivation
+        exact .scalarBuilder fuel environment destination expression scalar (previous.value environment expression derivation)
+      · intro environment channels expression scalar derivation
+        exact .valueProducer fuel environment channels expression (.scalar scalar) (previous.value environment expression derivation)
+          (fun destination => previous.scalarBuilder environment destination expression scalar derivation)
+      · intro activation pre scope statements expression derivation scalar valueSyntax
+        exact .boundActivationTail fuel activation pre scope statements expression
+          (fun environment => previous.statements environment statements derivation)
+          (fun environment channels => previous.scalarProducer environment channels expression scalar valueSyntax)
+      · intro activation pre scope statements expression origin derivation scalar valueSyntax
+        exact .boundActivationWithTail fuel activation pre scope statements expression origin
+          (previous.activationBodyScalarTail activation pre scope statements expression derivation scalar valueSyntax)
       · intro environment destination expression supported
         have operandSupported := supportedBuilderOperand_supported expression supported
         exact .supportedBuilder fuel environment destination expression supported
           (previous.value environment (supportedBuilderOperand expression) (.base operandSupported))
           (fun source => previous.supportedBuilder environment source (supportedBuilderOperand expression) operandSupported)
       · intro environment channels expression supported
-        exact .supportedProducer fuel environment channels expression supported (previous.value environment expression (.base supported))
+        exact .valueProducer fuel environment channels expression (.supported supported) (previous.value environment expression (.base supported))
           (fun destination => previous.supportedBuilder environment destination expression supported)
       · intro activation pre scope statements expression derivation supported
         exact .boundActivationTail fuel activation pre scope statements expression
@@ -312,6 +336,8 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
           rw [body]
           cases tailDerivation with
           | none => exact previous.activation ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements origin derivation
+          | scalar expression scalar valueSyntax =>
+              exact previous.activationScalarTail ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements expression origin derivation scalar valueSyntax
           | value expression supported =>
               exact previous.activationValueTail ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements expression origin derivation supported
           | call tailContext tailArguments tailOrigin tailArgumentsSyntax =>
@@ -325,6 +351,8 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         rw [body]
         cases tailDerivation with
         | none => exact previous.activation ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements origin derivation
+        | scalar expression scalar valueSyntax =>
+            exact previous.activationScalarTail ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements expression origin derivation scalar valueSyntax
         | value expression supported =>
             exact previous.activationValueTail ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements expression origin derivation supported
         | call tailContext tailArguments tailOrigin tailArgumentsSyntax =>
