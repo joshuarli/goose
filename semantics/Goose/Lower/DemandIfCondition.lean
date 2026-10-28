@@ -32,11 +32,12 @@ theorem accepted_generated_if_condition_prefix {cfg : Cfg} {env : Env} {cx : FnC
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
     (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
     (extended : ExtT (lowerStmt loop (.ifS condition yes no origin) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
-    (family : GeneratedExpressionPrefixFamily cx results selected loop condition (@CanonicalExpressionPrefixCursor cfg env cx))
+    {cursor : ∀ {expression : Expr} {state : St}, ExprSource cfg env expression state → LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop}
+    (family : GeneratedExpressionPrefixFamily cx results selected loop condition cursor)
     {taken : Nat} {reached : DemandRuntimePoint} (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
     ∃ child : ExprSource cfg env condition state,
       child.ty = .bool ∧ source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]) ∧
-      DemandPrefixDecomposition cx (fun fuel => evalExpr fuel cfg env condition) (CanonicalExpressionDemand map cx child)
+      DemandPrefixDecomposition cx (fun fuel => evalExpr fuel cfg env condition) (cursor child before (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2 initial start map required)
         (GeneratedExpressionPrefixEnd child map cx before initial
           (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2
           (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1)

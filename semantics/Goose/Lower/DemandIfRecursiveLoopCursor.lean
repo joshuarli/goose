@@ -1,4 +1,5 @@
 import Goose.Lower.DemandIfRecursiveCursor
+import Goose.Lower.DemandControlProgressCursor
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -22,7 +23,9 @@ inductive RecursiveLoopIfCursorStep {cfg : Cfg} (cx : FnCtx) (results : List Ty)
       {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
       (child : ExprSource cfg env condition state)
       (canonical : source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
-      (demanded : CanonicalExpressionDemand map cx child runtime) :
+      (demanded : CanonicalExpressionDemand map cx child runtime)
+      (progress : (∃ id op, instAt cx.fn runtime.point = some (.def id op)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
       RecursiveLoopIfCursorStep cx results loop inner selected source before built initial start map required runtime
   | fork {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
       {condition : Expr} {yes : Core.Block} {no : Option Core.Block} {origin : OriginId} {state : St}
@@ -33,7 +36,8 @@ inductive RecursiveLoopIfCursorStep {cfg : Cfg} (cx : FnCtx) (results : List Ty)
       (evaluated : evalExpr fuel cfg env condition state = .ok (.bool boolean) runtime.state)
       (boundary : GeneratedExpressionPrefixEnd child map cx before initial
         (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2
-        (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1 (.bool boolean) runtime) :
+        (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1 (.bool boolean) runtime)
+      (step : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
       RecursiveLoopIfCursorStep cx results loop inner selected source before built initial start map required runtime
   | branch {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
       {condition : Expr} {yes : Core.Block} {no : Option Core.Block} {origin : OriginId} {state middle : St}
@@ -85,8 +89,8 @@ theorem RecursiveLoopIfCursor.succ {cfg : Cfg} {cx : FnCtx} {results : List Ty} 
   | succ depth ih =>
     cases demanded with
     | scalar cursor => exact .scalar cursor
-    | condition child canonical demanded => exact .condition child canonical demanded
-    | fork child boolean fuel canonical evaluated boundary => exact .fork child boolean fuel canonical evaluated boundary
+    | condition child canonical demanded progress => exact .condition child canonical demanded progress
+    | fork child boolean fuel canonical evaluated boundary step => exact .fork child boolean fuel canonical evaluated boundary step
     | join joinBlock fuel evaluated step post => exact .join joinBlock fuel evaluated step post
     | branch child boolean fuel conditionCanonical evaluated indexEq found branch canonical demanded =>
       apply RecursiveLoopIfCursorStep.branch child boolean fuel conditionCanonical evaluated indexEq found branch canonical

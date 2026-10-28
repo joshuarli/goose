@@ -32,7 +32,7 @@ theorem accepted_generated_bounded_loop_if_statements {cfg : Cfg} {depth : Nat} 
     have head : GeneratedStatementPrefixFamily cx results selected loop (.ifS condition yes none origin)
         (@RecursiveLoopIfCursor cfg cx results root owner loop (depth + 1) env selected) :=
       accepted_generated_recursive_loop_if_none_prefix_family loop selected depth condition yes origin branch branchFamily noValue
-      (accepted_generated_control_prefix_family selected loop form)
+      (accepted_generated_control_progress_prefix_family selected loop form)
     have stop : GeneratedStoppedStatementPrefixFamily cx results selected loop (.ifS condition yes none origin) :=
       accepted_generated_recursive_loop_if_none_stopped_family loop selected depth condition yes origin branch branchFamily noValue
       (accepted_generated_read_stopped_expressions selected loop form.stopped)
@@ -51,7 +51,7 @@ theorem accepted_generated_bounded_loop_if_statements {cfg : Cfg} {depth : Nat} 
     have head : GeneratedStatementPrefixFamily cx results selected loop (.ifS condition yes (some no) origin)
         (@RecursiveLoopIfCursor cfg cx results root owner loop (depth + 1) env selected) :=
       accepted_generated_recursive_loop_if_some_prefix_family loop selected depth condition yes no origin yesBranch noBranch
-      yesFamily noFamily yesNoValue noNoValue (accepted_generated_control_prefix_family selected loop form)
+      yesFamily noFamily yesNoValue noNoValue (accepted_generated_control_progress_prefix_family selected loop form)
     have stop : GeneratedStoppedStatementPrefixFamily cx results selected loop (.ifS condition yes (some no) origin) :=
       accepted_generated_recursive_loop_if_some_stopped_family loop selected depth condition yes no origin yesBranch noBranch
       yesFamily noFamily yesNoValue noNoValue (accepted_generated_read_stopped_expressions selected loop form.stopped)
