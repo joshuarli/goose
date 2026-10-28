@@ -786,6 +786,28 @@ theorem counter_allocateActivation (make : Goose.Core.ActId → RuntimeActivatio
   simp only [freshAct, EvalM.get, EvalM.set, bind, pure, Goose.Proofs.Exit.stepState]
   exact Nat.le_trans (Nat.le_succ _) after
 
+theorem counter_withBreakTarget (act : Goose.Core.ActId) (scope : BreakScope) (channels : List Channel)
+    (action : EvalM α) (receive : JumpKind → EvalM α)
+    (preserved : PreservesActivationCounter action) (received : ∀ kind, PreservesActivationCounter (receive kind)) :
+    PreservesActivationCounter (withBreakTarget act scope channels action receive) := by
+  intro state
+  let id := state.nextScope
+  let pushed := { state with nextScope := id + 1, breaks := (⟨id, act, scope, channels⟩ : BreakTarget) :: state.breaks }
+  have prior := preserved pushed
+  cases result : action pushed with
+  | ok value final => simpa [withBreakTarget, pushed, id, result, mapStepState, Goose.Proofs.Exit.stepState] using prior
+  | stop reason final => simpa [withBreakTarget, pushed, id, result, mapStepState, Goose.Proofs.Exit.stepState] using prior
+  | escape address carriers final => simpa [withBreakTarget, pushed, id, result, mapStepState, Goose.Proofs.Exit.stepState] using prior
+  | jump target kind final =>
+    simp only [result, Goose.Proofs.Exit.stepState] at prior
+    by_cases caught : target = id
+    · let cleaned := { final with breaks := final.breaks.filter (fun entry => entry.id != id) }
+      have after := received kind cleaned
+      simpa [withBreakTarget, pushed, id, result, caught, mapStepState, cleaned, Goose.Proofs.Exit.stepState] using
+        Nat.le_trans prior after
+    · simpa [withBreakTarget, pushed, id, result, caught, mapStepState, Goose.Proofs.Exit.stepState] using prior
+
+#print axioms counter_withBreakTarget
 structure EvaluationPreservesActivationCounter (fuel : Nat) (config : EvalConfig) : Prop where
   value : ∀ environment expression, PreservesActivationCounter (evalValue fuel config environment expression)
   bound : ∀ environment count defaultValue operand, PreservesActivationCounter (evalBound fuel config environment count defaultValue operand)
@@ -1159,6 +1181,107 @@ theorem invokeCall_counter_succ (fuel : Nat) (config : EvalConfig)
                   exact counter_deliverCarriers _ _ _ _ _
 
 #print axioms invokeCall_counter_succ
+theorem counter_conditional (condition : Prop) [Decidable condition]
+    (yes no : EvalM α) (left : PreservesActivationCounter yes) (right : PreservesActivationCounter no) :
+    PreservesActivationCounter (if condition then yes else no) := by
+  split <;> assumption
+
+elab "counter_conditional_step" : tactic => do
+  let target ← Lean.Elab.Tactic.getMainTarget
+  unless target.getAppFn.isConstOf ``PreservesActivationCounter do throwError "expected counter action"
+  let args := target.getAppArgs
+  let some action := args[args.size - 1]? | throwError "expected action"
+  unless action.getAppFn.isConstOf ``ite do throwError "expected conditional"
+  Lean.Elab.Tactic.evalTactic (← `(tactic| apply counter_conditional))
+
+syntax "counter_eval_simple" ident : tactic
+macro_rules
+  | `(tactic| counter_eval_simple $previous:ident) => `(tactic|
+    repeat' first
+      | with_reducible assumption
+      | counter_conditional_step
+      | with_reducible exact counter_pure _
+      | with_reducible exact counter_stop _
+      | with_reducible exact counter_lift _ _
+      | with_reducible exact counter_stateQuery _ (stateQuery_expectBool _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_readLoc _ _ _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_arrayLength _)
+      | with_reducible exact ($previous).value _ _
+      | with_reducible exact ($previous).loop _ _ _
+      | with_reducible exact ($previous).whileLoop _ _ _
+      | with_reducible exact ($previous).rangeLoop _ _ _ _ _ _
+      | with_reducible exact ($previous).eachLoop _ _ _ _ _ _ _
+      | with_reducible apply counter_bind
+      | with_reducible split
+      | with_reducible rfl
+      | with_reducible intro)
+
+theorem execWhile_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (condition : Expr) (body : Block) :
+    PreservesActivationCounter (execWhile (fuel + 1) config environment condition body) := by
+  simp only [execWhile]
+  apply counter_bind
+  · exact previous.value _ _
+  · intro value
+    apply counter_bind
+    · exact counter_stateQuery _ (stateQuery_expectBool value)
+    · intro selected
+      cases selected with
+      | false => exact counter_pure _
+      | true =>
+        apply counter_bind
+        · exact previous.loop _ _ _
+        · intro flow
+          cases flow with
+          | normal value | continuing => exact previous.whileLoop _ _ _
+          | breaking value => exact counter_pure _
+
+theorem execRange_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (var : Goose.Core.VarId) (ty : Goose.Core.IntTy) (first last : Int) (body : Block) :
+    PreservesActivationCounter (execRange (fuel + 1) config environment var ty first last body) := by
+  simp only [execRange]
+  split
+  · apply counter_bind
+    · exact previous.loop _ _ _
+    · intro flow
+      cases flow with
+      | normal value | continuing => exact previous.rangeLoop _ _ _ _ _ _
+      | breaking value => exact counter_pure _
+  · exact counter_pure _
+
+theorem execEach_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (var : Goose.Core.VarId) (index : Option Goose.Core.VarId) (byRef : Bool) (body : Block)
+    (view : RuntimeView) (current : Nat) :
+    PreservesActivationCounter (execEach (fuel + 1) config environment var index byRef body view current) := by
+  simp only [execEach]
+  counter_eval_simple previous
+
+theorem loopBody_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (body : Block) :
+    PreservesActivationCounter (loopBody (fuel + 1) config environment pre body) := by
+  simp only [loopBody]
+  apply counter_withBreakTarget
+  · exact previous.block _ _ _ _
+  · intro kind
+    cases kind with
+    | continueLoop => exact counter_pure _
+    | breakValue carriers =>
+      cases carriers with
+      | nil => exact counter_pure _
+      | cons first rest =>
+        apply counter_bind
+        · exact counter_stateQuery _ (stateQuery_singleCarrier _)
+        · intro carrier
+          apply counter_bind
+          · exact counter_stateQuery _ (stateQuery_carrierValue carrier)
+          · intro value; exact counter_pure _
+
+#print axioms execEach_counter_succ
+#print axioms loopBody_counter_succ
 theorem evalValue_not_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (expression : Expr) :
     PreservesActivationCounter (evalValue (fuel + 1) config environment (.not expression)) := by
