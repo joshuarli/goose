@@ -7,7 +7,7 @@ namespace Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Construct
 open Goose.Proofs.ConstructionExecutionProtocol
 
-private theorem fresh_ticket_preimage (state : ConstructionState) (released token incoming selected : Nat)
+theorem fresh_ticket_preimage (state : ConstructionState) (released token incoming selected : Nat)
     (snapshot : PendingDestination)
     (present : (state.exitReservations.set! released .released)[token]? = some (.active .fresh incoming selected snapshot)) :
     state.exitReservations[token]? = some (.active .fresh incoming selected snapshot) := by

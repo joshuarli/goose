@@ -6,7 +6,7 @@ set_option Elab.async false
 namespace Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Construct
 
-private theorem replacementSupported_ticket_release (state : ConstructionState) (token id : Nat)
+theorem replacementSupported_ticket_release (state : ConstructionState) (token id : Nat)
     (supported : ReplacementSupported { state with exitReservations := state.exitReservations.set! token .released } id) :
     ReplacementSupported state id := by
   induction supported with
