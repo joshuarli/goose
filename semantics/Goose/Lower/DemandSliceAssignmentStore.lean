@@ -91,6 +91,42 @@ theorem accepted_generated_slice_assignment_store {cfg : Cfg} {env : Env} {state
   exact ⟨.next ((firstStep 0).runtime) (.next snapshot (.next ((literalStep 0).runtime) sliceAndStore)),
     done, post, resultSource, demanded⟩
 
+theorem accepted_generated_slice_assignment_snapshot_stop {cfg : Cfg} {env : Env} {state after : St}
+    {reference : Expr} {mutability : Mutability} {global : GlobalId} {sliceOrigin origin : OriginId}
+    (source : StmtSource cfg env (.assign (.deref reference)
+      (.slice mutability (.of (.global global)) .omitted (.expr (.lit .i64 0)) sliceOrigin) origin) state)
+    (child : ExprSource cfg env (.slice mutability (.of (.global global)) .omitted (.expr (.lit .i64 0)) sliceOrigin) state)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
+    {required : RetainedSsaMap} {initial destinationFrame : GIR.Frame} {destinationPoint : Pt}
+    {location : Loc} (placed : evalPlace 3 cfg env (.deref reference) state = .ok location state)
+    (destinationPost : Post cfg env cx before initial (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2
+      destinationFrame destinationPoint [((lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1, .val (.ref location))])
+    {valueOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root child.path
+      (.expression (.slice mutability (.of (.global global)) .omitted (.expr (.lit .i64 0)) sliceOrigin))
+      (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2}
+    (valueRows : GeneratedDemandRows cfg.mod child.rootsEnv.access valueOccurrence required)
+    (extended : ExtT (lowerStmt loop (.assign (.deref reference)
+      (.slice mutability (.of (.global global)) .omitted (.expr (.lit .i64 0)) sliceOrigin) origin)
+      (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    {targetFuel : Nat} {stop : Stop}
+    (stopped : DemandInstructionStop cx targetFuel
+      ⟨(destinationPoint.1, destinationPoint.2 + 1),
+        destinationFrame.set (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results)
+          (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
+            (.val (.ref ⟨.global global, []⟩)), state⟩ stop after) (nonTimeout : stop ≠ .timeout) :
+    DemandRuntimePrefix cx 1 ⟨destinationPoint, destinationFrame, state⟩
+      ⟨(destinationPoint.1, destinationPoint.2 + 1),
+        destinationFrame.set (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results)
+          (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
+            (.val (.ref ⟨.global global, []⟩)), state⟩ ∧
+    execStmt 4 cfg env (.assign (.deref reference)
+      (.slice mutability (.of (.global global)) .omitted (.expr (.lit .i64 0)) sliceOrigin) origin) state = .stop stop after := by
+  obtain ⟨first, sourceStop⟩ := accepted_generated_slice_global_snapshot_stop child valueOccurrence valueRows
+    destinationPost.pp destinationPost.rel (generated_assignment_value_extended extended) stopped nonTimeout
+  exact ⟨.next ((first 0).runtime) (.zero _), by simpa only [execStmt, bind_apply, placed, sourceStop] using sourceStop⟩
+
+#print axioms accepted_generated_slice_assignment_snapshot_stop
+
 theorem accepted_generated_slice_assignment_slice_stop {cfg : Cfg} {env : Env} {state sampledState sliceState after : St}
     {reference : Expr} {mutability : Mutability} {global : GlobalId} {sliceOrigin origin : OriginId}
     (source : StmtSource cfg env (.assign (.deref reference)
