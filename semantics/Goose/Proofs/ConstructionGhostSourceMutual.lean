@@ -289,6 +289,17 @@ inductive SourceHistory (config : EvalConfig) :
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
       SourceHistory config (fuel + 1) path (.element environment parent element operand) before
         (fixedElementContinuation fuel config parent element operand outcome)
+  | nonfixedElement {fuel : Nat} {path : List Nat} {environment : RuntimeActivation}
+      {parent : Goose.Core.DestinationId} {element : Ty} {operand : Expr} {before : ExecutionState}
+      (nonfixed : element.nonfixed = true)
+      (child : ∀ layout layoutReady destination ready,
+        receivingLayout config.layout element before = .ok layout layoutReady →
+        receivingAction (expressionOrigin operand) parent (fun current => openChild current element layout) layoutReady =
+          .ok destination ready →
+        SourceHistory config fuel (path ++ [0]) (.builder environment destination operand) ready
+          (buildExpr fuel config environment destination operand ready)) :
+      SourceHistory config (fuel + 1) path (.element environment parent element operand) before
+        (buildElement (fuel + 1) config environment parent element operand before)
   | argumentsDone (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (vars : Array LocalVar)
       (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.arguments environment vars [] []) before (.ok [] before)
@@ -384,6 +395,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   | @fixedElement fuel path environment parent element operand before outcome fixed child ih =>
       simp only [execute] at ih ⊢
       rw [fixedElement_execution fuel config environment parent element operand before fixed, ih]
+  | nonfixedElement => rfl
   | argumentsDone => simp [execute, evalArguments, pure]
   | @argumentValue fuel path environment vars parameter parameters operand arguments before outcome child tail ihChild ihTail =>
       simp only [execute] at ihChild ⊢
@@ -503,6 +515,10 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
   | fixedElement (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty)
       (operand : Expr) (fixed : element.nonfixed = false)
       (child : SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.element environment parent element operand)
+  | nonfixedElement (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty)
+      (operand : Expr) (nonfixed : element.nonfixed = true)
+      (child : ∀ destination, SupportedOperation config (.builder environment destination operand)) :
       SupportedOperation config (.element environment parent element operand)
   | argumentsDone (environment : RuntimeActivation) (vars : Array LocalVar) :
       SupportedOperation config (.arguments environment vars [] [])
@@ -664,6 +680,10 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute] at child ⊢
           rw [fixedElement_execution fuel config environment parent element operand before fixed]
           exact .fixedElement fixed child
+      | nonfixedElement environment parent element operand nonfixed childSupported =>
+          refine .nonfixedElement nonfixed ?_
+          intro layout layoutReady destination ready layoutResult opened
+          exact ih (.builder environment destination operand) (path ++ [0]) ready (childSupported destination)
       | argumentsDone environment vars => simpa [execute, evalArguments, pure] using
           (SourceHistory.argumentsDone fuel path environment vars before :
             SourceHistory config (fuel + 1) path (.arguments environment vars [] []) before _)
@@ -963,6 +983,45 @@ theorem witness_elementSourceCall : ∃ after,
       elementWitnessBefore (buildElement 40 sideEffectConfig witnessEnvironment 0 (.int .i64) (.call 0 [] 0) elementWitnessBefore) at history
     rw [actual] at history
     exact history
+
+private def nestedElementBefore : ExecutionState := witnessState
+  (newDestination sideEffectConfig.layout 0 (.varr (.varr (.int .u8))) .value 0 none (some 1) .initial)
+
+theorem witness_nonfixedElement : ∃ after,
+    newDestination sideEffectConfig.layout 0 (.varr (.varr (.int .u8))) .value 0 none (some 1) .initial =
+      .ok 0 nestedElementBefore ∧
+    buildElement 40 sideEffectConfig witnessEnvironment 0 (.varr (.int .u8))
+      (.bytes (.varr (.int .u8)) [65, 66] 0) nestedElementBefore = .ok () after ∧
+    after.construction.events = [.begin 0, .begin 1, .write 1 0, .write 1 1, .write 0 0] ∧
+    SourceHistory sideEffectConfig 40 [] (.element witnessEnvironment 0 (.varr (.int .u8))
+      (.bytes (.varr (.int .u8)) [65, 66] 0)) nestedElementBefore (.ok () after) := by
+  have supported : SupportedOperation sideEffectConfig (.element witnessEnvironment 0 (.varr (.int .u8))
+      (.bytes (.varr (.int .u8)) [65, 66] 0)) :=
+    .nonfixedElement witnessEnvironment 0 (.varr (.int .u8)) (.bytes (.varr (.int .u8)) [65, 66] 0) rfl
+      (fun destination => .builderBytes witnessEnvironment destination (.varr (.int .u8)) [65, 66] 0)
+  have history := history_exists 40 sideEffectConfig _ [] nestedElementBefore supported
+  refine ⟨witnessState (buildElement 40 sideEffectConfig witnessEnvironment 0 (.varr (.int .u8))
+    (.bytes (.varr (.int .u8)) [65, 66] 0) nestedElementBefore), ?_, ?_, ?_, ?_⟩
+  · unfold nestedElementBefore witnessState sideEffectConfig sideEffectContext sideEffectImplementation
+    cbv
+  · unfold nestedElementBefore witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · unfold nestedElementBefore witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · have actual : buildElement 40 sideEffectConfig witnessEnvironment 0 (.varr (.int .u8))
+        (.bytes (.varr (.int .u8)) [65, 66] 0) nestedElementBefore =
+        .ok () (witnessState (buildElement 40 sideEffectConfig witnessEnvironment 0 (.varr (.int .u8))
+          (.bytes (.varr (.int .u8)) [65, 66] 0) nestedElementBefore)) := by
+      unfold nestedElementBefore witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+      cbv
+    change SourceHistory sideEffectConfig 40 [] (.element witnessEnvironment 0 (.varr (.int .u8))
+      (.bytes (.varr (.int .u8)) [65, 66] 0)) nestedElementBefore
+      (buildElement 40 sideEffectConfig witnessEnvironment 0 (.varr (.int .u8))
+        (.bytes (.varr (.int .u8)) [65, 66] 0) nestedElementBefore) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_nonfixedElement
 
 #print axioms witness_elementSourceCall
 
