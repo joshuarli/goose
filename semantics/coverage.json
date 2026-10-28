@@ -597,10 +597,10 @@
  {
   "feature": "Accepted byte-owner allocation timeout",
   "label": "model-proved",
-  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_byteOwner_ne_timeout; Goose.Proofs.ConstructionAcceptedExecution.evalValue_byteOwner_timeout_world; Goose.Proofs.ConstructionAcceptedExecution.execStmt_acceptedByteOwner_timeout_world",
-  "statement": "An actual fuel-one byte-owner expression or accepted unnamed declaration that times out after allocating its destination preserves the accepted world and source frame, with the unfinished destination represented by a fresh receiving region. Destination creation itself cannot time out.",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_byteOwner_ne_timeout; Goose.Proofs.ConstructionAcceptedExecution.evalValue_byteOwner_timeout_world; Goose.Proofs.ConstructionAcceptedExecution.execStmt_acceptedByteOwner_timeout_world; Goose.Proofs.ConstructionAcceptedExecution.execStmts_acceptedByteOwner_timeout_world",
+  "statement": "An actual fuel-one byte-owner expression or accepted unnamed declaration that times out after allocating its destination preserves the accepted world and source frame, with the unfinished destination represented by a fresh receiving region. Destination creation itself cannot time out. For a checked declaration at the head of an actual fuel-two statement sequence, the timeout occurs in that declaration and preserves the same accepted facts.",
   "assumptions": "Accepted world and source frame; for declarations, accepted typing and implementation phase, byte-owner type and unnamed local. The actual evaluator outcome is a fuel-one timeout.",
-  "limits": "Other fuel levels, allocation failures, construction stops after writes, statement-sequence stops and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "limits": "Other fuel levels, allocation failures, construction stops after writes, other statement-sequence stops and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionAcceptedByteTimeout.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
