@@ -108,6 +108,34 @@ theorem FreshDestinationFrame.freshProtection {before after : ExecutionState} (f
     simp only [List.mem_singleton]
     exact Nat.ne_of_lt bound
 
+theorem bytes_writeLoop_stopped_world_with_frame (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (config : EvalConfig) (initialized : Nat) (environment : RuntimeActivation)
+    (before state after : ExecutionState) (frame : FreshDestinationFrame before state) (count : Nat)
+    (direct : frame.row.backing = .direct before.construction.storage.size) (opened : frame.row.progress = .open count)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (valid : OwnershipSourceState state.construction)
+    (current : destinationCurrent state.construction before.construction.destinations.size =
+      .ok before.construction.destinations.size) (stop : Goose.Core.Stop)
+    (executed : ((forIn bytes PUnit.unit fun byte _ => do
+      receivingAction origin before.construction.destinations.size (fun destination => writeElement destination ⟨#[byte]⟩)
+      pure (.yield PUnit.unit)) : EvalM PUnit) state = .stop stop after) :
+    AcceptedWorld config initialized after ambient types live
+      (freshReceivingRegion before before.construction.destinations.size :: regions) pending ∧ Nonempty (FreshDestinationFrame before after) := by
+  obtain ⟨finalFrame, finalDirect, finalSource⟩ := bytes_writeLoop_stopped_invariants bytes origin before state after
+    frame before.construction.storage.size count direct rfl opened valid current stop executed
+  have inherited := finalFrame.acceptedWorld config initialized ambient types live regions pending world finalSource
+  have protection := finalFrame.freshProtection config.layout live world.backing finalDirect
+  refine ⟨⟨⟨inherited.ownership, inherited.globals, inherited.globalTypes, inherited.layouts, inherited.typeFrontier,
+    inherited.syntheticFrontier, inherited.heap, inherited.objectsRegistered, inherited.ordinalsRegistered,
+    inherited.backing, ?_, inherited.carriers⟩, inherited.globalLive⟩, ⟨finalFrame⟩⟩
+  intro region member
+  rcases List.mem_cons.mp member with same | member
+  · subst region
+    exact protection
+  · exact inherited.protections region member
+
 theorem bytes_writeLoop_stopped_world (bytes : List UInt8) (origin : Goose.Core.OriginId)
     (config : EvalConfig) (accepted : AcceptedModule config) (sourceFrame : ConstructionSourceFrame)
     (before state after : ExecutionState) (frame : FreshDestinationFrame before state) (count : Nat)
@@ -124,18 +152,8 @@ theorem bytes_writeLoop_stopped_world (bytes : List UInt8) (origin : Goose.Core.
     AcceptedWorld config sourceFrame.initialized after ambient types live
       (freshReceivingRegion before before.construction.destinations.size :: regions) pending ∧
       AcceptedFrame config accepted sourceFrame after types := by
-  obtain ⟨finalFrame, finalDirect, finalSource⟩ := bytes_writeLoop_stopped_invariants bytes origin before state after
-    frame before.construction.storage.size count direct rfl opened valid current stop executed
-  have inherited := finalFrame.acceptedWorld config sourceFrame.initialized ambient types live regions pending world finalSource
-  have protection := finalFrame.freshProtection config.layout live world.backing finalDirect
-  refine ⟨⟨⟨inherited.ownership, inherited.globals, inherited.globalTypes, inherited.layouts, inherited.typeFrontier,
-    inherited.syntheticFrontier, inherited.heap, inherited.objectsRegistered, inherited.ordinalsRegistered,
-    inherited.backing, ?_, inherited.carriers⟩, inherited.globalLive⟩, finalFrame.acceptedFrame source⟩
-  intro region member
-  rcases List.mem_cons.mp member with same | member
-  · subst region
-    exact protection
-  · exact inherited.protections region member
+  obtain ⟨preserved, ⟨frameAfter⟩⟩ := bytes_writeLoop_stopped_world_with_frame bytes origin config sourceFrame.initialized sourceFrame.interpretation.environment before state after frame count direct opened ambient types live regions pending world valid current stop executed
+  exact ⟨preserved, frameAfter.acceptedFrame source⟩
 
 theorem evalValue_byteOwner_writeStop_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (sourceFrame : ConstructionSourceFrame) (before allocated after : ExecutionState)

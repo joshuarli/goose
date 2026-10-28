@@ -27,16 +27,16 @@ theorem finishPacked_fault_unchanged (state final : ConstructionState) (id count
       simp only [stored, replaceStorage_result, replaceDestination_result, storageInside, inside, ↓reduceIte] at executed
       cases executed
 
-theorem bytes_finish_stopped_world (bytes : List UInt8) (origin : Goose.Core.OriginId)
-    (config : EvalConfig) (accepted : AcceptedModule config) (sourceFrame : ConstructionSourceFrame)
+theorem bytes_finish_stopped_world_with_frame (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (config : EvalConfig) (initialized : Nat) (environment : RuntimeActivation)
     (before state middle after : ExecutionState) (frame : FreshDestinationFrame before state) (count : Nat)
     (ready : OpenDestinationBacking config.layout state before.construction.destinations.size (.varr (.int .u8)) count)
     (direct : frame.row.backing = .direct before.construction.storage.size)
     (packed : frame.row.layout = .packed) (request : frame.row.capability.request = .value)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
-    (world : AcceptedWorld config sourceFrame.initialized before ambient types live regions pending)
-    (source : AcceptedFrame config accepted sourceFrame before types) (valid : OwnershipSourceState state.construction)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (valid : OwnershipSourceState state.construction)
     (current : destinationCurrent state.construction before.construction.destinations.size =
       .ok before.construction.destinations.size)
     (loop : ((forIn bytes PUnit.unit fun byte _ => do
@@ -44,9 +44,8 @@ theorem bytes_finish_stopped_world (bytes : List UInt8) (origin : Goose.Core.Ori
       pure (.yield PUnit.unit)) : EvalM PUnit) state = .ok PUnit.unit middle)
     (stop : Goose.Core.Stop)
     (finished : receivingAction origin before.construction.destinations.size finishDestination middle = .stop stop after) :
-    AcceptedWorld config sourceFrame.initialized after ambient types live
-      (freshReceivingRegion before before.construction.destinations.size :: regions) pending ∧
-      AcceptedFrame config accepted sourceFrame after types := by
+    AcceptedWorld config initialized after ambient types live
+      (freshReceivingRegion before before.construction.destinations.size :: regions) pending ∧ Nonempty (FreshDestinationFrame before after) := by
   let id := before.construction.destinations.size
   have present : state.construction.destinations[id]? = some frame.row := by
     rw [frame.destinations]; exact Array.getElem?_push_size
@@ -79,15 +78,38 @@ theorem bytes_finish_stopped_world (bytes : List UInt8) (origin : Goose.Core.Ori
     simp only [result, ExecutionStep.stop.injEq] at finished
     obtain ⟨_, sameAfter⟩ := finished
     subst after
-    have inherited := next.acceptedWorld config sourceFrame.initialized ambient types live regions pending world nextValid
+    have inherited := next.acceptedWorld config initialized ambient types live regions pending world nextValid
     have protection := next.freshProtection config.layout live world.backing nextDirect
     refine ⟨⟨⟨inherited.ownership, inherited.globals, inherited.globalTypes, inherited.layouts, inherited.typeFrontier,
       inherited.syntheticFrontier, inherited.heap, inherited.objectsRegistered, inherited.ordinalsRegistered,
-      inherited.backing, ?_, inherited.carriers⟩, inherited.globalLive⟩, next.acceptedFrame source⟩
+      inherited.backing, ?_, inherited.carriers⟩, inherited.globalLive⟩, ⟨next⟩⟩
     intro region member
     rcases List.mem_cons.mp member with same | member
     · subst region; exact protection
     · exact inherited.protections region member
+
+theorem bytes_finish_stopped_world (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (config : EvalConfig) (accepted : AcceptedModule config) (sourceFrame : ConstructionSourceFrame)
+    (before state middle after : ExecutionState) (frame : FreshDestinationFrame before state) (count : Nat)
+    (ready : OpenDestinationBacking config.layout state before.construction.destinations.size (.varr (.int .u8)) count)
+    (direct : frame.row.backing = .direct before.construction.storage.size)
+    (packed : frame.row.layout = .packed) (request : frame.row.capability.request = .value)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config sourceFrame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted sourceFrame before types) (valid : OwnershipSourceState state.construction)
+    (current : destinationCurrent state.construction before.construction.destinations.size =
+      .ok before.construction.destinations.size)
+    (loop : ((forIn bytes PUnit.unit fun byte _ => do
+      receivingAction origin before.construction.destinations.size (fun destination => writeElement destination ⟨#[byte]⟩)
+      pure (.yield PUnit.unit)) : EvalM PUnit) state = .ok PUnit.unit middle)
+    (stop : Goose.Core.Stop)
+    (finished : receivingAction origin before.construction.destinations.size finishDestination middle = .stop stop after) :
+    AcceptedWorld config sourceFrame.initialized after ambient types live
+      (freshReceivingRegion before before.construction.destinations.size :: regions) pending ∧
+      AcceptedFrame config accepted sourceFrame after types := by
+  obtain ⟨preserved, ⟨frameAfter⟩⟩ := bytes_finish_stopped_world_with_frame bytes origin config sourceFrame.initialized sourceFrame.interpretation.environment before state middle after frame count ready direct packed request ambient types live regions pending world valid current loop stop finished
+  exact ⟨preserved, frameAfter.acceptedFrame source⟩
 
 #print axioms finishPacked_fault_unchanged
 #print axioms bytes_finish_stopped_world

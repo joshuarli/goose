@@ -26,49 +26,46 @@ theorem publishPacked_fault_unchanged (state final : ConstructionState) (id coun
       lookupStorage_result, stored, replaceStorage_result, replaceDestination_result, storageInside, inside,
       ↓reduceIte, emit_result, pure, reduceCtorEq] at executed
 
-theorem allocated_byteOwner_publishStop_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (sourceFrame : ConstructionSourceFrame) (before allocated built after : ExecutionState)
+theorem allocated_byteOwner_publishStop_world_with_frame (fuel : Nat) (config : EvalConfig) (initialized : Nat) (environment : RuntimeActivation) (before allocated built after : ExecutionState)
     (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId) (id : Nat) (stop : Goose.Core.Stop)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
-    (world : AcceptedWorld config sourceFrame.initialized before ambient types live regions pending)
-    (source : AcceptedFrame config accepted sourceFrame before types)
-    (created : newDestination config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin none
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (created : newDestination config.layout environment.act (.varr (.int .u8)) .value origin none
       (some bytes.length) before = .ok id allocated)
-    (constructed : buildExpr (fuel + 1) config sourceFrame.interpretation.environment id
+    (constructed : buildExpr (fuel + 1) config environment id
       (.bytes (.varr (.int .u8)) bytes bytesOrigin) allocated = .ok () built)
     (published : publishCarriers origin [.completed id] built = .stop stop after) :
-    AcceptedWorld config sourceFrame.initialized after ambient types live (freshReceivingRegion before id :: regions) pending ∧
-      AcceptedFrame config accepted sourceFrame after types := by
-  have freshId := newDestination_fresh_id config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
+    AcceptedWorld config initialized after ambient types live (freshReceivingRegion before id :: regions) pending ∧ Nonempty (FreshDestinationFrame before after) := by
+  have freshId := newDestination_fresh_id config.layout environment.act (.varr (.int .u8)) .value origin
     (some bytes.length) before allocated id created
   subst id
   let id := before.construction.destinations.size
-  obtain ⟨frame⟩ := newDestination_fresh_frame config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
+  obtain ⟨frame⟩ := newDestination_fresh_frame config.layout environment.act (.varr (.int .u8)) .value origin
     (some bytes.length) before allocated id world.ownership.source.structural.1.1.1 created
-  obtain ⟨ready⟩ := newDestination_initial_backing config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
+  obtain ⟨ready⟩ := newDestination_initial_backing config.layout environment.act (.varr (.int .u8)) .value origin
     (some bytes.length) before allocated id (.int .u8) rfl created
   obtain ⟨row, present, packed, request, direct, receiver⟩ := newDestination_byteOwner_packed_value config.layout
-    sourceFrame.interpretation.environment.act origin (some bytes.length) before allocated id created
+    environment.act origin (some bytes.length) before allocated id created
   have framePresent : allocated.construction.destinations[id]? = some frame.row := by
     rw [frame.destinations]
     exact Array.getElem?_push_size
   have same : row = frame.row := Option.some.inj (present.symm.trans framePresent)
   subst row
-  have allocatedWorld := newDestination_acceptedWorld config sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
-    (some bytes.length) sourceFrame.initialized before allocated id ambient types live regions pending world created
-  have current := newDestination_current_self config sourceFrame.initialized sourceFrame.interpretation.environment.act (.varr (.int .u8))
+  have allocatedWorld := newDestination_acceptedWorld config environment.act (.varr (.int .u8)) .value origin
+    (some bytes.length) initialized before allocated id ambient types live regions pending world created
+  have current := newDestination_current_self config initialized environment.act (.varr (.int .u8))
     .value origin (some bytes.length) before allocated id ambient types live regions pending world created
-  obtain ⟨builtFrame, builtDirect⟩ := buildExpr_byteOwner_freshFrame fuel config sourceFrame.interpretation.environment bytes bytesOrigin
+  obtain ⟨builtFrame, builtDirect⟩ := buildExpr_byteOwner_freshFrame fuel config environment bytes bytesOrigin
     before allocated built frame before.construction.storage.size 0 ready direct rfl packed request
     allocatedWorld.ownership.source.structural.1.1.1 current constructed
-  have builtSource := buildExpr_bytes_sourceState fuel config sourceFrame.interpretation.environment id (.varr (.int .u8))
+  have builtSource := buildExpr_bytes_sourceState fuel config environment id (.varr (.int .u8))
     bytes bytesOrigin allocated built ready.destination 0 allocatedWorld.ownership.source current ready.present ready.opened constructed
-  have fits := newDestination_byteOwner_count_bound config.layout sourceFrame.interpretation.environment.act origin bytes.length
+  have fits := newDestination_byteOwner_count_bound config.layout environment.act origin bytes.length
     before allocated id created
   have readySame : ready.destination = frame.row := Option.some.inj (ready.present.symm.trans framePresent)
   obtain ⟨builtRow, storage, builtPresent, stored, _, _, _, _, _, builtProgress, _⟩ :=
-    buildExpr_byteOwner_geometry fuel config sourceFrame.interpretation.environment bytes bytesOrigin id 0 allocated built ready
+    buildExpr_byteOwner_geometry fuel config environment bytes bytesOrigin id 0 allocated built ready
       (by rw [readySame]; exact packed) (by rw [readySame]; exact request) (by simpa using fits)
       allocatedWorld.ownership.source.structural.1.1.1 current constructed
   have builtFramePresent : built.construction.destinations[id]? = some builtFrame.row := by
@@ -90,15 +87,32 @@ theorem allocated_byteOwner_publishStop_world (fuel : Nat) (config : EvalConfig)
     simp only [result, ExecutionStep.stop.injEq] at published
     obtain ⟨_, sameAfter⟩ := published
     subst after
-    have inherited := builtFrame.acceptedWorld config sourceFrame.initialized ambient types live regions pending world builtSource
+    have inherited := builtFrame.acceptedWorld config initialized ambient types live regions pending world builtSource
     have protection := builtFrame.freshProtection config.layout live world.backing builtDirect
     refine ⟨⟨⟨inherited.ownership, inherited.globals, inherited.globalTypes, inherited.layouts, inherited.typeFrontier,
       inherited.syntheticFrontier, inherited.heap, inherited.objectsRegistered, inherited.ordinalsRegistered,
-      inherited.backing, ?_, inherited.carriers⟩, inherited.globalLive⟩, builtFrame.acceptedFrame source⟩
+      inherited.backing, ?_, inherited.carriers⟩, inherited.globalLive⟩, ⟨builtFrame⟩⟩
     intro region member
     rcases List.mem_cons.mp member with same | member
     · subst region; exact protection
     · exact inherited.protections region member
+
+theorem allocated_byteOwner_publishStop_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (sourceFrame : ConstructionSourceFrame) (before allocated built after : ExecutionState)
+    (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId) (id : Nat) (stop : Goose.Core.Stop)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config sourceFrame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted sourceFrame before types)
+    (created : newDestination config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin none
+      (some bytes.length) before = .ok id allocated)
+    (constructed : buildExpr (fuel + 1) config sourceFrame.interpretation.environment id
+      (.bytes (.varr (.int .u8)) bytes bytesOrigin) allocated = .ok () built)
+    (published : publishCarriers origin [.completed id] built = .stop stop after) :
+    AcceptedWorld config sourceFrame.initialized after ambient types live (freshReceivingRegion before id :: regions) pending ∧
+      AcceptedFrame config accepted sourceFrame after types := by
+  obtain ⟨preserved, ⟨frameAfter⟩⟩ := allocated_byteOwner_publishStop_world_with_frame fuel config sourceFrame.initialized sourceFrame.interpretation.environment before allocated built after bytes origin bytesOrigin id stop ambient types live regions pending world created constructed published
+  exact ⟨preserved, frameAfter.acceptedFrame source⟩
 
 #print axioms publishPacked_fault_unchanged
 #print axioms allocated_byteOwner_publishStop_world
