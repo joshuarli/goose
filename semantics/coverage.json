@@ -505,6 +505,15 @@
   "evidence": "Goose/Lower/DemandGeneratedScalarPrefix.lean and its expression-family dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Generated short-circuit left prefixes and actual branches",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_shortCircuit_left_prefix; Goose.Lower.accepted_generated_shortCircuit_actual_branch",
+  "statement": "A generated short-circuit expression inherits the finite target-prefix decomposition of its accepted left operand. After that operand completes, the actual next runtime instruction selects the matching right-operand or skip destination and carries its accepted demand frame.",
+  "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and a left-operand prefix family; the branch result assumes an actual successful target instruction.",
+  "limits": "Right-operand prefixes, join completion, stopping prefixes and whole-expression composition remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandGeneratedShortCircuitPrefix.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
