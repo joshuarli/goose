@@ -46,6 +46,46 @@ theorem counter_lift (origin : Goose.Core.OriginId) (action : ConstructionM α) 
   intro state
   cases result : action state.construction <;> simp [liftConstruction, result, Goose.Proofs.Exit.stepState]
 
+theorem counter_listMapM (action : α → EvalM β) (items : List α)
+    (preserved : ∀ item, PreservesActivationCounter (action item)) : PreservesActivationCounter (items.mapM action) := by
+  induction items with
+  | nil => exact counter_pure _
+  | cons item rest ih =>
+      rw [List.mapM_cons]
+      apply counter_bind
+      · exact preserved item
+      · intro value
+        apply counter_bind
+        · exact ih
+        · intro values; exact counter_pure _
+
+theorem counter_listForIn (action : α → β → EvalM (ForInStep β)) (items : List α)
+    (initial : β) (preserved : ∀ item value, PreservesActivationCounter (action item value)) :
+    PreservesActivationCounter (forIn items initial action) := by
+  induction items generalizing initial with
+  | nil => exact counter_pure _
+  | cons item rest ih =>
+      rw [List.forIn_cons]
+      apply counter_bind
+      · exact preserved item initial
+      · intro step
+        cases step with
+        | done value => exact counter_pure _
+        | yield value => exact ih value
+
+theorem counter_arrayForIn (action : α → β → EvalM (ForInStep β)) (items : Array α)
+    (initial : β) (preserved : ∀ item value, PreservesActivationCounter (action item value)) :
+    PreservesActivationCounter (forIn items initial action) := by
+  rw [← Array.forIn_toList]
+  exact counter_listForIn action items.toList initial preserved
+
+theorem counter_rangeForIn (action : Nat → β → EvalM (ForInStep β))
+    (range : Std.Legacy.Range) (initial : β)
+    (preserved : ∀ index value, PreservesActivationCounter (action index value)) :
+    PreservesActivationCounter (forIn range initial action) := by
+  rw [Std.Legacy.Range.forIn_eq_forIn_range']
+  exact counter_listForIn action _ initial preserved
+
 theorem counter_withScope (environment : RuntimeActivation) (scope scopeInst : Nat) (action : EvalM α)
     (preserved : PreservesActivationCounter action) : PreservesActivationCounter (withScope environment scope scopeInst action) := by
   intro state
