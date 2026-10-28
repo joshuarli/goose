@@ -4,6 +4,7 @@ namespace Goose.Proofs.ConstructionGhostNestedActivationOrderWitness
 open Goose.Construct Goose.Proofs.ConstructionGhostStatements Goose.Proofs.ConstructionGhostResultScope
 open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
 open Goose.Proofs.ConstructionGhostCallHistorical Goose.Proofs.ConstructionGhostNestedActivationOrder
+open Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceTransition
 
 private def implementation : Impl := ⟨"callee", #[], #[], #[], .mk 1 [] none, .unknown⟩
 private def context : Context := ⟨0, "callee", [], [], []⟩
@@ -21,7 +22,8 @@ private def visit : StatementInvocation := ⟨0, 0, 36, statement, ready, .ok (.
 
 theorem nestedActivation_order_witness : ∃ innerResult,
     StatementReplay config scopedEnvironment 37 0 [statement] ready (.ok (.normal .unit) after) [visit] ∧
-    CallAllocation config ready innerResult 1 ∧ parent.act < 1 := by
+    CallAllocation config ready innerResult 1 ∧ parent.act < 1 ∧
+    evalValue 35 config scopedEnvironment (.call 0 [] 0) ready = callValueResult 0 innerResult := by
   have bound : bindAll parent.act activated.nextScope [] (resultScopeStart parent 0 activated) = .ok () ready := by
     simp [ready, bindAll, bind, pure]
   have head : execStmt 36 config scopedEnvironment statement ready = .ok (.normal .unit) after := by
@@ -40,7 +42,8 @@ theorem nestedActivation_order_witness : ∃ innerResult,
     · rfl
   have ordered := reachedActivation_visitBeforeNestedCall (config := config) (id := 1) (activationReady := activationReady)
     (boundReady := ready) (vars := #[]) (channels := []) (pre := []) (scope := 0) bound replay visit (by simp) inner
-  exact ⟨_, replay, inner, ordered⟩
+  refine ⟨_, replay, inner, ordered, ?_⟩
+  exact valueCall_source 34 config scopedEnvironment 0 context implementation 0 ready rfl rfl rfl
 
 #print axioms nestedActivation_order_witness
 end Goose.Proofs.ConstructionGhostNestedActivationOrderWitness
