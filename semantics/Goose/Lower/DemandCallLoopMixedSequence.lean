@@ -5,6 +5,15 @@ import Goose.Lower.DemandIfRecursiveLoopPrepend
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 
+theorem CallMixedArguments.stopped {access : AccessEnv} {arguments : List Arg}
+    (form : CallMixedArguments access arguments) : CallMixedStoppedArguments access arguments := by
+  induction form with
+  | nil => exact .nil
+  | value expression tail ih => exact .value expression.stopped ih
+  | reference place type tail ih => exact .reference place type ih
+
+#print axioms CallMixedArguments.stopped
+
 inductive ReachableScalarCallStatements (cfg : Cfg) (env : Env) : List Stmt → Prop
   | mixed {statements : List Stmt} (fragment : ScalarAssignmentStatements cfg env statements) :
       ReachableScalarCallStatements cfg env statements
@@ -21,8 +30,6 @@ inductive ReachableScalarCallStatements (cfg : Cfg) (env : Env) : List Stmt → 
       (shrink : cfg.mod.profile = .shrink)
       (argumentsForm : ∀ {state : St} (source : StmtSource cfg env (.expr (.call context arguments origin) statementOrigin) state),
         CallMixedArguments source.rootsEnv.access arguments)
-      (stoppedArgumentsForm : ∀ {state : St} (source : StmtSource cfg env (.expr (.call context arguments origin) statementOrigin) state),
-        CallMixedStoppedArguments source.rootsEnv.access arguments)
       (tail : ReachableScalarCallStatements cfg env later) :
       ReachableScalarCallStatements cfg env (earlier ++ (.expr (.call context arguments origin) statementOrigin :: later))
 
@@ -73,7 +80,7 @@ theorem accepted_generated_reachable_scalar_call_statements {cfg : Cfg} {env : E
       (by intro statement state source before built initial start map required runtime cursor; exact .conditional selected cursor)
       (fun point => RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller point.point point.frame point.state)
       (fun valid steps => steps.reachable valid) (ih selected before loop bindings want block)
-  | @call earlier later earlierForm context arguments origin statementOrigin ctx impl contextAt implAt depth callee expression form hasValue shrink argumentsForm stoppedArgumentsForm tail ih =>
+  | @call earlier later earlierForm context arguments origin statementOrigin ctx impl contextAt implAt depth callee expression form hasValue shrink argumentsForm tail ih =>
     intro caller results root owner selected before loop bindings want block
     have suffix := ih selected before loop bindings want block
     have head : ReachableStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop
@@ -94,7 +101,7 @@ theorem accepted_generated_reachable_scalar_call_statements {cfg : Cfg} {env : E
         (.expr (.call context arguments origin) statementOrigin :: later) := ⟨accepted_generated_reachable_sequence_prefix_cons selected before loop bindings want block _ head suffix.1,
       accepted_generated_reachable_stopped_sequence_cons selected before loop bindings want block
         (accepted_generated_reachable_control_call_statement_stopped_family contextAt implAt depth callee form hasValue
-          shrink stoppedArgumentsForm selected loop) suffix.2⟩
+          shrink (fun source => (argumentsForm source).stopped) selected loop) suffix.2⟩
     exact accepted_generated_invariant_scalar_assignment_statements_prepend selected before loop bindings want block earlierForm
       (@ReachableScalarCallCursor cfg env caller results loop)
       (by intro statement state source before built initial start map required runtime cursor; exact .scalar cursor)
@@ -113,10 +120,10 @@ theorem ReachableScalarCallStatements.toMixed {cfg : Cfg} {env : Env} {statement
       simpa [List.append_assoc] using ReachableMixedCallStatements.call
         (WhileMixedStatements.recursive earlierForm previous) context arguments origin statementOrigin ctx impl contextAt implAt depth
         fragment expression form hasValue shrink argumentsForm stoppedArgumentsForm mixedTail
-  | call earlierForm context arguments origin statementOrigin ctx impl contextAt implAt depth fragment expression exprForm hasValue shrink argumentsForm stoppedArgumentsForm tail ih =>
+  | call earlierForm context arguments origin statementOrigin ctx impl contextAt implAt depth fragment expression exprForm hasValue shrink argumentsForm tail ih =>
     exact .call (by simpa using WhileMixedStatements.scalar earlierForm WhileMixedStatements.nil)
       context arguments origin statementOrigin ctx impl contextAt implAt depth fragment expression exprForm hasValue shrink
-      argumentsForm stoppedArgumentsForm ih
+      argumentsForm (fun source => (argumentsForm source).stopped) ih
 
 theorem ReachableScalarCallStatements.normal {cfg : Cfg} {env : Env} {statements : List Stmt}
     (form : ReachableScalarCallStatements cfg env statements) {fuel : Nat} {state after : St} {flow : Flow}
@@ -145,7 +152,7 @@ theorem ReachableScalarCallStatements.single {cfg : Cfg} {env : Env}
     ReachableScalarCallStatements cfg env [.expr (.call context arguments origin) statementOrigin] := by
   simpa using ReachableScalarCallStatements.call (cfg := cfg) (env := env) (earlier := []) (later := [])
     ScalarAssignmentStatements.nil context arguments origin statementOrigin ctx impl contextAt implAt depth
-    fragment expression form hasValue shrink argumentsForm stoppedArgumentsForm
+    fragment expression form hasValue shrink argumentsForm
     (ReachableScalarCallStatements.mixed ScalarAssignmentStatements.nil)
 
 #print axioms ReachableScalarCallStatements.single
