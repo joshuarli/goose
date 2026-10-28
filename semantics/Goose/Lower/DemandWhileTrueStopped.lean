@@ -53,7 +53,7 @@ theorem accepted_generated_while_true_stopped {cfg : Cfg} {env : Env} {condition
     ∃ (consumed remaining : Nat) (current : DemandRuntimePoint)
       (next : StmtSource cfg env (.while condition body origin) current.state),
       WhileIterations cfg env condition body (count + 1) initialState current.state ∧
-      consumed + remaining = taken ∧ DemandRuntimePrefix cx consumed ⟨point, frame, middle⟩ current ∧
+      consumed + remaining = taken ∧ 0 < consumed ∧ DemandRuntimePrefix cx consumed ⟨point, frame, middle⟩ current ∧
       DemandRuntimePrefix cx remaining current reached ∧
       next.typingEnv = source.typingEnv ∧ next.rootsEnv = source.rootsEnv ∧ next.world = source.world ∧
       next.observation = source.observation ∧ next.plans = source.plans ∧ next.path = source.path ∧ HEq next.context source.context ∧
@@ -102,7 +102,7 @@ theorem accepted_generated_while_true_stopped {cfg : Cfg} {env : Env} {condition
         have backEqual := actualBack.deterministic (back lastFuel)
         have nextEq : nextPoint = ⟨(header, 0), current.frame, current.state⟩ := by cases nextPoint; exact backEqual
         subst nextPoint
-        exact Or.inr ⟨consumed + 2, tail, ⟨(header, 0), current.frame, current.state⟩, next, allIterations, by omega,
+        exact Or.inr ⟨consumed + 2, tail, ⟨(header, 0), current.frame, current.state⟩, next, allIterations, by omega, by omega,
           by simpa [Nat.add_assoc] using (DemandRuntimePrefix.next first executed).append (.next last (.zero _)),
           afterBack, typing, roots, world, observation, plans, path, context, input, post, bounded, realized, rfl,
           nextOwned, nextAdmitted, nextOccurrence, nextRows⟩
