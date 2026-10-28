@@ -624,10 +624,10 @@
  },
  {
   "feature": "Conditional condition agreement",
-  "statement": "An accepted conditional without else has successful-prefix agreement and non-timeout stop reflection through condition, selected branch and join. Discarded mixed branch blocks agree through scope leave, and these conditionals compose at arbitrary positions in mixed statement sequences.",
+  "statement": "An accepted conditional without else has successful-prefix agreement and non-timeout stop reflection through condition, selected branch and join. These conditionals compose at arbitrary positions in mixed statement sequences and enclosing unit and value blocks.",
   "assumptions": "Accepted source and generated occurrence, supported condition expression, no loop context or trailing branch value, mixed branch fragment and supplied expression prefix and stop families, related builder and retained demand.",
-  "limits": "Conditionals with else and composition into enclosing mixed block families remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandIfPrefixFamily.lean; Goose/Lower/DemandIfStoppedFamily.lean; Goose/Lower/DemandIfMixedStatements.lean; Goose/Lower/DemandBranchBlockSuffix.lean; Goose/Lower/DemandBranchBlockStopped.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "Conditionals with else, loop contexts, branch tail values and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandIfPrefixFamily.lean; Goose/Lower/DemandIfStoppedFamily.lean; Goose/Lower/DemandIfMixedStatements.lean; Goose/Lower/DemandIfMixedBlockPrefix.lean; Goose/Lower/DemandIfMixedBlockStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted byte-owner allocation timeout",
@@ -656,10 +656,10 @@
  },
  {
   "feature": "Direct byte write trace",
-  "statement": "A writeElement operation appends only write events for its destination on every outcome, and finishDestination leaves events unchanged. At every fuel, evaluation of a fresh growable byte literal in an accepted world appends only begin, write and publish events for its fresh destination, including terminal prefixes. The same event bound holds through checked byte global initialization and local declaration sequences.",
-  "assumptions": "An accepted starting world and a fresh unbounded growable byte literal receiving its newly allocated destination.",
+  "statement": "A writeElement operation appends only write events for its destination on every outcome, and finishDestination leaves events unchanged. At every fuel, evaluation of a fresh growable byte literal in an accepted world appends only begin, write and publish events for its fresh destination, including terminal prefixes. For a validated byte-only module with no entry tail, the actual module trace contains only begin, write and publish events at every outcome.",
+  "assumptions": "An accepted starting world and a fresh unbounded growable byte literal receiving its newly allocated destination. The module result assumes byte-owner literal globals, a no-tail entry body of unnamed byte declarations, and sufficient checker fuel.",
   "limits": "Calls, forwarding, other value forms and general C-DIRECT remain open. This component does not close TH-CON-01.",
-  "evidence": "Goose/Construct/Destination.lean; Goose/Proofs/ConstructionFreshByteValueEvents.lean; Goose/Proofs/ConstructionFreshByteGlobalSequenceEvents.lean; Goose/Proofs/ConstructionFreshByteLocalSequenceEvents.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Construct/Destination.lean; Goose/Proofs/ConstructionFreshByteValueEvents.lean; Goose/Proofs/ConstructionFreshByteGlobalSequenceEvents.lean; Goose/Proofs/ConstructionFreshByteLocalSequenceEvents.lean; Goose/Proofs/ConstructionFreshByteModuleEvents.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Byte-owner global initialization outcomes",
