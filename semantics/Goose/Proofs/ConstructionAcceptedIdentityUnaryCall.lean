@@ -9,22 +9,28 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionRepresentation
 
-theorem invokeCall_identityUnary_allFuel {config : EvalConfig} {accepted : AcceptedModule config}
+theorem invokeCall_identity_fromArguments {config : EvalConfig} {accepted : AcceptedModule config}
     (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (target origin : Nat) (context : Context) (callee : Impl) (parameter : Param) (descriptor : LocalVar)
-    (expression : Expr) (integer : Goose.Core.IntTy) (checkFuel fuel : Nat)
-    (form : UnaryRegisterExpression config integer expression) (graph : RegisterCallGraphWithCallLocals config (.int integer))
+    (expression : Expr) (integer : Goose.Core.IntTy) (fuel : Nat)
     (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
     (source : AcceptedFrame config accepted frame before types)
     (contextAt : config.module.contexts[target]? = some context) (calleeAt : config.module.impls[context.impl]? = some callee)
-    (parameters : callee.params = #[parameter]) (mode : parameter.mode = .byValue)
-    (declared : callee.vars[parameter.var]? = some descriptor) (descriptorType : descriptor.ty = .int integer)
-    (results : callee.results = #[⟨.int integer, .register, none⟩])
+    (parameters : callee.params = #[parameter]) (declared : callee.vars[parameter.var]? = some descriptor)
+    (descriptorType : descriptor.ty = .int integer) (results : callee.results = #[⟨.int integer, .register, none⟩])
     (body : callee.body = ⟨callee.body.scope, [], some (.read (.var 0))⟩)
-    (nesting : frame.typingFuel = checkFuel + 2)
-    (resultTy : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
-    (checked : CheckedValue frame (.call target [.byVal expression] origin) resultTy roots typingAfter rootsAfter) :
+    (argumentsSafe : ∀ argumentFuel, ∃ nextTypes nextLive nextAmbient,
+      let outcome := evalArguments argumentFuel config frame.interpretation.environment callee.vars [parameter] [.byVal expression] before
+      RootTypesExtend types nextTypes ∧ before.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      before.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState outcome) nextTypes ∧
+      FutureGlobalsClear config frame.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      EarlierCallerObservations before.nextAct before (Goose.Proofs.Exit.stepState outcome) types nextTypes ∧
+      (match outcome with
+       | .ok values _ => nextAmbient = ambient ∧ ∃ value, values = [value] ∧ ValueRepresentation (.int integer) value
+       | .stop .. => True | .escape .. | .jump .. => False)) :
     ∃ nextTypes nextLive nextAmbient,
       let outcome := invokeCall fuel config frame.interpretation.environment target [.byVal expression] [.register (.int integer)] origin before
       RootTypesExtend types nextTypes ∧ before.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
@@ -43,9 +49,7 @@ theorem invokeCall_identityUnary_allFuel {config : EvalConfig} {accepted : Accep
       source.futureGlobals, EarlierCallerObservations.refl _ _ _, trivial⟩
   | succ fuel =>
     obtain ⟨middleTypes, middleLive, middleAmbient, extension, acts, scopes, middleWorld, middleSource, clear, observed, result⟩ :=
-      evalArguments_unaryRegisterExpression_fromChecker frame before ambient types live regions pending target origin context callee parameter
-        descriptor expression integer checkFuel fuel form graph world source contextAt calleeAt parameters mode declared descriptorType nesting
-        resultTy roots typingAfter rootsAfter checked
+      argumentsSafe fuel
     cases evaluated : evalArguments fuel config frame.interpretation.environment callee.vars [parameter] [.byVal expression] before with
     | stop reason after =>
       simp only [evaluated, Goose.Proofs.Exit.stepState] at acts scopes middleWorld middleSource clear observed result
@@ -79,6 +83,41 @@ theorem invokeCall_identityUnary_allFuel {config : EvalConfig} {accepted : Accep
         exact ⟨finalTypes, finalLive, finalAmbient, (fun root ty found => extension2 root ty (extension root ty found)),
           finalActs, finalScopes, finalWorld, source.afterEarlierObservations finalActs finalScopes finalObserved, finalClear,
           finalObserved, finalResult⟩
+
+
+theorem invokeCall_identityUnary_allFuel {config : EvalConfig} {accepted : AcceptedModule config}
+    (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (target origin : Nat) (context : Context) (callee : Impl) (parameter : Param) (descriptor : LocalVar)
+    (expression : Expr) (integer : Goose.Core.IntTy) (checkFuel fuel : Nat)
+    (form : UnaryRegisterExpression config integer expression) (graph : RegisterCallGraphWithCallLocals config (.int integer))
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types)
+    (contextAt : config.module.contexts[target]? = some context) (calleeAt : config.module.impls[context.impl]? = some callee)
+    (parameters : callee.params = #[parameter]) (mode : parameter.mode = .byValue)
+    (declared : callee.vars[parameter.var]? = some descriptor) (descriptorType : descriptor.ty = .int integer)
+    (results : callee.results = #[⟨.int integer, .register, none⟩])
+    (body : callee.body = ⟨callee.body.scope, [], some (.read (.var 0))⟩)
+    (nesting : frame.typingFuel = checkFuel + 2)
+    (resultTy : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue frame (.call target [.byVal expression] origin) resultTy roots typingAfter rootsAfter) :
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := invokeCall fuel config frame.interpretation.environment target [.byVal expression] [.register (.int integer)] origin before
+      RootTypesExtend types nextTypes ∧ before.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      before.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState outcome) nextTypes ∧
+      FutureGlobalsClear config frame.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      EarlierCallerObservations before.nextAct before (Goose.Proofs.Exit.stepState outcome) types nextTypes ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation (.int integer) value
+       | .stop .. => True | .escape .. | .jump .. => False) := by
+  apply invokeCall_identity_fromArguments frame before ambient types live regions pending target origin context callee parameter descriptor
+    expression integer fuel world source contextAt calleeAt parameters declared descriptorType results body
+  intro argumentFuel
+  exact evalArguments_unaryRegisterExpression_fromChecker frame before ambient types live regions pending target origin context callee parameter
+    descriptor expression integer checkFuel argumentFuel form graph world source contextAt calleeAt parameters mode declared descriptorType nesting
+    resultTy roots typingAfter rootsAfter checked
 
 theorem evalValue_identityUnary_allFuel {config : EvalConfig} {accepted : AcceptedModule config}
     (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
@@ -119,5 +158,6 @@ theorem evalValue_identityUnary_allFuel {config : EvalConfig} {accepted : Accept
       ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, clear, result⟩
 
 #print axioms evalValue_identityUnary_allFuel
+#print axioms invokeCall_identity_fromArguments
 #print axioms invokeCall_identityUnary_allFuel
 end Goose.Proofs.ConstructionAcceptedExecution
