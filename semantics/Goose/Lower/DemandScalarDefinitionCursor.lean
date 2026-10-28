@@ -64,8 +64,8 @@ theorem accepted_generated_scalar_definition_prefix_family {cfg : Cfg} {env : En
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded) (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
     cases cursor with
     | left child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.instruction⟩
-    | right child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.instruction⟩
-    | operation child metadata owned site coverage admitted bounded carried => exact ⟨demanded, _, _, site.instruction⟩
+    | right child metadata owned occurrence rows coverage leftPost cursor => exact ⟨demanded, cursor.instruction⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, _, _, site.instruction⟩
   | compare operation first second firstIH secondIH =>
     apply GeneratedExpressionPrefixFamily.mapCursor
       (accepted_generated_compare_prefix_family selected loop operation _ _ _ _ firstIH secondIH)

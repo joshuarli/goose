@@ -180,8 +180,8 @@ theorem accepted_generated_control_progress_prefix_family {cfg : Cfg} {env : Env
     have demanded := cursor.canonical (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded) (by intro expression state child before built initial start map required runtime cursor; exact cursor.demanded)
     cases cursor with
     | left child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.progress⟩
-    | right child metadata owned occurrence rows coverage cursor => exact ⟨demanded, cursor.progress⟩
-    | operation child metadata owned site coverage admitted bounded carried => exact ⟨demanded, Or.inl ⟨_, _, site.instruction⟩⟩
+    | right child metadata owned occurrence rows coverage leftPost cursor => exact ⟨demanded, cursor.progress⟩
+    | operation child metadata owned site coverage admitted bounded same carried => exact ⟨demanded, Or.inl ⟨_, _, site.instruction⟩⟩
   | compare operation first second firstIH secondIH =>
     apply GeneratedExpressionPrefixFamily.mapCursor
       (accepted_generated_compare_prefix_family selected loop operation _ _ _ _ firstIH secondIH)
