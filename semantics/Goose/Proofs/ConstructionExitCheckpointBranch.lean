@@ -17,7 +17,7 @@ def recursiveBranchCondition : Expr :=
 
 def recursiveBranchBlock : Block := .mk 1 [.expr (.call 2 [] 0) 0] none
 
-theorem recursive_checkpoint_branch_escape :
+theorem recursive_checkpoint_branch_escape (otherwise : Option Block) :
     ∃ after : ExecutionState,
       let cleaned := { after with construction := { after.construction with
         exitReservations := after.construction.exitReservations.set! 0 .released } }
@@ -25,7 +25,7 @@ theorem recursive_checkpoint_branch_escape :
       let crossed := { innerUnwound with activations := innerUnwound.activations.filter (fun current => current.act != recursiveHelperActivation.act) }
       let branchUnwound := releaseScopeState recursiveCheckpointTarget 1 recursiveBeforeBranch.nextScope crossed
       execStmt 13 recursiveCheckpointConfig recursiveCheckpointTarget
-        (.ifS recursiveBranchCondition recursiveBranchBlock none 0) recursiveBeforeBranch =
+        (.ifS recursiveBranchCondition recursiveBranchBlock otherwise 0) recursiveBeforeBranch =
         .escape ⟨2, .nonlocal 0⟩ [.completed 1] branchUnwound := by
   obtain ⟨after, call⟩ := recursive_checkpoint_helper_call_escape
   let cleaned := { after with construction := { after.construction with
@@ -58,8 +58,7 @@ theorem recursive_checkpoint_branch_escape :
   have condition : evalValue 12 recursiveCheckpointConfig recursiveCheckpointTarget recursiveBranchCondition recursiveBeforeBranch =
       .ok (.bool true) recursiveBeforeBranch := by cbv
   refine ⟨after, ?_⟩
-  simp only [execStmt, condition, bind, expectBool, pure, ↓reduceIte, block]
-  rfl
+  cases otherwise <;> simp only [execStmt, condition, bind, expectBool, pure, ↓reduceIte, block] <;> rfl
 
 #print axioms recursive_checkpoint_branch_escape
 
