@@ -601,6 +601,20 @@ def preflightPublication (state : ConstructionState) (ids : List DestinationId) 
   if ids.eraseDups != ids then throw .ownership
   for id in ids do publicationCheck state id
 
+theorem preflightPublication_direct_packed (state : ConstructionState) (id storageId count : Nat)
+    (row : PendingDestination) (storage : ReceivingStorage)
+    (present : state.destinations[id]? = some row)
+    (stored : state.storage[storageId]? = some storage)
+    (progress : row.progress = .built count) (receiver : row.use = .receiver)
+    (backing : row.backing = .direct storageId) (storageEq : row.storage = storageId)
+    (packed : row.layout = .packed) (adaptation : row.adaptation = none) (fits : count < 2 ^ 32) :
+    preflightPublication state [id] = .ok () := by
+  have inside := (Array.getElem?_eq_some_iff.mp stored).1
+  simp [preflightPublication, List.eraseDups, List.eraseDupsBy, List.eraseDupsBy.loop,
+    publicationCheck, present, progress, receiver, backing, storageEq, stored, packed, adaptation,
+    DestinationBacking.receiverStorage, available, fits, Nat.not_le.mpr inside]
+  rfl
+
 def fitStagedDestination (id : DestinationId) : ConstructionM Unit := do
   let destination ← writableDestination id
   let count ← match destination.progress with
