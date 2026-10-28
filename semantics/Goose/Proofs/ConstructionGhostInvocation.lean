@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionGhostInvocationCore
 import Goose.Proofs.ConstructionInvocationReplay
 import Goose.Proofs.ConstructionExecutionSourceOrder
 import Goose.Proofs.ConstructionGhostBlock
@@ -5,24 +6,6 @@ import Goose.Proofs.ConstructionGhostBlock
 namespace Goose.Proofs.ConstructionGhostInvocation
 open Goose.Construct Goose.Proofs.ConstructionInvocationReplay
 open Goose.Proofs.ConstructionGhostStatements Goose.Proofs.ConstructionGhostBlock
-
-theorem visit_executes {action : α → EvalM β} {offset : Nat} {operands : List α}
-    {accumulator : List β} {before : ExecutionState} {outcome : ExecutionStep (List β)}
-    {visits : List (Invocation α β)}
-    (replay : OperandReplay action offset operands accumulator before outcome visits)
-    (visit : Invocation α β) (member : visit ∈ visits) :
-    action visit.operand visit.before = visit.outcome := by
-  induction replay with
-  | done => simp at member
-  | next head tail ih =>
-    simp only [List.mem_cons] at member
-    rcases member with same | later
-    · subst visit; exact head
-    · exact ih later
-  | stopped head | escaped head | jumped head =>
-    simp only [List.mem_singleton] at member
-    subst visit
-    exact head
 
 def comparisonContinuation (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (operation : Goose.Core.CmpOp) (second : Expr) (first : ExecutionStep Value) : ExecutionStep Value :=
