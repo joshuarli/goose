@@ -624,10 +624,10 @@
  },
  {
   "feature": "Conditional condition agreement",
-  "statement": "An accepted conditional statement's supported generated condition has successful-prefix agreement and non-timeout stop reflection, and its actual source result selects the matching branch or skip path.",
+  "statement": "An accepted conditional statement's supported generated condition has successful-prefix agreement and non-timeout stop reflection, and its actual source result selects the matching branch or skip path. Discarded mixed branch blocks agree through scope leave; an if without else also has its generated fork and join derived from lowering.",
   "assumptions": "Accepted source and generated occurrence, supported condition expression, related builder and retained demand.",
   "limits": "Generated branch-body control and its composition into mixed statements and blocks remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandIfCondition.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Lower/DemandIfCondition.lean; Goose/Lower/DemandBranchBlockSuffix.lean; Goose/Lower/DemandBranchBlockStopped.lean; Goose/Lower/DemandIfLowering.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted byte-owner allocation timeout",
@@ -656,9 +656,9 @@
  },
  {
   "feature": "Direct byte write trace",
-  "statement": "A writeElement operation appends only write events for its destination on every outcome, and finishDestination leaves events unchanged. The byte write loop from the canonical direct, open owner state succeeds and appends only writes for that owner.",
-  "assumptions": "The loop result starts from the canonical direct, open destination and storage zero; existing events and input bytes are arbitrary.",
-  "limits": "The loop result does not cover arbitrary runtime states, publication, terminal construction outcomes or general C-DIRECT. This component does not close TH-CON-01.",
+  "statement": "A writeElement operation appends only write events for its destination on every outcome, and finishDestination leaves events unchanged. From the canonical fresh byte-owner state, byte evaluation at every fuel either times out with its actual event prefix or succeeds with begin, write-only and publish events.",
+  "assumptions": "The evaluation result uses the canonical initial runtime and byte-owner module, owner and origin zero, and a growable byte literal. The loop result starts from the canonical direct, open destination and storage zero; existing loop events and input bytes are arbitrary.",
+  "limits": "The byte evaluation result does not cover arbitrary runtime states, general terminal construction outcomes or general C-DIRECT. This component does not close TH-CON-01.",
   "evidence": "Goose/Construct/Destination.lean; Goose/Proofs/ConstructionByteOwnerInitialization.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
@@ -733,10 +733,10 @@
  },
  {
   "feature": "Mixed byte and scalar module world preservation",
-  "statement": "At every fuel, a validated module with byte-owner globals and a no-tail entry body interleaving unnamed byte-owner declarations and recursive scalar expression statements preserves an accepted world at the actual module result. Escape and jump outcomes are impossible.",
-  "assumptions": "Accepted module, the specified byte-owner globals, mixed entry syntax and byte-owner local types.",
-  "limits": "Tail expressions, scalar declarations, other statements and global forms, and general construction trace claims remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionAcceptedMixedEffects.lean; Goose/Proofs/ConstructionAcceptedMixedExecution.lean; Goose/Proofs/ConstructionAcceptedMixedModule.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "At every fuel, a validated module with byte-owner globals and a no-tail entry body interleaving unnamed byte-owner declarations, integer or Boolean local declarations, and recursive scalar expression statements preserves an accepted world at the actual module result. Escape and jump outcomes are impossible.",
+  "assumptions": "Accepted module, the specified byte-owner globals, mixed entry syntax, byte-owner local types and integer or Boolean scalar local types.",
+  "limits": "Tail expressions, other statements and global forms, and general construction trace claims remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedMixedEffects.lean; Goose/Proofs/ConstructionAcceptedMixedLocalExecution.lean; Goose/Proofs/ConstructionAcceptedMixedLocalModule.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Stopped byte-owner local construction",
