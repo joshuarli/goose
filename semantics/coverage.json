@@ -742,8 +742,15 @@
   "feature": "Generated scalar literal assignment prefix",
   "statement": "Every successful target prefix of an accepted assignment of an integer literal to a local or global scalar place either retains the original demand map at an intermediate point or completes the matching source statement.",
   "assumptions": "Accepted source and generated assignment occurrence, related builder, admitted bounded realized retained map, generated rows and builder extension.",
-  "limits": "The right-hand side is an integer literal and the destination is a local or global scalar place. Non-timeout stops and general assignment traversal remain open. This component does not close TH-LOWER-03.",
+  "limits": "The right-hand side is an integer literal and the destination is a local or global scalar place. General assignment traversal remains open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandScalarAssignmentPrefix.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Generated scalar literal assignment non-timeout stops",
+  "statement": "A non-timeout target stop after a successful prefix of an accepted scalar literal assignment either matches a source stop or follows the completed source statement.",
+  "assumptions": "Accepted source and generated assignment occurrence, related builder, admitted bounded realized retained map, generated rows and builder extension.",
+  "limits": "The right-hand side is an integer literal and the destination is a local or global scalar place. Timeout and general assignment traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandScalarAssignmentStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted Core short-circuit control demand transfer",
