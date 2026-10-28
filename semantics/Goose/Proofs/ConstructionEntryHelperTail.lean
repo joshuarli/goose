@@ -23,8 +23,8 @@ theorem completion_empty_call (fuel : Nat) (config : EvalConfig) (environment : 
   | ok carriers after =>
     simp only [evaluated] at shape
     subst carriers
-    simp [withCompletionChannels, materializeOwnedCarriers, bind, pure, produced, evaluated]
-  | stop reason after => simp [withCompletionChannels, materializeOwnedCarriers, bind, pure, produced, evaluated]
+    simp [withCompletionChannels, completionChannelSetup, materializeOwnedCarriers, bind, pure, produced, evaluated]
+  | stop reason after => simp [withCompletionChannels, completionChannelSetup, bind, pure, produced, evaluated]
   | escape address carriers after | jump target kind after => simp only [evaluated] at shape
 
 theorem execActivationBody_helperTail (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)

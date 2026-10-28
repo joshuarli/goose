@@ -9,7 +9,7 @@ private theorem withCompletionChannels_register_success (ty : Ty) (origin : Goos
     (action : List Channel → EvalM (List Carrier)) (state after : ExecutionState) (value : Value)
     (evaluated : action [.register ty] state = .ok [.register value] after) :
     withCompletionChannels [.register ty] origin action state = .ok [.register value] after := by
-  simp [withCompletionChannels, materializeOwnedCarriers, List.mapM_cons, List.mapM_nil,
+  simp [withCompletionChannels, completionChannelSetup, materializeOwnedCarriers, List.mapM_cons, List.mapM_nil,
     bind, pure, evaluated, List.forIn_nil]
 
 theorem fixedInitializer_activationBody {fuel : Nat} {ty : Ty} {expression : Expr}
