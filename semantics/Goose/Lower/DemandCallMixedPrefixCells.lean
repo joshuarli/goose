@@ -179,7 +179,16 @@ theorem accepted_generated_call_mixed_prefix_cells_suffix {cfg : Cfg} {env : Env
             · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalPost
             · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalCells
             · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalInput
-        · exact .interior (required := required) (.referenceInterior done executed count suffix)
+        · obtain ⟨actualLocation, placed, placeEntry, placeAddressed, addressStep⟩ :=
+            accepted_generated_call_reference_demand source found child (Or.inl target) childCanonical headForm occurrence rows tracked
+              input.atPoint input.related bounded realized extended
+          have locationEq : actualLocation = location := by
+            have same := done
+            simp [evalArg, bind_apply, placed, pure_apply] at same
+            exact same
+          subst actualLocation
+          exact .interior (required := required)
+            (.referenceInterior found child target childCanonical placeEntry placeAddressed done executed count suffix)
 
 theorem accepted_generated_call_mixed_prefix_cells {cfg : Cfg} {env : Env} {state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}

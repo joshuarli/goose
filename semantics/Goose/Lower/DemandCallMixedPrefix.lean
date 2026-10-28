@@ -1,3 +1,4 @@
+import Goose.Lower.DemandCallReferenceDemand
 import Goose.Lower.DemandCallMixedStopped
 import Goose.Lower.DemandCallValuePrefix
 
@@ -38,6 +39,17 @@ inductive CallMixedPrefix {cfg : Cfg} {env : Env} {initialState : St}
       CallMixedPrefix source cx results before loop map required index (.byVal expression :: rest) start taken reached
   | referenceInterior {index : Nat} {mutability : Mutability} {place : Place} {rest : List Arg}
       {start reached boundary : DemandRuntimePoint} {taken length remaining : Nat} {location : Loc}
+      (found : arguments[index]? = some (.byRef mutability place))
+      (child : PlaceSource cfg env place start.state) (target : child.ty.refTarget = true)
+      (canonical : (ArgSource.byRef mutability child (Or.inl target)).MatchesContext source.world source.typingEnv source.rootsEnv
+        (callArgContext source.context index (.byRef mutability place) found))
+      {prior : List (ValueId × RetainedAlias)}
+      (placeEntry : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
+        (prior ++ map.values) map.runs start)
+      (placeAddressed : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.outputFuture
+        (prior ++ map.values) map.runs
+        ⟨(start.point.1, start.point.2 + 1), start.frame.set (lowerPlace place (lowerEnv cfg.mod env.vars results)
+          (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).1 (.val (.ref location)), start.state⟩)
       (evaluated : evalArg 2 cfg env (.byRef mutability place) start.state = .ok (.ref location) boundary.state)
       (expected : DemandRuntimePrefix cx length start boundary)
       (count : taken + remaining = length)
@@ -144,7 +156,15 @@ theorem accepted_generated_call_mixed_prefix_suffix {cfg : Cfg} {env : Env} {ini
             exact ArgsSource.afterHead_callChildren source sources canonical done fuel
           have next := ih nextSources nextCanonical nextTracked nextBounded nextRealized nextInput residual
           exact .referenceNext count executed done next
-        · exact .referenceInterior done executed count suffix
+        · obtain ⟨actualLocation, placed, placeEntry, placeAddressed, addressStep⟩ :=
+            accepted_generated_call_reference_demand source found child (Or.inl target) childCanonical headForm occurrence rows tracked
+              input.atPoint input.related bounded realized extended
+          have locationEq : actualLocation = location := by
+            have same := done
+            simp [evalArg, bind_apply, placed, pure_apply] at same
+            exact same
+          subst actualLocation
+          exact .referenceInterior found child target childCanonical placeEntry placeAddressed done executed count suffix
 
 theorem accepted_generated_call_mixed_prefix {cfg : Cfg} {env : Env} {state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
