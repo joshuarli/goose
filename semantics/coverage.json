@@ -537,8 +537,17 @@
   "theorem": "Goose.Lower.accepted_generated_unary_stopped_prefix",
   "statement": "For a non-timeout target stop following a generated unary-expression prefix, a stop in the unary operation is reflected to the source with the same stop and final state. A stop inside the operand retains its canonical source cursor; a completed expression retains its actual prefix and residual.",
   "assumptions": "Accepted source and generated occurrence, a successful-prefix family for the operand, realized and bounded retained map, builder extension, and an actual non-timeout stopped target instruction.",
-  "limits": "Stops inside operands are located but not yet recursively reflected; other operators and whole-module stopping prefixes remain open. This component does not close TH-LOWER-03.",
+  "limits": "Recursive unary and conversion operands are covered by the stopped-family result; other operators and whole-module stopping prefixes remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandUnaryStoppedPrefix.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Recursive unary and conversion stop reflection",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_leaf_stopped_family; Goose.Lower.accepted_generated_unary_stopped_family; Goose.Lower.accepted_generated_convert_stopped_family; Goose.Lower.accepted_generated_unary_stopped_expressions",
+  "statement": "A non-timeout target stop through a recursive literal, unary-operation or integer-conversion expression either reflects the same source stop and final state, or occurs after the source expression has completed and its actual target prefix has ended.",
+  "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and an actual successful target prefix followed by a non-timeout stopped instruction.",
+  "limits": "Reads, binary operations, comparisons, short-circuit control, other expressions and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandStoppedExpressionFamily.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted Core short-circuit control demand transfer",
