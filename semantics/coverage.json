@@ -676,6 +676,15 @@
   "evidence": "Goose/Lower/DemandControlValueBlockPrefix.lean and its expression, block and sequence dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Value-block suffix stop reflection",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_block_value_suffix_stopped",
+  "statement": "After accepted block statements complete, a non-timeout stop in a final expression reflects to the source block with the same stop and state. The generated scope-leave instruction cannot stop for a non-timeout reason, and later stops retain the completed block boundary.",
+  "assumptions": "Accepted block and body sources, completed source statements, generated occurrences, realized and bounded retained map, builder extension, and a stopped-expression family for the final value.",
+  "limits": "Body-to-value composition, other statement and expression forms, calls, timeout stops and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandStoppedValueBlockSuffix.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
