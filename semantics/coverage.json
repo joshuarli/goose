@@ -781,6 +781,13 @@
   "evidence": "Goose/Proofs/ConstructionAcceptedParameterPositionInvoke.lean; Goose/Proofs/ConstructionMixedLocalReplayWorld.lean; Goose/Proofs/ConstructionMixedLocalModuleScalarHelper.lean; Goose/Proofs/ConstructionScalarParameterWorldWitness.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Mixed module with scalar helper result",
+  "statement": "At every fuel, a validated module with byte globals and a mixed entry ending in a scalar-result helper declaration preserves an accepted world at the actual result. The helper receives one by-value scalar argument, executes a mixed body and returns a scalar; the caller binds the result. A validated witness instantiates the all-fuel theorem and completes successfully.",
+  "assumptions": "Accepted module, specified byte globals and mixed entry and helper bodies, one integer or Boolean by-value parameter and register result, a supported scalar helper tail, and the call-valued declaration as the final entry statement.",
+  "limits": "Statements after the result declaration, other result and argument forms, recursive calls and general evaluator preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedRegisterCallerFrame.lean; Goose/Proofs/ConstructionAcceptedMixedRegisterModule.lean; Goose/Proofs/ConstructionScalarResultNoPrintWorld.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Stopped byte-owner local construction",
   "statement": "At every fuel, an actual stop in local construction of a byte owner preserves the accepted world and source frame, including a fresh receiving region when allocation succeeded.",
   "assumptions": "Accepted world and source frame before construction. Allocation and byte expression origins may differ.",
