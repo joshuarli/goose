@@ -515,6 +515,15 @@
   "evidence": "ConstructionAcceptedByteSource.lean, ConstructionAcceptedByteFrame.lean, ConstructionAcceptedByteEvaluation.lean, ConstructionAcceptedByteChecked.lean, ConstructionAcceptedByteBinding.lean, ConstructionAcceptedByteStatement.lean, ConstructionAcceptedLocalFreshness.lean, ConstructionAcceptedTypingDeclaration.lean, ConstructionAcceptedByteContinuation.lean, ConstructionAcceptedByteSequence.lean, ConstructionAcceptedByteExecutionSequence.lean, ConstructionAcceptedByteAbnormalSequence.lean, ConstructionAcceptedByteBatch.lean and ConstructionAcceptedBytePrefix.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Uninitialized global prefix",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.futureGlobalsClear_initial; Goose.Proofs.ConstructionAcceptedExecution.FutureGlobalsClear.freshAct; Goose.Proofs.ConstructionAcceptedExecution.FutureGlobalsClear.freshDestination; Goose.Proofs.ConstructionAcceptedExecution.FutureGlobalsClear.bindGlobal",
+  "statement": "Future global objects and ordinals are absent initially, remain absent through fresh activation and receiver construction, and remain absent past the current global after binding it.",
+  "assumptions": "The prior future-global absence invariant and the stated successful receiver or global binding operation.",
+  "limits": "The lemmas do not yet establish accepted-world preservation for arbitrary global initializers or discharge TH-CON-01.",
+  "evidence": "ConstructionAcceptedGlobalPrefix.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted entry statement frame",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryStatementsFrame; Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryFreshStatements; Goose.Proofs.ConstructionAcceptedExecution.acceptedZeroGlobalEntryStatements; Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryPushedStatements; Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryCallSetup; Goose.Proofs.ConstructionAcceptedExecution.acceptedZeroGlobalRunEntry; Goose.Proofs.ConstructionAcceptedExecution.acceptedZeroGlobalEntryBytePrefix",
