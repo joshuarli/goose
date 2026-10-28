@@ -36,6 +36,27 @@ theorem completion_register_scalar {expression : Expr} (form : AcceptedBinaryExp
   cases evaluated : evalValue fuel config environment expression state <;>
     simp [withCompletionChannels, completionChannelSetup, materializeOwnedCarriers, bind, pure, produced, evaluated]
 
+theorem execActivationBody_register_scalar_tail_withBindings {expression : Expr} (form : AcceptedBinaryExpression expression)
+    (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation) (scope : Nat) (pre : List (Nat × Value)) (statements : List Stmt)
+    (before boundState middle : ExecutionState) (ty : Ty) (channels : activation.channels = [.register ty])
+    (bound : bindAll activation.act before.nextScope pre (ownershipResultScopeState activation scope before) = .ok () boundState)
+    (normal : execStmts (fuel + 1) config
+      { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements boundState = .ok (.normal .unit) middle) :
+    execActivationBody (fuel + 2) config activation pre ⟨scope, statements, some expression⟩ before =
+      match evalValue fuel config { activation with scopes := (scope, before.nextScope) :: activation.scopes } expression middle with
+      | .ok value after => .ok [.register value] (releaseScopeState activation scope before.nextScope after)
+      | .stop reason after => .stop reason after
+      | .escape target carriers after => .escape target carriers (releaseScopeState activation scope before.nextScope after)
+      | .jump target kind after => .jump target kind (releaseScopeState activation scope before.nextScope after) := by
+  have tail := completion_register_scalar form fuel config
+    { activation with scopes := (scope, before.nextScope) :: activation.scopes } middle ty
+  simp only [ownershipResultScopeState, beq_iff_eq, channels] at bound
+  simp only [channels] at normal tail ⊢
+  cases evaluated : evalValue fuel config
+      { activation with scopes := (scope, before.nextScope) :: activation.scopes, channels := [.register ty] } expression middle <;>
+    simp [execActivationBody, execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope,
+      channels, beq_iff_eq, bound, normal, tail, evaluated, releaseScope]
+
 theorem execActivationBody_register_scalar_tail {expression : Expr} (form : AcceptedBinaryExpression expression)
     (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt)
     (before middle : ExecutionState) (ty : Ty) (channels : activation.channels = [.register ty])
@@ -48,15 +69,8 @@ theorem execActivationBody_register_scalar_tail {expression : Expr} (form : Acce
       | .stop reason after => .stop reason after
       | .escape target carriers after => .escape target carriers (releaseScopeState activation scope before.nextScope after)
       | .jump target kind after => .jump target kind (releaseScopeState activation scope before.nextScope after) := by
-  have tail := completion_register_scalar form fuel config
-    { activation with scopes := (scope, before.nextScope) :: activation.scopes } middle ty
-  simp only [ownershipResultScopeState, beq_iff_eq, channels] at normal
-  simp only [channels] at tail
-  simp only [channels] at ⊢
-  cases evaluated : evalValue fuel config
-      { activation with scopes := (scope, before.nextScope) :: activation.scopes, channels := [.register ty] } expression middle <;>
-    simp [execActivationBody, execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope,
-      bindAll, channels, beq_iff_eq, normal, tail, evaluated, releaseScope]
+  exact execActivationBody_register_scalar_tail_withBindings form fuel config activation scope [] statements before
+    (ownershipResultScopeState activation scope before) middle ty channels (by simp [bindAll, bind, pure]) normal
 
 theorem execActivationBody_register_statements_stopped (fuel : Nat) (config : EvalConfig)
     (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt) (expression : Expr)
@@ -159,6 +173,7 @@ theorem checkedRegisterTail_activation_world {expression : Expr} (form : Accepte
 
 #print axioms checkedRegisterTail_activation_world
 #print axioms execActivationBody_register_statements_stopped
+#print axioms execActivationBody_register_scalar_tail_withBindings
 #print axioms execActivationBody_register_scalar_tail
 #print axioms evalProduce_register_scalar
 #print axioms completion_register_scalar
