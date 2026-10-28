@@ -3412,6 +3412,154 @@ theorem rpCall_nextVar {env : PEnv} {context : ContextId} {arguments : List (Lis
     (checked : rpCall env context arguments before = .ok (roots, after)) : after.nextVar = before.nextVar :=
   keeps_call env context arguments before roots after checked
 
+private def AccessBound (allowed : List Target) (action : P α) : Prop :=
+  ∀ before result after, action before = .ok (result, after) →
+    ∀ target, target ∈ after.eff.accessTargets → target ∈ before.eff.accessTargets ∨ target ∈ allowed
+
+private theorem accessBound_pure (allowed : List Target) (value : α) : AccessBound allowed (pure value) := by
+  intro before result after checked target member
+  change Except.ok (value, before) = Except.ok (result, after) at checked
+  cases checked
+  exact Or.inl member
+
+private theorem accessBound_bind (allowed : List Target) (action : P α) (next : α → P β)
+    (first : AccessBound allowed action) (remaining : ∀ value, AccessBound allowed (next value)) :
+    AccessBound allowed (action >>= next) := by
+  intro before result after checked target member
+  cases initial : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, initial] at checked
+  | ok pair =>
+    have rest : next pair.1 pair.2 = .ok (result, after) := by
+      simpa [bind, StateT.bind, Except.bind, initial] using checked
+    rcases remaining pair.1 pair.2 result after rest target member with middle | allowedMember
+    · exact first before pair.1 pair.2 initial target middle
+    · exact Or.inr allowedMember
+
+private theorem accessBound_modify (allowed : List Target) (update : RState → RState)
+    (bounded : ∀ before target, target ∈ (update before).eff.accessTargets → target ∈ before.eff.accessTargets ∨ target ∈ allowed) :
+    AccessBound allowed (modify update) := by
+  intro before result after checked target member
+  change Except.ok (PUnit.unit, update before) = Except.ok (result, after) at checked
+  cases checked
+  exact bounded before target member
+
+private theorem accessBound_get (allowed : List Target) : AccessBound allowed (get : P RState) := by
+  intro before result after checked target member
+  change Except.ok (before, before) = Except.ok (result, after) at checked
+  cases checked
+  exact Or.inl member
+
+private theorem accessBound_lift (allowed : List Target) (action : V α) : AccessBound allowed (liftV action) := by
+  intro before result after checked target member
+  cases action with
+  | error error => cases checked
+  | ok value =>
+    change Except.ok (value, before) = Except.ok (result, after) at checked
+    cases checked
+    exact Or.inl member
+
+private theorem accessBound_reject (allowed : List Target) (rule : Rule) (message : String) :
+    AccessBound allowed (rejP (α := α) rule message) := by
+  intro before result after checked
+  cases checked
+
+private theorem accessBound_forIn_list (allowed : List Target) (rows : List α) (initial : β)
+    (body : α → β → P (ForInStep β)) (each : ∀ row token, AccessBound allowed (body row token)) :
+    AccessBound allowed (forIn rows initial body) := by
+  induction rows generalizing initial with
+  | nil => exact accessBound_pure allowed initial
+  | cons row rows ih =>
+    rw [List.forIn_cons]
+    apply accessBound_bind _ _ _ (each row initial)
+    intro step
+    cases step with
+    | done token => exact accessBound_pure allowed token
+    | yield token => exact ih token
+
+private theorem accessBound_forIn'_list (allowed : List Target) (rows : List α) (initial : β)
+    (body : (row : α) → row ∈ rows → β → P (ForInStep β))
+    (each : ∀ row member token, AccessBound allowed (body row member token)) :
+    AccessBound allowed (forIn' rows initial body) := by
+  induction rows generalizing initial with
+  | nil => exact accessBound_pure allowed initial
+  | cons row rows ih =>
+    rw [List.forIn'_cons]
+    apply accessBound_bind _ _ _ (each row (by simp) initial)
+    intro step
+    cases step with
+    | done token => exact accessBound_pure allowed token
+    | yield token => exact ih token _ (fun selected member token => each selected (by simp [member]) token)
+
+private theorem accessBound_forIn'_range (allowed : List Target) (rows : Std.Legacy.Range) (initial : β)
+    (body : (row : Nat) → row ∈ rows → β → P (ForInStep β))
+    (each : ∀ row member token, AccessBound allowed (body row member token)) :
+    AccessBound allowed (forIn' rows initial body) := by
+  rw [Std.Legacy.Range.forIn'_eq_forIn'_range']
+  exact accessBound_forIn'_list _ _ _ _ (fun row member token => each row _ token)
+
+local macro "bound_access" "[" extra:tacticSeq "]" : tactic => `(tactic|
+  repeat' first
+  | $extra
+  | assumption
+  | exact accessBound_pure _ _
+  | exact accessBound_lift _ _
+  | exact accessBound_reject _ _ _
+  | exact accessBound_get _
+  | refine accessBound_modify _ _ (by intro before target member; exact Or.inl member)
+  | refine accessBound_forIn_list _ _ _ _ (fun _ _ => ?_)
+  | refine accessBound_forIn'_range _ _ _ _ (fun _ _ _ => ?_)
+  | refine accessBound_bind _ _ _ ?_ (fun _ => ?_)
+  | split)
+
+private theorem accessBound_scopedShrinkAliases (allowed : List Target) (env : PEnv) (effects : Eff) :
+    AccessBound allowed (checkScopedShrinkAliases env effects) := by
+  unfold checkScopedShrinkAliases checkRetainedShrinks
+  bound_access [fail]
+  all_goals try dsimp only
+  all_goals bound_access [fail]
+
+private theorem accessBound_escapeRoots (allowed : List Target) (env : PEnv) (target : Nat) (channels : List (List RootRef)) :
+    AccessBound allowed (receiveEscapeRoots env target channels) := by
+  unfold receiveEscapeRoots
+  bound_access [fail]
+
+
+private theorem callEffects_accessBound (callee : Impl) (context : Context) (arguments : List (List RootRef)) (before : Eff)
+    (target : Target) (member : target ∈ (callEffects callee context arguments before).accessTargets) :
+    target ∈ before.accessTargets ∨ target ∈ (callEffects callee context arguments {}).accessTargets := by
+  cases known : callee.summary <;>
+    simp only [callEffects, known, Eff.accessTargets, List.mem_append, addTargets_members] at member ⊢
+  · rcases member with (((a | b) | (c | d)) | (e | f)) | (g | h) <;> simp_all
+  · rcases member with ((a | (b | c)) | d) | e <;> simp_all
+
+theorem rpCall_accessUpper {env : PEnv} {target : ContextId} {context : Context} {callee : Impl}
+    {before after : RState} {roots : List RootRef} (arguments : List (List RootRef))
+    (contextAt : env.mod.contexts[target]? = some context) (calleeAt : env.mod.impls[context.impl]? = some callee)
+    (checked : rpCall env target arguments before = .ok (roots, after)) :
+    ∀ access ∈ after.eff.accessTargets,
+      access ∈ before.eff.accessTargets ∨ access ∈ (callEffects callee context arguments {}).accessTargets := by
+  have bounded : AccessBound (callEffects callee context arguments {}).accessTargets (rpCall env target arguments) := by
+    unfold rpCall
+    simp only [contextAt, calleeAt, checkRetainedShrinks]
+    bound_access [first
+      | exact accessBound_scopedShrinkAliases _ _ _
+      | exact accessBound_escapeRoots _ _ _ _
+      | refine accessBound_modify _ _ (by
+          intro state access member
+          change access ∈ (callEffects callee context arguments state.eff).accessTargets at member
+          exact callEffects_accessBound callee context arguments state.eff access member)]
+    all_goals try dsimp only
+    all_goals bound_access [first
+      | exact accessBound_scopedShrinkAliases _ _ _
+      | exact accessBound_escapeRoots _ _ _ _
+      | refine accessBound_modify _ _ (by
+          intro state access member
+          change access ∈ (callEffects callee context arguments state.eff).accessTargets at member
+          exact callEffects_accessBound callee context arguments state.eff access member)]
+  exact bounded before roots after checked
+
+#print axioms rpCall_accessUpper
+
 #print axioms rpCall_access
 #print axioms rpCall_nextVar
 
