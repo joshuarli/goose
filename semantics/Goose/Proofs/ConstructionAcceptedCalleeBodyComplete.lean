@@ -44,7 +44,7 @@ theorem execActivationBody_scalarLocal_prefix_earlier (fuel : Nat) (config : Eva
     execActivationBody_checkedSequence_earlier fuel config accepted frame context state ambient types live regions pending
       frontier scope statements expression ty world source phase parameters scopes cursor bodyFrame body frontierBound channels position
       tailForm bodyType available (fun candidate => candidate = ambient) rfl (by
-        intro n child before seqWorld seqSource seqPhase seqPosition seqAvailable
+        intro n _ child before seqWorld seqSource seqPhase seqPosition seqAvailable
         have bodyScope : frame.source.impl.body.scope = scope := by simp [body, Block.scope]
         have childInterpretation : child.interpretation = frame.interpretation.enterScope scope state.nextScope := by
           simp [child, entryStatementsFrame, bodyScope]

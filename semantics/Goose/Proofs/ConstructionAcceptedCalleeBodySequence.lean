@@ -27,7 +27,7 @@ theorem execActivationBody_checkedSequence_earlier (fuel : Nat) (config : EvalCo
     (available : ∀ result after, rpBlockValue frame.source [] ⟨scope, statements, some expression⟩ frame.rootCursor =
       .ok (result, after) → GlobalEffectsAvailable frame.interpretation frame.initialized after.eff)
     (ambientAllowed : OwnershipAmbient → Prop) (ambientInitial : ambientAllowed ambient)
-    (sequence : ∀ n,
+    (sequence : ∀ n, n < fuel →
       let child := entryStatementsFrame config frame state.nextScope
       let before := ownershipResultScopeState frame.interpretation.environment scope state
       AcceptedWorld config child.initialized before ambient types live regions pending →
@@ -113,7 +113,7 @@ theorem execActivationBody_checkedSequence_earlier (fuel : Nat) (config : EvalCo
         EarlierCallerObservations.enterScope frontier activation scope state types, trivial⟩
     | succ fuel =>
       obtain ⟨final, finalTypes, finalLive, finalAmbient, sameInitialized, allowed, extend, finalActClock, finalScopeClock, finalWorld, finalSource, finalObserved, finalFlow⟩ :=
-        sequence (fuel + 1) scopeWorld scopeSource childPhase scopePosition seqAvailable
+        sequence (fuel + 1) (by omega) scopeWorld scopeSource childPhase scopePosition seqAvailable
       change final.initialized = child.initialized at sameInitialized
       cases execution : execStmts (fuel + 1) config (entryStatementsFrame config frame state.nextScope).interpretation.environment statements
           (ownershipResultScopeState frame.interpretation.environment scope state) with
