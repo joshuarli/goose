@@ -81,6 +81,30 @@ theorem execStmt_assignVisibleInteger_world (fuel : Nat) (config : EvalConfig) (
     simp only [StatementWorldOutcome, outcome]
     exact ⟨normal, frame, types, nextLive, regions, rfl, nextWorld, nextSource⟩
 
+theorem execStmt_assignGlobalInteger_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (id : Nat) (intTy : Goose.Core.IntTy) (number : Int) (origin : Goose.Core.OriginId) (descriptor : Global)
+    (world : AcceptedWorld config frame.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame state types)
+    (initialized : frame.initialized = config.module.globals.size)
+    (bounded : GlobalEffectTargetsBounded frame.rootCursor.eff config.module.globals.size)
+    (declared : config.module.globals[id]? = some descriptor) (localType : descriptor.ty = .int intTy) :
+    AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState
+      (execStmt fuel config frame.interpretation.environment (.assign (.global id) (.lit intTy number) origin) state)) ambient types live regions pending ∧
+    AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState
+      (execStmt fuel config frame.interpretation.environment (.assign (.global id) (.lit intTy number) origin) state)) types ∧
+    (match execStmt fuel config frame.interpretation.environment (.assign (.global id) (.lit intTy number) origin) state with
+    | .ok flow _ => flow = .normal .unit | .stop .. => True | _ => False) := by
+  have checked : CheckedValue (ordinaryOperandFrame frame 1) (.lit intTy number) descriptor.ty []
+      frame.typingCounter frame.rootCursor := by
+    simpa [localType] using checkedIntegerLiteral source intTy number initialized bounded
+  have result := execStmt_checkedScalarAssignGlobal_complete fuel 1 config accepted frame state ambient types live regions pending
+    id (.lit intTy number) origin descriptor (.numeric (.scalar (.scalar (.integer intTy number)))) world source initialized
+    declared (Or.inl ⟨intTy, localType⟩) [] frame.typingCounter frame.rootCursor checked
+  cases outcome : execStmt fuel config frame.interpretation.environment (.assign (.global id) (.lit intTy number) origin) state <;>
+    simpa only [outcome] using result
+
 theorem execStmt_assignGlobalInteger_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -92,12 +116,8 @@ theorem execStmt_assignGlobalInteger_world (fuel : Nat) (config : EvalConfig) (a
     (declared : config.module.globals[id]? = some descriptor) (localType : descriptor.ty = .int intTy) :
     StatementWorldOutcome config accepted frame.initialized ambient pending
       (execStmt fuel config frame.interpretation.environment (.assign (.global id) (.lit intTy number) origin) state) := by
-  have checked : CheckedValue (ordinaryOperandFrame frame 1) (.lit intTy number) descriptor.ty []
-      frame.typingCounter frame.rootCursor := by
-    simpa [localType] using checkedIntegerLiteral source intTy number initialized bounded
-  have result := execStmt_checkedScalarAssignGlobal_complete fuel 1 config accepted frame state ambient types live regions pending
-    id (.lit intTy number) origin descriptor (.numeric (.scalar (.scalar (.integer intTy number)))) world source initialized
-    declared (Or.inl ⟨intTy, localType⟩) [] frame.typingCounter frame.rootCursor checked
+  have result := execStmt_assignGlobalInteger_complete fuel config accepted frame state ambient types live regions pending
+    id intTy number origin descriptor world source initialized bounded declared localType
   cases outcome : execStmt fuel config frame.interpretation.environment (.assign (.global id) (.lit intTy number) origin) state with
   | escape target carriers after | jump target kind after =>
     simp only [outcome] at result
@@ -112,6 +132,7 @@ theorem execStmt_assignGlobalInteger_world (fuel : Nat) (config : EvalConfig) (a
     exact ⟨result.2.2, frame, types, live, regions, rfl, result.1, result.2.1⟩
 
 #print axioms checkedIntegerLiteral
+#print axioms execStmt_assignGlobalInteger_complete
 #print axioms execStmt_assignGlobalInteger_world
 #print axioms execStmt_assignVisibleInteger_complete
 #print axioms execStmt_assignVisibleInteger_world
