@@ -3008,6 +3008,26 @@ def ArgsSource.resultsMatch {n : Nat} {cfg : Cfg} {env : Env} :
   | _ :: _, _, .cons source rest, results => source.resultsMatch results ∧
       ∀ value after hdone, (rest value after hdone).resultsMatch results
 
+open Core.Sound
+def ArgSource.MatchesContext {cfg : Cfg} {env : Env} {state : St} {arg : Arg}
+    {plans : Array (Array DemandPoint)} {path : List Nat} (world : World)
+    (context : ArgContext cfg.mod plans path arg) (source : ArgSource cfg env state arg) : Prop :=
+  match source, context with
+  | .byVal child, .byVal argumentContext => child.plans = plans ∧ child.path = path ∧ child.world = world ∧
+      HEq child.context argumentContext
+  | .byRef _ child _, .byRef argumentContext => child.plans = plans ∧ child.path = path ∧ child.world = world ∧
+      HEq child.context argumentContext
+
+def ArgsSource.CallChildren {n : Nat} {cfg : Cfg} {env : Env} {initial : St}
+    {c : ContextId} {all : List Arg} {origin : OriginId}
+    (root : ExprSource cfg env (.call c all origin) initial) :
+    ∀ {args : List Arg} {state : St}, Nat → ArgsSource n cfg env args state → Prop
+  | [], _, _, .nil _ => True
+  | arg :: args, _, offset, .cons head rest =>
+    ∃ found : all[offset]? = some arg,
+      head.MatchesContext root.world (callArgContext root.context offset arg found) ∧
+      ∀ value after done, (rest value after done).CallChildren root (offset + 1)
+
 open Core.Sound in
 private theorem argSource_of_spec {cfg : Cfg} {env : Env} {expr : Expr} {initial state : St}
     (root : ExprSource cfg env expr initial) {path : List Nat} (arg : Arg)
@@ -3024,7 +3044,7 @@ private theorem argSource_of_spec {cfg : Cfg} {env : Env} {expr : Expr} {initial
     (typed : ArgTy root.typingEnv arg tn ty tn') (rooted : ArgRp root.rootsEnv arg rst roots rst')
     (effects : EffLe rst'.eff root.world.E)
     (metadata : SourceResults root.typingEnv root.rootsEnv results) :
-    ∃ source : ArgSource cfg env state arg, source.resultsMatch results := by
+    ∃ source : ArgSource cfg env state arg, source.resultsMatch results ∧ source.MatchesContext root.world ac := by
   cases arg with
   | byVal expr =>
     cases ac with
@@ -3036,7 +3056,7 @@ private theorem argSource_of_spec {cfg : Cfg} {env : Env} {expr : Expr} {initial
         rootsStart := rst, rootsEnd := rst', roots := roots, active := active, access := access,
         protection := protection, observed := observed, classified := classified,
         permission := root.permission, frame := frame, typed := typed, rooted := rooted,
-        effects := effects }, metadata⟩
+        effects := effects }, metadata, ⟨rfl, rfl, rfl, HEq.rfl⟩⟩
   | byRef mutability place =>
     cases ac with
     | byRef context =>
@@ -3048,7 +3068,7 @@ private theorem argSource_of_spec {cfg : Cfg} {env : Env} {expr : Expr} {initial
         mutable := caps.1, contents := caps.2, rootsStart := rst, rootsEnd := rst', roots := roots,
         active := active, access := access, protection := protection, observed := observed,
         classified := classified, permission := root.permission, frame := frame,
-        typed := typed, rooted := rooted, effects := effects } allowed, metadata⟩
+        typed := typed, rooted := rooted, effects := effects } allowed, metadata, ⟨rfl, rfl, rfl, HEq.rfl⟩⟩
 
 open Core.Sound in
 private theorem typedArgsSource_suffix {n : Nat} {cfg : Cfg} {env : Env} {initial : St}
@@ -3066,9 +3086,9 @@ private theorem typedArgsSource_suffix {n : Nat} {cfg : Cfg} {env : Env} {initia
       root.observation state.store) →
     ps.length = args.length → tyArgs root.typingEnv callee ps args tn = .ok ((), tn') →
     rpArgs root.rootsEnv args rst = .ok (ars, rst') → EffLe rst'.eff root.world.E →
-    ∃ source : ArgsSource n cfg env args state, source.resultsMatch results
+    ∃ source : ArgsSource n cfg env args state, source.resultsMatch results ∧ source.CallChildren root offset
   | [], _, _, state, _, _, _, _, _, _, _, _, _, _, _, _, _, _ =>
-    ⟨.nil state, trivial⟩
+    ⟨.nil state, trivial, trivial⟩
   | arg :: args, [], _, _, _, _, _, _, _, _, _, _, _, _, size, _, _, _ => by simp at size
   | arg :: args, param :: params, offset, state, tn, tn', rst, rst', ars, sourceEq, bound,
       frame, observed, classified, size, ht, hr, effects => by
@@ -3131,12 +3151,12 @@ private theorem typedArgsSource_suffix {n : Nat} {cfg : Cfg} {env : Env} {initia
         rw [shrinkEq]
         exact observed
       have childEffects : EffLe r1.eff root.world.E := (rpArgs_mono hra).2.trans effects
-      obtain ⟨source, hmetadata⟩ := argSource_of_spec root arg ac tn t1 ty rst r1 rho results
+      obtain ⟨source, hmetadata, hcanonical⟩ := argSource_of_spec root arg ac tn t1 ty rst r1 rho results
         (callArgContext_activeMatches ec offset arg harg root.active)
         (callArgContext_accessMatches ec offset arg harg root.access)
         childProtected childObserved classified childFrame hat har childEffects metadata
       have nextReady : ∀ value after, evalArg n cfg env arg state = .ok value after →
-          ∃ source : ArgsSource n cfg env args after, source.resultsMatch results := by
+          ∃ source : ArgsSource n cfg env args after, source.resultsMatch results ∧ source.CallChildren root (offset + 1) := by
         intro value after hdone
         have hs := (Core.Sound.specs_all (Core.Sound.validate_modOk cfg.mod root.accepted)
           cfg.profile root.plans n).arg (root.path ++ [offset]) arg ac root.observation
@@ -3154,14 +3174,16 @@ private theorem typedArgsSource_suffix {n : Nat} {cfg : Cfg} {env : Env} {initia
           (callArgFrame_rest ec offset arg args harg hrest root.active frame1)
           observed1 classified1 hl' tailTyping hra effects
       let rest := fun value after hdone => Classical.choose (nextReady value after hdone)
-      exact ⟨.cons source rest, hmetadata, fun value after hdone =>
-        Classical.choose_spec (nextReady value after hdone)⟩
+      refine ⟨.cons source rest, ⟨hmetadata, fun value after hdone =>
+        (Classical.choose_spec (nextReady value after hdone)).1⟩, harg, hcanonical, ?_⟩
+      intro value after hdone
+      exact (Classical.choose_spec (nextReady value after hdone)).2
 
 open Core.Sound in
-theorem ExprSource.callArgs {cfg : Cfg} {env : Env} {state : St} {c : ContextId}
+theorem ExprSource.callArgsCanonical {cfg : Cfg} {env : Env} {state : St} {c : ContextId}
     {args : List Arg} {origin : OriginId} (root : ExprSource cfg env (.call c args origin) state)
     (n : Nat) (results : List Ty) (metadata : SourceResults root.typingEnv root.rootsEnv results) :
-    ∃ source : ArgsSource n cfg env args state, source.resultsMatch results := by
+    ∃ source : ArgsSource n cfg env args state, source.resultsMatch results ∧ source.CallChildren root 0 := by
   have replay := root.rooted
   simp only [rpExpr] at replay
   inv at replay
@@ -3197,6 +3219,13 @@ def TypedArgsClaim (n : Nat) (cfg : Cfg) (results : List Ty) (args : List Arg) :
     SimEAt cx pt fr (mapList (evalArg n cfg env) args)
       (fun values pt' fr' => ids.length = values.length ∧
         Post cfg env cx ls fr ls' fr' pt' (cellsOf ids values)) state
+
+theorem ExprSource.callArgs {cfg : Cfg} {env : Env} {state : St} {c : ContextId}
+    {args : List Arg} {origin : OriginId} (root : ExprSource cfg env (.call c args origin) state)
+    (n : Nat) (results : List Ty) (metadata : SourceResults root.typingEnv root.rootsEnv results) :
+    ∃ source : ArgsSource n cfg env args state, source.resultsMatch results := by
+  obtain ⟨source, metadata, canonical⟩ := root.callArgsCanonical n results metadata
+  exact ⟨source, metadata⟩
 
 theorem typedArgsClaim {n : Nat} {cfg : Cfg} {results : List Ty} : ∀ (args : List Arg),
     (∀ arg ∈ args, TypedArgClaim n cfg results arg) → TypedArgsClaim n cfg results args

@@ -11,6 +11,16 @@ def RetainedSsaMap.addValues (map : RetainedSsaMap) (id : ValueId) (aliases : Li
 def RetainedSsaMap.addRuns (map : RetainedSsaMap) (id : ValueId) (aliases : List RetainedAlias) : RetainedSsaMap :=
   ⟨map.values, aliases.map (fun alias => (id, alias)) ++ map.runs⟩
 
+inductive GeneratedCallArgumentRows (access : AccessEnv) (path : List Nat) :
+    Nat → List Arg → List ValueId → List (ValueId × RetainedAlias) → Prop
+  | nil (index : Nat) : GeneratedCallArgumentRows access path index [] [] []
+  | cons {index : Nat} {argument : Arg} {arguments : List Arg} {id : ValueId} {ids : List ValueId}
+      {aliases : List RetainedAlias} {retained : List (ValueId × RetainedAlias)}
+      (query : access.aliasArg (path ++ [index]) argument = .ok aliases)
+      (tail : GeneratedCallArgumentRows access path (index + 1) arguments ids retained) :
+      GeneratedCallArgumentRows access path index (argument :: arguments) (id :: ids)
+        (aliases.map (fun alias => (id, alias)) ++ retained)
+
 inductive GeneratedDemandRows (m : Core.Module) (access : AccessEnv) :
     {function : Func} → {le : LEnv} → {root : DemandNode} → {path : List Nat} → {action : DemandLoweringAction} →
     {before : LS} → GeneratedDemandOccurrence m function le root path action before → RetainedSsaMap → Prop
@@ -108,6 +118,14 @@ inductive GeneratedDemandRows (m : Core.Module) (access : AccessEnv) :
       (query : access.aliasPlace (path ++ [0]) owner = .ok aliases) :
       GeneratedDemandRows m access (.pushValue occurrence)
         (required.addValues (lowerPlace owner le before).1 aliases)
+  | argument {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS}
+      {context : ContextId} {arguments : List Arg} {origin : OriginId} {index : Nat} {argument : Arg}
+      {occurrence : GeneratedDemandOccurrence m function le root path (.expression (.call context arguments origin)) before}
+      {argumentAt : arguments[index]? = some argument} {required : RetainedSsaMap}
+      {prior : List (ValueId × RetainedAlias)} (rows : GeneratedDemandRows m access occurrence required)
+      (tracked : GeneratedCallArgumentRows access path 0 (arguments.take index)
+        (lowerArgs (arguments.take index) le before).1 prior) :
+      GeneratedDemandRows m access (.argument occurrence argumentAt) ⟨prior ++ required.values, required.runs⟩
   | argumentValue {function : Func} {le : LEnv} {root : DemandNode} {path : List Nat} {before : LS} {expression : Expr}
       {occurrence : GeneratedDemandOccurrence m function le root path (.argument (.byVal expression)) before}
       {required : RetainedSsaMap} (rows : GeneratedDemandRows m access occurrence required) :
