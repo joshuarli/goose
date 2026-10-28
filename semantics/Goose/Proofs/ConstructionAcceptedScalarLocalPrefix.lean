@@ -196,12 +196,17 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
         next.initialized = frame.initialized ∧ RootTypesExtend types nextTypes ∧
         AcceptedWorld config next.initialized after ambient nextTypes nextLive regions pending ∧
         AcceptedFrame config accepted next after nextTypes ∧
-        (match outcome with | .ok flow _ => flow = .normal .unit | .stop _ _ => True | .escape .. | .jump .. => False) := by
+        (match outcome with | .ok flow _ => flow = .normal .unit ∧ SourcePosition accepted next (.statements []) | .stop _ _ => True | .escape .. | .jump .. => False) := by
   induction form with
   | nil =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position available scalar
-    cases fuel <;> simp only [execStmts, timeout, EvalM.stop, pure, Goose.Proofs.Exit.stepState]
-    all_goals exact ⟨frame, types, live, rfl, (fun _ _ found => found), world, source, trivial⟩
+    cases fuel with
+    | zero =>
+      simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
+      exact ⟨frame, types, live, rfl, (fun _ _ found => found), world, source, trivial⟩
+    | succ fuel =>
+      simp only [execStmts, pure, Goose.Proofs.Exit.stepState]
+      exact ⟨frame, types, live, rfl, (fun _ _ found => found), world, source, trivial, position⟩
   | cons id expression origin rest expressionForm tail ih =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position available scalar
     cases fuel with
