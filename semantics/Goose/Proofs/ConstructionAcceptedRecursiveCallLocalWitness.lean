@@ -34,17 +34,15 @@ theorem callLocalCycle_graph : RegisterCallGraphWithCallLocals callLocalCycleCon
       simp [callLocalCycleConfig, callLocalCycleModule] at implementationAt
       subst implementation
       apply Or.inr
-      refine ⟨_, 0, 0, 1, 0, 0, [], [], .read (.var 0), ⟨1, "cycle", [], [[]], []⟩,
-        callLocalCycleHelper, rfl, rfl, .nil, .nil, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl⟩
+      refine ⟨_, 0, [.letS 0 (.call 1 [] 0) 0], .read (.var 0), rfl, rfl, ?_, ?_, ?_⟩
+      · exact .call 0 1 0 0 [] ⟨1, "cycle", [], [[]], []⟩ callLocalCycleHelper rfl rfl rfl rfl .nil
       · repeat constructor
-      · intro id expression origin member
-        cases member
-      · intro descriptor found
+      · intro id expression origin member descriptor found
+        simp at member
+        obtain ⟨rfl, rfl, rfl⟩ := member
         simp [callLocalCycleHelper] at found
         subst descriptor
         exact Or.inl ⟨.i64, rfl⟩
-      · intro id expression origin member
-        cases member
     | succ target => simp [callLocalCycleConfig, callLocalCycleModule] at contextAt
 
 private def callLocalCycleStops : Bool :=

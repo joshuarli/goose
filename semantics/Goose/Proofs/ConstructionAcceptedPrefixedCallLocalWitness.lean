@@ -33,22 +33,15 @@ theorem prefixedCycle_graph : RegisterCallGraphWithCallLocals prefixedCycleConfi
       simp [prefixedCycleConfig, prefixedCycleModule] at implementationAt
       subst implementation
       apply Or.inr
-      refine ⟨_, 0, 1, 1, 0, 0, [.letS 0 (.lit .i64 3) 0], [], .read (.var 1),
-        ⟨1, "cycle", [], [[]], []⟩, prefixedCycleHelper, rfl, rfl, ?_, .nil, ?_, ?_, ?_, ?_, rfl, rfl, rfl, rfl⟩
-      · repeat constructor
+      refine ⟨_, 0, [.letS 0 (.lit .i64 3) 0, .letS 1 (.call 1 [] 0) 0], .read (.var 1), rfl, rfl, ?_, ?_, ?_⟩
+      · apply CallLocalStatements.scalar
+        · repeat constructor
+        · exact .call 1 1 0 0 [] ⟨1, "cycle", [], [[]], []⟩ prefixedCycleHelper rfl rfl rfl rfl .nil
       · repeat constructor
       · intro id expression origin member descriptor found
         simp at member
-        obtain ⟨rfl, rfl, rfl⟩ := member
-        simp [prefixedCycleHelper] at found
-        subst descriptor
-        exact Or.inl ⟨.i64, rfl⟩
-      · intro descriptor found
-        simp [prefixedCycleHelper] at found
-        subst descriptor
-        exact Or.inl ⟨.i64, rfl⟩
-      · intro id expression origin member
-        cases member
+        rcases member with ⟨rfl, rfl, rfl⟩ | ⟨rfl, rfl, rfl⟩ <;>
+          simp [prefixedCycleHelper] at found <;> subst descriptor <;> exact Or.inl ⟨.i64, rfl⟩
     | succ target => simp [prefixedCycleConfig, prefixedCycleModule] at contextAt
 
 private def prefixedCycleStops : Bool :=
