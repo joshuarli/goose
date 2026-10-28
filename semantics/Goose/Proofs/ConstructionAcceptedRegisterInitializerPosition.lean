@@ -11,22 +11,22 @@ private theorem initializer_bind_success {ε α β : Type} (first : Except ε α
   | error failure => cases checked
   | ok value => exact ⟨value, rfl⟩
 
-theorem SourcePosition.registerCallInitializer {config : EvalConfig} {accepted : AcceptedModule config}
-    (frame : ConstructionSourceFrame) (id origin contextId callOrigin fuel : Nat) (expression : Expr)
-    (position : SourcePosition accepted frame (.statement (.letS id (.call contextId [.byVal expression] callOrigin) origin)))
+theorem SourcePosition.callInitializer {config : EvalConfig} {accepted : AcceptedModule config}
+    (frame : ConstructionSourceFrame) (id origin contextId callOrigin fuel : Nat) (arguments : List Arg)
+    (position : SourcePosition accepted frame (.statement (.letS id (.call contextId arguments callOrigin) origin)))
     (nesting : frame.typingFuel = fuel + 1) :
     ∃ descriptor, frame.typing.variables[id]? = some descriptor ∧ id = frame.typingCounter ∧ id = frame.rootCursor.nextVar ∧
-      SourcePosition accepted (letInitializerFrame frame id fuel) (.expression (.call contextId [.byVal expression] callOrigin)) := by
+      SourcePosition accepted (letInitializerFrame frame id fuel) (.expression (.call contextId arguments callOrigin)) := by
   obtain ⟨next, counter, rootsAfter, typed, rooted⟩ := position.checked accepted frame _
-  have typed' : typeStatement (fuel + 1) frame.typing (.letS id (.call contextId [.byVal expression] callOrigin) origin)
+  have typed' : typeStatement (fuel + 1) frame.typing (.letS id (.call contextId arguments callOrigin) origin)
       frame.typingCounter = .ok (next, counter) := by simpa [nesting] using typed
   obtain ⟨descriptor, declared, scope, order⟩ := typeStatement_let_descriptor fuel frame.typing next id
-    (.call contextId [.byVal expression] callOrigin) origin frame.typingCounter counter typed'
+    (.call contextId arguments callOrigin) origin frame.typingCounter counter typed'
   have rootOrder := (rpStmt_letS_initializer rooted).1
   obtain ⟨_, roots, expressionRootsAfter, expressionRooted, included⟩ := rpStmt_letS_initializer rooted
   have expressionTyped : ∃ types after,
       typeExpr fuel { frame.typing with use := .ordinary, request := .value, resultRequests := [] }
-        (.call contextId [.byVal expression] callOrigin) (frame.typingCounter + 1) = .ok (types, after) := by
+        (.call contextId arguments callOrigin) (frame.typingCounter + 1) = .ok (types, after) := by
     have checked := typed'
     simp only [typeStatement, bind, StateT.bind] at checked
     subst id
@@ -54,6 +54,15 @@ theorem SourcePosition.registerCallInitializer {config : EvalConfig} {accepted :
   refine ⟨descriptor, declared, order, rootOrder, .child position (.letInitializer frame id origin fuel _ nesting order rootOrder) ?_⟩
   exact ⟨types, after, roots, expressionRootsAfter, by simpa [letInitializerFrame, ordinaryOperandFrame] using expressionChecked,
     by simpa [letInitializerFrame, ordinaryOperandFrame] using expressionRooted⟩
+
+
+theorem SourcePosition.registerCallInitializer {config : EvalConfig} {accepted : AcceptedModule config}
+    (frame : ConstructionSourceFrame) (id origin contextId callOrigin fuel : Nat) (expression : Expr)
+    (position : SourcePosition accepted frame (.statement (.letS id (.call contextId [.byVal expression] callOrigin) origin)))
+    (nesting : frame.typingFuel = fuel + 1) :
+    ∃ descriptor, frame.typing.variables[id]? = some descriptor ∧ id = frame.typingCounter ∧ id = frame.rootCursor.nextVar ∧
+      SourcePosition accepted (letInitializerFrame frame id fuel) (.expression (.call contextId [.byVal expression] callOrigin)) := by
+  exact position.callInitializer frame id origin contextId callOrigin fuel [.byVal expression] nesting
 
 theorem checkedRegisterCallInitializerArgument {config : EvalConfig} {accepted : AcceptedModule config}
     (frame : ConstructionSourceFrame) (state : ExecutionState) (types : RootTypes)
@@ -87,5 +96,6 @@ theorem checkedRegisterCallInitializerArgument {config : EvalConfig} {accepted :
     by simpa [initial, letInitializerFrame, ordinaryOperandFrame] using checked⟩
 
 #print axioms checkedRegisterCallInitializerArgument
+#print axioms SourcePosition.callInitializer
 #print axioms SourcePosition.registerCallInitializer
 end Goose.Proofs.ConstructionAcceptedExecution
