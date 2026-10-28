@@ -39,6 +39,34 @@ theorem byReference_head_history {config : EvalConfig} {α : Type} {fuel : Nat} 
       (evalPlace sourceFuel config environment place before) := by
   cases history <;> simp_all [argumentsSyntax]
 
+theorem constructed_head_materialized_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
+    {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}
+    (history : SourceHistory config fuel path operation before outcome) (sourceFuel : Nat)
+    (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param) (parameters : List Param)
+    (operand : Expr) (arguments : List Arg) (localVar : LocalVar) (count : Nat)
+    (fuelEq : fuel = sourceFuel + 1)
+    (operationEq : argumentsSyntax operation = some (environment, vars, parameter :: parameters, .construct operand :: arguments))
+    (found : vars[parameter.var]? = some localVar)
+    (materialized : ordinaryProducerCount? sourceFuel ⟨config.module, environment.vars⟩ operand = some count) :
+    SourceHistory config sourceFuel (path ++ [0]) (.value environment operand) before
+      (evalValue sourceFuel config environment operand before) := by
+  cases history <;> simp_all [argumentsSyntax]
+
+theorem constructed_head_direct_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
+    {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}
+    (history : SourceHistory config fuel path operation before outcome) (sourceFuel : Nat)
+    (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param) (parameters : List Param)
+    (operand : Expr) (arguments : List Arg) (localVar : LocalVar) (destination : Goose.Core.DestinationId) (ready : ExecutionState)
+    (fuelEq : fuel = sourceFuel + 1)
+    (operationEq : argumentsSyntax operation = some (environment, vars, parameter :: parameters, .construct operand :: arguments))
+    (found : vars[parameter.var]? = some localVar)
+    (direct : ordinaryProducerCount? sourceFuel ⟨config.module, environment.vars⟩ operand = none)
+    (allocated : newDestination config.layout environment.act localVar.ty .value (expressionOrigin operand) none
+      (producerCount? ⟨config.module, environment.vars⟩ operand) before = .ok destination ready) :
+    SourceHistory config sourceFuel (path ++ [0]) (.builder environment destination operand) ready
+      (buildExpr sourceFuel config environment destination operand ready) := by
+  cases history <;> simp_all [argumentsSyntax]
+
 theorem arguments_tail_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
     {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}
     (history : SourceHistory config fuel path operation before outcome) (sourceFuel : Nat)
@@ -114,13 +142,13 @@ theorem argumentReplay_sourcePaths {config : EvalConfig} {environment : RuntimeA
     {fuel offset : Nat} {parameters : List Param} {arguments : List Arg} {before : ExecutionState}
     {outcome : ExecutionStep (List Value)} {visits : List ArgumentInvocation}
     (replay : ArgumentReplay config environment vars fuel offset parameters arguments before outcome visits)
-    (property : Nat → Arg → ExecutionState → List Nat → Prop)
+    (property : Nat → Param → Arg → ExecutionState → List Nat → Prop)
     (headProperty : ∀ headFuel parameter parameters argument arguments before outcome path,
       SourceHistory config (headFuel + 1) path (.arguments environment vars (parameter :: parameters) (argument :: arguments)) before outcome →
-      property headFuel argument before (path ++ [0])) :
+      property headFuel parameter argument before (path ++ [0])) :
     ∀ path, SourceHistory config fuel path (.arguments environment vars parameters arguments) before outcome →
       ∀ visit ∈ visits, ∃ suffix, StatementPath offset suffix visit.ordinal ∧
-        property visit.fuel visit.argument visit.before (path ++ suffix) := by
+        property visit.fuel visit.parameter visit.argument visit.before (path ++ suffix) := by
   induction replay with
   | timeout | done | arityLeft | arityRight => intros; simp_all
   | @next fuel offset parameter parameters argument arguments before middle value outcome visits head tail ih =>
@@ -158,13 +186,13 @@ theorem argumentReplay_byValuePaths {config : EvalConfig} {environment : Runtime
         ∃ suffix, StatementPath offset suffix visit.ordinal ∧
           SourceHistory config visit.fuel (path ++ suffix) (.value environment operand) visit.before
             (evalValue visit.fuel config environment operand visit.before) := by
-  let property : Nat → Arg → ExecutionState → List Nat → Prop := fun sourceFuel argument sourceBefore childPath =>
+  let property : Nat → Param → Arg → ExecutionState → List Nat → Prop := fun sourceFuel _ argument sourceBefore childPath =>
     ∀ operand, argument = .byVal operand →
       SourceHistory config sourceFuel childPath (.value environment operand) sourceBefore
         (evalValue sourceFuel config environment operand sourceBefore)
   have headProperty : ∀ headFuel parameter parameters argument arguments before outcome path,
       SourceHistory config (headFuel + 1) path (.arguments environment vars (parameter :: parameters) (argument :: arguments)) before outcome →
-      property headFuel argument before (path ++ [0]) := by
+      property headFuel parameter argument before (path ++ [0]) := by
     intro headFuel parameter parameters argument arguments before outcome path history operand same
     subst argument
     exact byValue_head_history history headFuel environment vars parameter parameters operand arguments rfl rfl
@@ -181,13 +209,13 @@ theorem argumentReplay_byReferencePaths {config : EvalConfig} {environment : Run
         ∃ suffix, StatementPath offset suffix visit.ordinal ∧
           SourceHistory config visit.fuel (path ++ suffix) (.place environment place) visit.before
             (evalPlace visit.fuel config environment place visit.before) := by
-  let property : Nat → Arg → ExecutionState → List Nat → Prop := fun sourceFuel argument sourceBefore childPath =>
+  let property : Nat → Param → Arg → ExecutionState → List Nat → Prop := fun sourceFuel _ argument sourceBefore childPath =>
     ∀ mutability place, argument = .byRef mutability place →
       SourceHistory config sourceFuel childPath (.place environment place) sourceBefore
         (evalPlace sourceFuel config environment place sourceBefore)
   have headProperty : ∀ headFuel parameter parameters argument arguments before outcome path,
       SourceHistory config (headFuel + 1) path (.arguments environment vars (parameter :: parameters) (argument :: arguments)) before outcome →
-      property headFuel argument before (path ++ [0]) := by
+      property headFuel parameter argument before (path ++ [0]) := by
     intro headFuel parameter parameters argument arguments before outcome path history mutability place same
     subst argument
     exact byReference_head_history history headFuel environment vars parameter parameters mutability place arguments rfl rfl
@@ -195,6 +223,48 @@ theorem argumentReplay_byReferencePaths {config : EvalConfig} {environment : Run
   obtain ⟨suffix, suffixPath, child⟩ := argumentReplay_sourcePaths replay property headProperty path history visit member
   exact ⟨suffix, suffixPath, child mutability place byReference⟩
 
+theorem argumentReplay_constructedPaths {config : EvalConfig} {environment : RuntimeActivation} {vars : Array LocalVar}
+    {fuel offset : Nat} {parameters : List Param} {arguments : List Arg} {before : ExecutionState}
+    {outcome : ExecutionStep (List Value)} {visits : List ArgumentInvocation}
+    (replay : ArgumentReplay config environment vars fuel offset parameters arguments before outcome visits) :
+    ∀ path, SourceHistory config fuel path (.arguments environment vars parameters arguments) before outcome →
+      ∀ visit ∈ visits, ∀ operand, visit.argument = .construct operand →
+        ∃ suffix, StatementPath offset suffix visit.ordinal ∧
+          (∀ localVar count, vars[visit.parameter.var]? = some localVar →
+            ordinaryProducerCount? visit.fuel ⟨config.module, environment.vars⟩ operand = some count →
+            SourceHistory config visit.fuel (path ++ suffix) (.value environment operand) visit.before
+              (evalValue visit.fuel config environment operand visit.before)) ∧
+          (∀ localVar destination ready, vars[visit.parameter.var]? = some localVar →
+            ordinaryProducerCount? visit.fuel ⟨config.module, environment.vars⟩ operand = none →
+            newDestination config.layout environment.act localVar.ty .value (expressionOrigin operand) none
+              (producerCount? ⟨config.module, environment.vars⟩ operand) visit.before = .ok destination ready →
+            SourceHistory config visit.fuel (path ++ suffix) (.builder environment destination operand) ready
+              (buildExpr visit.fuel config environment destination operand ready)) := by
+  let property : Nat → Param → Arg → ExecutionState → List Nat → Prop := fun sourceFuel parameter argument sourceBefore childPath =>
+    ∀ operand, argument = .construct operand →
+      (∀ localVar count, vars[parameter.var]? = some localVar →
+        ordinaryProducerCount? sourceFuel ⟨config.module, environment.vars⟩ operand = some count →
+        SourceHistory config sourceFuel childPath (.value environment operand) sourceBefore (evalValue sourceFuel config environment operand sourceBefore)) ∧
+      (∀ localVar destination ready, vars[parameter.var]? = some localVar →
+        ordinaryProducerCount? sourceFuel ⟨config.module, environment.vars⟩ operand = none →
+        newDestination config.layout environment.act localVar.ty .value (expressionOrigin operand) none
+          (producerCount? ⟨config.module, environment.vars⟩ operand) sourceBefore = .ok destination ready →
+        SourceHistory config sourceFuel childPath (.builder environment destination operand) ready (buildExpr sourceFuel config environment destination operand ready))
+  have headProperty : ∀ headFuel parameter parameters argument arguments before outcome path,
+      SourceHistory config (headFuel + 1) path (.arguments environment vars (parameter :: parameters) (argument :: arguments)) before outcome →
+      property headFuel parameter argument before (path ++ [0]) := by
+    intro headFuel parameter parameters argument arguments before outcome path history operand same
+    subst argument
+    constructor
+    · intro localVar count found materialized
+      exact constructed_head_materialized_history history headFuel environment vars parameter parameters operand arguments localVar count rfl rfl found materialized
+    · intro localVar destination ready found direct allocated
+      exact constructed_head_direct_history history headFuel environment vars parameter parameters operand arguments localVar destination ready rfl rfl found direct allocated
+  intro path history visit member operand constructed
+  obtain ⟨suffix, suffixPath, child⟩ := argumentReplay_sourcePaths replay property headProperty path history visit member
+  exact ⟨suffix, suffixPath, (child operand constructed).1, (child operand constructed).2⟩
+
+#print axioms argumentReplay_constructedPaths
 theorem argumentReplay_visitExecutes {config : EvalConfig} {environment : RuntimeActivation} {vars : Array LocalVar}
     {fuel offset : Nat} {parameters : List Param} {arguments : List Arg} {before : ExecutionState}
     {outcome : ExecutionStep (List Value)} {visits : List ArgumentInvocation}
@@ -288,6 +358,8 @@ theorem invokeCall_byValueSource (fuel : Nat) (config : EvalConfig) (environment
 
 #print axioms argumentReplay_byReferencePaths
 #print axioms argumentReplay_sourcePaths
+#print axioms constructed_head_materialized_history
+#print axioms constructed_head_direct_history
 #print axioms byReference_head_history
 #print axioms invokeCall_byValueSource
 #print axioms argumentReplay_visitExecutes
