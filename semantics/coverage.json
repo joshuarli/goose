@@ -649,6 +649,15 @@
   "evidence": "Goose/Lower/DemandControlBlockPrefix.lean and its block, expression and sequence dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Unit-block suffix stop exclusion",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_unit_block_suffix_stopped",
+  "statement": "After an accepted unit block's statement body completes, its generated unit and scope-leave instructions cannot stop for a non-timeout reason. A later target stop is accompanied by the completed source block and its actual residual target prefix.",
+  "assumptions": "Accepted block and body sources, completed source statements, generated occurrences, realized and bounded retained map, builder extension, and an actual non-timeout target stop.",
+  "limits": "The body-to-suffix stop proof is not yet composed into a full block theorem. Blocks with values, other statements, calls and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandStoppedUnitBlockSuffix.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
