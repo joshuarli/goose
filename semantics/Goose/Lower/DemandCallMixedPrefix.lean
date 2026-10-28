@@ -10,7 +10,7 @@ inductive CallMixedArguments (access : AccessEnv) : List Arg → Prop
   | value {expression : Expr} {rest : List Arg} (form : ControlPrefixExpression expression)
       (tail : CallMixedArguments access rest) : CallMixedArguments access (.byVal expression :: rest)
   | reference {mutability : Mutability} {place : Place} {rest : List Arg} (form : ScalarReadPlace place)
-      (type : ∃ ty, access.placeType? place = some ty ∧ ty.refTarget = true)
+      (type : CallReferenceSupported access place)
       (tail : CallMixedArguments access rest) : CallMixedArguments access (.byRef mutability place :: rest)
 
 inductive CallMixedPrefix {cfg : Cfg} {env : Env} {initialState : St}
@@ -142,10 +142,7 @@ theorem accepted_generated_call_mixed_prefix_suffix {cfg : Cfg} {env : Env} {ini
         have accessType := tyPlace_accessType (child.frame.mod_t.trans child.frame.mod_p.symm)
           (child.frame.vars_t.trans child.frame.vars_p.symm) child.typed
         rw [roots] at accessType
-        obtain ⟨type, typeAt, target⟩ := typeFact
-        rw [typeAt] at accessType
-        have sameType : child.ty = type := Option.some.inj accessType.symm
-        have target : child.ty.refTarget = true := by simpa [sameType] using target
+        have target : child.ty.refTarget = true := CallReferenceSupported.target typeFact accessType allowed
         have childCanonical : (ArgSource.byRef mutability child (Or.inl target)).MatchesContext
             source.world source.typingEnv source.rootsEnv (callArgContext source.context index (.byRef mutability place) found) :=
           ⟨plans, path, world, typing, roots, childContext⟩

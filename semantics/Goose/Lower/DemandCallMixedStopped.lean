@@ -4,12 +4,27 @@ import Goose.Lower.DemandCallReferenceStoppedStage
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
 
+def CallReferenceSupported (access : AccessEnv) (place : Place) : Prop :=
+  (∃ ty, access.placeType? place = some ty ∧ ty.refTarget = true) ∨ ∃ global, place = .global global
+
+theorem CallReferenceSupported.target {access : AccessEnv} {place : Place} {ty : Ty} {mutable : Bool}
+    (supported : CallReferenceSupported access place) (typeAt : access.placeType? place = some ty)
+    (allowed : ty.refTarget = true ∨ (ty.isSlice = true ∧ mutable = true ∧ place.sliceArg = true)) : ty.refTarget = true := by
+  rcases supported with ⟨other, otherAt, target⟩ | ⟨global, rfl⟩
+  · have same : ty = other := Option.some.inj (typeAt.symm.trans otherAt)
+    simpa [same] using target
+  · rcases allowed with target | ⟨_, _, impossible⟩
+    · exact target
+    · simp [Place.sliceArg, Place.derefVar?] at impossible
+
+#print axioms CallReferenceSupported.target
+
 inductive CallMixedStoppedArguments (access : AccessEnv) : List Arg → Prop
   | nil : CallMixedStoppedArguments access []
   | value {expression : Expr} {rest : List Arg} (form : ReadStoppedExpression expression)
       (tail : CallMixedStoppedArguments access rest) : CallMixedStoppedArguments access (.byVal expression :: rest)
   | reference {mutability : Mutability} {place : Place} {rest : List Arg} (form : ScalarReadPlace place)
-      (type : ∃ ty, access.placeType? place = some ty ∧ ty.refTarget = true)
+      (type : CallReferenceSupported access place)
       (tail : CallMixedStoppedArguments access rest) : CallMixedStoppedArguments access (.byRef mutability place :: rest)
 
 theorem accepted_generated_call_mixed_stopped_suffix {cfg : Cfg} {env : Env} {initialState : St}
@@ -95,10 +110,7 @@ theorem accepted_generated_call_mixed_stopped_suffix {cfg : Cfg} {env : Env} {in
         have accessType := tyPlace_accessType (child.frame.mod_t.trans child.frame.mod_p.symm)
           (child.frame.vars_t.trans child.frame.vars_p.symm) child.typed
         rw [roots] at accessType
-        obtain ⟨type, typeAt, target⟩ := typeFact
-        rw [typeAt] at accessType
-        have sameType : child.ty = type := Option.some.inj accessType.symm
-        have target : child.ty.refTarget = true := by simpa [sameType] using target
+        have target : child.ty.refTarget = true := CallReferenceSupported.target typeFact accessType allowed
         have childCanonical : (ArgSource.byRef mutability child (Or.inl target)).MatchesContext
             source.world source.typingEnv source.rootsEnv (callArgContext source.context index (.byRef mutability place) found) :=
           ⟨plans, path, world, typing, roots, childContext⟩
