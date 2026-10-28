@@ -698,7 +698,7 @@
  },
  {
   "feature": "Byte-only module world preservation",
-  "statement": "At every fuel, a validated module with byte-owner globals and a no-tail entry body consisting of unnamed byte-owner declarations preserves an accepted world at the actual module result, whether it stops or returns normally. Normal completion removes the entry activation and its empty channel frame.",
+  "statement": "At every fuel, a validated module with byte-owner globals and a no-tail entry body consisting of unnamed byte-owner declarations preserves an accepted world and the destination-trace protocol at the actual module result, whether it stops or returns normally. Normal completion removes the entry activation and its empty channel frame.",
   "assumptions": "The specified byte globals and entry declarations, accepted module and local types, and sufficient checker fuel.",
   "limits": "Tail expressions, other statement and global forms, and general trace claims remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionAcceptedScopeWorld.lean; Goose/Proofs/ConstructionByteEntryScopeWorld.lean; Goose/Proofs/ConstructionAcceptedActivationWorld.lean; Goose/Proofs/ConstructionByteModuleCompletedWorld.lean; Goose/Proofs/ConstructionByteModuleLowFuel.lean; scoped Lean 4.35 closure and axiom checks."

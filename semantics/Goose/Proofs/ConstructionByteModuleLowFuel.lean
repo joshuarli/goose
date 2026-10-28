@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionByteModuleCompletedWorld
+import Goose.Proofs.ConstructionExecutionProtocolLifecycle
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 
@@ -102,8 +103,32 @@ theorem acceptedByteModule_allFuel (fuel : Nat) (config : EvalConfig) (accepted 
       simp only [executed, Goose.Proofs.Exit.stepState]
       exact ⟨initialized, [], types, live, regions, world, trivial⟩
 
+theorem acceptedByteModule_allFuel_trace (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (declarations : List ByteOwnerDeclaration) (original : Context) (implementation : Impl)
+    (globals : ∀ id, id < config.module.globals.size →
+      ∃ descriptor bytes bytesOrigin, config.module.globals[id]? = some descriptor ∧
+        descriptor.ty = .varr (.int .u8) ∧ descriptor.init = .bytes (.varr (.int .u8)) bytes bytesOrigin)
+    (originalAt : config.module.contexts[config.module.entry]? = some original)
+    (implementationAt : config.module.impls[original.impl]? = some implementation)
+    (body : implementation.body.stmts = declarations.map ByteOwnerDeclaration.statement)
+    (tail : implementation.body.value = none)
+    (owners : ∀ declaration ∈ declarations,
+      (implementation.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
+    (checkFuel : declarations.length ≤ 4094) :
+    ∃ initialized ambient types live regions,
+      let outcome := runModule fuel config .initial
+      let after := Goose.Proofs.Exit.stepState outcome
+      AcceptedWorld config initialized after ambient types live regions [] ∧
+      DestinationTraceProtocol after.construction ∧
+      (match outcome with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
+  obtain ⟨initialized, ambient, types, live, regions, world, flow⟩ :=
+    acceptedByteModule_allFuel fuel config accepted declarations original implementation globals originalAt implementationAt body tail owners checkFuel
+  exact ⟨initialized, ambient, types, live, regions, world,
+    Goose.Proofs.ConstructionExecutionProtocol.runModule_destination_trace_protocol fuel config, flow⟩
+
 #print axioms acceptedEntry_lowFuel_afterGlobals
 #print axioms acceptedByteModule_lowFuel
 #print axioms acceptedByteModule_allFuel
+#print axioms acceptedByteModule_allFuel_trace
 
 end Goose.Proofs.ConstructionAcceptedExecution
