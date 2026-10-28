@@ -15,6 +15,11 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
       (viewChild : ViewSyntax config view) (loChild : BoundSyntax config lo) (hiChild : BoundSyntax config hi) :
       ValueSyntax config (.slice mutability view lo hi origin)
   | pop (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.pop place origin)
+  | blockValue (block : Block) (origin : Goose.Core.OriginId) (child : BlockValueSyntax config block) :
+      ValueSyntax config (.blockE block origin)
+  | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
+      (conditionChild : ValueSyntax config condition) (yesChild : BlockValueSyntax config yes) (noChild : BlockValueSyntax config no) :
+      ValueSyntax config (.ifE condition yes no origin)
   | aggregate (expression : Expr) (operands : List Expr) (shape : ValueAggregate expression operands)
       (children : ∀ operand ∈ operands, ValueSyntax config operand) : ValueSyntax config expression
   | unary (operation : Goose.Core.UnOp) (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
@@ -109,7 +114,12 @@ inductive PlaceSyntax (config : EvalConfig) : Place → Prop
   | element (view : View) (operand : Expr) (origin : Goose.Core.OriginId)
       (viewChild : ViewSyntax config view) (indexChild : ValueSyntax config operand) : PlaceSyntax config (.elem view operand origin)
 
-end
+inductive BlockValueSyntax (config : EvalConfig) : Block → Prop
+  | noTail (scope : Nat) (statements : List Stmt)
+      (body : ∀ statement ∈ statements, StatementSyntax config statement) : BlockValueSyntax config (.mk scope statements none)
+  | tail (scope : Nat) (statements : List Stmt) (expression : Expr)
+      (body : ∀ statement ∈ statements, StatementSyntax config statement) (value : ValueSyntax config expression) :
+      BlockValueSyntax config (.mk scope statements (some expression))
 
 inductive PrintArgumentSyntax (config : EvalConfig) : PrintArg → Prop
   | text (text : String) : PrintArgumentSyntax config (.text text)
@@ -167,6 +177,8 @@ inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
       (yesBody : ∀ statement ∈ yesStatements, StatementSyntax config statement)
       (noBody : ∀ statement ∈ noStatements, StatementSyntax config statement) :
       StatementSyntax config (.ifS condition (.mk yesScope yesStatements none) (some (.mk noScope noStatements none)) origin)
+
+end
 
 def ClosedModule (config : EvalConfig) : Prop :=
   ∀ (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl),
@@ -234,6 +246,7 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     FuelSupport config fuel (.statements environment statements)
   block : ∀ environment scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.block environment (.mk scope statements none))
+  valueBlock : ∀ environment block, BlockValueSyntax config block → FuelSupport config fuel (.block environment block)
   loopBody : ∀ environment scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.loopBody environment (.mk scope statements none))
   whileLoop : ∀ environment condition scope statements, ValueSyntax config condition →
@@ -321,6 +334,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | reference mutability place child => exact .referenceValue fuel environment mutability place (previous.place environment place child)
         | length view child => exact .lengthValue fuel environment view (previous.view environment view child)
         | pop place origin child => exact .popValue fuel environment place origin (previous.place environment place child)
+        | blockValue block origin child => exact .valueBlock fuel environment block origin (previous.valueBlock environment block child)
+        | conditional condition yes no origin conditionChild yesChild noChild =>
+            exact .conditional fuel environment condition yes no origin (previous.value environment condition conditionChild)
+              (previous.valueBlock environment yes yesChild) (previous.valueBlock environment no noChild)
         | slice mutability view lo hi origin viewChild loChild hiChild =>
             exact .sliceValue fuel environment mutability view lo hi origin (previous.view environment view viewChild)
               (fun count defaultValue => previous.bound environment count defaultValue lo loChild)
@@ -477,6 +494,14 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
             exact .sequence fuel environment statement rest headSupported (previous.statements environment rest tail)
       · intro environment scope statements derivation
         exact .block fuel environment scope statements (fun scopedEnvironment => previous.statements scopedEnvironment statements derivation)
+      · intro environment block derivation
+        cases derivation with
+        | noTail scope statements body =>
+            exact .block fuel environment scope statements (fun scopedEnvironment => previous.statements scopedEnvironment statements body)
+        | tail scope statements expression body value =>
+            exact .blockTail fuel environment scope statements expression
+              (fun scopedEnvironment => previous.statements scopedEnvironment statements body)
+              (fun scopedEnvironment => previous.value scopedEnvironment expression value)
       · intro environment scope statements derivation
         exact .loopBody fuel environment (.mk scope statements none) (previous.block environment scope statements derivation)
       · intro environment condition scope statements conditionSyntax body

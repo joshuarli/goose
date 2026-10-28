@@ -50,6 +50,40 @@ theorem recursivePrint_witness :
   refine ⟨recursivePrint_history 40, ?_, ?_⟩ <;>
     simp only [stepState, config, context, implementation, environment, arguments] <;> cbv
 
+private def nestedValue : Expr := .ifE (.bool true)
+  (.mk 1 [.print [.text "branch"] 0] (some (.call 0 [] 0)))
+  (.mk 2 [.abort "skipped" 0] (some (.lit .i64 3))) 0
+
+private theorem nestedValueSyntax : ValueSyntax config nestedValue := by
+  unfold nestedValue
+  apply ValueSyntax.conditional
+  · exact .base (.boolean true)
+  · apply BlockValueSyntax.tail
+    · intro statement member
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at member
+      subst statement
+      exact .printText "branch" 0
+    · exact .call 0 [] 0 context implementation rfl rfl rfl .nil
+  · apply BlockValueSyntax.tail
+    · intro statement member
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at member
+      subst statement
+      exact .abort "skipped" 0
+    · exact .base (.integer .i64 3)
+
+theorem nestedValue_history (fuel : Nat) :
+    SourceHistory config fuel [] (.value environment nestedValue) .initial (evalValue fuel config environment nestedValue .initial) :=
+  fuelHistory_exists fuel config _ [] .initial ((syntaxFuel_existsWithTails fuel config closed).value environment nestedValue nestedValueSyntax)
+
+theorem nestedValue_witness :
+    SourceHistory config 40 [] (.value environment nestedValue) .initial (evalValue 40 config environment nestedValue .initial) ∧
+    evalValue 40 config environment nestedValue .initial = .ok .unit (stepState (evalValue 40 config environment nestedValue .initial)) ∧
+    (stepState (evalValue 40 config environment nestedValue .initial)).construction.stdout.data.toList = [98, 114, 97, 110, 99, 104, 10, 120, 10] := by
+  refine ⟨nestedValue_history 40, ?_, ?_⟩ <;>
+    simp only [stepState, config, context, implementation, environment, nestedValue] <;> cbv
+
+#print axioms nestedValue_history
+#print axioms nestedValue_witness
 #print axioms recursivePrint_history
 #print axioms recursivePrint_witness
 end Goose.Proofs.ConstructionGhostRecursivePrintWitness

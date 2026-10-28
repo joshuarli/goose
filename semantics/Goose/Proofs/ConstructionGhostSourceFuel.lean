@@ -89,6 +89,17 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.value environment (.fill (.arr element count) operand origin))
+  | valueBlock (fuel : Nat) (environment : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId)
+      (child : FuelSupport config fuel (.block environment block)) :
+      FuelSupport config (fuel + 1) (.value environment (.blockE block origin))
+  | conditional (fuel : Nat) (environment : RuntimeActivation) (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
+      (conditionChild : FuelSupport config fuel (.value environment condition))
+      (yesChild : FuelSupport config fuel (.block environment yes)) (noChild : FuelSupport config fuel (.block environment no)) :
+      FuelSupport config (fuel + 1) (.value environment (.ifE condition yes no origin))
+  | blockTail (fuel : Nat) (environment : RuntimeActivation) (scope : Nat) (statements : List Stmt) (expression : Expr)
+      (body : ∀ scopedEnvironment, FuelSupport config fuel (.statements scopedEnvironment statements))
+      (tail : ∀ scopedEnvironment, FuelSupport config fuel (.value scopedEnvironment expression)) :
+      FuelSupport config (fuel + 1) (.block environment (.mk scope statements (some expression)))
   | valueFirstStatement (fuel : Nat) (environment : RuntimeActivation) (statement : Stmt) (expression : Expr)
       (shape : ValueFirstStatement statement expression) (child : FuelSupport config fuel (.value environment expression)) :
       FuelSupport config (fuel + 1) (.statement environment statement)
@@ -412,6 +423,39 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           simp only [execute] at child ⊢
           rw [actual]
           exact .fill fixed child
+      | valueBlock _ environment block origin child =>
+          exact .valueBlock fuel path environment block origin before (ih (.block environment block) (path ++ [0]) before child)
+      | conditional _ environment condition yes no origin conditionSupported yesSupported noSupported =>
+          have child := ih (.value environment condition) (path ++ [0]) before conditionSupported
+          have branch : ∀ value middle selected ready,
+              evalValue fuel config environment condition before = .ok value middle → expectBool value middle = .ok selected ready →
+              SourceHistory config fuel (path ++ [if selected then 1 else 2])
+                (.block environment (if selected then yes else no)) ready
+                (execBlock fuel config environment [] [] (if selected then yes else no) ready) := by
+            intro value middle selected ready _ _
+            cases selected with
+            | false => exact ih (.block environment no) (path ++ [2]) ready noSupported
+            | true => exact ih (.block environment yes) (path ++ [1]) ready yesSupported
+          have actual : evalValue (fuel + 1) config environment (.ifE condition yes no origin) before =
+              conditionalResult fuel config environment yes no (evalValue fuel config environment condition before) := by
+            simp only [evalValue, bind, conditionalResult]
+            cases result : evalValue fuel config environment condition before with
+            | ok value state =>
+                simp only
+                cases check : expectBool value state with
+                | ok selected ready => simp only [check]; cases selected <;> rfl
+                | stop | escape | jump => simp only [check]
+            | stop | escape | jump => rfl
+          simp only [execute]
+          rw [actual]
+          exact .conditional child branch
+      | blockTail _ environment scope statements expression bodySupported tailSupported =>
+          refine .blockTail fuel path environment scope statements expression before ?_ ?_
+          · exact ih (.statements { environment with scopes := (scope, before.nextScope) :: environment.scopes } statements)
+              (path ++ [0]) { before with nextScope := before.nextScope + 1 } (bodySupported _)
+          · intro value ready result
+            exact ih (.value { environment with scopes := (scope, before.nextScope) :: environment.scopes } expression)
+              (path ++ [1]) ready (tailSupported _)
       | valueFirstStatement _ environment statement expression shape child =>
           exact .valueFirstStatement fuel path environment statement expression before shape
             (ih (.value environment expression) (path ++ [0]) before child)
