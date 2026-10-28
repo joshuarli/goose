@@ -65,7 +65,7 @@ theorem byteBody_checkedTail_afterNormal (fuel checkFuel : Nat) (config : EvalCo
   have position := blockPosition.block_statements accepted blockFrame scope (checkFuel + 1)
     (declarations.map ByteOwnerDeclaration.statement) (some expression) (by omega)
   obtain ⟨remainingFuel, next, middle, nextTypes, nextLive, nextRegions, fuelEq, interpretationEq, initializedEq,
-    sourceEq, phaseEq, typed, rooted, tail, extended, nextWorld, nextSource, nextPosition⟩ :=
+    sourceEq, phaseEq, limitEq, effectEq, typed, rooted, tail, extended, nextWorld, nextSource, nextPosition⟩ :=
     execStmts_byteOwners_normalTail_replay declarations fuel checkFuel config accepted entry context [] before after .unit
       ambient types live regions pending enoughFuel enoughCheck rfl world source phase (by simpa only [List.append_nil, entry] using position) owners unnamed (by simpa using normal)
   have remaining : 0 < remainingFuel := by omega

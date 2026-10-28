@@ -66,6 +66,7 @@ theorem execStmts_byteOwners_normalTail_replay (declarations : List ByteOwnerDec
         (nextTypes : RootTypes) (nextLive : Goose.Core.RootInst → Prop) (nextRegions : List ReceivingRegion),
         remainingFuel + declarations.length = runFuel ∧
         next.interpretation = frame.interpretation ∧ next.initialized = frame.initialized ∧ next.source = frame.source ∧ next.phase = frame.phase ∧
+        next.typing.globalLimit = frame.typing.globalLimit ∧ next.rootCursor.eff = frame.rootCursor.eff ∧
         typeStatements frame.typingFuel frame.typing (declarations.map ByteOwnerDeclaration.statement) frame.typingCounter =
           .ok (next.typing, next.typingCounter) ∧
         rpStmts frame.source (declarations.map ByteOwnerDeclaration.statement) frame.rootCursor = .ok ((), next.rootCursor) ∧
@@ -80,7 +81,7 @@ theorem execStmts_byteOwners_normalTail_replay (declarations : List ByteOwnerDec
     have typed : typeStatements frame.typingFuel frame.typing [] frame.typingCounter = .ok (frame.typing, frame.typingCounter) := by
       rw [nesting]
       simp [typeStatements, pure, StateT.pure, Except.pure]
-    exact ⟨runFuel, frame, before, types, live, regions, by simp, rfl, rfl, rfl, rfl, typed, rfl, executed,
+    exact ⟨runFuel, frame, before, types, live, regions, by simp, rfl, rfl, rfl, rfl, rfl, rfl, typed, rfl, executed,
       (fun root ty found => found), world, source, position⟩
   | cons declaration declarations ih =>
     intro enoughRun enoughCheck nesting world source phase position owners unnamed executed
@@ -133,18 +134,20 @@ theorem execStmts_byteOwners_normalTail_replay (declarations : List ByteOwnerDec
           intro item member
           exact unnamed item (List.mem_cons_of_mem declaration member)
         obtain ⟨remainingFuel, finalFrame, finalState, finalTypes, finalLive, finalRegions,
-          fuelEq, interpretationEq, initializedEq, sourceEq, phaseEq, tailTyped, tailRooted, finalTail, typesExtended, finalWorld, finalSource, finalPosition⟩ :=
+          fuelEq, interpretationEq, initializedEq, sourceEq, phaseEq, limitEq, effectEq, tailTyped, tailRooted, finalTail, typesExtended, finalWorld, finalSource, finalPosition⟩ :=
           ih (runFuel + 2) checkFuel nextFrame middle nextTypes nextLive nextRegions
             (by simp only [List.length_cons] at enoughRun; omega) (by simp only [List.length_cons] at enoughCheck; omega) rfl
             middleWorld middleSource (by simpa only [nextFrame, advanceLocalFrame] using phase) middlePosition remainingOwners remainingUnnamed tail
         have replay := statementReplay_cons (checkFuel + 1) frame nextFrame finalFrame declaration.statement
           (declarations.map ByteOwnerDeclaration.statement) headReplay.1 headReplay.2 rfl tailTyped tailRooted
-        refine ⟨remainingFuel, finalFrame, finalState, finalTypes, finalLive, finalRegions, ?_, ?_, ?_, ?_, ?_, ?_, ?_, finalTail, ?_, finalWorld, finalSource, finalPosition⟩
+        refine ⟨remainingFuel, finalFrame, finalState, finalTypes, finalLive, finalRegions, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, finalTail, ?_, finalWorld, finalSource, finalPosition⟩
         · simp only [List.length_cons] at *; omega
         · exact interpretationEq
         · exact initializedEq
         · exact sourceEq
         · exact phaseEq
+        · exact limitEq
+        · exact effectEq
         · simpa only [nesting, List.map_cons] using replay.1
         · simpa only [List.map_cons] using replay.2
         · intro oldRoot ty found
