@@ -490,11 +490,11 @@
  {
   "feature": "Published owner storage from fresh allocation",
   "label": "model-proved",
-  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_publishedOwner_storage",
-  "statement": "A stored value sampled from a published fresh receiver retains the storage row allocated by its actual newDestination operation and names that destination.",
-  "assumptions": "An accepted world, successful fresh allocation, an ownership source extension to the published state, and the actual storedDestination result.",
-  "limits": "The evaluator induction must establish the source extension or follow landing successors for the intervening construction. This result does not discharge TH-CON-01.",
-  "evidence": "ConstructionAcceptedOwnerLineage.lean; scoped Lean 4.35 closure and axiom check."
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_publishedOwner_storage; Goose.Proofs.ConstructionAcceptedExecution.emptyBytes_publishedOwner_storage",
+  "statement": "A stored value sampled from a published fresh receiver retains the storage row allocated by its actual newDestination operation and names that destination. For an empty byte owner, the actual successful build and publication supply the intervening ownership source extension.",
+  "assumptions": "An accepted world, successful fresh allocation, publication, and the actual storedDestination result. The generic result assumes an ownership source extension; the empty-byte result derives it from its successful build and publication.",
+  "limits": "General construction and exit-replacement successors remain outside the composed empty-byte case. This result does not discharge TH-CON-01.",
+  "evidence": "ConstructionAcceptedOwnerLineage.lean and ConstructionAcceptedOwnerLineageChecks.lean; scoped Lean 4.35 closure and axiom check."
  },
  {
   "feature": "Receiver storage identity across completed carrier landing",
