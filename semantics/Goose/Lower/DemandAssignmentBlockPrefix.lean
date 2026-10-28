@@ -1,5 +1,5 @@
 import Goose.Lower.DemandAssignmentStatementsNormal
-import Goose.Lower.DemandGeneratedClearBlockPrefix
+import Goose.Lower.DemandControlBlockPrefix
 
 namespace Goose.Lower
 
@@ -128,6 +128,67 @@ theorem accepted_generated_assignment_unit_block_prefix {cfg : Cfg} {env : Env} 
     coverage admitted bounded realized statements post bodyBounded bodyRealized extended prefixSteps residual
 
 
+theorem ScalarAssignmentPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+    {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+    (cursor : ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime) :
+    ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
+  have carried := cursor.realizes
+  cases cursor with
+  | destination child canonical demanded =>
+    exact ⟨_, _, _, ⟨demanded.builder, by simpa only [canonical.world] using demanded.source, carried⟩⟩
+  | value child canonical aliases demanded =>
+    obtain ⟨typing, roots, future, frame⟩ := demanded.frame
+    exact ⟨typing, roots, future, ⟨frame.builder, by simpa only [canonical.world] using frame.source, carried⟩⟩
+  | store child canonical aliases site demanded =>
+    exact ⟨_, _, _, ⟨demanded.builder, by simpa only [canonical.world] using demanded.source, carried⟩⟩
+
+theorem AssignmentStatementPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+    {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+    (cursor : AssignmentStatementPrefixCursor cx results source before built initial start map required runtime) :
+    ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
+  cases cursor with
+  | control cursor => exact cursor.frame
+  | assignment cursor => exact cursor.frame
+
+theorem GeneratedSequencePrefixCursor.assignment_frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {map required : RetainedSsaMap} {before : LS} {loop : Option LoopCtx}
+    {bindings : List (SlotId × ValueId × OriginId)} {block : Core.Block} {root : DemandNode} {owner : Nat}
+    {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+    {statements : List Stmt} {state : St} {source : StmtsSource cfg env statements state}
+    {initial runtime : DemandRuntimePoint}
+    (cursor : GeneratedSequencePrefixCursor (@AssignmentStatementPrefixCursor cfg env cx results)
+      map required cx results before loop bindings block selected source initial runtime) :
+    ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
+  induction cursor with
+  | head canonical owned occurrence rows coverage demanded =>
+    simpa only [canonical.world] using demanded.frame
+  | tail canonical evaluated prefixSteps post demanded ih =>
+    simpa only [canonical.world] using ih
+
+theorem GeneratedAssignmentBlockPrefixDemand.frame {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    {source : BlockSource cfg env [] block state} {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
+    {map required : RetainedSsaMap} {before : LS} {loop : Option LoopCtx} {initial : GIR.Frame} {runtime : DemandRuntimePoint}
+    {suffixCursor : DemandRuntimePoint → Prop}
+    (suffixFrame : ∀ runtime, suffixCursor runtime → ∃ typing roots future,
+      DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime ∨
+      DemandFrameAt cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
+        cx source.world typing roots future map.values map.runs runtime)
+    (demanded : GeneratedAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime) :
+    ∃ typing roots future,
+      DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime ∨
+      DemandFrameAt cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes }
+        cx source.world typing roots future map.values map.runs runtime := by
+  cases demanded with
+  | emitted demanded => exact demanded.frame
+  | suffix demanded => exact suffixFrame _ demanded
+  | body canonical demanded =>
+    obtain ⟨typing, roots, future, framed⟩ := demanded.assignment_frame
+    exact ⟨typing, roots, future, Or.inr (by simpa only [canonical.world] using framed)⟩
+
+#print axioms GeneratedAssignmentBlockPrefixDemand.frame
 #print axioms accepted_generated_assignment_block_prefix
 #print axioms accepted_generated_assignment_unit_block_prefix
 
