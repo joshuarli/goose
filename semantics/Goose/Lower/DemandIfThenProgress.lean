@@ -3,6 +3,84 @@ import Goose.Lower.DemandIfJoin
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
 
+theorem accepted_generated_if_invariant_then_stopped {cfg : Cfg} {env : Env} {condition : Expr} {yes : Core.Block}
+    {origin : OriginId} {state middle after : St} (source : StmtSource cfg env (.ifS condition yes none origin) state)
+    (child : ExprSource cfg env condition state)
+    (canonical : source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
+    {conditionFuel : Nat} (conditionDone : evalExpr conditionFuel cfg env condition state = .ok (.bool true) middle)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    {before forked branchStart branchEnd jumped built : LS} {initial conditionFrame : GIR.Frame} {start conditionPoint : Pt}
+    {map required : RetainedSsaMap} {yesBlock joinBlock value : Nat}
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.statement loop (.ifS condition yes none origin)) before)
+    (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (boundary : ExpressionDemandBoundary child map cx before initial
+      (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2
+      (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1 (.bool true) middle conditionPoint conditionFrame)
+    (forkRun : fork (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).1
+      (lowerEnv cfg.mod env.vars results) (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2 =
+      ((yesBlock, joinBlock), forked))
+    (forkExtended : ExtT forked cx.fn.blocks) (startEq : branchStart = { forked with cur := some yesBlock })
+    (branchRun : lowerBlock loop [] false yes (lowerEnv cfg.mod env.vars results) branchStart = (value, branchEnd))
+    (branchExtended : ExtT branchEnd cx.fn.blocks)
+    (jumpRun : emitTerm (.br joinBlock []) (lowerEnv cfg.mod env.vars results) branchEnd = ((), jumped))
+    (jumpExtended : ExtT jumped cx.fn.blocks) (finalEq : built = { jumped with cur := some joinBlock })
+    (joinPoint : built.pp = some (joinBlock, 0))
+    (joinStack : built.stack = (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2.stack)
+    (joinVals : (lowerExpr condition (lowerEnv cfg.mod env.vars results) before).2.vals.size ≤ built.vals.size)
+    (invariant : DemandRuntimePoint → Prop)
+    (advance : ∀ {length : Nat} {first last : DemandRuntimePoint}, invariant first → DemandRuntimePrefix cx length first last → invariant last)
+    (atStart : invariant ⟨(yesBlock, 0), conditionFrame, middle⟩)
+    (bodyFamily : InvariantStoppedSequencePrefixFamily
+      (env := { env with scopes := (yes.scope, middle.nextScope) :: env.scopes }) cx results selected branchStart loop [] false yes yes.stmts invariant)
+    (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
+      execStmts fuel cfg { env with scopes := (yes.scope, middle.nextScope) :: env.scopes } yes.stmts innerState = .ok flow after →
+      flow = .normal .unit)
+    (noValue : yes.value = none) {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨(yesBlock, 0), conditionFrame, middle⟩ reached)
+    {targetFuel : Nat} {stop : Stop} (stopped : DemandInstructionStop cx targetFuel reached stop after)
+    (nonTimeout : stop ≠ .timeout) :
+    (∃ fuel, execStmt fuel cfg env (.ifS condition yes none origin) state = .stop stop after) ∨
+      ∃ consumed remaining boundaryPoint fuel,
+        consumed + remaining = taken ∧
+        DemandRuntimePrefix cx consumed ⟨(yesBlock, 0), conditionFrame, middle⟩ boundaryPoint ∧
+        DemandRuntimePrefix cx remaining boundaryPoint reached ∧
+        execStmt fuel cfg env (.ifS condition yes none origin) state = .ok (.normal .unit) boundaryPoint.state ∧
+        GeneratedStatementPrefixEnd source map cx before initial built loop (.normal .unit) boundaryPoint := by
+  obtain ⟨branch, typing, roots, branchCanonical, branchOwner, branchAdmitted, branchBounded, branchRealized, branchInput⟩ :=
+    accepted_generated_if_then_input source child canonical conditionDone selected owned admitted input boundary forkRun startEq forkExtended
+  obtain ⟨branchOccurrence, branchRows⟩ := generated_if_then_occurrence source branch branchCanonical occurrence rows
+    boundary.post.pp forkRun startEq roots
+  have finalExtended : ExtT (lowerBlock loop [] false yes (lowerEnv cfg.mod env.vars results) branchStart).2 cx.fn.blocks := by
+    rw [branchRun]
+    exact branchExtended
+  have progress := accepted_generated_invariant_loop_branch_block_stopped branch selected branchOwner branchOccurrence branchRows
+    coverage branchAdmitted branchBounded branchRealized branchInput finalExtended invariant advance atStart bodyFamily normal noValue steps stopped nonTimeout
+  cases progress with
+  | aborted fuel branchStopped =>
+    exact Or.inl (if_then_source_stop (no := none) (origin := origin) conditionDone branchStopped nonTimeout)
+  | @complete fuel consumed remaining current flow count executed residual branchDone ended =>
+    have normal := ended.normal
+    subst flow
+    have joined := accepted_generated_if_then_join source branch branchCanonical conditionDone branchDone boundary.post
+      forkRun forkExtended startEq branchRun jumpRun jumpExtended finalEq joinPoint joinStack joinVals ended
+    obtain ⟨joinStep, ⟨sourceFuel, sourceDone⟩, finalPost⟩ := joined
+    rcases residual.uncons with ⟨_, rfl⟩ | ⟨rest, next, restCount, nextStep, afterJoin⟩
+    · exact (stopped.excludes_step_nonTimeout nonTimeout (joinStep targetFuel)).elim
+    · obtain ⟨stepFuel, actual⟩ := runtimeStep_demandInstructionStep nextStep
+      have equal := actual.deterministic (joinStep stepFuel)
+      have nextEq : next = ⟨(joinBlock, 0), current.frame, current.state⟩ := by
+        cases next
+        exact equal
+      subst next
+      exact Or.inr ⟨consumed + 1, rest, _, sourceFuel, by omega,
+        executed.append (.next nextStep (.zero _)), afterJoin, sourceDone, finalPost⟩
+
+
 theorem accepted_generated_if_generic_then_stopped {cfg : Cfg} {env : Env} {condition : Expr} {yes : Core.Block}
     {origin : OriginId} {state middle after : St} (source : StmtSource cfg env (.ifS condition yes none origin) state)
     (child : ExprSource cfg env condition state)
@@ -48,34 +126,13 @@ theorem accepted_generated_if_generic_then_stopped {cfg : Cfg} {env : Env} {cond
         DemandRuntimePrefix cx remaining boundaryPoint reached ∧
         execStmt fuel cfg env (.ifS condition yes none origin) state = .ok (.normal .unit) boundaryPoint.state ∧
         GeneratedStatementPrefixEnd source map cx before initial built loop (.normal .unit) boundaryPoint := by
-  obtain ⟨branch, typing, roots, branchCanonical, branchOwner, branchAdmitted, branchBounded, branchRealized, branchInput⟩ :=
-    accepted_generated_if_then_input source child canonical conditionDone selected owned admitted input boundary forkRun startEq forkExtended
-  obtain ⟨branchOccurrence, branchRows⟩ := generated_if_then_occurrence source branch branchCanonical occurrence rows
-    boundary.post.pp forkRun startEq roots
-  have finalExtended : ExtT (lowerBlock loop [] false yes (lowerEnv cfg.mod env.vars results) branchStart).2 cx.fn.blocks := by
-    rw [branchRun]
-    exact branchExtended
-  have progress := accepted_generated_loop_branch_block_stopped branch selected branchOwner branchOccurrence branchRows
-    coverage branchAdmitted branchBounded branchRealized branchInput finalExtended bodyFamily normal noValue steps stopped nonTimeout
-  cases progress with
-  | aborted fuel branchStopped =>
-    exact Or.inl (if_then_source_stop (no := none) (origin := origin) conditionDone branchStopped nonTimeout)
-  | @complete fuel consumed remaining current flow count executed residual branchDone ended =>
-    have normal := ended.normal
-    subst flow
-    have joined := accepted_generated_if_then_join source branch branchCanonical conditionDone branchDone boundary.post
-      forkRun forkExtended startEq branchRun jumpRun jumpExtended finalEq joinPoint joinStack joinVals ended
-    obtain ⟨joinStep, ⟨sourceFuel, sourceDone⟩, finalPost⟩ := joined
-    rcases residual.uncons with ⟨_, rfl⟩ | ⟨rest, next, restCount, nextStep, afterJoin⟩
-    · exact (stopped.excludes_step_nonTimeout nonTimeout (joinStep targetFuel)).elim
-    · obtain ⟨stepFuel, actual⟩ := runtimeStep_demandInstructionStep nextStep
-      have equal := actual.deterministic (joinStep stepFuel)
-      have nextEq : next = ⟨(joinBlock, 0), current.frame, current.state⟩ := by
-        cases next
-        exact equal
-      subst next
-      exact Or.inr ⟨consumed + 1, rest, _, sourceFuel, by omega,
-        executed.append (.next nextStep (.zero _)), afterJoin, sourceDone, finalPost⟩
+  have invariantFamily : InvariantStoppedSequencePrefixFamily
+      (env := { env with scopes := (yes.scope, middle.nextScope) :: env.scopes }) cx results selected branchStart loop [] false yes yes.stmts (fun _ => True) := by
+    intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended _ taken reached steps fuel stop after stopped nonTimeout
+    exact bodyFamily source owned occurrence all scope value rows coverage admitted bounded realized input extended steps stopped nonTimeout
+  exact accepted_generated_if_invariant_then_stopped source child canonical conditionDone selected owned occurrence rows coverage admitted
+    input boundary forkRun forkExtended startEq branchRun branchExtended jumpRun jumpExtended finalEq joinPoint joinStack joinVals
+    (fun _ => True) (fun _ _ => trivial) trivial invariantFamily normal noValue steps stopped nonTimeout
 
 
 theorem accepted_generated_if_then_stopped {cfg : Cfg} {env : Env} {condition : Expr} {yes : Core.Block}
@@ -323,6 +380,7 @@ theorem accepted_generated_if_then_prefix {cfg : Cfg} {env : Env} {condition : E
 #print axioms accepted_generated_if_generic_then_prefix_canonical
 #print axioms accepted_generated_if_invariant_then_prefix_canonical
 #print axioms accepted_generated_if_generic_then_stopped
+#print axioms accepted_generated_if_invariant_then_stopped
 #print axioms accepted_generated_if_then_prefix
 #print axioms accepted_generated_if_then_stopped
 end Goose.Lower
