@@ -64,6 +64,8 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
     ∃ (stored : StoredValue) (published : ExecutionState),
       bytes.length < 2 ^ 32 ∧
       Nonempty (FreshDestinationFrame before published) ∧
+      AcceptedWorld config initialized published ambient types live regions pending ∧
+      stored.ty = .varr (.int .u8) ∧
       storedDestination before.construction.destinations.size published = .ok stored published ∧
       bindRoot root (.stored stored) published = .ok () after ∧
       RootTypesExtend types (registerRootType types root (.varr (.int .u8))) ∧
@@ -129,7 +131,7 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
               before.construction.destinations.size root ambient types live regions pending world compatible conforms fresh freshType
               freshSynthetic created constructed published
           simp only [sampled] at executed
-          obtain ⟨_, publishedFrame, value, sampled', backed, identity, named, valueType⟩ :=
+          obtain ⟨publishedWorld, publishedFrame, value, sampled', backed, identity, named, valueType⟩ :=
             allocated_published_byteOwner_world fuel config initialized environment bytes origin bytesOrigin before allocated built final
               before.construction.destinations.size ambient types live regions pending world created constructed published
           have sameValue : stored = value := (ExecutionStep.ok.inj (sampled.symm.trans sampled')).1
@@ -140,7 +142,7 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
             simp_all
           rw [sameStored, bound] at executed
           cases executed
-          exact ⟨stored, final, fits, publishedFrame, sampled, bound, extended, finalWorld⟩
+          exact ⟨stored, final, fits, publishedFrame, publishedWorld, valueType, sampled, bound, extended, finalWorld⟩
 
 #print axioms completedReceivingDestination_self
 #print axioms FreshDestinationFrame.same_current

@@ -71,7 +71,7 @@ theorem execStmt_checkedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (a
     intro previous present
     rw [source.uninitializedTypes localVar uninitialized root resolved] at present
     cases present
-  obtain ⟨stored, published, _, _, _, _, extended, preserved⟩ :=
+  obtain ⟨stored, published, _, _, _, _, _, _, extended, preserved⟩ :=
     execStmt_byteOwner_letWorld fuel config frame.initialized frame.interpretation.environment localVar descriptor
     implementation bytes origin bytesOrigin before after root ambient types live regions pending world declared ty implementationFound
     unnamed resolved compatible True.intro fresh freshType freshSynthetic executed

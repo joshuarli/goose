@@ -9,7 +9,7 @@ open Goose.Proofs.ConstructionRootCorrespondence
 theorem typeStatement_let_descriptor (fuel : Nat) (env next : TypingEnv) (id : Nat)
     (expression : Expr) (origin before after : Nat)
     (checked : typeStatement (fuel + 1) env (.letS id expression origin) before = .ok (next, after)) :
-    ∃ descriptor, env.variables[id]? = some descriptor ∧ descriptor.scope = env.scope := by
+    ∃ descriptor, env.variables[id]? = some descriptor ∧ descriptor.scope = env.scope ∧ id = before := by
   simp only [typeStatement, bind, StateT.bind] at checked
   change Except.bind (((do
     let expected ← get
@@ -29,7 +29,7 @@ theorem typeStatement_let_descriptor (fuel : Nat) (env next : TypingEnv) (id : N
       simp [present, throwState] at checked
     | some descriptor =>
       by_cases same : descriptor.scope = env.scope
-      · exact ⟨descriptor, rfl, same⟩
+      · exact ⟨descriptor, rfl, same, rfl⟩
       · simp [StateT.bind, present, same, throwState] at checked
         change Except.error _ = Except.ok _ at checked
         cases checked
@@ -69,7 +69,7 @@ theorem execStmt_typedScopedByteOwner_letWorld (fuel typeFuel : Nat) (config : E
         (registerRootType types (.local frame.interpretation.environment.act scopeInst localVar) (.varr (.int .u8)))
         (fun other => other = .local frame.interpretation.environment.act scopeInst localVar ∨ live other)
         (regions.map (fun region => extendReceivingLimit region stored.storage (storageExtent published stored.storage))) pending := by
-  obtain ⟨descriptor, declared, localScope⟩ := typeStatement_let_descriptor typeFuel frame.typing typingNext localVar
+  obtain ⟨descriptor, declared, localScope, typingOrder⟩ := typeStatement_let_descriptor typeFuel frame.typing typingNext localVar
     (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin frame.typingCounter typingAfter typed
   have descriptorType : descriptor.ty = .varr (.int .u8) := by
     simpa only [declared, Option.map_some, Option.some.injEq] using byteOwner
