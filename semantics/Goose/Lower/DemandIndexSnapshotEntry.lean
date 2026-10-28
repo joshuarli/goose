@@ -1,6 +1,6 @@
 import Goose.Lower.DemandIndexOwnerForm
 import Goose.Lower.DemandGeneratedSnapshotStop
-import Goose.Lower.DemandGeneratedScalarPrefix
+import Goose.Lower.DemandControlProgressCursor
 import Goose.Lower.DemandStoppedExpressionFamily
 
 namespace Goose.Lower
@@ -92,7 +92,7 @@ theorem accepted_generated_index_expression_prefix {cfg : Cfg} {env : Env} {owne
     (extended : ExtT (lowerPlace (.elem (.of owner) index origin) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
     {next : Pt} {nextFrame : GIR.Frame}
     (step : Goose.Evidence.RuntimeStep cx.cfg cx.fn point frame state next nextFrame after)
-    (family : GeneratedExpressionPrefixFamily cx results selected loop index (@CanonicalExpressionPrefixCursor cfg env cx))
+    (family : GeneratedExpressionPrefixFamily cx results selected loop index (@GeneratedControlProgressCursor cfg env cx))
     {taken : Nat} {reached : DemandRuntimePoint} (steps : DemandRuntimePrefix cx taken ⟨next, nextFrame, after⟩ reached) :
     ∃ (sample : ViewVal) (aliases : List RetainedAlias) (child : ExprSource cfg env index after),
       evalView (fuel + 1) cfg env (.of owner) state = .ok sample after ∧ source.ExpressionChildAt child 1 rfl ∧
@@ -100,7 +100,12 @@ theorem accepted_generated_index_expression_prefix {cfg : Cfg} {env : Env} {owne
       Post cfg env cx before initial (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2 nextFrame next
         [((lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).1, .view sample)] ∧
       DemandPrefixDecomposition cx (fun fuel => evalExpr fuel cfg env index)
-        (CanonicalExpressionDemand (map.addRuns (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).1 aliases) cx child)
+        (GeneratedControlProgressCursor cx child
+          (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2
+          (lowerExpr index (lowerEnv cfg.mod env.vars results) (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2).2
+          nextFrame next
+          (map.addRuns (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).1 aliases)
+          (required.addRuns (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).1 aliases))
         (GeneratedExpressionPrefixEnd child (map.addRuns (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).1 aliases)
           cx (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2 nextFrame
           (lowerExpr index (lowerEnv cfg.mod env.vars results) (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2).2

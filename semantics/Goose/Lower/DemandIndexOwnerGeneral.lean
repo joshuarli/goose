@@ -44,7 +44,7 @@ theorem accepted_generated_index_owner_general {cfg : Cfg} {env : Env} {owner : 
 
 inductive GeneratedIndexOwnerProgress (cx : FnCtx) (invariant : DemandRuntimePoint → Prop)
     (before final : DemandRuntimePoint) (taken : Nat) (reached : DemandRuntimePoint) : Prop
-  | interior (demanded : invariant reached) : GeneratedIndexOwnerProgress cx invariant before final taken reached
+  | interior (demanded : invariant reached) (step : ∃ next, ∀ fuel, DemandInstructionStep cx fuel reached next) : GeneratedIndexOwnerProgress cx invariant before final taken reached
   | arrived {consumed remaining : Nat} (count : consumed + remaining = taken)
       (trace : DemandRuntimePrefix cx consumed before final) (residual : DemandRuntimePrefix cx remaining final reached) :
       GeneratedIndexOwnerProgress cx invariant before final taken reached
@@ -54,7 +54,9 @@ theorem GeneratedIndexOwnerSteps.prefix {cx : FnCtx} {invariant : DemandRuntimeP
     (initial : invariant before) {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken before reached) : GeneratedIndexOwnerProgress cx invariant before final taken reached := by
   rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨remaining, current, rfl, actual, tail⟩
-  · exact .interior initial
+  · cases generated with
+    | one step => exact .interior initial ⟨_, step⟩
+    | two middle demanded first second => exact .interior initial ⟨_, first⟩
   · obtain ⟨fuel, first⟩ := runtimeStep_demandInstructionStep actual
     cases generated with
     | one generated =>
@@ -67,7 +69,7 @@ theorem GeneratedIndexOwnerSteps.prefix {cx : FnCtx} {invariant : DemandRuntimeP
       have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
       subst current
       rcases tail.uncons with ⟨rfl, rfl⟩ | ⟨remaining, current, rfl, second, tail⟩
-      · exact .interior demanded
+      · exact .interior demanded ⟨_, generatedSecond⟩
       · obtain ⟨fuel, actualSecond⟩ := runtimeStep_demandInstructionStep second
         have same := actualSecond.deterministic (generatedSecond fuel)
         have currentEq : current = final := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same

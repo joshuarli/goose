@@ -11,7 +11,9 @@ inductive IndexAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (resu
   | frame {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
       {typing : TEnv} {roots : PEnv} {future : _}
-      (frame : DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime) :
+      (frame : DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime)
+      (progress : (∃ id op, instAt cx.fn runtime.point = some (.def id op)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
       IndexAssignmentPrefixCursor cx results source before built initial start map required runtime
   | value {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
@@ -24,7 +26,7 @@ theorem accepted_generated_index_assignment_prefix {cfg : Cfg} {env : Env} {cx :
     (loop : Option LoopCtx) (owner : Place) (form : IndexOwnerPlace owner) (index value : Expr) (indexOrigin origin : OriginId)
     (target : ∀ {state after : St} (source : StmtSource cfg env (.assign (.elem (.of owner) index indexOrigin) value origin) state)
       (child : ExprSource cfg env value after), source.AssignmentValueAt child → child.ty.refTarget = true)
-    (indexFamily : GeneratedExpressionPrefixFamily cx results selected loop index (@CanonicalExpressionPrefixCursor cfg env cx))
+    (indexFamily : GeneratedExpressionPrefixFamily cx results selected loop index (@GeneratedControlProgressCursor cfg env cx))
     (valueFamily : GeneratedExpressionPrefixFamily cx results selected loop value (@GeneratedControlProgressCursor cfg env cx)) :
     GeneratedStatementPrefixFamily cx results selected loop (.assign (.elem (.of owner) index indexOrigin) value origin)
       (@IndexAssignmentPrefixCursor cfg env cx results) := by
@@ -57,9 +59,9 @@ theorem accepted_generated_index_assignment_prefix {cfg : Cfg} {env : Env} {cx :
   have progress := addressSteps.prefix initialFrame steps
   refine ⟨owned, coverage, ?_⟩
   cases progress with
-  | interior frame =>
+  | interior frame step =>
     obtain ⟨typing, roots, future, frame⟩ := frame
-    exact .interior (.frame (by simpa only [destinationWorld] using frame))
+    exact .interior (.frame (by simpa only [destinationWorld] using frame) (Or.inr step))
   | @arrived ownerCount remaining count ownerTrace tail =>
     rcases addressedPoint with ⟨addressPoint, addressFrame, addressState⟩
     dsimp only at addressedState
@@ -67,8 +69,12 @@ theorem accepted_generated_index_assignment_prefix {cfg : Cfg} {env : Env} {cx :
     rcases tail.uncons with ⟨rfl, rfl⟩ | ⟨remaining, snapshot, rfl, snapshotStep, tail⟩
     · apply DemandPrefixDecomposition.interior
       apply IndexAssignmentPrefixCursor.frame
-      exact ⟨⟨_, addressPost.pp, addressPost.rel⟩, source.frame,
-        by simpa only [RetainedSsaMap.Realizes, destinationWorld] using addressed⟩
+      · exact ⟨⟨_, addressPost.pp, addressPost.rel⟩, source.frame,
+          by simpa only [RetainedSsaMap.Realizes, destinationWorld] using addressed⟩
+      · have viewRows := GeneratedDemandRows.first (first := .placeView rfl) destinationRows
+        have site := GeneratedDemandInstruction.snapshot_auto (.first destinationOccurrence (.placeView rfl)) viewRows
+          addressPost.pp (generated_index_view_extended placeExtended)
+        exact Or.inl ⟨_, _, site.instruction⟩
     · obtain ⟨sample, aliases, child, viewed, childCanonical, viewQuery, viewPost, progress⟩ :=
         accepted_generated_index_expression_prefix destination form selected destinationOwner destinationOccurrence destinationRows
           coverage destinationAdmitted bounded destinationRealized destinationInput placed addressPost addressed placeExtended snapshotStep indexFamily tail
@@ -78,18 +84,21 @@ theorem accepted_generated_index_assignment_prefix {cfg : Cfg} {env : Env} {cx :
         · intro cell member; exact List.mem_append_right _ member
       cases progress with
       | interior demanded =>
-        obtain ⟨typing, roots, future, frame⟩ := demanded.frame
-        have carried := baseCoverage.realizes demanded.carried
+        obtain ⟨typing, roots, future, frame⟩ := demanded.demanded.frame
+        have carried := baseCoverage.realizes demanded.demanded.carried
         exact .interior (.frame ⟨frame.builder, by simpa only [childCanonical.world, destinationWorld] using frame.source,
-          by simpa only [RetainedSsaMap.Realizes, childCanonical.world, destinationWorld] using carried⟩)
+          by simpa only [RetainedSsaMap.Realizes, childCanonical.world, destinationWorld] using carried⟩ demanded.progress)
       | @complete indexFuel indexCount left boundary indexValue count indexTrace residual indexDone indexBoundary =>
         rcases residual.uncons with ⟨rfl, rfl⟩ | ⟨remaining, afterCheck, rfl, checkStep, rest⟩
         · apply DemandPrefixDecomposition.interior
           apply IndexAssignmentPrefixCursor.frame
           have carried := baseCoverage.realizes indexBoundary.demanded.operands
-          exact ⟨indexBoundary.demanded.builder,
-            by simpa only [childCanonical.world, destinationWorld] using indexBoundary.demanded.source,
-            by simpa only [RetainedSsaMap.Realizes, childCanonical.world, destinationWorld] using carried⟩
+          · exact ⟨indexBoundary.demanded.builder,
+              by simpa only [childCanonical.world, destinationWorld] using indexBoundary.demanded.source,
+              by simpa only [RetainedSsaMap.Realizes, childCanonical.world, destinationWorld] using carried⟩
+          · have indexRows := GeneratedDemandRows.index destinationRows viewQuery
+            have site := GeneratedDemandInstruction.indexChecked_auto destinationOccurrence indexRows indexBoundary.post.pp placeExtended
+            exact Or.inl ⟨_, _, site.instruction⟩
         · let common := max (ownerFuel + 1) indexFuel
           have viewed' : evalView common cfg env (.of owner) state = .ok sample snapshot.state :=
             ((monoAll (ownerFuel + 1) common (by dsimp [common]; exact Nat.le_max_left _ _)).view cfg env (.of owner) state).1 _ _ viewed
@@ -117,7 +126,7 @@ theorem IndexAssignmentPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCtx
     (cursor : IndexAssignmentPrefixCursor cx results source before built initial start map required runtime) :
     map.Realizes cfg.mod source.world env runtime := by
   cases cursor with
-  | frame frame => exact frame.operands
+  | frame frame progress => exact frame.operands
   | value cursor => exact cursor.realizes
 
 #print axioms IndexAssignmentPrefixCursor.realizes

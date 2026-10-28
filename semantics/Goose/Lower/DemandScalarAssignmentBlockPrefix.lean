@@ -218,7 +218,7 @@ theorem ScalarAssignmentStatementPrefixCursor.frame {cfg : Cfg} {env : Env} {cx 
       | atFrame frame progress => exact ⟨_, _, _, frame⟩
   | indexAssignment cursor =>
     cases cursor with
-    | frame frame => exact ⟨_, _, _, frame⟩
+    | frame frame progress => exact ⟨_, _, _, frame⟩
     | value cursor => exact cursor.frame
   | fieldAssignment cursor =>
     cases cursor with
