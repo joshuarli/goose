@@ -19,6 +19,14 @@ theorem typeExpr_call_scalarOperand (fuel : Nat) (environment : TypingEnv) (cont
     simpa [parameters] using arguments
   exact typeArguments_scalar_operand fuel environment callee parameter descriptor expression before middle mode declared args
 
+theorem scalarParameter_passesTo_eq (source target : Ty)
+    (scalar : (∃ intTy, target = .int intTy) ∨ target = .bool)
+    (passes : source.passesTo target = true) : source = target := by
+  rcases scalar with ⟨intTy, rfl⟩ | rfl
+  · cases source <;> simp_all [Ty.passesTo, Ty.adaptsTo, Ty.element?]
+  · cases source <;> simp_all [Ty.passesTo, Ty.adaptsTo, Ty.element?]
+
+#print axioms scalarParameter_passesTo_eq
 #print axioms typeArguments_scalar_operand
 #print axioms typeExpr_call_arguments
 #print axioms typeExpr_call_scalarOperand
