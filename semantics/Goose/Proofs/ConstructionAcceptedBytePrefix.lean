@@ -26,6 +26,7 @@ theorem execStmts_byteOwners_prefix (declarations : List ByteOwnerDeclaration) :
         (nextRegions : List ReceivingRegion),
         declarations = completed ++ remaining ∧ remainingFuel + completed.length = runFuel ∧
         next.interpretation = frame.interpretation ∧ next.initialized = frame.initialized ∧
+        next.phase = frame.phase ∧ next.typing.variables = frame.typing.variables ∧ next.source = frame.source ∧
         RootTypesExtend types nextTypes ∧ AcceptedWorld config next.initialized middle ambient nextTypes nextLive nextRegions pending ∧
         AcceptedFrame config accepted next middle nextTypes ∧
         SourcePosition accepted next (.statements (remaining.map ByteOwnerDeclaration.statement ++ rest)) ∧
@@ -36,7 +37,7 @@ theorem execStmts_byteOwners_prefix (declarations : List ByteOwnerDeclaration) :
   induction declarations generalizing runFuel checkFuel frame before types live regions with
   | nil =>
     intro enoughRun enoughCheck nesting world source phase position owners unnamed executed
-    exact ⟨[], [], runFuel, frame, before, types, live, regions, rfl, by simp, rfl, rfl,
+    exact ⟨[], [], runFuel, frame, before, types, live, regions, rfl, by simp, rfl, rfl, rfl, rfl, rfl,
       (fun root ty found => found), world, source, position, Or.inl ⟨rfl, executed⟩⟩
   | cons declaration declarations ih =>
     intro enoughRun enoughCheck nesting world source phase position owners unnamed executed
@@ -65,7 +66,7 @@ theorem execStmts_byteOwners_prefix (declarations : List ByteOwnerDeclaration) :
           before result ambient types live regions pending world source phase headPosition (by omega) headOwner headUnnamed headExecuted
         rcases split with stopped | ⟨middle, scopeInst, stored, published, tail, extended, middleWorld, middleSource, middlePosition⟩
         · refine ⟨[], declaration :: declarations, runFuel + 3, frame, before, types, live, regions,
-            rfl, by simp, rfl, rfl, (fun root ty found => found), world, source, position, Or.inr ?_⟩
+            rfl, by simp, rfl, rfl, rfl, rfl, rfl, (fun root ty found => found), world, source, position, Or.inr ?_⟩
           have fuelStep : runFuel + 3 - 1 = runFuel + 2 := by omega
           exact ⟨declaration, declarations, rfl, by simpa only [ByteOwnerDeclaration.statement, fuelStep] using stopped⟩
         · let root := Goose.Core.RootInst.local frame.interpretation.environment.act scopeInst declaration.id
@@ -81,12 +82,12 @@ theorem execStmts_byteOwners_prefix (declarations : List ByteOwnerDeclaration) :
             intro item member
             exact unnamed item (List.mem_cons_of_mem declaration member)
           obtain ⟨completed, remaining, remainingFuel, finalFrame, finalState, finalTypes, finalLive, finalRegions,
-            decomposition, fuelEq, interpretationEq, initializedEq, typesExtended, finalWorld, finalSource, finalPosition, outcome⟩ :=
+            decomposition, fuelEq, interpretationEq, initializedEq, phaseEq, variablesEq, sourceEq, typesExtended, finalWorld, finalSource, finalPosition, outcome⟩ :=
             ih (runFuel + 2) checkFuel nextFrame middle nextTypes nextLive nextRegions
               (by simp only [List.length_cons] at enoughRun; omega) (by simp only [List.length_cons] at enoughCheck; omega) rfl
               middleWorld middleSource (by simpa only [nextFrame, advanceLocalFrame] using phase) middlePosition remainingOwners remainingUnnamed tail
           refine ⟨declaration :: completed, remaining, remainingFuel, finalFrame, finalState, finalTypes, finalLive, finalRegions,
-            ?_, ?_, interpretationEq, initializedEq, ?_, finalWorld, finalSource, finalPosition, outcome⟩
+            ?_, ?_, interpretationEq, initializedEq, phaseEq, variablesEq, sourceEq, ?_, finalWorld, finalSource, finalPosition, outcome⟩
           · simp only [List.cons_append, decomposition]
           · simp only [List.length_cons] at *; omega
           · intro oldRoot ty found

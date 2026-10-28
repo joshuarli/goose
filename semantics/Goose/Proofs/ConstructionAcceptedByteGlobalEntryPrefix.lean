@@ -77,7 +77,7 @@ theorem acceptedByteGlobalEntryBytePrefix (fuel : Nat) (config : EvalConfig) (ac
       (declarations.map ByteOwnerDeclaration.statement ++ rest) after = outcome := by
     simp only [outcome, ← bodyPrefix, ← implementationEq]
   obtain ⟨completed, remaining, remainingFuel, next, middle, types, live, regions,
-    decomposition, fuelEq, interpretationEq, initializedEq, extended, nextWorld, nextSource, nextPosition, residual⟩ :=
+    decomposition, fuelEq, interpretationEq, initializedEq, _, _, _, extended, nextWorld, nextSource, nextPosition, residual⟩ :=
     execStmts_byteOwners_prefix declarations fuel 4094 config accepted entryFrame config.module.entry rest after outcome
       [.callChannels activation []] (declaredRootTypes config.module) globalLive [] [] runFuel checkFuel rfl
       world source (by simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using phase)
