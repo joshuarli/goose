@@ -30,7 +30,8 @@ theorem direct_byte_return_cleanup (fuel : Nat) (config : EvalConfig)
       execStmt (fuel + 4) config source (.returnFrom targetId [.bytes (.varr (.int .u8)) bytes origin] origin) initial =
         .escape ⟨target.act, .nonlocal targetId⟩ [.completed id] cleaned ∧
       landCarriersInto origin [.construct id] [.completed id] cleaned = .ok () cleaned ∧
-      finishChannels config.layout [.construct id] [.varr (.int .u8)] [.completed id] origin cleaned = .ok () cleaned := by
+      finishChannels config.layout [.construct id] [.varr (.int .u8)] [.completed id] origin cleaned = .ok () cleaned ∧
+      LandedResultChannels cleaned [.construct id] [.varr (.int .u8)] [.completed id] := by
   let token := initial.construction.exitReservations.size
   let reserved := { initial.construction with exitReservations := initial.construction.exitReservations.push (.active .fresh id id ready.destination) }
   let prepared := { initial with construction := reserved }
@@ -82,7 +83,7 @@ theorem direct_byte_return_cleanup (fuel : Nat) (config : EvalConfig)
       { after.construction with exitReservations := after.construction.exitReservations.set! token .released } rfl rfl id
     exact same.trans resolved
   dsimp only [token] at cleanCurrent
-  refine ⟨after, escaped.1, ?_, ?_⟩
+  refine ⟨after, escaped.1, ?_, ?_, ?_⟩
   · simp only [landCarriersInto, List.length_cons, List.length_nil, bne_self_eq_false,
       Bool.false_eq_true, ↓reduceIte, List.zip_cons_cons, List.zip_nil_left, List.forIn_cons,
       List.forIn_nil, receivingDestination, liftConstruction, cleanCurrent, bind, pure]
@@ -109,6 +110,24 @@ theorem direct_byte_return_cleanup (fuel : Nat) (config : EvalConfig)
     simp only [finishChannels, land, bind, List.length_cons, List.length_nil, bne_self_eq_false,
       Bool.false_eq_true, ↓reduceIte, List.zip_cons_cons, List.zip_nil_left, List.forIn_cons,
       List.forIn_nil, finish, pure]
+  · obtain ⟨capRow, capFound, capEq, _⟩ := build_packed_bytes_capability fuel config source id 0 bytes origin
+      prepared after preparedSource preparedReady packed request preparedCurrent built
+    obtain ⟨adaptRow, adaptFound, adaptEq, _⟩ := build_packed_bytes_adaptation fuel config source id 0 bytes origin
+      prepared after preparedSource preparedReady packed request preparedCurrent built
+    have capSame : capRow = destination := Option.some.inj (capFound.symm.trans found)
+    have adaptSame : adaptRow = destination := Option.some.inj (adaptFound.symm.trans found)
+    subst capRow
+    subst adaptRow
+    have finalAdaptation : destination.adaptation = none := adaptEq.trans adaptation
+    have finalPhysical : destination.capability.layout = .varr (.int .u8) := by rw [capEq]; exact physical
+    have finalLogical : destination.capability.logicalType = .varr (.int .u8) := by rw [capEq]; exact ready.logicalType
+    let cleaned := { after with construction := { after.construction with
+      exitReservations := after.construction.exitReservations.set! token .released } }
+    have normalized : NormalizedCompletedCarrier cleaned (.varr (.int .u8)) id :=
+      ⟨destination, found, ⟨0 + bytes.length, progress⟩,
+        receiver_destination_writable cleaned.construction id destination found (use.trans receiver),
+        finalAdaptation, by simp only [finalPhysical, Bool.not_true, Bool.and_false], finalLogical, rfl⟩
+    exact .cons (.construct id id _ cleanCurrent normalized) .nil
 
 #print axioms direct_byte_return_cleanup
 
