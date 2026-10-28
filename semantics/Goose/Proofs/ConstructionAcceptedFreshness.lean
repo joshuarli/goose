@@ -21,7 +21,7 @@ private theorem storedDestination_construction_frame (before after : ExecutionSt
     | none => simp [count, fault, EvalM.stop] at sampled
     | some count => simp only [count, ExecutionStep.ok.injEq] at sampled ⊢; exact sampled
 
-private theorem carrierBacking_construction_frame (layout : LayoutEnv) (before after : ExecutionState)
+theorem carrierBacking_construction_frame (layout : LayoutEnv) (before after : ExecutionState)
     (construction : after.construction = before.construction) (carrier : Carrier)
     (backed : CarrierResultBacking layout before carrier) : CarrierResultBacking layout after carrier := by
   cases backed with
@@ -47,7 +47,7 @@ private def receivingReady_construction_frame (before after : ExecutionState)
   · simpa only [construction] using ready.path
   · simpa only [construction] using ready.parent
 
-private theorem carrierReady_construction_frame (before after : ExecutionState)
+theorem carrierReady_construction_frame (before after : ExecutionState)
     (construction : after.construction = before.construction) (channel : Channel) (carrier : Carrier)
     (ready : CarrierLandingReady before channel carrier) : CarrierLandingReady after channel carrier := by
   cases ready with

@@ -10,18 +10,20 @@ open Goose.Core (RootInst)
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionExecutionOwnership
+open Goose.Proofs.ExitExecution
 
 theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (environment : RuntimeActivation) (interpretation : RootInterpretation)
     (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (liveRoots : RootInst → Prop) (bytes : List UInt8) (origin : Nat)
-    (world : AcceptedWorld config initialized state ambient types liveRoots [] [])
+    {regions : List ReceivingRegion} {pending : List PendingCarrierFrame}
+    (world : AcceptedWorld config initialized state ambient types liveRoots regions pending)
     (globalCount : interpretation.globalCount = config.module.globals.size) :
     ∃ after nextTypes root,
       evalValue (fuel + 1) config environment (.bytes (.slice .readOnly (.int .u8)) bytes origin) state =
         .ok (.slice ⟨root, []⟩ 0 bytes.length) after ∧
       RootTypesExtend types nextTypes ∧
-      AcceptedWorld config initialized after ambient nextTypes (fun other => other = root ∨ liveRoots other) [] [] ∧
+      AcceptedWorld config initialized after ambient nextTypes (fun other => other = root ∨ liveRoots other) regions pending ∧
       AcceptedValue config.layout nextTypes interpretation after (.slice .readOnly (.int .u8)) [.static]
         (.slice ⟨root, []⟩ 0 bytes.length) := by
   let root := RootInst.global (config.module.globals.size + state.nextScope)
@@ -64,6 +66,36 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
   have same := (ExecutionStep.ok.inj (typedResult.symm.trans boundResult)).2
   subst boundAfter
   have typedObjects : typedAfter.objects = after.objects := objects
+  have noStored : ∀ stored, ¬ StoredOccurrence (.fixed values) stored := by
+    intro stored occurrence
+    cases occurrence with
+    | array _ value stored member child =>
+      simp only [values, List.mem_map] at member
+      obtain ⟨byte, _, rfl⟩ := member
+      cases child
+  have afterBacking : RootedBackingState config.layout after (fun other => other = root ∨ liveRoots other) := by
+    constructor
+    · intro other retained value present
+      by_cases same : other = root
+      · subst other
+        have equal : Value.fixed values = value := by simpa only [after, List.lookup, beq_self_eq_true, Option.some.injEq] using present
+        subst value
+        exact valueBacking
+      · have old : state.objects.lookup other = some value := by
+          rw [← typedObjects, bindRoot_lookup_other root other (.fixed values) scopeState typedAfter typedResult same] at present
+          exact present
+        exact ValueStorageBacked.construction_frame (before := state) (after := after) rfl
+          (world.backing.values other (retained.resolve_left same) value old)
+    · intro other retained stored present
+      by_cases same : other = root
+      · subst other
+        have impossible : Value.fixed values = Value.stored stored := by
+          simpa only [after, List.lookup, beq_self_eq_true, Option.some.injEq] using present
+        cases impossible
+      · have old : state.objects.lookup other = some (.stored stored) := by
+          rw [← typedObjects, bindRoot_lookup_other root other (.fixed values) scopeState typedAfter typedResult same] at present
+          exact present
+        exact world.backing.identities other (retained.resolve_left same) stored old
   refine ⟨after, registerRootType types root ownerTy, root, ?_, extended, ?_, ?_⟩
   · simp only [evalValue, freshScope, bindStaticRoot, EvalM.get, EvalM.set, bind, pure, root, after, scopeState, values]
   · refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_⟩
@@ -107,32 +139,43 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
     · intro other ordinal present
       obtain ⟨ty, declared⟩ := world.ordinalsRegistered other ordinal present
       exact ⟨ty, extended other ty declared⟩
-    · constructor
+    · exact afterBacking
+    · intro region member
+      have valid := world.protections region member
+      refine ⟨valid.present, ⟨⟨?_, ?_⟩, ?_⟩, valid.cutoff, valid.landing, valid.authority, ?_⟩
       · intro other retained value present
+        exact afterBacking.values other retained.1 value present
+      · intro other retained stored present
+        exact afterBacking.identities other retained.1 stored present
+      · intro other retained value present stored occurrence
         by_cases same : other = root
         · subst other
           have equal : Value.fixed values = value := by simpa only [after, List.lookup, beq_self_eq_true, Option.some.injEq] using present
           subst value
-          exact valueBacking
+          exact (noStored stored occurrence).elim
         · have old : state.objects.lookup other = some value := by
             rw [← typedObjects, bindRoot_lookup_other root other (.fixed values) scopeState typedAfter typedResult same] at present
             exact present
-          exact ValueStorageBacked.construction_frame (before := state) (after := after) rfl
-            (world.backing.values other (retained.resolve_left same) value old)
-      · intro other retained stored present
+          obtain ⟨storage, run, fuel, finish, found, sampled, measured, lower, upper⟩ :=
+            (valid.observations.observations other ⟨retained.1.resolve_left same, retained.2⟩ value old stored occurrence).observed
+          refine ⟨storage, run, fuel, finish, found, ?_, measured, lower, upper⟩
+          exact sampledStored_storage_transport stored state after storage storage run found found rfl
+            (by intro id named; rfl) sampled
+      · intro other retained outside value present stored occurrence id named
         by_cases same : other = root
         · subst other
-          have impossible : Value.fixed values = Value.stored stored := by
-            simpa only [after, List.lookup, beq_self_eq_true, Option.some.injEq] using present
-          cases impossible
-        · have old : state.objects.lookup other = some (.stored stored) := by
+          have equal : Value.fixed values = value := by simpa only [after, List.lookup, beq_self_eq_true, Option.some.injEq] using present
+          subst value
+          exact (noStored stored occurrence).elim
+        · have old : state.objects.lookup other = some value := by
             rw [← typedObjects, bindRoot_lookup_other root other (.fixed values) scopeState typedAfter typedResult same] at present
             exact present
-          exact world.backing.identities other (retained.resolve_left same) stored old
-    · intro region present
-      cases present
-    · intro frame present
-      cases present
+          exact valid.names other (retained.resolve_left same) outside value old stored occurrence id named
+    · intro frame member
+      obtain ⟨ready, backing⟩ := world.carriers frame member
+      exact ⟨⟨ready.lengths, fun channel carrier pair =>
+        carrierReady_construction_frame state after rfl channel carrier (ready.pairs channel carrier pair)⟩,
+        fun carrier present => carrierBacking_construction_frame config.layout state after rfl carrier (backing carrier present)⟩
     · intro id available
       exact Or.inr (world.globalLive id available)
   · refine ⟨.slice .readOnly (.int .u8) ⟨root, []⟩ 0 bytes.length,
@@ -142,6 +185,36 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
       cases reference
       exact ⟨.static, List.mem_cons_self, .static _ (by rw [globalCount]; omega)⟩
 
+theorem evalValue_checkedStaticBytes_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (liveRoots : RootInst → Prop) (bytes : List UInt8) (origin : Nat) (ty : Ty) (roots : List RootRef)
+    (typingAfter : Nat) (rootsAfter : RState) {regions : List ReceivingRegion} {pending : List PendingCarrierFrame}
+    (world : AcceptedWorld config frame.initialized state ambient types liveRoots regions pending)
+    (source : AcceptedFrame config accepted frame state types)
+    (checked : CheckedValue frame (.bytes (.slice .readOnly (.int .u8)) bytes origin) ty roots typingAfter rootsAfter) :
+    ∃ after nextTypes root,
+      evalValue (fuel + 1) config frame.interpretation.environment
+        (.bytes (.slice .readOnly (.int .u8)) bytes origin) state = .ok (.slice ⟨root, []⟩ 0 bytes.length) after ∧
+      RootTypesExtend types nextTypes ∧
+      AcceptedWorld config frame.initialized after ambient nextTypes (fun other => other = root ∨ liveRoots other)
+        regions pending ∧
+      AcceptedValue config.layout nextTypes frame.interpretation after ty roots (.slice ⟨root, []⟩ 0 bytes.length) := by
+  have typing := checked.typing
+  have provenance := checked.provenance
+  cases h : frame.typingFuel with
+  | zero =>
+    rw [h] at typing
+    change Except.error _ = Except.ok _ at typing
+    cases typing
+  | succ typeFuel =>
+    simp only [h, typeExpr, pure] at typing
+    simp only [rpExpr, pure, StateT.run] at provenance
+    obtain ⟨rfl, _⟩ := provenance
+    obtain ⟨⟨rfl, _⟩, _⟩ := typing
+    exact evalValue_staticBytes_world fuel config frame.initialized frame.interpretation.environment frame.interpretation
+      state ambient types liveRoots bytes origin world source.compatible.globalCount
+
 #print axioms evalValue_staticBytes_world
+#print axioms evalValue_checkedStaticBytes_world
 
 end Goose.Proofs.ConstructionAcceptedExecution
