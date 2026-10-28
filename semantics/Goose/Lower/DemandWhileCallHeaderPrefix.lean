@@ -1,21 +1,26 @@
 import Goose.Lower.DemandWhileCallCursor
+import Goose.Lower.DemandNestedCallLoopHeaderCursor
 import Goose.Lower.DemandWhileScalarCallTrueBody
 import Goose.Lower.DemandWhileHeaderPrefix
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 
-theorem accepted_generated_while_scalar_call_header_prefix_complete {cfg : Cfg} {env : Env} {condition : Expr} {body : Core.Block}
-    {origin : OriginId} {initialState state : St} {count : Nat}
+theorem accepted_generated_while_bounded_nested_call_header_prefix_complete {cfg : Cfg} {env : Env} {condition : Expr} {body : Core.Block}
+    {origin : OriginId} {initialState state : St} {count depth : Nat}
     (iterations : WhileIterations cfg env condition body count initialState state)
     (source : StmtSource cfg env (.while condition body origin) state)
     (original : StmtSource cfg env (.while condition body origin) initialState) (world : source.world = original.world)
-    (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
+    (fragment : ∀ middle : St, BoundedNestedCallLoopStatements cfg depth
       { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
     (noValue : body.value = none)
     {cx : FnCtx} {results : List Ty} {loop : Option LoopCtx} {root : DemandNode} {owner : Nat}
     (targetConfig : cx.cfg = ⟨cfg.profile, lower cfg.mod⟩)
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (families : ∀ (middle : St) (before : LS) (innerLoop : Option LoopCtx),
+      ReachableSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes }) cx results selected before innerLoop [] false body body.stmts
+        (@NestedCallLoopCursor cfg cx.fn results root owner depth { env with scopes := (body.scope, middle.nextScope) :: env.scopes } innerLoop selected) ∧
+      ReachableStoppedSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes }) cx results selected before innerLoop [] false body body.stmts)
     (owned : GeneratedSourceOwner selected source.context) {before headerState built : LS}
     {header : BlockId} {frame : GIR.Frame}
     (headerInput : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv headerState frame (header, 0))
@@ -36,7 +41,7 @@ theorem accepted_generated_while_scalar_call_header_prefix_complete {cfg : Cfg} 
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨(header, 0), frame, state⟩ reached)
     :
-    WhileCallHeaderCursor cx.fn results selected original before built frame (header, 0) map required reached ∨
+    NestedCallLoopHeaderCursor cx.fn results depth selected original before built frame (header, 0) map required reached ∨
     ∃ (sourceFuel consumed remaining : Nat) (boundary : DemandRuntimePoint),
       consumed + remaining = taken ∧ DemandRuntimePrefix cx consumed ⟨(header, 0), frame, state⟩ boundary ∧
       DemandRuntimePrefix cx remaining boundary reached ∧
@@ -84,7 +89,7 @@ theorem accepted_generated_while_scalar_call_header_prefix_complete {cfg : Cfg} 
         | true =>
           obtain ⟨bodyBlock, exitBlock, forked, bodyStart, bodyEnd, jumped, value, branch, canonicalBranch,
             forkRun, bodyEq, bodyRun, jumpRun, jumpExtended, branchStep, bodyPrefix, bodyStopped⟩ :=
-            accepted_generated_while_scalar_call_true_body source child canonical evaluated (fragment current.state) noValue rfl selected owned
+            accepted_generated_while_bounded_nested_call_true_body source child canonical evaluated (fragment current.state) noValue rfl selected (families current.state) owned
               headerInput headerTarget headerId headerEq occurrence rows coverage admitted boundary (executed.reachable headerReach) lowered extended
           obtain ⟨stepFuel, actual⟩ := runtimeStep_demandInstructionStep first
           have equal := actual.deterministic (branchStep stepFuel)
@@ -92,7 +97,7 @@ theorem accepted_generated_while_scalar_call_header_prefix_complete {cfg : Cfg} 
           subst nextPoint
           have bodyProgress := bodyPrefix suffix
           cases bodyProgress.progress with
-          | interior demanded => exact Or.inl (.scalarBody iterations source world child fuel canonical evaluated branch canonicalBranch demanded)
+          | interior demanded => exact Or.inl (.body iterations source world child fuel canonical evaluated branch canonicalBranch demanded)
           | @complete bodyFuel bodyConsumed bodyRest bodyPoint flow bodyCount bodySteps bodyResidual bodyDone ended =>
             have normal := ended.normal
             subst flow
@@ -117,9 +122,9 @@ theorem accepted_generated_while_scalar_call_header_prefix_complete {cfg : Cfg} 
               have iteration := WhileIterations.next evaluated bodyDone (Or.inl ⟨.unit, rfl⟩) (WhileIterations.zero bodyPoint.state)
               have allIterations : WhileIterations cfg env condition body (count + 1) initialState bodyPoint.state := by
                 simpa using iterations.append iteration
-              have nextProgress := accepted_generated_while_scalar_call_header_prefix_complete allIterations next original (nextWorld.trans world)
+              have nextProgress := accepted_generated_while_bounded_nested_call_header_prefix_complete allIterations next original (nextWorld.trans world)
                 fragment noValue rfl
-                selected nextOwned nextInput headerTarget headerId headerEq nextOccurrence nextRows coverage nextAdmitted
+                selected families nextOwned nextInput headerTarget headerId headerEq nextOccurrence nextRows coverage nextAdmitted
                 nextBounded nextRealized family lowered extended
                 (((executed.append (.next first bodySteps)).append (.next backStep (.zero _))).reachable headerReach) backResidual
               rcases nextProgress with demanded | ⟨sourceFuel, laterConsumed, laterRest, final, laterCount,
@@ -133,6 +138,63 @@ termination_by taken
 decreasing_by omega
 
 
+
+
+theorem accepted_generated_while_scalar_call_header_prefix_complete {cfg : Cfg} {env : Env} {condition : Expr} {body : Core.Block}
+    {origin : OriginId} {initialState state : St} {count : Nat}
+    (iterations : WhileIterations cfg env condition body count initialState state)
+    (source : StmtSource cfg env (.while condition body origin) state)
+    (original : StmtSource cfg env (.while condition body origin) initialState) (world : source.world = original.world)
+    (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
+    (noValue : body.value = none)
+    {cx : FnCtx} {results : List Ty} {loop : Option LoopCtx} {root : DemandNode} {owner : Nat}
+    (targetConfig : cx.cfg = ⟨cfg.profile, lower cfg.mod⟩)
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context) {before headerState built : LS}
+    {header : BlockId} {frame : GIR.Frame}
+    (headerInput : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv headerState frame (header, 0))
+    (headerTarget : ∃ block, cx.fn.blocks[header]? = some block ∧ block.params = [])
+    (headerId : header = (newBlock [] (lowerEnv cfg.mod env.vars results) before).1.1)
+    (headerEq : headerState = demandWhileHeaderBefore (lowerEnv cfg.mod env.vars results) before)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.statement loop (.while condition body origin)) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded headerState.vals.size)
+    (realized : map.Realizes cfg.mod source.world env ⟨(header, 0), frame, state⟩)
+    (family : GeneratedExpressionPrefixFamily cx results selected loop condition (@GeneratedControlProgressCursor cfg env cx))
+    (lowered : lowerWhile header (lowerExpr condition)
+      (fun depth exitBlock => lowerBlock (some ⟨depth, exitBlock, .jump header⟩) [] false body)
+      (lowerEnv cfg.mod env.vars results) headerState = ((), built)) (extended : ExtT built cx.fn.blocks)
+    (headerReach : Evidence.RuntimePoint cx.cfg cx.fn (header, 0) frame state)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨(header, 0), frame, state⟩ reached)
+    :
+    WhileCallHeaderCursor cx.fn results selected original before built frame (header, 0) map required reached ∨
+    ∃ (sourceFuel consumed remaining : Nat) (boundary : DemandRuntimePoint),
+      consumed + remaining = taken ∧ DemandRuntimePrefix cx consumed ⟨(header, 0), frame, state⟩ boundary ∧
+      DemandRuntimePrefix cx remaining boundary reached ∧
+      execStmt sourceFuel cfg env (.while condition body origin) initialState = .ok (.normal .unit) boundary.state ∧
+      Post cfg env cx headerState frame built boundary.frame boundary.point [] ∧
+      map.Bounded built.vals.size ∧ map.Realizes cfg.mod original.world env boundary := by
+  have boundedBody : ∀ middle : St, BoundedNestedCallLoopStatements cfg 0
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts := fun middle => .mixed (fragment middle)
+  have families : ∀ (middle : St) (before : LS) (innerLoop : Option LoopCtx),
+      ReachableSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes }) cx results selected before innerLoop [] false body body.stmts
+        (@NestedCallLoopCursor cfg cx.fn results root owner 0 { env with scopes := (body.scope, middle.nextScope) :: env.scopes } innerLoop selected) ∧
+      ReachableStoppedSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes }) cx results selected before innerLoop [] false body body.stmts := by
+    intro middle before innerLoop
+    cases cx with
+    | mk current caller =>
+      change current = ⟨cfg.profile, lower cfg.mod⟩ at targetConfig
+      subst current
+      exact accepted_generated_reachable_scalar_call_statements (fragment middle) selected before innerLoop [] false body
+  rcases accepted_generated_while_bounded_nested_call_header_prefix_complete iterations source original world boundedBody noValue
+    targetConfig selected families owned headerInput headerTarget headerId headerEq occurrence rows coverage admitted bounded realized
+    family lowered extended headerReach steps with cursor | complete
+  · exact Or.inl cursor.toScalar
+  · exact Or.inr complete
 
 theorem accepted_generated_while_call_header_prefix_complete {cfg : Cfg} {env : Env} {condition : Expr} {body : Core.Block}
     {origin : OriginId} {initialState state : St} {count : Nat}
@@ -194,4 +256,5 @@ theorem accepted_generated_while_call_header_prefix_complete {cfg : Cfg} {env : 
 
 #print axioms accepted_generated_while_call_header_prefix_complete
 #print axioms accepted_generated_while_scalar_call_header_prefix_complete
+#print axioms accepted_generated_while_bounded_nested_call_header_prefix_complete
 end Goose.Lower
