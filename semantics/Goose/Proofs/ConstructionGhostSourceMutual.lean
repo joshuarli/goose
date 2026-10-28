@@ -392,6 +392,16 @@ inductive SourceHistory (config : EvalConfig) :
       (bytes : List UInt8) (origin : Goose.Core.OriginId) (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.value environment (.bytes ty bytes origin)) before
         (evalValue (fuel + 1) config environment (.bytes ty bytes origin) before)
+  | valueNonfixedFill (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (nonfixed : (Ty.arr element count).nonfixed = true)
+      (child : ∀ destination ready,
+        newDestination config.layout environment.act (.arr element count) .value origin none
+          (producerCount? ⟨config.module, environment.vars⟩ (.fill (.arr element count) operand origin)) before = .ok destination ready →
+        SourceHistory config fuel (path ++ [0]) (.builder environment destination (.fill (.arr element count) operand origin)) ready
+          (buildExpr fuel config environment destination (.fill (.arr element count) operand origin) ready)) :
+      SourceHistory config (fuel + 1) path (.value environment (.fill (.arr element count) operand origin)) before
+        (evalValue (fuel + 1) config environment (.fill (.arr element count) operand origin) before)
   | negation {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -872,6 +882,17 @@ inductive SourceHistory (config : EvalConfig) :
           (evalValue fuel config environment expression ready)) :
       SourceHistory config (fuel + 1) path (.builder environment incoming expression) before
         (buildExpr (fuel + 1) config environment incoming expression before)
+  | fillBuilder (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (valueChild : ∀ destination ready,
+        liftConstruction origin (renewReceivingDestination incoming) before = .ok destination ready → element.nonfixed = false →
+        SourceHistory config fuel (path ++ [0]) (.value environment operand) ready (evalValue fuel config environment operand ready))
+      (builderChild : ∀ destination ready source allocated,
+        liftConstruction origin (renewReceivingDestination incoming) before = .ok destination ready → element.nonfixed = true →
+        newDestination config.layout environment.act element .value origin none none ready = .ok source allocated →
+        SourceHistory config fuel (path ++ [0]) (.builder environment source operand) allocated (buildExpr fuel config environment source operand allocated)) :
+      SourceHistory config (fuel + 1) path (.builder environment incoming (.fill (.arr element count) operand origin)) before
+        (buildExpr (fuel + 1) config environment incoming (.fill (.arr element count) operand origin) before)
   | supportedBuilder (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
       (incoming : Goose.Core.DestinationId) (expression : Expr) (before : ExecutionState) (supported : SupportedValue expression)
       (valueChild : ∀ destination ready,
@@ -1015,7 +1036,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | declaration | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
+  | declaration | valueNonfixedFill | fillBuilder | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]

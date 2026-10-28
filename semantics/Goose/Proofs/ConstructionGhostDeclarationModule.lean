@@ -65,11 +65,7 @@ theorem runModule_declarationVisits (fuel : Nat) (config : EvalConfig) (before :
     have derivation := statementSyntax (.letS localVar expression origin) member
     cases derivation with
     | declaration _ _ _ value builder =>
-        cases builder with
-        | bytes ty bytes byteOrigin => exact .legacy sourceFuel (.builderBytes _ destination ty bytes byteOrigin)
-        | scalar expression shape source => exact (syntaxFuel_existsWithTails sourceFuel config closed).scalarBuilder _ destination expression shape source
-        | supported expression source => exact (syntaxFuel_existsWithTails sourceFuel config closed).supportedBuilder _ destination expression source
-        | static expression source => exact .legacy sourceFuel (source _ destination)
+        exact (syntaxFuel_existsWithTails sourceFuel config closed).builder _ destination expression builder
   obtain ⟨globalOutcome, globalVisits, globalChunks, replay, fixed, materialized, direct, ordered, once, aligned, finalEq, execution, entry⟩ :=
     runModule_globalAndChannelEntryEvents fuel config before globalSupported globalDirectSupported context implementation
       contextFound implementationFound parametersEmpty scope statements tail body entrySupported entryBuilderSupported

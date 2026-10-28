@@ -40,6 +40,15 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | logical (fuel : Nat) (environment : RuntimeActivation) (isAnd : Bool) (first second : Expr)
       (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
       FuelSupport config (fuel + 1) (.value environment (logicalExpression isAnd first second))
+  | valueNonfixedFill (fuel : Nat) (environment : RuntimeActivation) (element : Ty) (count : Nat)
+      (operand : Expr) (origin : Goose.Core.OriginId) (nonfixed : (Ty.arr element count).nonfixed = true)
+      (child : ∀ destination, FuelSupport config fuel (.builder environment destination (.fill (.arr element count) operand origin))) :
+      FuelSupport config (fuel + 1) (.value environment (.fill (.arr element count) operand origin))
+  | fillBuilder (fuel : Nat) (environment : RuntimeActivation) (destination : Goose.Core.DestinationId)
+      (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId)
+      (valueChild : FuelSupport config fuel (.value environment operand))
+      (builderChild : ∀ source, FuelSupport config fuel (.builder environment source operand)) :
+      FuelSupport config (fuel + 1) (.builder environment destination (.fill (.arr element count) operand origin))
   | fill (fuel : Nat) (environment : RuntimeActivation) (element : Ty) (count : Nat) (origin : Goose.Core.OriginId)
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : FuelSupport config fuel (.value environment operand)) :
@@ -275,6 +284,16 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .logical (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
           intro value middle ready result checked
           exact ih (.value environment second) (path ++ [1]) ready rightSupported
+      | valueNonfixedFill _ environment element count operand origin nonfixed childSupported =>
+          refine .valueNonfixedFill fuel path environment element count operand origin before nonfixed ?_
+          intro destination ready allocated
+          exact ih (.builder environment destination (.fill (.arr element count) operand origin)) (path ++ [0]) ready (childSupported destination)
+      | fillBuilder _ environment destination element count operand origin valueSupported builderSupported =>
+          refine .fillBuilder fuel path environment destination element count operand origin before ?_ ?_
+          · intro current ready renewed fixed
+            exact ih (.value environment operand) (path ++ [0]) ready valueSupported
+          · intro current ready source allocated renewed nonfixed made
+            exact ih (.builder environment source operand) (path ++ [0]) allocated (builderSupported source)
       | fill _ environment element count origin operand fixed childSupported =>
           have child := ih (.value environment operand) (path ++ [0]) before childSupported
           have actual : evalValue (fuel + 1) config environment (.fill (.arr element count) operand origin) before =
