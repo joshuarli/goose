@@ -54,6 +54,41 @@ theorem NestedCallLoopStatements.bounded {cfg : Cfg} {env : Env} {statements : L
       · apply tailIH.mono
         omega
 
+theorem NestedCallLoopStatements.normal_any_env {cfg : Cfg} {env other : Env} {statements : List Stmt}
+    (form : NestedCallLoopStatements cfg env statements) {fuel : Nat} {state after : St} {flow : Flow}
+    (done : execStmts fuel cfg other statements state = .ok flow after) : flow = .normal .unit := by
+  induction form generalizing other fuel state after flow with
+  | mixed fragment => exact fragment.normal_any_env done
+  | @loop env condition body origin conditionForm bodyForm noValue later tail bodyIH tailIH =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, bind_apply] at done
+      cases head : execStmt fuel cfg other (.while condition body origin) state with
+      | stop reason final => simp only [head] at done; cases done
+      | ok first middle =>
+        cases fuel with
+        | zero => simp [execStmt, timeout, M.stop] at head
+        | succ fuel =>
+          have bodyNormal : ∀ {innerEnv : Env} {fuel : Nat} {state after : St} {flow : Flow},
+              execStmts fuel cfg innerEnv body.stmts state = .ok flow after → flow = .normal .unit := by
+            intro innerEnv fuel state after flow result
+            exact bodyIH St.initial result
+          have normal : first = .normal .unit := call_loop_normal_of_stmts bodyNormal noValue (by simpa [execStmt] using head)
+          subst first
+          simp only [head] at done
+          exact tailIH done
+
+theorem BoundedNestedCallLoopStatements.recursive {cfg : Cfg} {depth : Nat} {env : Env} {statements : List Stmt}
+    (form : BoundedNestedCallLoopStatements cfg depth env statements) : NestedCallLoopStatements cfg env statements := by
+  induction form with
+  | mixed fragment => exact .mixed fragment
+  | loop condition body origin conditionForm bodyForm noValue tail bodyIH tailIH =>
+    exact .loop condition body origin conditionForm bodyIH noValue tailIH
+
+#print axioms NestedCallLoopStatements.normal_any_env
+#print axioms BoundedNestedCallLoopStatements.recursive
+
 #print axioms BoundedNestedCallLoopStatements.mono
 #print axioms NestedCallLoopStatements.bounded
 end Goose.Lower
