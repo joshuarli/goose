@@ -10,7 +10,7 @@ theorem accepted_generated_while_prefix_family {cfg : Cfg} {env : Env} {cx : FnC
     (fragment : ∀ middle : St, RecursiveIfStatements cfg
       { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
     (noValue : body.value = none)
-    (family : GeneratedExpressionPrefixFamily cx results selected none condition (@CanonicalExpressionPrefixCursor cfg env cx)) :
+    (family : GeneratedExpressionPrefixFamily cx results selected none condition (@GeneratedControlProgressCursor cfg env cx)) :
     GeneratedStatementPrefixFamily cx results selected none (.while condition body origin)
       (@WhileStatementPrefixCursor cfg env cx results root owner selected) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps
@@ -29,7 +29,7 @@ theorem accepted_generated_while_prefix_family {cfg : Cfg} {env : Env} {cx : FnC
   have headerRealized : map.Realizes cfg.mod source.world env ⟨(header, 0), initial, state⟩ := by
     simpa only [RetainedSsaMap.Realizes] using realized
   rcases steps.uncons with ⟨zero, rfl⟩ | ⟨remaining, nextPoint, count, first, residual⟩
-  · exact .interior (.entry realized)
+  · exact .interior (.entry realized ⟨⟨(header, 0), initial, state⟩, headerStep⟩)
   · obtain ⟨stepFuel, actual⟩ := runtimeStep_demandInstructionStep first
     have equal := actual.deterministic (headerStep stepFuel)
     have nextEq : nextPoint = ⟨(header, 0), initial, state⟩ := by cases nextPoint; exact equal

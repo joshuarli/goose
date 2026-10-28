@@ -1,4 +1,5 @@
 import Goose.Lower.DemandWhileStoppedFamily
+import Goose.Lower.DemandControlProgressCursor
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -15,7 +16,9 @@ inductive WhileHeaderPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (results 
       (active : StmtSource cfg env (.while condition body origin) current) (world : active.world = source.world)
       (child : ExprSource cfg env condition current)
       (canonical : active.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
-      (demanded : CanonicalExpressionDemand map cx child runtime) :
+      (demanded : CanonicalExpressionDemand map cx child runtime)
+      (progress : (∃ id op, instAt cx.fn runtime.point = some (.def id op)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
       WhileHeaderPrefixCursor cx results selected source before built initial start map required runtime
   | fork {condition : Expr} {body : Core.Block} {origin : OriginId} {state current : St} {count : Nat}
       {source : StmtSource cfg env (.while condition body origin) state} {before built headerState : LS}
@@ -27,7 +30,8 @@ inductive WhileHeaderPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (results 
       (evaluated : evalExpr fuel cfg env condition current = .ok (.bool boolean) runtime.state)
       (boundary : GeneratedExpressionPrefixEnd child map cx headerState headerFrame
         (lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2
-        (lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).1 (.bool boolean) runtime) :
+        (lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).1 (.bool boolean) runtime)
+      (step : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
       WhileHeaderPrefixCursor cx results selected source before built initial start map required runtime
   | body {condition : Expr} {body : Core.Block} {origin : OriginId} {state current middle : St} {count : Nat}
       {source : StmtSource cfg env (.while condition body origin) state} {before built branchStart headerState : LS}
@@ -77,8 +81,8 @@ theorem WhileHeaderPrefixCursor.rebase {cfg : Cfg} {env : Env} {cx : FnCtx} {res
     (cursor : WhileHeaderPrefixCursor cx results selected source before built initial start map required runtime) :
     WhileHeaderPrefixCursor cx results selected source before built otherInitial otherStart map required runtime := by
   cases cursor with
-  | condition iterations active world child canonical demanded => exact .condition iterations active world child canonical demanded
-  | fork iterations active world child boolean fuel canonical evaluated boundary => exact .fork iterations active world child boolean fuel canonical evaluated boundary
+  | condition iterations active world child canonical demanded progress => exact .condition iterations active world child canonical demanded progress
+  | fork iterations active world child boolean fuel canonical evaluated boundary step => exact .fork iterations active world child boolean fuel canonical evaluated boundary step
   | body iterations active world child fuel conditionCanonical evaluated branch canonical demanded =>
     exact .body iterations active world child fuel conditionCanonical evaluated branch canonical demanded
   | backEdge iterations active world child conditionFuel bodyFuel conditionCanonical conditionDone branch canonical bodyDone ended step =>
@@ -92,7 +96,8 @@ inductive WhileStatementPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (resul
   | entry {condition : Expr} {body : Core.Block} {origin : OriginId} {state : St}
       {source : StmtSource cfg env (.while condition body origin) state} {before built : LS}
       {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap}
-      (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩) :
+      (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+      (step : ∃ next, ∀ fuel, DemandInstructionStep cx fuel ⟨start, initial, state⟩ next) :
       WhileStatementPrefixCursor cx results selected source before built initial start map required ⟨start, initial, state⟩
   | header {statement : Stmt} {state : St} {source : StmtSource cfg env statement state} {before built : LS}
       {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}

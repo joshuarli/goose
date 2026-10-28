@@ -15,7 +15,7 @@ theorem accepted_generated_while_agreement {cfg : Cfg} {env : Env} {cx : FnCtx} 
       (@WhileStatementPrefixCursor cfg env cx results root owner selected) ∧
     GeneratedStoppedStatementPrefixFamily cx results selected none (.while condition body origin) :=
   ⟨accepted_generated_while_prefix_family selected condition body origin fragment noValue
-      (accepted_generated_control_prefix_family selected none form),
+      (accepted_generated_control_progress_prefix_family selected none form),
     accepted_generated_while_stopped_family selected condition body origin fragment noValue
       (accepted_generated_read_stopped_expressions selected none form.stopped)⟩
 

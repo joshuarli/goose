@@ -27,7 +27,7 @@ theorem accepted_generated_while_header_prefix_complete {cfg : Cfg} {env : Env} 
     (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
     (bounded : map.Bounded headerState.vals.size)
     (realized : map.Realizes cfg.mod source.world env ⟨(header, 0), frame, state⟩)
-    (family : GeneratedExpressionPrefixFamily cx results selected none condition (@CanonicalExpressionPrefixCursor cfg env cx))
+    (family : GeneratedExpressionPrefixFamily cx results selected none condition (@GeneratedControlProgressCursor cfg env cx))
     (lowered : lowerWhile header (lowerExpr condition)
       (fun depth exitBlock => lowerBlock (some ⟨depth, exitBlock, .jump header⟩) [] false body)
       (lowerEnv cfg.mod env.vars results) headerState = ((), built)) (extended : ExtT built cx.fn.blocks)
@@ -41,17 +41,26 @@ theorem accepted_generated_while_header_prefix_complete {cfg : Cfg} {env : Env} 
       execStmt sourceFuel cfg env (.while condition body origin) initialState = .ok (.normal .unit) boundary.state ∧
       Post cfg env cx headerState frame built boundary.frame boundary.point [] ∧
       map.Bounded built.vals.size ∧ map.Realizes cfg.mod original.world env boundary := by
-  obtain ⟨child, childType, canonical, progress⟩ :=
-    accepted_generated_while_header_prefix source selected owned occurrence rows admitted realized headerInput headerEq coverage bounded
-      family lowered extended steps
+  obtain ⟨child, childType, canonical, childOwner, childAdmitted, childRealized, childInput, childExtended, childOccurrence, childRows⟩ :=
+    accepted_generated_while_header_condition source selected owned occurrence rows admitted realized headerInput headerEq lowered extended
+  have progress := (family child childOwner childOccurrence childRows coverage childAdmitted bounded childRealized childInput childExtended steps).progress
   cases progress with
-  | interior demanded => exact Or.inl (.condition iterations source world child canonical demanded)
+  | interior cursor => exact Or.inl (.condition iterations source world child canonical cursor.demanded cursor.progress)
   | @complete fuel consumed remaining current value split executed residual evaluated boundary =>
     have typed := (child.result fuel value evaluated).typed
     rw [childType] at typed
     obtain ⟨boolean, rfl⟩ := hasTy_bool typed
     rcases residual.uncons with ⟨zero, rfl⟩ | ⟨rest, nextPoint, restCount, first, suffix⟩
-    · exact Or.inl (.fork iterations source world child boolean fuel canonical evaluated boundary)
+    · obtain ⟨bodyBlock, exitBlock, forked, bodyStart, bodyEnd, jumped, value, forkRun, bodyEq, bodyRun,
+        jumpRun, finalEq, forkExtended, bodyExtended, jumpExtended, exitPoint, exitStack, exitVals⟩ :=
+        generated_while_exit_builder lowered boundary.post.pp extended
+      have cell := boundary.post.has ((lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).1,
+        .val (.bool boolean)) (by simp)
+      have step : ∃ next, ∀ targetFuel, DemandInstructionStep cx targetFuel reached next := by
+        refine ⟨⟨(if boolean then bodyBlock else exitBlock, 0), reached.frame, reached.state⟩, ?_⟩
+        intro targetFuel
+        exact generated_if_branch_step boolean forkRun boundary.post.pp forkExtended cell targetFuel
+      exact Or.inl (.fork iterations source world child boolean fuel canonical evaluated boundary step)
     · cases boolean with
       | false =>
         obtain ⟨exitBlock, exitStep, _, finalPost, finalBounded, finalRealized⟩ :=
