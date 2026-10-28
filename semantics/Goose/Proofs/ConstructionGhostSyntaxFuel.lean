@@ -15,6 +15,8 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
       (viewChild : ViewSyntax config view) (loChild : BoundSyntax config lo) (hiChild : BoundSyntax config hi) :
       ValueSyntax config (.slice mutability view lo hi origin)
   | pop (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.pop place origin)
+  | blockValue (block : Block) (origin : Goose.Core.OriginId) (child : ResultBlockSyntax config block) :
+      ValueSyntax config (.blockE block origin)
   | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
       (conditionChild : ValueSyntax config condition) (yesChild : BlockValueSyntax config yes) (noChild : BlockValueSyntax config no) :
       ValueSyntax config (.ifE condition yes no origin)
@@ -118,6 +120,23 @@ inductive BlockValueSyntax (config : EvalConfig) : Block → Prop
   | tail (scope : Nat) (statements : List Stmt) (expression : Expr)
       (body : ∀ statement ∈ statements, StatementSyntax config statement) (value : ValueSyntax config expression) :
       BlockValueSyntax config (.mk scope statements (some expression))
+
+inductive ResultBlockSyntax (config : EvalConfig) : Block → Prop
+  | make (scope : Nat) (statements : List Stmt) (tail : Option Expr)
+      (body : ∀ statement ∈ statements, StatementSyntax config statement) (result : ResultTailSyntax config tail) :
+      ResultBlockSyntax config (.mk scope statements tail)
+
+inductive ResultTailSyntax (config : EvalConfig) : Option Expr → Prop
+  | none : ResultTailSyntax config none
+  | produced (expression : Expr) (shape : ValueProducerExpression expression)
+      (value : ValueSyntax config expression) (builder : DeclarationBuilderSyntax config expression) :
+      ResultTailSyntax config (some expression)
+  | call (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
+      (argumentsSyntax : ∀ id implementation start ready,
+        getImplementation config context start = .ok (id, implementation) ready → ArgumentSyntax config implementation.params.toList arguments) :
+      ResultTailSyntax config (some (.call context arguments origin))
+  | block (block : Block) (origin : Goose.Core.OriginId) (child : ResultBlockSyntax config block) :
+      ResultTailSyntax config (some (.blockE block origin))
 
 inductive PrintArgumentSyntax (config : EvalConfig) : PrintArg → Prop
   | text (text : String) : PrintArgumentSyntax config (.text text)
@@ -245,6 +264,12 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   block : ∀ environment scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.block environment (.mk scope statements none))
   valueBlock : ∀ environment block, BlockValueSyntax config block → FuelSupport config fuel (.block environment block)
+  resultBlockWith : ∀ environment pre channels block, ResultBlockSyntax config block →
+    FuelSupport config fuel (.resultBlockWith environment pre channels block)
+  resultBlock : ∀ environment channels block, ResultBlockSyntax config block →
+    FuelSupport config fuel (.resultBlock environment channels block)
+  blockProducer : ∀ environment channels block origin, ResultBlockSyntax config block →
+    FuelSupport config fuel (.producerWith environment channels (.blockE block origin))
   loopBody : ∀ environment scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.loopBody environment (.mk scope statements none))
   whileLoop : ∀ environment condition scope statements, ValueSyntax config condition →
@@ -332,6 +357,8 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | reference mutability place child => exact .referenceValue fuel environment mutability place (previous.place environment place child)
         | length view child => exact .lengthValue fuel environment view (previous.view environment view child)
         | pop place origin child => exact .popValue fuel environment place origin (previous.place environment place child)
+        | blockValue block origin child =>
+            exact .valueBlockProducer fuel environment block origin (fun channels => previous.blockProducer environment channels block origin child)
         | conditional condition yes no origin conditionChild yesChild noChild =>
             exact .conditional fuel environment condition yes no origin (previous.value environment condition conditionChild)
               (previous.valueBlock environment yes yesChild) (previous.valueBlock environment no noChild)
@@ -499,6 +526,28 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
             exact .blockTail fuel environment scope statements expression
               (fun scopedEnvironment => previous.statements scopedEnvironment statements body)
               (fun scopedEnvironment => previous.value scopedEnvironment expression value)
+      · intro environment pre channels block derivation
+        cases derivation with
+        | make scope statements tail body tailSyntax =>
+            apply FuelSupport.resultBlockWith fuel environment pre channels scope statements tail
+            · intro scopedEnvironment
+              exact previous.statements scopedEnvironment statements body
+            · intro scopedEnvironment expression tailEq
+              cases tailSyntax with
+              | none => simp at tailEq
+              | produced actual shape value builder =>
+                  cases tailEq
+                  exact previous.constructedProducer scopedEnvironment channels expression shape value builder
+              | call context arguments origin argumentsSyntax =>
+                  cases tailEq
+                  exact previous.producerCall scopedEnvironment channels context arguments origin argumentsSyntax
+              | block block origin child =>
+                  cases tailEq
+                  exact previous.blockProducer scopedEnvironment channels block origin child
+      · intro environment channels block derivation
+        exact .resultBlock fuel environment channels block (previous.resultBlockWith environment [] channels block derivation)
+      · intro environment channels block origin derivation
+        exact .producerBlock fuel environment channels block origin (fun planned => previous.resultBlock environment planned block derivation)
       · intro environment scope statements derivation
         exact .loopBody fuel environment (.mk scope statements none) (previous.block environment scope statements derivation)
       · intro environment condition scope statements conditionSyntax body

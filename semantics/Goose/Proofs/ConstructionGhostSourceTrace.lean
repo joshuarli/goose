@@ -15,6 +15,8 @@ theorem sourceOperation_keepsEventPrefix (fuel : Nat) (config : EvalConfig)
     | exact preserved.statement _ _
     | exact preserved.statements _ _
     | exact preserved.block _ _ _ _
+    | exact preserved.resultBlock _ _ _
+    | exact preserved.resultBlockWith _ _ _ _
     | exact preserved.activationBody _ _ _
     | exact preserved.activation _ _ _ _
     | exact preserved.call _ _ _ _ _

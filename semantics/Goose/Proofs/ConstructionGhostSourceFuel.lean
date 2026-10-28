@@ -4,7 +4,7 @@ namespace Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostArguments
 open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
 open Goose.Proofs.ConstructionGhostProducerChannel Goose.Proofs.ConstructionGhostRegisterProducer Goose.Proofs.ConstructionGhostScalarProducer
-open Goose.Proofs.ConstructionGhostSourceTransition
+open Goose.Proofs.ConstructionGhostSourceTransition Goose.Proofs.ConstructionGhostBlockProducerTransition
 
 inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOperation α → Prop
   | timeout (operation : SourceOperation α) : FuelSupport config 0 operation
@@ -89,6 +89,20 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.value environment (.fill (.arr element count) operand origin))
+  | valueBlockProducer (fuel : Nat) (environment : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId)
+      (child : ∀ channels, FuelSupport config fuel (.producerWith environment channels (.blockE block origin))) :
+      FuelSupport config (fuel + 1) (.value environment (.blockE block origin))
+  | producerBlock (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel) (block : Block) (origin : Goose.Core.OriginId)
+      (child : ∀ planned, FuelSupport config fuel (.resultBlock environment planned block)) :
+      FuelSupport config (fuel + 1) (.producerWith environment channels (.blockE block origin))
+  | resultBlock (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel) (block : Block)
+      (child : FuelSupport config fuel (.resultBlockWith environment [] channels block)) :
+      FuelSupport config (fuel + 1) (.resultBlock environment channels block)
+  | resultBlockWith (fuel : Nat) (environment : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
+      (channels : List Channel) (scope : Nat) (statements : List Stmt) (tail : Option Expr)
+      (body : ∀ scopedEnvironment, FuelSupport config fuel (.statements scopedEnvironment statements))
+      (tailChild : ∀ scopedEnvironment expression, tail = some expression → FuelSupport config fuel (.producerWith scopedEnvironment channels expression)) :
+      FuelSupport config (fuel + 1) (.resultBlockWith environment pre channels (.mk scope statements tail))
   | conditional (fuel : Nat) (environment : RuntimeActivation) (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
       (conditionChild : FuelSupport config fuel (.value environment condition))
       (yesChild : FuelSupport config fuel (.block environment yes)) (noChild : FuelSupport config fuel (.block environment no)) :
@@ -294,7 +308,7 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execResultBlock, execResultBlockWith, execActivationBody,
         enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop] using
         (SourceHistory.timeout path _ before)
   | succ fuel ih =>
@@ -420,6 +434,25 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           simp only [execute] at child ⊢
           rw [actual]
           exact .fill fixed child
+      | valueBlockProducer _ environment block origin childSupported =>
+          refine .valueBlockProducer fuel path environment block origin before ?_
+          intro types channels ready typesFound prepared
+          exact ih (.producerWith environment channels (.blockE block origin)) (path ++ [0]) ready (childSupported channels)
+      | producerBlock _ environment channels block origin childSupported =>
+          refine .producerBlock fuel path environment channels block origin before ?_
+          intro planned ready prepared
+          exact ih (.resultBlock environment planned block) (path ++ [0]) (blockProducerStart environment planned ready) (childSupported planned)
+      | resultBlock _ environment channels block childSupported =>
+          exact .resultBlock fuel path environment channels block before
+            (ih (.resultBlockWith environment [] channels block) (path ++ [0]) before childSupported)
+      | resultBlockWith _ environment pre channels scope statements tail bodySupported tailSupported =>
+          refine .resultBlockWith fuel path environment pre channels scope statements tail before ?_ ?_
+          · intro ready bound
+            exact ih (.statements { environment with scopes := (scope, before.nextScope) :: environment.scopes } statements)
+              (path ++ [0]) ready (bodySupported _)
+          · intro expression ready value after tailEq bound bodyResult
+            exact ih (.producerWith { environment with scopes := (scope, before.nextScope) :: environment.scopes } channels expression)
+              (path ++ [1]) after (tailSupported _ expression tailEq)
       | conditional _ environment condition yes no origin conditionSupported yesSupported noSupported =>
           have child := ih (.value environment condition) (path ++ [0]) before conditionSupported
           have branch : ∀ value middle selected ready,

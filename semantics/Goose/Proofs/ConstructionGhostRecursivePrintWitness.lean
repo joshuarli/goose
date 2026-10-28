@@ -82,6 +82,32 @@ theorem nestedValue_witness :
   refine ⟨nestedValue_history 40, ?_, ?_⟩ <;>
     simp only [stepState, config, context, implementation, environment, nestedValue] <;> cbv
 
+private def blockValue : Expr := .blockE (.mk 1 [.expr (.call 0 [] 0) 0] (some (.lit .i64 7))) 0
+
+private theorem blockValueSyntax : ValueSyntax config blockValue := by
+  unfold blockValue
+  apply ValueSyntax.blockValue
+  apply ResultBlockSyntax.make
+  · intro statement member
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at member
+    subst statement
+    exact .expression (.call 0 [] 0) 0 (.call 0 [] 0 context implementation rfl rfl rfl .nil)
+  · exact .produced (.lit .i64 7) (.scalar (.integer .i64 7)) (.base (.integer .i64 7))
+      (.scalar (.lit .i64 7) (.integer .i64 7) (.base (.integer .i64 7)))
+
+theorem blockValue_history (fuel : Nat) :
+    SourceHistory config fuel [] (.value environment blockValue) .initial (evalValue fuel config environment blockValue .initial) :=
+  fuelHistory_exists fuel config _ [] .initial ((syntaxFuel_existsWithTails fuel config closed).value environment blockValue blockValueSyntax)
+
+theorem blockValue_witness :
+    SourceHistory config 40 [] (.value environment blockValue) .initial (evalValue 40 config environment blockValue .initial) ∧
+    evalValue 40 config environment blockValue .initial = .ok (.int .i64 7) (stepState (evalValue 40 config environment blockValue .initial)) ∧
+    (stepState (evalValue 40 config environment blockValue .initial)).construction.stdout.data.toList = [120, 10] := by
+  refine ⟨blockValue_history 40, ?_, ?_⟩ <;>
+    simp only [stepState, config, context, implementation, environment, blockValue] <;> cbv
+
+#print axioms blockValue_history
+#print axioms blockValue_witness
 #print axioms nestedValue_history
 #print axioms nestedValue_witness
 #print axioms recursivePrint_history

@@ -1,6 +1,7 @@
 import Goose.Proofs.ConstructionGhostScalarProducer
 import Goose.Proofs.ConstructionGhostRegisterProducer
 import Goose.Proofs.ConstructionGhostProducerChannel
+import Goose.Proofs.ConstructionGhostBlockProducerCore
 import Goose.Proofs.ConstructionGhostChannelTransition
 import Goose.Proofs.ConstructionGhostCallActivation
 import Goose.Proofs.ConstructionGhostSourceTransition
@@ -15,6 +16,7 @@ import Goose.Proofs.ConstructionInitializerLoopReplay
 namespace Goose.Proofs.ConstructionGhostSourceMutual
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition
 open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultScope Goose.Proofs.ConstructionGhostElements
+open Goose.Proofs.ConstructionGhostBlockProducerTransition
 open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInvocation Goose.Proofs.ConstructionInitializerLoopReplay
 open Goose.Proofs.ConstructionGhostArguments Goose.Proofs.ConstructionGhostEachCore
 open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
@@ -25,6 +27,9 @@ inductive SourceOperation : Type → Type
   | statement (environment : RuntimeActivation) (statement : Stmt) : SourceOperation Flow
   | statements (environment : RuntimeActivation) (statements : List Stmt) : SourceOperation Flow
   | block (environment : RuntimeActivation) (block : Block) : SourceOperation Flow
+  | resultBlock (environment : RuntimeActivation) (channels : List Channel) (block : Block) : SourceOperation (Flow × List Carrier)
+  | resultBlockWith (environment : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
+      (channels : List Channel) (block : Block) : SourceOperation (Flow × List Carrier)
   | activationBody (activation : RuntimeActivation) (block : Block) : SourceOperation (List Carrier)
   | activation (activation : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
   | boundActivationBody (activation : RuntimeActivation) (pre : List (Goose.Core.VarId × Value)) (block : Block) : SourceOperation (List Carrier)
@@ -59,6 +64,8 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .statement environment statement => execStmt fuel config environment statement
   | .statements environment statements => execStmts fuel config environment statements
   | .block environment block => execBlock fuel config environment [] [] block
+  | .resultBlock environment channels block => execResultBlock fuel config environment channels block
+  | .resultBlockWith environment pre channels block => execResultBlockWith fuel config environment pre channels block
   | .activationBody activation block => execActivationBody fuel config activation [] block
   | .activation activation block origin => enterActivation fuel config activation [] block origin
   | .boundActivationBody activation pre block => execActivationBody fuel config activation pre block
@@ -1017,6 +1024,43 @@ inductive SourceHistory (config : EvalConfig) :
       (statement : Stmt) (before : ExecutionState) (shape : LeafStatement statement) :
       SourceHistory config (fuel + 1) path (.statement environment statement) before
         (execStmt (fuel + 1) config environment statement before)
+  | valueBlockProducer (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (block : Block)
+      (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (child : ∀ types channels ready,
+        blockResultTypes? (max fuel (blockQueryBudget block)) ⟨config.module, environment.vars⟩ block = some types →
+        channelsFor config.layout environment.act (types.map fun ty => ⟨ty, if ty.nonfixed then .value else .register, none⟩)
+          origin before = .ok channels ready →
+        SourceHistory config fuel (path ++ [0]) (.producerWith environment channels (.blockE block origin)) ready
+          (evalProduce fuel config environment channels (.blockE block origin) ready)) :
+      SourceHistory config (fuel + 1) path (.value environment (.blockE block origin)) before
+        (evalValue (fuel + 1) config environment (.blockE block origin) before)
+  | producerBlock (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (channels : List Channel)
+      (block : Block) (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (child : ∀ planned ready, prepareBlockProducerChannels channels origin before = .ok planned ready →
+        SourceHistory config fuel (path ++ [0]) (.resultBlock environment planned block) (blockProducerStart environment planned ready)
+          (execResultBlock fuel config environment planned block (blockProducerStart environment planned ready))) :
+      SourceHistory config (fuel + 1) path (.producerWith environment channels (.blockE block origin)) before
+        (evalProduce (fuel + 1) config environment channels (.blockE block origin) before)
+  | resultBlock (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (channels : List Channel)
+      (block : Block) (before : ExecutionState)
+      (child : SourceHistory config fuel (path ++ [0]) (.resultBlockWith environment [] channels block) before
+        (execResultBlockWith fuel config environment [] channels block before)) :
+      SourceHistory config (fuel + 1) path (.resultBlock environment channels block) before
+        (execResultBlock (fuel + 1) config environment channels block before)
+  | resultBlockWith (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (pre : List (Goose.Core.VarId × Value))
+      (channels : List Channel) (scope : Nat) (statements : List Stmt) (tail : Option Expr) (before : ExecutionState)
+      (body : ∀ ready, bindAll environment.act before.nextScope pre (resultScopeStart environment scope before) = .ok () ready →
+        SourceHistory config fuel (path ++ [0])
+          (.statements { environment with scopes := (scope, before.nextScope) :: environment.scopes } statements) ready
+          (execStmts fuel config { environment with scopes := (scope, before.nextScope) :: environment.scopes } statements ready))
+      (tailChild : ∀ expression ready value after, tail = some expression →
+        bindAll environment.act before.nextScope pre (resultScopeStart environment scope before) = .ok () ready →
+        execStmts fuel config { environment with scopes := (scope, before.nextScope) :: environment.scopes } statements ready = .ok (.normal value) after →
+        SourceHistory config fuel (path ++ [1])
+          (.producerWith { environment with scopes := (scope, before.nextScope) :: environment.scopes } channels expression) after
+          (evalProduce fuel config { environment with scopes := (scope, before.nextScope) :: environment.scopes } channels expression after)) :
+      SourceHistory config (fuel + 1) path (.resultBlockWith environment pre channels (.mk scope statements tail)) before
+        (execResultBlockWith (fuel + 1) config environment pre channels (.mk scope statements tail) before)
   | blockTail (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (scope : Nat)
       (statements : List Stmt) (expression : Expr) (before : ExecutionState)
       (body : SourceHistory config fuel (path ++ [0])
@@ -1099,9 +1143,9 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execResultBlock, execResultBlockWith, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | blockTail | valueFirstStatement | leafStatement | assignment | declaration | valueNonfixedArray | valueNonfixedFill | builderChannelCall | fillBuilder | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
+  | valueBlockProducer | producerBlock | resultBlock | resultBlockWith | blockTail | valueFirstStatement | leafStatement | assignment | declaration | valueNonfixedArray | valueNonfixedFill | builderChannelCall | fillBuilder | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]
@@ -1489,7 +1533,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execResultBlock, execResultBlockWith, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
