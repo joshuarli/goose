@@ -92,6 +92,11 @@ inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
       (placeSyntax : PlaceSyntax config place)
       (body : ∀ statement ∈ statements, StatementSyntax config statement) :
       StatementSyntax config (.forEach localVar index (.of place) byRef (.mk scope statements none) origin)
+  | eachValueStatement (localVar : Goose.Core.VarId) (index : Option Goose.Core.VarId) (operand : Expr) (byRef : Bool)
+      (scope : Nat) (statements : List Stmt) (origin : Goose.Core.OriginId)
+      (operandSyntax : ValueSyntax config operand)
+      (body : ∀ statement ∈ statements, StatementSyntax config statement) :
+      StatementSyntax config (.forEach localVar index (.val operand) byRef (.mk scope statements none) origin)
   | rangeStatement (localVar : Goose.Core.VarId) (first last : Expr) (scope : Nat) (statements : List Stmt)
       (origin : Goose.Core.OriginId) (firstSyntax : ValueSyntax config first) (lastSyntax : ValueSyntax config last)
       (body : ∀ statement ∈ statements, StatementSyntax config statement) :
@@ -306,6 +311,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | eachStatement localVar index place byRef scope statements origin placeSyntax body =>
             exact .eachStatement fuel environment localVar index (.of place) byRef (.mk scope statements none) origin
               (previous.placeView environment place placeSyntax)
+              (fun runtime => previous.eachLoop environment localVar index byRef scope statements runtime 0 body)
+        | eachValueStatement localVar index operand byRef scope statements origin operandSyntax body =>
+            exact .eachStatement fuel environment localVar index (.val operand) byRef (.mk scope statements none) origin
+              (previous.view environment (.val operand) (.value operand operandSyntax))
               (fun runtime => previous.eachLoop environment localVar index byRef scope statements runtime 0 body)
         | rangeStatement localVar first last scope statements origin firstSyntax lastSyntax body =>
             exact .rangeStatement fuel environment localVar first last (.mk scope statements none) origin
