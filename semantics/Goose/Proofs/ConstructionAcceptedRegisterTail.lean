@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionScalarTailExecution
+import Goose.Proofs.ConstructionAcceptedBinaryComplete
 import Goose.Proofs.ConstructionAcceptedCalleeScope
 import Goose.Proofs.ConstructionAcceptedScalarControl
 
