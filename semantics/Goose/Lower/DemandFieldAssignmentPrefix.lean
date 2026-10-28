@@ -15,7 +15,8 @@ inductive FieldAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (resu
       {source : StmtSource cfg env (.assign place expression origin) state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
       (child : PlaceSource cfg env place state) (canonical : source.PlaceChildAt child rfl)
-      (frame : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture map.values map.runs runtime) :
+      (frame : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture map.values map.runs runtime)
+      (step : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
       FieldAssignmentPrefixCursor cx results source before built initial start map required runtime
 
 theorem accepted_generated_field_assignment_prefix {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
@@ -47,7 +48,7 @@ theorem accepted_generated_field_assignment_prefix {cfg : Cfg} {env : Env} {cx :
     simpa only [destinationWorld] using realized
   refine ⟨owned, coverage, ?_⟩
   rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨remaining, current, rfl, first, tail⟩
-  · exact .interior (.scalar (.destination destination destinationAt ⟨⟨_, input.atPoint, input.related⟩, destination.frame, destinationRealized⟩))
+  · exact .interior (.scalar (.destination destination destinationAt ⟨⟨_, input.atPoint, input.related⟩, destination.frame, destinationRealized⟩ ⟨middle, firstAddress⟩))
   · obtain ⟨fuel, firstStep⟩ := runtimeStep_demandInstructionStep first
     have same := firstStep.deterministic (firstAddress fuel)
     have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
@@ -56,8 +57,9 @@ theorem accepted_generated_field_assignment_prefix {cfg : Cfg} {env : Env} {cx :
     · have carried := destinationRealized.retained middlePost.same bounded.1 bounded.2 RetainsAliases.refl
       apply DemandPrefixDecomposition.interior
       apply FieldAssignmentPrefixCursor.address destination destinationAt
-      exact ⟨⟨_, middlePost.pp, middlePost.rel⟩, by simpa only [middleState] using destination.frame,
-        by simpa only [middleState] using carried⟩
+      · exact ⟨⟨_, middlePost.pp, middlePost.rel⟩, by simpa only [middleState] using destination.frame,
+          by simpa only [middleState] using carried⟩
+      · exact ⟨addressedPoint, secondAddress⟩
     · obtain ⟨fuel, secondStep⟩ := runtimeStep_demandInstructionStep second
       have same := secondStep.deterministic (secondAddress fuel)
       have currentEq : current = addressedPoint := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
@@ -125,7 +127,7 @@ theorem FieldAssignmentPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCtx
     map.Realizes cfg.mod source.world env runtime := by
   cases cursor with
   | scalar cursor => exact cursor.realizes
-  | address child canonical frame =>
+  | address child canonical frame step =>
     change RetainedOperandsAt cfg.mod source.world env runtime.state.store runtime.frame map.values map.runs
     simpa only [canonical.world] using frame.operands
 

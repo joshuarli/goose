@@ -197,7 +197,7 @@ theorem ScalarAssignmentPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} 
     ∃ typing roots future, DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime := by
   have carried := cursor.realizes
   cases cursor with
-  | destination child canonical demanded =>
+  | destination child canonical demanded step =>
     exact ⟨_, _, _, ⟨demanded.builder, by simpa only [canonical.world] using demanded.source, carried⟩⟩
   | value child canonical aliases demanded =>
     obtain ⟨typing, roots, future, frame⟩ := demanded.frame
@@ -223,7 +223,7 @@ theorem ScalarAssignmentStatementPrefixCursor.frame {cfg : Cfg} {env : Env} {cx 
   | fieldAssignment cursor =>
     cases cursor with
     | scalar cursor => exact cursor.frame
-    | address child canonical frame =>
+    | address child canonical frame step =>
       exact ⟨_, _, _, by simpa only [canonical.world] using frame⟩
   | assignment cursor => exact cursor.frame
 

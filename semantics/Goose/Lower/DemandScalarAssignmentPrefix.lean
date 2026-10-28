@@ -14,7 +14,8 @@ inductive ScalarAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (res
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap}
       (child : PlaceSource cfg env place state) (canonical : source.PlaceChildAt child rfl)
       (demanded : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
-        map.values map.runs ⟨start, initial, state⟩) :
+        map.values map.runs ⟨start, initial, state⟩)
+      (step : ∃ next, ∀ fuel, DemandInstructionStep cx fuel ⟨start, initial, state⟩ next) :
       ScalarAssignmentPrefixCursor cx results source before built initial start map required ⟨start, initial, state⟩
   | value {place : Place} {expression : Expr} {origin : OriginId} {state after : St}
       {source : StmtSource cfg env (.assign place expression origin) state}
@@ -64,7 +65,7 @@ theorem accepted_generated_scalar_assignment_prefix {cfg : Cfg} {env : Env} {cx 
     simpa only [destinationWorld] using realized
   refine ⟨owned, coverage, ?_⟩
   rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨remaining, current, rfl, first, tail⟩
-  · exact .interior (.destination destination destinationAt ⟨⟨_, input.atPoint, input.related⟩, destination.frame, destinationRealized⟩)
+  · exact .interior (.destination destination destinationAt ⟨⟨_, input.atPoint, input.related⟩, destination.frame, destinationRealized⟩ ⟨middle, addressStep⟩)
   · obtain ⟨fuel, firstStep⟩ := runtimeStep_demandInstructionStep first
     have same := firstStep.deterministic (addressStep fuel)
     have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
@@ -123,7 +124,7 @@ theorem ScalarAssignmentPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCt
     (cursor : ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime) :
     map.Realizes cfg.mod source.world env runtime := by
   cases cursor with
-  | destination child canonical demanded =>
+  | destination child canonical demanded step =>
     change RetainedOperandsAt cfg.mod source.world env state.store initial map.values map.runs
     simpa only [canonical.world] using demanded.operands
   | value child canonical aliases demanded =>
