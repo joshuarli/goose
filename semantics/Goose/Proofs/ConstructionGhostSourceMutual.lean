@@ -195,16 +195,16 @@ def callValueResult (origin : Goose.Core.OriginId) : ExecutionStep (List Carrier
   | .escape address carriers state => .escape address carriers state
   | .jump target kind state => .jump target kind state
 
-theorem valueCall_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
-    (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl) (origin : Goose.Core.OriginId)
+theorem valueCallWith_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (contextId : Goose.Core.ContextId) (arguments : List Arg) (context : Context) (implementation : Impl) (origin : Goose.Core.OriginId)
     (before : ExecutionState) (contextFound : config.module.contexts[contextId]? = some context)
     (implementationFound : config.module.impls[context.impl]? = some implementation)
     (resultsEmpty : implementation.results = #[]) :
-    evalValue (fuel + 1) config environment (.call contextId [] origin) before =
-      callValueResult origin (invokeCall fuel config environment contextId [] [] origin before) := by
+    evalValue (fuel + 1) config environment (.call contextId arguments origin) before =
+      callValueResult origin (invokeCall fuel config environment contextId arguments [] origin before) := by
   simp only [evalValue, getImplementation, contextFound, implementationFound, resultsEmpty,
     Array.toList_empty, channelsFor, List.mapM_nil, bind, pure, callValueResult]
-  cases invokeCall fuel config environment contextId [] [] origin before <;> rfl
+  cases invokeCall fuel config environment contextId arguments [] origin before <;> rfl
 
 def argumentResult (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation) (vars : Array LocalVar)
     (parameters : List Param) (arguments : List Arg) : ExecutionStep Value → ExecutionStep (List Value)
@@ -221,10 +221,19 @@ theorem valueArgument_source (fuel : Nat) (config : EvalConfig) (environment : R
   simp only [evalArguments, bind, argumentResult]
   cases evalValue fuel config environment operand before <;> rfl
 
-theorem producerCall_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
-    (context : Goose.Core.ContextId) (origin : Goose.Core.OriginId) (before : ExecutionState) :
-    evalProduce (fuel + 1) config environment [] (.call context [] origin) before =
-      invokeCall fuel config environment context [] [] origin before := by
+theorem valueCall_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (contextId : Goose.Core.ContextId) (context : Context) (implementation : Impl) (origin : Goose.Core.OriginId)
+    (before : ExecutionState) (contextFound : config.module.contexts[contextId]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (resultsEmpty : implementation.results = #[]) :
+    evalValue (fuel + 1) config environment (.call contextId [] origin) before =
+      callValueResult origin (invokeCall fuel config environment contextId [] [] origin before) :=
+  valueCallWith_source fuel config environment contextId [] context implementation origin before contextFound implementationFound resultsEmpty
+
+theorem producerCallWith_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId) (before : ExecutionState) :
+    evalProduce (fuel + 1) config environment [] (.call context arguments origin) before =
+      invokeCall fuel config environment context arguments [] origin before := by
   simp only [evalProduce, List.mapM, List.mapM.loop, List.reverse_nil, bind, pure]
 
 def callWithResult (fuel : Nat) (config : EvalConfig) (context : Context) (implementation : Impl)
@@ -260,6 +269,12 @@ theorem callWith_source (fuel : Nat) (config : EvalConfig) (environment : Runtim
   | stop | escape | jump => simp_all [bind]
 
 #print axioms callWith_source
+
+theorem producerCall_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (context : Goose.Core.ContextId) (origin : Goose.Core.OriginId) (before : ExecutionState) :
+    evalProduce (fuel + 1) config environment [] (.call context [] origin) before =
+      invokeCall fuel config environment context [] [] origin before :=
+  producerCallWith_source fuel config environment context [] origin before
 
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
@@ -330,6 +345,19 @@ inductive SourceHistory (config : EvalConfig) :
       (child : SourceHistory config fuel (path ++ [0]) (.call environment contextId origin) before outcome) :
       SourceHistory config (fuel + 1) path (.value environment (.call contextId [] origin)) before
         (callValueResult origin outcome)
+  | valueCallWith {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
+      {arguments : List Arg} {origin : Goose.Core.OriginId} {before : ExecutionState} {context : Context} {implementation : Impl}
+      {outcome : ExecutionStep (List Carrier)}
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (resultsEmpty : implementation.results = #[])
+      (child : SourceHistory config fuel (path ++ [0]) (.callWith environment contextId arguments origin) before outcome) :
+      SourceHistory config (fuel + 1) path (.value environment (.call contextId arguments origin)) before
+        (callValueResult origin outcome)
+  | producerCallWith {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
+      {arguments : List Arg} {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep (List Carrier)}
+      (child : SourceHistory config fuel (path ++ [0]) (.callWith environment contextId arguments origin) before outcome) :
+      SourceHistory config (fuel + 1) path (.producer environment (.call contextId arguments origin)) before outcome
   | producerCall {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
       {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep (List Carrier)}
       (child : SourceHistory config fuel (path ++ [0]) (.call environment contextId origin) before outcome) :
@@ -505,6 +533,14 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       simp only [execute] at ih ⊢
       rw [valueCall_source fuel config environment contextId context implementation origin before
         contextFound implementationFound resultsEmpty, ih]
+  | @valueCallWith fuel path environment contextId arguments origin before context implementation outcome contextFound
+      implementationFound resultsEmpty child ih =>
+      simp only [execute] at ih ⊢
+      rw [valueCallWith_source fuel config environment contextId arguments context implementation origin before
+        contextFound implementationFound resultsEmpty, ih]
+  | @producerCallWith fuel path environment contextId arguments origin before outcome child ih =>
+      simp only [execute] at ih ⊢
+      rw [producerCallWith_source fuel config environment contextId arguments origin before, ih]
   | @producerCall fuel path environment contextId origin before outcome child ih =>
       simp only [execute] at ih ⊢
       rw [producerCall_source fuel config environment contextId origin before, ih]
@@ -644,6 +680,16 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (resultsEmpty : implementation.results = #[])
       (callee : SupportedOperation config (.call environment contextId origin)) :
       SupportedOperation config (.value environment (.call contextId [] origin))
+  | valueCallWith (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (arguments : List Arg)
+      (origin : Goose.Core.OriginId) (context : Context) (implementation : Impl)
+      (contextFound : config.module.contexts[contextId]? = some context)
+      (implementationFound : config.module.impls[context.impl]? = some implementation)
+      (resultsEmpty : implementation.results = #[])
+      (callee : SupportedOperation config (.callWith environment contextId arguments origin)) :
+      SupportedOperation config (.value environment (.call contextId arguments origin))
+  | producerCallWith (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (arguments : List Arg)
+      (origin : Goose.Core.OriginId) (callee : SupportedOperation config (.callWith environment contextId arguments origin)) :
+      SupportedOperation config (.producer environment (.call contextId arguments origin))
   | producerCall (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (origin : Goose.Core.OriginId)
       (callee : SupportedOperation config (.call environment contextId origin)) :
       SupportedOperation config (.producer environment (.call contextId [] origin))
@@ -815,6 +861,17 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           rw [valueCall_source fuel config environment contextId context implementation origin before
             contextFound implementationFound resultsEmpty]
           exact .valueCall contextFound implementationFound resultsEmpty child
+      | valueCallWith environment contextId arguments origin context implementation contextFound implementationFound resultsEmpty callee =>
+          have child := ih (.callWith environment contextId arguments origin) (path ++ [0]) before callee
+          simp only [execute] at child ⊢
+          rw [valueCallWith_source fuel config environment contextId arguments context implementation origin before
+            contextFound implementationFound resultsEmpty]
+          exact .valueCallWith contextFound implementationFound resultsEmpty child
+      | producerCallWith environment contextId arguments origin callee =>
+          have child := ih (.callWith environment contextId arguments origin) (path ++ [0]) before callee
+          simp only [execute] at child ⊢
+          rw [producerCallWith_source]
+          exact .producerCallWith child
       | producerCall environment contextId origin callee =>
           have child := ih (.call environment contextId origin) (path ++ [0]) before callee
           simp only [execute] at child ⊢
@@ -1295,16 +1352,14 @@ private def parameterConfig : EvalConfig := ⟨.release,
     #[parameterSourceContext, parameterTargetContext], 0, #[], #[], #[]⟩⟩
 private def parameterArguments : List Arg := [.byVal (.call 0 [] 0), .byVal (.lit .i64 9)]
 
-theorem witness_parameterCall : ∃ after,
-    invokeCall 40 parameterConfig witnessEnvironment 1 parameterArguments [] 0 .initial = .ok [] after ∧
-    after.construction.stdout.data.toList = [120, 10, 121, 10] ∧ after.nextAct = 2 ∧
-    SourceHistory parameterConfig 40 [] (.callWith witnessEnvironment 1 parameterArguments 0) .initial (.ok [] after) := by
+private theorem parameterCall_supported (environment : RuntimeActivation) :
+    SupportedOperation parameterConfig (.callWith environment 1 parameterArguments 0) := by
   have sourceBody : ∀ environment, SupportedOperation parameterConfig
       (.statements environment [.print [.text "x"] 0]) := by
     intro environment
     exact .sequence environment (.printText environment "x" 0) (.empty environment)
-  have sourceCall : SupportedOperation parameterConfig (.call witnessEnvironment 0 0) := by
-    apply SupportedOperation.call witnessEnvironment 0 0 parameterSourceContext parameterSourceImplementation
+  have sourceCall : SupportedOperation parameterConfig (.call environment 0 0) := by
+    apply SupportedOperation.call environment 0 0 parameterSourceContext parameterSourceImplementation
     · rfl
     · rfl
     · rfl
@@ -1312,23 +1367,30 @@ theorem witness_parameterCall : ∃ after,
     · intro act
       exact .activation _ 0 _ 0 sourceBody
   have arguments : SupportedOperation parameterConfig
-      (.arguments witnessEnvironment parameterTargetImplementation.vars parameterTargetImplementation.params.toList parameterArguments) := by
+      (.arguments environment parameterTargetImplementation.vars parameterTargetImplementation.params.toList parameterArguments) := by
     unfold parameterTargetImplementation parameterArguments
     exact .argumentValue _ _ _ _ _ _
-      (.valueCall witnessEnvironment 0 0 parameterSourceContext parameterSourceImplementation rfl rfl rfl sourceCall)
+      (.valueCall environment 0 0 parameterSourceContext parameterSourceImplementation rfl rfl rfl sourceCall)
       (.argumentValue _ _ _ _ _ _ (.value _ (.integer .i64 9)) (.argumentsDone _ _))
   have targetBody : ∀ environment, SupportedOperation parameterConfig
       (.statements environment [.print [.text "y"] 0]) := by
     intro environment
     exact .sequence environment (.printText environment "y" 0) (.empty environment)
-  have supported : SupportedOperation parameterConfig (.callWith witnessEnvironment 1 parameterArguments 0) := by
-    apply SupportedOperation.callWith witnessEnvironment 1 parameterArguments 0 parameterTargetContext parameterTargetImplementation
+  have supported : SupportedOperation parameterConfig (.callWith environment 1 parameterArguments 0) := by
+    apply SupportedOperation.callWith environment 1 parameterArguments 0 parameterTargetContext parameterTargetImplementation
     · rfl
     · rfl
     · rfl
     · exact arguments
     · intro act pre
       exact .boundActivation _ pre 1 _ 0 targetBody
+  exact supported
+
+theorem witness_parameterCall : ∃ after,
+    invokeCall 40 parameterConfig witnessEnvironment 1 parameterArguments [] 0 .initial = .ok [] after ∧
+    after.construction.stdout.data.toList = [120, 10, 121, 10] ∧ after.nextAct = 2 ∧
+    SourceHistory parameterConfig 40 [] (.callWith witnessEnvironment 1 parameterArguments 0) .initial (.ok [] after) := by
+  have supported := parameterCall_supported witnessEnvironment
   have history := history_exists 40 parameterConfig (.callWith witnessEnvironment 1 parameterArguments 0) [] .initial supported
   refine ⟨witnessState (invokeCall 40 parameterConfig witnessEnvironment 1 parameterArguments [] 0 .initial), ?_, ?_, ?_, ?_⟩
   · unfold witnessState parameterConfig parameterSourceContext parameterTargetContext parameterSourceImplementation parameterTargetImplementation parameterArguments witnessEnvironment
@@ -1345,6 +1407,32 @@ theorem witness_parameterCall : ∃ after,
       (invokeCall 40 parameterConfig witnessEnvironment 1 parameterArguments [] 0 .initial) at history
     rw [actual] at history
     exact history
+
+theorem witness_parameterValueCall : ∃ after,
+    evalValue 40 parameterConfig witnessEnvironment (.call 1 parameterArguments 0) .initial = .ok .unit after ∧
+    after.construction.stdout.data.toList = [120, 10, 121, 10] ∧ after.nextAct = 2 ∧
+    SourceHistory parameterConfig 40 [] (.value witnessEnvironment (.call 1 parameterArguments 0)) .initial (.ok .unit after) := by
+  have supported : SupportedOperation parameterConfig (.value witnessEnvironment (.call 1 parameterArguments 0)) :=
+    .valueCallWith witnessEnvironment 1 parameterArguments 0 parameterTargetContext parameterTargetImplementation rfl rfl rfl
+      (parameterCall_supported witnessEnvironment)
+  have history := history_exists 40 parameterConfig (.value witnessEnvironment (.call 1 parameterArguments 0)) [] .initial supported
+  refine ⟨witnessState (evalValue 40 parameterConfig witnessEnvironment (.call 1 parameterArguments 0) .initial), ?_, ?_, ?_, ?_⟩
+  · unfold witnessState parameterConfig parameterSourceContext parameterTargetContext parameterSourceImplementation parameterTargetImplementation parameterArguments witnessEnvironment
+    cbv
+  · unfold witnessState parameterConfig parameterSourceContext parameterTargetContext parameterSourceImplementation parameterTargetImplementation parameterArguments witnessEnvironment
+    cbv
+  · unfold witnessState parameterConfig parameterSourceContext parameterTargetContext parameterSourceImplementation parameterTargetImplementation parameterArguments witnessEnvironment
+    cbv
+  · have actual : evalValue 40 parameterConfig witnessEnvironment (.call 1 parameterArguments 0) .initial =
+        .ok .unit (witnessState (evalValue 40 parameterConfig witnessEnvironment (.call 1 parameterArguments 0) .initial)) := by
+      unfold witnessState parameterConfig parameterSourceContext parameterTargetContext parameterSourceImplementation parameterTargetImplementation parameterArguments witnessEnvironment
+      cbv
+    change SourceHistory parameterConfig 40 [] (.value witnessEnvironment (.call 1 parameterArguments 0)) .initial
+      (evalValue 40 parameterConfig witnessEnvironment (.call 1 parameterArguments 0) .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_parameterValueCall
 
 #print axioms witness_parameterCall
 
@@ -1394,6 +1482,8 @@ theorem witness_boundActivation : ∃ after,
 
 #print axioms witness_nestedFill
 
+#print axioms producerCallWith_source
+#print axioms valueCallWith_source
 #print axioms producerCall_source
 #print axioms valueArgument_source
 #print axioms valueCall_source
