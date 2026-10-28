@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedByteStatement
+import Goose.Proofs.ConstructionRootCorrespondenceCursors
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -74,8 +75,35 @@ theorem execStmt_checkedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (a
     implementation bytes origin before after root ambient types live regions pending world declared ty implementationFound
     unnamed resolved compatible True.intro fresh freshType freshSynthetic executed
 
+theorem execStmt_rootCheckedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (localVar : Nat) (descriptor : LocalVar) (implementation : Impl)
+    (bytes : List UInt8) (origin : Goose.Core.OriginId) (before after : ExecutionState) (root : Goose.Core.RootInst)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types)
+    (checked : rpStmt frame.source (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+      frame.rootCursor = .ok ((), rootAfter))
+    (declared : frame.interpretation.environment.vars[localVar]? = some descriptor)
+    (ty : descriptor.ty = .varr (.int .u8))
+    (implementationFound : config.module.impls[frame.interpretation.environment.implementation]? = some implementation)
+    (unnamed : (implementation.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some localVar)) = none)
+    (resolved : rootOf frame.interpretation.environment localVar before = .ok root before)
+    (executed : execStmt (fuel + 2) config frame.interpretation.environment
+      (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin) before = .ok (.normal .unit) after) :
+    ∃ (stored : StoredValue) (published : ExecutionState),
+      RootTypesExtend types (registerRootType types root (.varr (.int .u8))) ∧
+      AcceptedWorld config frame.initialized after ambient (registerRootType types root (.varr (.int .u8)))
+        (fun other => other = root ∨ live other)
+        (regions.map (fun region => extendReceivingLimit region stored.storage (storageExtent published stored.storage))) pending := by
+  have order := (rpStmt_letS_initializer checked).1
+  exact execStmt_checkedByteOwner_letWorld fuel config accepted frame localVar descriptor implementation bytes origin
+    before after root ambient types live regions pending world source declared ty implementationFound unnamed
+    (Or.inl (by rw [order]; exact Nat.le_refl _)) resolved executed
+
 #print axioms AcceptedFrame.enterScope_frontier
 #print axioms AcceptedFrame.uninitializedLocal_fresh
 #print axioms execStmt_checkedByteOwner_letWorld
+#print axioms execStmt_rootCheckedByteOwner_letWorld
 
 end Goose.Proofs.ConstructionAcceptedExecution
