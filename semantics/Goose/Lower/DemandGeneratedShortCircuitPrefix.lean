@@ -115,6 +115,61 @@ theorem accepted_generated_shortCircuit_actual_branch {cfg : Cfg} {env : Env} {a
   rw [nextEq, frameEq, stateEq]
   cases h : path <;> simp only [h, RetainedSsaMap.addValues, List.map_nil, List.nil_append] at demanded ⊢ <;> exact demanded
 
+theorem accepted_generated_shortCircuit_right_entry {cfg : Cfg} {env : Env} {a b : Expr} {state middle : St}
+    (isAnd : Bool) (source : ExprSource cfg env (if isAnd then .and a b else .or a b) state)
+    (left : ExprSource cfg env a state) (metadata : source.ChildAt left 0 (by cases isAnd <;> rfl))
+    (roots : left.rootsEnv = source.rootsEnv) (leftType : left.ty = .bool)
+    {sourceFuel : Nat} (leftDone : evalExpr sourceFuel cfg env a state = .ok (.bool isAnd) middle)
+    {cx : FnCtx} {le : LEnv} {root : DemandNode} {before : LS} {point : Pt}
+    {initial frame : GIR.Frame} {map required : RetainedSsaMap}
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn le root source.path
+      (.expression (if isAnd then .and a b else .or a b)) before)
+    (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (boundary : ExpressionDemandBoundary left map cx before initial (lowerExpr a le before).2
+      (lowerExpr a le before).1 (.bool isAnd) middle point frame)
+    (extended : ExtT (lowerExpr (if isAnd then .and a b else .or a b) le before).2 cx.fn.blocks)
+    {next : Pt} {nextFrame : GIR.Frame} {nextState : St}
+    (actual : Evidence.RuntimeStep cx.cfg cx.fn point frame middle next nextFrame nextState) :
+    ∃ right : ExprSource cfg env b middle,
+      right.typingEnv = source.typingEnv ∧ right.rootsEnv = source.rootsEnv ∧ right.ty = .bool ∧
+      source.ChildAt right 1 (by cases isAnd <;> rfl) ∧ nextFrame = frame ∧ nextState = middle ∧
+      (demandShortCircuitRightBefore isAnd a le before).pp = some next ∧
+      DemandFrameAt cfg env cx right.world right.typingEnv right.rootsEnv right.context.inputFuture
+        map.values map.runs ⟨next, nextFrame, nextState⟩ := by
+  obtain ⟨path, branchRight, valueEq, branchWorld, branchPath, branchPlans, branchContext,
+    nextEq, frameEq, stateEq, branchDemand⟩ :=
+    accepted_generated_shortCircuit_actual_branch isAnd source left metadata roots leftType leftDone
+      occurrence rows coverage admitted boundary extended actual
+  have rhs : path = .rhs := by
+    cases h : path <;> cases isAnd <;> simp [h, ShortCircuitPath.leftValue] at valueEq ⊢
+  subst path
+  dsimp only [ShortCircuitPath.target, ShortCircuitPath.frame] at nextEq frameEq
+  obtain ⟨_, _, _, _, _, _, _, _, _, nextSource⟩ := source.shortCircuitChildrenDemand isAnd
+  obtain ⟨right, typing, rightRoots, type, world, path, plans, context, retained⟩ :=
+    nextSource sourceFuel (.bool isAnd) middle leftDone
+  have child : source.ChildAt right 1 (by cases isAnd <;> rfl) := ⟨world, path, plans, context, retained⟩
+  have forkExtended := generated_shortCircuit_fork_extended (right := b) boundary.post.pp extended
+  have ⟨_, _, _, _, _, _, _, rhsAt, _⟩ := scFork_facts
+    (show scFork isAnd (lowerExpr a le before).1 le (lowerExpr a le before).2 =
+      ((demandShortCircuitFork isAnd a le before).1, (demandShortCircuitFork isAnd a le before).2) from rfl)
+    boundary.post.pp forkExtended
+  have atPoint : (demandShortCircuitRightBefore isAnd a le before).pp = some next := by
+    rw [nextEq]
+    exact LS.pp_cur rhsAt
+  have branchBuilder := branchDemand.builder
+  have branchRealized := branchDemand.operands
+  rw [stateEq] at branchRealized
+  have rightRealized : map.Realizes cfg.mod right.world env ⟨next, nextFrame, middle⟩ := by
+    simpa only [RetainedSsaMap.Realizes, world, branchWorld] using branchRealized
+  have demanded : DemandFrameAt cfg env cx right.world right.typingEnv right.rootsEnv right.context.inputFuture
+      map.values map.runs ⟨next, nextFrame, nextState⟩ := by
+    rw [stateEq]
+    exact ⟨branchBuilder, right.frame, rightRealized⟩
+  exact ⟨right, typing, rightRoots, type, child, frameEq, stateEq, atPoint, demanded⟩
+
+#print axioms accepted_generated_shortCircuit_right_entry
+
 #print axioms accepted_generated_shortCircuit_actual_branch
 
 #print axioms accepted_generated_shortCircuit_left_prefix
