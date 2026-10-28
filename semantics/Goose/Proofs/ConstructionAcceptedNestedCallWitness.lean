@@ -1,9 +1,13 @@
+import Goose.Proofs.ConstructionAcceptedRecursiveCallGlobal
 import Goose.Construct.Validate
 import Goose.Construct.Eval
 import Goose.Proofs.ConstructionAcceptedLocalRead
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
+open Goose.Proofs.ConstructionExecutionOwnership
+open Goose.Proofs.ConstructionRootCorrespondence
+open Goose.Proofs.ConstructionRepresentation
 
 private def nestedCallSummary : SummaryAnn := .known ⟨[], [], [], [], [], [], [], [], false, false⟩
 private def nestedCallEntry : Impl := ⟨"entry", #[], #[], #[], .mk 0 [] none, nestedCallSummary⟩
@@ -39,6 +43,63 @@ theorem nestedCall_validated : validate nestedCallModule = .ok () := by cbv
 
 theorem nestedCall_result : nestedCallObservation = some 7 := by decide +kernel
 
+theorem nestedCall_graph : RegisterCallGraph ⟨.release, nestedCallModule⟩ (.int .i64) := by
+  intro target context implementation contextAt implementationAt parameters results
+  cases target with
+  | zero =>
+    simp [nestedCallModule] at contextAt
+    subst context
+    simp [nestedCallModule, nestedCallEntry] at implementationAt
+    subst implementation
+    simp [nestedCallEntry] at results
+  | succ target =>
+    cases target with
+    | zero =>
+      simp [nestedCallModule] at contextAt
+      subst context
+      simp [nestedCallModule] at implementationAt
+      subst implementation
+      refine ⟨_, rfl, Or.inr ⟨0, 2, 0, _, nestedCallInner, rfl, rfl, rfl, rfl, rfl⟩⟩
+    | succ target =>
+      cases target with
+      | zero =>
+        simp [nestedCallModule] at contextAt
+        subst context
+        simp [nestedCallModule] at implementationAt
+        subst implementation
+        refine ⟨_, rfl, Or.inl ⟨0, _, _, rfl, ?_, ?_, ?_⟩⟩
+        · repeat constructor
+        · repeat constructor
+        · intro id expression origin member descriptor found
+          simp [nestedCallInner] at member found
+          obtain ⟨rfl, rfl, rfl⟩ := member
+          simp at found
+          subst descriptor
+          exact Or.inl ⟨.i64, rfl⟩
+      | succ target => simp [nestedCallModule] at contextAt
+
+theorem nestedCall_initializer_allFuel (fuel : Nat) :
+    ∃ completed types live ambient,
+      let outcome := initGlobals fuel ⟨.release, nestedCallModule⟩ [0] .initial
+      let after := Goose.Proofs.Exit.stepState outcome
+      RootTypesExtend (declaredRootTypes nestedCallModule) types ∧ completed ≤ 1 ∧
+      AcceptedWorld ⟨.release, nestedCallModule⟩ completed after ambient types live [] [] ∧
+      (match outcome with
+       | .ok _ _ => ambient = [] ∧ completed = 1 ∧ FutureGlobalsClear ⟨.release, nestedCallModule⟩ completed after
+       | .stop _ _ => completed = 0 ∧ FutureGlobalsClear ⟨.release, nestedCallModule⟩ 0 after
+       | .escape .. | .jump .. => False) := by
+  let config : EvalConfig := ⟨.release, nestedCallModule⟩
+  let descriptor : Global := ⟨"answer", .int .i64, .immutable, .call 1 [] 0, 0⟩
+  let context : Context := ⟨1, "outer", [], [[]], []⟩
+  have safe := initGlobals_recursive_register_single fuel 0 config (acceptedModule config nestedCall_validated)
+    .initial [] (declaredRootTypes nestedCallModule) (fun _ => False) descriptor 1 0 context nestedCallOuter
+    (initial_acceptedWorld config nestedCall_validated) (futureGlobalsClear_initial config)
+    (by rfl) (by rfl) (Or.inl ⟨.i64, rfl⟩) (by rfl) (by rfl) (by rfl) (by rfl) nestedCall_graph
+  obtain ⟨completed, types, live, ambient, extend, lower, upper, world, result⟩ := safe
+  exact ⟨completed, types, live, ambient, extend, upper, world, result⟩
+
+#print axioms nestedCall_initializer_allFuel
+#print axioms nestedCall_graph
 #print axioms validated_global_noDirectLocalRead
 #print axioms nestedCall_validated
 #print axioms nestedCall_result
