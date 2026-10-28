@@ -5,9 +5,10 @@ open Goose.Core Goose.GIR Goose.Core.Sound
 
 structure GeneratedDefinitionExpressionCursor {cfg : Cfg} {env : Env} (cx : FnCtx)
     {expression : Expr} {state : St} (source : ExprSource cfg env expression state)
-    (_before _built : LS) (_initial : GIR.Frame) (_start : Pt) (map required : RetainedSsaMap)
+    (before _built : LS) (initial : GIR.Frame) (_start : Pt) (map required : RetainedSsaMap)
     (runtime : DemandRuntimePoint) : Prop where
   demanded : CanonicalExpressionDemand map cx source runtime
+  same : Same before.vals.size initial runtime.frame
   instruction : ∃ label id op, GeneratedDemandInstruction cfg.mod source.rootsEnv.access cx.fn required label runtime.point (.def id op)
 
 theorem accepted_generated_read_definition_prefix_family {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
@@ -38,14 +39,14 @@ theorem accepted_generated_read_definition_prefix_family {cfg : Cfg} {env : Env}
     exact ⟨⟨_, post.pp, post.rel⟩, frame, carried⟩
   refine ⟨owned, coverage, ?_⟩
   rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨length, current, rfl, actual, tail⟩
-  · refine .interior ⟨.entry ⟨⟨_, input.atPoint, input.related⟩, source.frame, realized⟩, ?_⟩
+  · refine .interior ⟨.entry ⟨⟨_, input.atPoint, input.related⟩, source.frame, realized⟩, Same.refl _ _, ?_⟩
     exact accepted_generated_scalar_read_next source form occurrence rows input.atPoint input.related extended (by omega) (.zero _)
   · obtain ⟨fuel, actualStep⟩ := runtimeStep_demandInstructionStep actual
     have same := actualStep.deterministic (firstStep fuel)
     have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
     subst current
     rcases tail.uncons with ⟨rfl, rfl⟩ | ⟨remaining, boundary, rfl, loaded, residual⟩
-    · refine .interior ⟨.exit atMiddle, ?_⟩
+    · refine .interior ⟨.exit atMiddle, post.same, ?_⟩
       exact accepted_generated_scalar_read_next source form occurrence rows input.atPoint input.related extended (by omega)
         (.next actual (.zero _))
     · obtain ⟨_, _, _, _, value, _, _, evaluated, finalPost, _, _⟩ :=
