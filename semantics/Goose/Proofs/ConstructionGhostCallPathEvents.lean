@@ -11,6 +11,8 @@ open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostC
 open Goose.Proofs.ConstructionGhostCallResultEvents Goose.Proofs.ConstructionGhostResultScope
 open Goose.Proofs.ConstructionGhostDeclaration Goose.Proofs.ConstructionGhostDeclarationOnce
 open Goose.Proofs.ConstructionGhostDeclarationInversion Goose.Proofs.ConstructionGhostDeclarationOccurrenceEvents
+open Goose.Proofs.ConstructionGhostDeclarationSelection
+open Goose.Proofs.ConstructionGhostDeclarationFallback
 
 theorem call_statementPathEvents (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (path : List Nat) (contextId : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel) (origin : Goose.Core.OriginId)
@@ -94,6 +96,36 @@ theorem statementOccurrence_pathEvents (config : EvalConfig) (environment : Runt
   rw [actual] at kept
   cases destination <;> exact ⟨child, eventPrefix_trans _ _ _ kept visitPrefix⟩
 
+theorem statementClassification_pathEvents (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (visit : StatementInvocation) (sourceFuel : Nat) (localVar : Goose.Core.VarId)
+    (expression : Expr) (origin : Goose.Core.OriginId) (finalEvents : List Goose.Core.ConstructionEvent)
+    (fuelEq : visit.fuel = sourceFuel + 1) (statementEq : visit.statement = .letS localVar expression origin)
+    (actual : execStmt visit.fuel config environment visit.statement visit.before = visit.outcome)
+    (history : SourceHistory config visit.fuel path (.statement environment visit.statement) visit.before visit.outcome)
+    (visitPrefix : EventPrefix (Goose.Proofs.Exit.stepState visit.outcome).construction.events finalEvents) :
+    (∃ destination ready, DeclarationOccurrence sourceFuel config environment localVar expression origin visit.before destination ready ∧
+      (∀ other otherReady, DeclarationOccurrence sourceFuel config environment localVar expression origin visit.before other otherReady →
+        destination = other ∧ ready = otherReady) ∧
+      match destination with
+      | none => SourceHistory config sourceFuel (path ++ [0]) (.value environment expression) ready
+          (evalValue sourceFuel config environment expression ready) ∧
+          EventPrefix (Goose.Proofs.Exit.stepState (evalValue sourceFuel config environment expression ready)).construction.events finalEvents
+      | some destination => SourceHistory config sourceFuel (path ++ [0]) (.builder environment destination expression) ready
+          (buildExpr sourceFuel config environment destination expression ready) ∧
+          EventPrefix (Goose.Proofs.Exit.stepState (buildExpr sourceFuel config environment destination expression ready)).construction.events finalEvents) ∨
+    ((∃ terminal : DeclarationTerminal, visit.outcome = terminal.step) ∧
+      ¬ ∃ destination ready, DeclarationOccurrence sourceFuel config environment localVar expression origin visit.before destination ready) := by
+  rw [fuelEq, statementEq] at actual history
+  rw [← actual] at history
+  have classification := declaration_history_or_earlyTerminal sourceFuel config environment localVar expression origin visit.before path history
+  rw [actual] at classification
+  rcases classification with ⟨destination, ready, occurrence, unique, child⟩ | terminal
+  · left
+    refine ⟨destination, ready, occurrence, unique, ?_⟩
+    cases destination <;> exact ⟨child.1, eventPrefix_trans _ _ _ child.2 visitPrefix⟩
+  · exact Or.inr terminal
+
+#print axioms statementClassification_pathEvents
 #print axioms statementOccurrence_pathEvents
 #print axioms call_statementPathEvents
 end Goose.Proofs.ConstructionGhostCallPathEvents

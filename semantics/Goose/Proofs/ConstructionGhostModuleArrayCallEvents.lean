@@ -13,6 +13,7 @@ open Goose.Proofs.ConstructionGhostDeclaration Goose.Proofs.ConstructionGhostRes
 open Goose.Proofs.ConstructionGhostSourceGlobal Goose.Proofs.ConstructionGhostCallSetupHistory
 open Goose.Proofs.ConstructionGhostCallPathEvents Goose.Proofs.ConstructionGhostCallArguments
 open Goose.Proofs.ConstructionGhostCallActivation Goose.Proofs.ConstructionGhostSyntaxFuel Goose.Proofs.ConstructionGhostStatementPaths
+open Goose.Proofs.ConstructionGhostDeclarationFallback
 
 theorem moduleEntry_arrayCallEvents (fuel sourceFuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
     (implementation : Impl) (scope : Nat) (statements : List Stmt) (tail : Option Expr)
@@ -328,6 +329,114 @@ theorem moduleEntry_arrayCalleeSources (fuel calleeFuel : Nat) (config : EvalCon
     fuelEq statementEq (statementVisit_executes calleeReplay calleeVisit member) childHistory occurrence childPrefix
   cases destination <;> exact result
 
+theorem moduleEntry_arrayCalleeClassification (fuel calleeFuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
+    (implementation : Impl) (scope : Nat) (statements : List Stmt) (tail : Option Expr)
+    (activated moduleBefore : ExecutionState) (channels : List Channel) (callResult : ExecutionStep (List Carrier))
+    (outcome : ExecutionStep Flow) (visits : List StatementInvocation) (visit : StatementInvocation)
+    (path : List Nat) (localVar : Goose.Core.VarId) (incoming current : Goose.Core.DestinationId)
+    (ty : Ty) (operands : List Expr) (arrayOrigin origin : Goose.Core.OriginId)
+    (initial prepared ready : ExecutionState) (pending : PendingDestination) (element : Ty)
+    (found : config.module.impls[activation.implementation]? = some implementation)
+    (body : implementation.body = .mk scope statements tail)
+    (replay : StatementReplay config { activation with scopes := (scope, activated.nextScope) :: activation.scopes }
+      fuel 0 statements (resultScopeStart activation scope activated) outcome visits)
+    (member : visit ∈ visits)
+    (visitFuel : visit.fuel = calleeFuel + 7)
+    (visitStatement : visit.statement = .letS localVar (.arrLit ty operands arrayOrigin) origin)
+    (supported : ∀ sourceFuel localVar expression statementOrigin, .letS localVar expression statementOrigin ∈ statements →
+      FuelSupport config sourceFuel
+        (.value { activation with scopes := (scope, activated.nextScope) :: activation.scopes } expression))
+    (call : callResult = ((enterActivation (fuel + 2) config activation [] implementation.body 0 >>= fun carriers =>
+      deliverCarriers (fuel + 2) config.layout channels carriers 0) activated))
+    (moduleResult : runModule (fuel + 3) config moduleBefore = entryCallResult callResult)
+    (occurrence : DeclarationOccurrence (calleeFuel + 6) config
+      { activation with scopes := (scope, activated.nextScope) :: activation.scopes } localVar (.arrLit ty operands arrayOrigin)
+      origin visit.before (some incoming) initial)
+    (renewed : liftConstruction arrayOrigin (renewReceivingDestination incoming) initial = .ok current prepared)
+    (destinationFound : getDestination current prepared = .ok pending ready)
+    (elementFound : elementType pending.capability.logicalType = some element) (nonfixed : element.nonfixed = true)
+    (elementsSupported : ∀ operand ∈ operands, FuelSupport config (calleeFuel + 5)
+      (.element { activation with scopes := (scope, activated.nextScope) :: activation.scopes } current element operand)) :
+    ∃ elementOutcome elementVisits,
+      OperandReplay (fun operand => buildElement (calleeFuel + 5) config
+        { activation with scopes := (scope, activated.nextScope) :: activation.scopes } current element operand)
+        0 operands [] ready elementOutcome elementVisits ∧
+      elementVisits.map Invocation.operand = operands.take elementVisits.length ∧
+      (elementVisits.map Invocation.ordinal).Nodup ∧
+      ∀ elementVisit ∈ elementVisits, ∀ context arguments callOrigin layout layoutReady childReady child destination callReady,
+        elementVisit.operand = .call context arguments callOrigin →
+        receivingLayout config.layout element elementVisit.before = .ok layout layoutReady →
+        receivingAction (expressionOrigin elementVisit.operand) current (fun parent => openChild parent element layout) layoutReady = .ok child childReady →
+        liftConstruction callOrigin (renewReceivingDestination child) childReady = .ok destination callReady →
+        ∀ lookupReady argumentsReady valuesReady activationReady boundReady id callee callableChannels refreshed values,
+          getImplementation config context callReady = .ok (id, callee) lookupReady →
+          config.module.impls[id]? = some callee →
+          [Channel.construct destination].length = callee.results.size →
+          prepareCallableChannels { activation with scopes := (scope, activated.nextScope) :: activation.scopes }
+            [.construct destination] callee callOrigin lookupReady = .ok callableChannels argumentsReady →
+          evalArguments (calleeFuel + 2) config { activation with scopes := (scope, activated.nextScope) :: activation.scopes }
+            callee.vars callee.params.toList arguments argumentsReady = .ok values valuesReady →
+          refreshCallableChannels callableChannels callOrigin valuesReady = .ok refreshed activationReady →
+          activationReady.activations.length < Goose.Core.maxCallDepth →
+          ∀ calleeScope calleeStatements calleeTail, callee.body = .mk calleeScope calleeStatements calleeTail →
+          ClosedModuleWithTails config → (∀ statement ∈ calleeStatements, StatementSyntax config statement) →
+          (let calleeActivation : RuntimeActivation := ⟨id, activationReady.nextAct, callee.vars, [], refreshed⟩
+           let calleeActivated := { activationReady with nextAct := activationReady.nextAct + 1, activations := calleeActivation :: activationReady.activations }
+           bindAll calleeActivation.act calleeActivated.nextScope
+             ((callee.params.toList.zip values).map fun (parameter, value) => (parameter.var, value))
+             (resultScopeStart calleeActivation calleeScope calleeActivated) = .ok () boundReady) →
+          let calleeActivation : RuntimeActivation := ⟨id, activationReady.nextAct, callee.vars, [], refreshed⟩
+          let calleeActivated := { activationReady with nextAct := activationReady.nextAct + 1, activations := calleeActivation :: activationReady.activations }
+          let calleeEnvironment := { calleeActivation with scopes := (calleeScope, calleeActivated.nextScope) :: calleeActivation.scopes }
+          ∃ calleeOutcome calleeVisits,
+            StatementReplay config calleeEnvironment calleeFuel 0 calleeStatements boundReady calleeOutcome calleeVisits ∧
+            (calleeVisits.map StatementInvocation.ordinal).Nodup ∧
+            ∀ calleeVisit ∈ calleeVisits, ∃ suffix, StatementPath 0 suffix calleeVisit.ordinal ∧
+              SourceHistory config calleeVisit.fuel
+                ((((((((path ++ [0]) ++ [elementVisit.ordinal]) ++ [0]) ++ [0]) ++ [1]) ++ [0]) ++ [0]) ++ suffix)
+                (.statement calleeEnvironment calleeVisit.statement) calleeVisit.before calleeVisit.outcome ∧
+              EventPrefix (Goose.Proofs.Exit.stepState calleeVisit.outcome).construction.events
+                (Goose.Proofs.Exit.stepState (runModule (fuel + 3) config moduleBefore)).construction.events ∧
+              ∀ sourceFuel localVar expression statementOrigin,
+                calleeVisit.fuel = sourceFuel + 1 → calleeVisit.statement = .letS localVar expression statementOrigin →
+                (∃ destination sourceReady, DeclarationOccurrence sourceFuel config calleeEnvironment localVar expression statementOrigin calleeVisit.before destination sourceReady ∧
+                  (∀ other otherReady, DeclarationOccurrence sourceFuel config calleeEnvironment localVar expression statementOrigin calleeVisit.before other otherReady →
+                    destination = other ∧ sourceReady = otherReady) ∧
+                  match destination with
+                  | none => SourceHistory config sourceFuel
+                      (((((((((path ++ [0]) ++ [elementVisit.ordinal]) ++ [0]) ++ [0]) ++ [1]) ++ [0]) ++ [0]) ++ suffix) ++ [0])
+                      (.value calleeEnvironment expression) sourceReady (evalValue sourceFuel config calleeEnvironment expression sourceReady) ∧
+                      EventPrefix (Goose.Proofs.Exit.stepState (evalValue sourceFuel config calleeEnvironment expression sourceReady)).construction.events
+                        (Goose.Proofs.Exit.stepState (runModule (fuel + 3) config moduleBefore)).construction.events
+                  | some destination => SourceHistory config sourceFuel
+                      (((((((((path ++ [0]) ++ [elementVisit.ordinal]) ++ [0]) ++ [0]) ++ [1]) ++ [0]) ++ [0]) ++ suffix) ++ [0])
+                      (.builder calleeEnvironment destination expression) sourceReady (buildExpr sourceFuel config calleeEnvironment destination expression sourceReady) ∧
+                      EventPrefix (Goose.Proofs.Exit.stepState (buildExpr sourceFuel config calleeEnvironment destination expression sourceReady)).construction.events
+                        (Goose.Proofs.Exit.stepState (runModule (fuel + 3) config moduleBefore)).construction.events) ∨
+                ((∃ terminal : DeclarationTerminal, calleeVisit.outcome = terminal.step) ∧
+                  ¬ ∃ destination sourceReady, DeclarationOccurrence sourceFuel config calleeEnvironment localVar expression statementOrigin calleeVisit.before destination sourceReady) := by
+  obtain ⟨elementOutcome, elementVisits, elementReplay, ordered, once, children⟩ :=
+    moduleEntry_arrayCalleeEvents fuel calleeFuel config activation implementation scope statements tail activated moduleBefore
+      channels callResult outcome visits visit path localVar incoming current ty operands arrayOrigin origin initial prepared ready pending element
+      found body replay member visitFuel visitStatement supported call moduleResult occurrence renewed destinationFound elementFound nonfixed elementsSupported
+  refine ⟨elementOutcome, elementVisits, elementReplay, ordered, once, ?_⟩
+  intro elementVisit elementMember context arguments callOrigin layout layoutReady childReady child destination callReady operandEq layoutResult opened callRenewed
+  have nested := children elementVisit elementMember context arguments callOrigin layout layoutReady childReady child destination callReady
+    operandEq layoutResult opened callRenewed
+  intro lookupReady argumentsReady valuesReady activationReady boundReady id callee callableChannels refreshed values lookup implemented arity calleePrepared
+    argumentsResult refresh depth calleeScope calleeStatements calleeTail calleeBody closed calleeSyntax bound
+  obtain ⟨calleeOutcome, calleeVisits, calleeReplay, calleeOnce, calleeChildren⟩ := nested lookupReady argumentsReady valuesReady activationReady boundReady
+    id callee callableChannels refreshed values lookup implemented arity calleePrepared argumentsResult refresh depth calleeScope calleeStatements
+    calleeTail calleeBody closed calleeSyntax bound
+  refine ⟨calleeOutcome, calleeVisits, calleeReplay, calleeOnce, ?_⟩
+  intro calleeVisit member
+  obtain ⟨suffix, suffixPath, childHistory, childPrefix⟩ := calleeChildren calleeVisit member
+  refine ⟨suffix, suffixPath, childHistory, childPrefix, ?_⟩
+  intro sourceFuel localVar expression statementOrigin fuelEq statementEq
+  exact statementClassification_pathEvents config _ _ calleeVisit sourceFuel localVar expression statementOrigin _
+    fuelEq statementEq (statementVisit_executes calleeReplay calleeVisit member) childHistory childPrefix
+
+#print axioms moduleEntry_arrayCalleeClassification
 #print axioms moduleEntry_arrayCalleeSources
 #print axioms moduleEntry_arrayCalleeEvents
 #print axioms moduleEntry_arrayCallSetup
