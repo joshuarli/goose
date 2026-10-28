@@ -1,4 +1,6 @@
 import Goose.Proofs.ConstructionAcceptedScalarAssignCursor
+import Goose.Proofs.ConstructionMixedScalarStatementEvents
+import Goose.Proofs.ConstructionFreshByteLocalSequenceEvents
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -28,7 +30,7 @@ private theorem mixedAssign_bind_success {ε α β : Type} (first : Except ε α
   | error failure => cases checked
   | ok value => exact ⟨value, rfl, checked⟩
 
-theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : MixedAssignStatements statements) :
+theorem execStmts_mixedAssign_accepted_world_events {statements : List Stmt} (form : MixedAssignStatements statements) :
     ∀ (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
       (frame : ConstructionSourceFrame) (context : Nat) (before : ExecutionState)
       (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
@@ -58,18 +60,20 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
         next.initialized = frame.initialized ∧ RootTypesExtend types nextTypes ∧
         AcceptedWorld config next.initialized after ambient nextTypes nextLive nextRegions pending ∧
         AcceptedFrame config accepted next after nextTypes ∧
-        (match outcome with | .ok flow _ => flow = .normal .unit | .stop _ _ => True | .escape .. | .jump .. => False) := by
+        (match outcome with | .ok flow _ => flow = .normal .unit | .stop _ _ => True | .escape .. | .jump .. => False) ∧
+        ∃ suffix, after.construction.events = before.construction.events ++ suffix ∧
+          ∀ event ∈ suffix, ByteOwnerSequenceEvent event := by
   induction form with
   | nil =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position initialized limit bounded owners scalarOwners localTargets globalTargets unnamed
     cases fuel <;> simp only [execStmts, timeout, EvalM.stop, pure, Goose.Proofs.Exit.stepState]
-    all_goals exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial⟩
+    all_goals exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, [], by simp, by simp⟩
   | byte declaration rest tail ih =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position initialized limit bounded owners scalarOwners localTargets globalTargets unnamed
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial⟩
+      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, [], by simp, by simp⟩
     | succ fuel =>
       obtain ⟨_, _, _, typedAll, _⟩ := position.checked accepted frame _
       cases nesting : frame.typingFuel with
@@ -88,6 +92,9 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
           have headOutcome := execStmt_acceptedByteOwner_outcome fuel (checkFuel + 1) config accepted frame context declaration.id
             declaration.bytes declaration.origin declaration.bytesOrigin rest before ambient types live regions pending
             world source phase headPosition nesting byteOwner headUnnamed
+          obtain ⟨firstEvents, headTrace, headValid⟩ := execStmt_acceptedByteOwner_fresh_events fuel config accepted frame context
+            declaration.id declaration.bytes declaration.origin declaration.bytesOrigin before ambient types live regions pending
+            world source phase byteOwner headUnnamed
           cases head : execStmt fuel config frame.interpretation.environment declaration.statement before with
           | stop reason after =>
             have head' := head
@@ -95,7 +102,11 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
             simp only [head'] at headOutcome
             obtain ⟨nextRegions, finalWorld, finalSource⟩ := headOutcome
             simp only [execStmts, bind, head, Goose.Proofs.Exit.stepState]
-            exact ⟨frame, types, live, nextRegions, rfl, (fun _ _ found => found), finalWorld, finalSource, trivial⟩
+            simp only [head', Goose.Proofs.Exit.stepState] at headTrace
+            refine ⟨frame, types, live, nextRegions, rfl, (fun _ _ found => found), finalWorld, finalSource, trivial,
+              firstEvents, headTrace, ?_⟩
+            intro event member
+            exact ⟨before.construction.destinations.size, headValid event member⟩
           | escape address carriers after | jump target kind after =>
             have head' := head
             simp only [ByteOwnerDeclaration.statement] at head'
@@ -117,19 +128,31 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
             have remainingUnnamed : ∀ item : ByteOwnerDeclaration, item.statement ∈ rest →
                 (nextFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some item.id)) = none := by
               intro item member; exact unnamed item (List.mem_cons_of_mem declaration.statement member)
-            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow⟩ :=
+            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, tailEvents, tailTrace, tailValid⟩ :=
               ih fuel config accepted nextFrame context middle ambient nextTypes nextLive nextRegions pending middleWorld middleSource
                 (by simpa [nextFrame, advanceLocalFrame] using phase) middlePosition initialized limit bounded remainingOwners (by intro id expression origin member shape descriptor found; exact scalarOwners id expression origin (List.mem_cons_of_mem _ member) shape descriptor found) (by intro id expression origin member descriptor found; exact localTargets id expression origin (List.mem_cons_of_mem _ member) descriptor found) (by intro id expression origin member descriptor found; exact globalTargets id expression origin (List.mem_cons_of_mem _ member) descriptor found) remainingUnnamed
             simp only [execStmts, bind, head]
-            refine ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, ?_, finalWorld, finalSource, finalFlow⟩
-            intro oldRoot ty found
-            exact finalExtended oldRoot ty (extended oldRoot ty found)
+            refine ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, ?_, finalWorld, finalSource, finalFlow, ?_⟩
+            · intro oldRoot ty found
+              exact finalExtended oldRoot ty (extended oldRoot ty found)
+            · simp only [head', Goose.Proofs.Exit.stepState] at headTrace
+              refine ⟨firstEvents ++ tailEvents, ?_, ?_⟩
+              · have tailTrace' : (Goose.Proofs.Exit.stepState (execStmts fuel config frame.interpretation.environment rest middle)).construction.events =
+                    middle.construction.events ++ tailEvents := by
+                  simpa only [nextFrame, advanceLocalFrame] using tailTrace
+                rw [tailTrace', headTrace]
+                simp [List.append_assoc]
+              · intro event member
+                simp only [List.mem_append] at member
+                rcases member with member | member
+                · exact ⟨before.construction.destinations.size, headValid event member⟩
+                · exact tailValid event member
   | scalar expression origin rest expressionForm tail ih =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position initialized limit bounded owners scalarOwners localTargets globalTargets unnamed
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial⟩
+      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, [], by simp, by simp⟩
     | succ fuel =>
       obtain ⟨finalTyping, finalCounter, finalRoots, typedAll, rootedAll⟩ := position.checked accepted frame _
       obtain ⟨rootMiddle, headRooted, tailRooted⟩ := rpStmts_cons rootedAll
@@ -175,7 +198,7 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
             have same := headOutcome.1
             subst after
             simp only [execStmts, bind, head, Goose.Proofs.Exit.stepState]
-            exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial⟩
+            exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, [], by simp, by simp⟩
           | escape address carriers after => exact (control.1 before address carriers after head).elim
           | jump target kind after => exact (control.2 before target kind after head).elim
           | ok flow middle =>
@@ -187,18 +210,18 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
             have remainingUnnamed : ∀ item : ByteOwnerDeclaration, item.statement ∈ rest →
                 (nextFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some item.id)) = none := by
               intro item member; exact unnamed item (List.mem_cons_of_mem _ member)
-            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow⟩ :=
+            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, tailEvents, tailTrace, tailValid⟩ :=
               ih fuel config accepted nextFrame context before ambient types live regions pending world nextSource phase nextPosition
                 initialized limit middleBounded remainingOwners (by intro id expression origin member shape descriptor found; exact scalarOwners id expression origin (List.mem_cons_of_mem _ member) shape descriptor found) (by intro id expression origin member descriptor found; exact localTargets id expression origin (List.mem_cons_of_mem _ member) descriptor found) (by intro id expression origin member descriptor found; exact globalTargets id expression origin (List.mem_cons_of_mem _ member) descriptor found) remainingUnnamed
             simp only [execStmts, bind, head]
-            exact ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow⟩
+            exact ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, tailEvents, tailTrace, tailValid⟩
 
   | scalarLocal id expression origin rest expressionForm tail ih =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position initialized limit bounded owners scalarOwners localTargets globalTargets unnamed
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial⟩
+      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, [], by simp, by simp⟩
     | succ fuel =>
       obtain ⟨_, _, _, typedAll, _⟩ := position.checked accepted frame _
       cases nesting : frame.typingFuel with
@@ -212,6 +235,12 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
             intro descriptor declared
             apply scalarOwners id expression origin (by simp) expressionForm descriptor
             rw [source.compatible.sourceVariables]; exact declared
+          have fixed : ∀ descriptor, frame.interpretation.environment.vars[id]? = some descriptor → descriptor.ty.nonfixed = false := by
+            intro descriptor declared
+            have typed : frame.typing.variables[id]? = some descriptor := by
+              rw [← source.compatible.variables]; exact declared
+            rcases localScalar descriptor typed with ⟨intTy, same⟩ | same <;> simp [same, Ty.nonfixed]
+          have headEvents := execStmt_scalarLocal_events fuel config frame.interpretation.environment id expression origin expressionForm fixed before
           have headOutcome := execStmt_acceptedScalarLocal_outcome fuel checkFuel config accepted frame context id expression origin rest
             before ambient types live regions pending expressionForm world source phase position nesting initialized bounded localScalar
           cases head : execStmt fuel config frame.interpretation.environment (.letS id expression origin) before with
@@ -219,7 +248,9 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
             simp only [head] at headOutcome
             obtain ⟨finalWorld, finalSource⟩ := headOutcome
             simp only [execStmts, bind, head, Goose.Proofs.Exit.stepState]
-            exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), finalWorld, finalSource, trivial⟩
+            simp only [head, Goose.Proofs.Exit.stepState] at headEvents
+            refine ⟨frame, types, live, regions, rfl, (fun _ _ found => found), finalWorld, finalSource, trivial, [], ?_, by simp⟩
+            simpa using headEvents
           | escape address carriers after | jump target kind after => simp only [head] at headOutcome
           | ok flow middle =>
             simp only [head] at headOutcome
@@ -240,21 +271,23 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
             have remainingUnnamed : ∀ item : ByteOwnerDeclaration, item.statement ∈ rest →
                 (nextFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some item.id)) = none := by
               intro item member; exact unnamed item (List.mem_cons_of_mem _ member)
-            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow⟩ :=
+            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, tailEvents, tailTrace, tailValid⟩ :=
               ih fuel config accepted nextFrame context middle ambient nextTypes nextLive regions pending middleWorld middleSource
                 (by simpa [nextFrame, advanceLocalFrame] using phase) middlePosition initialized limit middleBounded
                   remainingOwners remainingScalar (by intro id expression origin member descriptor found; exact localTargets id expression origin (List.mem_cons_of_mem _ member) descriptor found) (by intro id expression origin member descriptor found; exact globalTargets id expression origin (List.mem_cons_of_mem _ member) descriptor found) remainingUnnamed
             simp only [execStmts, bind, head]
-            refine ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, ?_, finalWorld, finalSource, finalFlow⟩
-            intro oldRoot ty found
-            exact finalExtended oldRoot ty (extended oldRoot ty found)
+            refine ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, ?_, finalWorld, finalSource, finalFlow, ?_⟩
+            · intro oldRoot ty found
+              exact finalExtended oldRoot ty (extended oldRoot ty found)
+            · simp only [head, Goose.Proofs.Exit.stepState] at headEvents
+              exact ⟨tailEvents, by simpa only [nextFrame, advanceLocalFrame, headEvents] using tailTrace, tailValid⟩
 
   | assign place expression origin rest expressionForm direct tail ih =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position initialized limit bounded owners scalarOwners localTargets globalTargets unnamed
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial⟩
+      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, [], by simp, by simp⟩
     | succ fuel =>
       obtain ⟨_, _, _, typedAll, _⟩ := position.checked accepted frame _
       cases nesting : frame.typingFuel with
@@ -291,11 +324,14 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
                 ambient types live regions pending id expression origin expressionForm world headSource initialized headPosition rfl scalar
               exact ⟨live, nextWorld, by simpa [headFrame] using nextSource.withTypingFuel frame.typingFuel, flow⟩
           obtain ⟨nextLive, nextWorld, nextSource, headFlow⟩ := headResult
+          have headEvents := execStmt_scalarAssign_events fuel config frame.interpretation.environment place expression origin expressionForm direct before
           cases head : execStmt fuel config frame.interpretation.environment (.assign place expression origin) before with
           | stop reason after =>
             simp only [head, Goose.Proofs.Exit.stepState] at nextWorld nextSource headFlow
             simp only [execStmts, bind, head, Goose.Proofs.Exit.stepState]
-            exact ⟨frame, types, nextLive, regions, rfl, (fun _ _ found => found), nextWorld, nextSource, trivial⟩
+            simp only [head, Goose.Proofs.Exit.stepState] at headEvents
+            refine ⟨frame, types, nextLive, regions, rfl, (fun _ _ found => found), nextWorld, nextSource, trivial, [], ?_, by simp⟩
+            simpa using headEvents
           | escape address carriers after | jump target kind after => simp only [head] at headFlow
           | ok flow middle =>
             simp only [head, Goose.Proofs.Exit.stepState] at nextWorld nextSource headFlow
@@ -324,11 +360,51 @@ theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : Mi
             have remainingUnnamed : ∀ item : ByteOwnerDeclaration, item.statement ∈ rest →
                 (nextFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some item.id)) = none := by
               intro item member; exact unnamed item (List.mem_cons_of_mem _ member)
-            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow⟩ :=
+            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, tailEvents, tailTrace, tailValid⟩ :=
               ih fuel config accepted nextFrame context middle ambient types nextLive regions pending nextWorld afterSource
                 phase nextPosition initialized limit nextBounded remainingOwners remainingScalar remainingLocal remainingGlobal remainingUnnamed
             simp only [execStmts, bind, head]
-            exact ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow⟩
+            simp only [head, Goose.Proofs.Exit.stepState] at headEvents
+            exact ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow,
+              tailEvents, by simpa only [headEvents] using tailTrace, tailValid⟩
 
+theorem execStmts_mixedAssign_accepted_world {statements : List Stmt} (form : MixedAssignStatements statements) :
+    ∀ (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+      (frame : ConstructionSourceFrame) (context : Nat) (before : ExecutionState)
+      (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+      (regions : List ReceivingRegion) (pending : List PendingCarrierFrame),
+      AcceptedWorld config frame.initialized before ambient types live regions pending →
+      AcceptedFrame config accepted frame before types → frame.phase = .implementation context →
+      SourcePosition accepted frame (.statements statements) →
+      frame.initialized = config.module.globals.size → frame.typing.globalLimit ≤ config.module.globals.size →
+      GlobalEffectTargetsBounded frame.rootCursor.eff config.module.globals.size →
+      (∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ statements →
+        (frame.source.impl.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8))) →
+      (∀ id expression origin, .letS id expression origin ∈ statements → AcceptedBinaryExpression expression →
+        ∀ descriptor, frame.source.impl.vars[id]? = some descriptor →
+          (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool) →
+      (∀ id expression origin, .assign (.var id) expression origin ∈ statements →
+        ∀ descriptor, frame.source.impl.vars[id]? = some descriptor →
+          (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool) →
+      (∀ id expression origin, .assign (.global id) expression origin ∈ statements →
+        ∀ descriptor, config.module.globals[id]? = some descriptor →
+          (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool) →
+      (∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ statements →
+        (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none) →
+      ∃ (next : ConstructionSourceFrame) (nextTypes : RootTypes) (nextLive : Goose.Core.RootInst → Prop)
+        (nextRegions : List ReceivingRegion),
+        let outcome := execStmts fuel config frame.interpretation.environment statements before
+        let after := Goose.Proofs.Exit.stepState outcome
+        next.initialized = frame.initialized ∧ RootTypesExtend types nextTypes ∧
+        AcceptedWorld config next.initialized after ambient nextTypes nextLive nextRegions pending ∧
+        AcceptedFrame config accepted next after nextTypes ∧
+        (match outcome with | .ok flow _ => flow = .normal .unit | .stop _ _ => True | .escape .. | .jump .. => False) := by
+  intro fuel config accepted frame context before ambient types live regions pending world source phase position initialized limit bounded owners scalarOwners localTargets globalTargets unnamed
+  obtain ⟨next, nextTypes, nextLive, nextRegions, initializedEq, extended, finalWorld, finalSource, flow, trace⟩ :=
+    execStmts_mixedAssign_accepted_world_events form fuel config accepted frame context before ambient types live regions pending
+      world source phase position initialized limit bounded owners scalarOwners localTargets globalTargets unnamed
+  exact ⟨next, nextTypes, nextLive, nextRegions, initializedEq, extended, finalWorld, finalSource, flow⟩
+
+#print axioms execStmts_mixedAssign_accepted_world_events
 #print axioms execStmts_mixedAssign_accepted_world
 end Goose.Proofs.ConstructionAcceptedExecution
