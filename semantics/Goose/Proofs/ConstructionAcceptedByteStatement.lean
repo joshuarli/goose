@@ -62,6 +62,7 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
     (executed : execStmt (fuel + 2) config environment (.letS localVar (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin) before =
       .ok (.normal .unit) after) :
     ∃ (stored : StoredValue) (published : ExecutionState),
+      bytes.length < 2 ^ 32 ∧
       Nonempty (FreshDestinationFrame before published) ∧
       storedDestination before.construction.destinations.size published = .ok stored published ∧
       bindRoot root (.stored stored) published = .ok () after ∧
@@ -95,6 +96,7 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
         simp only [completed] at executed
         have freshId := newDestination_fresh_id config.layout environment.act (.varr (.int .u8)) .value origin
           (some bytes.length) before allocated id created
+        have fits := newDestination_byteOwner_count_bound config.layout environment.act origin bytes.length before allocated id created
         subst id
         obtain ⟨frame⟩ := newDestination_fresh_frame config.layout environment.act (.varr (.int .u8)) .value origin
           (some bytes.length) before allocated before.construction.destinations.size world.ownership.source.structural.1.1.1 created
@@ -138,7 +140,7 @@ theorem execStmt_byteOwner_letWorld (fuel : Nat) (config : EvalConfig) (initiali
             simp_all
           rw [sameStored, bound] at executed
           cases executed
-          exact ⟨stored, final, publishedFrame, sampled, bound, extended, finalWorld⟩
+          exact ⟨stored, final, fits, publishedFrame, sampled, bound, extended, finalWorld⟩
 
 #print axioms completedReceivingDestination_self
 #print axioms FreshDestinationFrame.same_current

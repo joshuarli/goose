@@ -524,6 +524,15 @@
   "evidence": "ConstructionAcceptedScopeTypes.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Byte declaration checker cursor",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.rpStmt_byteOwner_cursor",
+  "statement": "For a byte-owner declaration within the packed count limit, successful root checking advances the variable cursor once without changing the other root-checker state.",
+  "assumptions": "The actual root check, a matching byte-owner descriptor and the packed count limit; successful byte-owner allocation enforces the count limit.",
+  "limits": "The source-frame continuation and universal construction proof remain open.",
+  "evidence": "ConstructionAcceptedByteCursor.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Published owner storage from fresh allocation",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_publishedOwner_storage; Goose.Proofs.ConstructionAcceptedExecution.bytes_publishedOwner_storage",

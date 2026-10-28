@@ -315,6 +315,10 @@ private def noteReceivingCapacity (env : PEnv) (ty : Ty) (request : Request) (ex
     | some maximum => if maximum > capacity then noteAborts else pure ()
     | none => noteAborts
 
+theorem noteReceivingCapacity_byte_result (env : PEnv) (bytes : List UInt8) (origin : Core.OriginId) :
+    noteReceivingCapacity env (.varr (.int .u8)) .value (.bytes (.varr (.int .u8)) bytes origin) =
+      if bytes.length > 2 ^ 32 - 1 then noteAborts else pure () := rfl
+
 private def noteOperandCapacities (env : PEnv) (descriptors : List ResultDescriptor) (operands : List Expr) : P Unit :=
   for (descriptor, operand) in descriptors.zip operands do
     noteReceivingCapacity env descriptor.ty descriptor.request operand
