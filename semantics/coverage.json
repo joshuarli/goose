@@ -628,10 +628,17 @@
  },
  {
   "feature": "Byte-owner construction stop preservation",
-  "statement": "If actual byte construction stops after successful destination allocation, its terminal state retains the accepted world and source frame, including protection for the fresh receiving region. This covers stops during writes, destination finishing and publication after a successful build.",
-  "assumptions": "Accepted world and source frame before allocation and a successful fresh byte-owner destination allocation. Publication stops also assume a successful positive-fuel build.",
+  "statement": "If actual positive-fuel byte value evaluation stops after successful destination allocation, its terminal state retains the accepted world and source frame, including protection for the fresh receiving region. This covers stops during writes, destination finishing and publication after a successful build.",
+  "assumptions": "Accepted world and source frame before allocation, a successful fresh byte-owner destination allocation and an actual positive-fuel value evaluation stop.",
   "limits": "Destination allocation stops and other construction forms need separate preservation. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionByteWriteStopped.lean; Goose/Proofs/ConstructionByteFinishStopped.lean; Goose/Proofs/ConstructionByteBuildStopped.lean; Goose/Proofs/ConstructionBytePublishStopped.lean; scoped Lean 4.35 closure and axiom checks."
+  "evidence": "Goose/Proofs/ConstructionByteWriteStopped.lean; Goose/Proofs/ConstructionByteFinishStopped.lean; Goose/Proofs/ConstructionByteBuildStopped.lean; Goose/Proofs/ConstructionBytePublishStopped.lean; Goose/Proofs/ConstructionByteValueStopped.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Stopped byte-owner allocation state",
+  "statement": "A stopped byte-owner destination allocation leaves one fresh empty storage entry and preserves the accepted source frame and ownership source state.",
+  "assumptions": "An actual allocation stop and the corresponding accepted source frame or ownership source state.",
+  "limits": "The full accepted world has not yet been transported across the storage-only append. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionByteAllocationStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Expression-statement sequence stop reflection",
