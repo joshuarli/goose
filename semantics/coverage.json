@@ -648,6 +648,13 @@
   "evidence": "Goose/Proofs/ConstructionByteValueComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Accepted scalar value evaluation",
+  "statement": "At every fuel, checked integer literals, Boolean literals and initialized global reads preserve the accepted world and source frame; every successful value satisfies its checked value invariant.",
+  "assumptions": "Accepted world and source frame, and a checked value expression.",
+  "limits": "Other scalar operations, places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Stopped byte-owner local construction",
   "statement": "At every fuel, an actual stop in local construction of a byte owner preserves the accepted world and source frame, including a fresh receiving region when allocation succeeded.",
   "assumptions": "Accepted world and source frame before construction. Allocation and byte expression origins may differ.",
