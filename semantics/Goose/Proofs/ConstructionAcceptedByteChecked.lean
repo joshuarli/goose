@@ -15,7 +15,7 @@ theorem FreshDestinationFrame.acceptedFrame {config : EvalConfig} {accepted : Ac
   have ordinals := congrArg ExecutionState.objectOrdinals frame.outer
   have acts := congrArg ExecutionState.nextAct frame.outer
   have scopes := congrArg ExecutionState.nextScope frame.outer
-  refine ⟨valid.compatible, ?_, ?_, valid.aliases, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨valid.compatible, ?_, ?_, valid.aliases, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simpa only [acts] using valid.frontier
   · simpa only [scopes] using valid.scopeFrontier
   · intro var member
@@ -29,6 +29,9 @@ theorem FreshDestinationFrame.acceptedFrame {config : EvalConfig} {accepted : Ac
     obtain ⟨absent, ordinal⟩ := valid.uninitializedLocals var uninitialized root
       (rootOf_transfer source.interpretation var after before root resolved)
     exact ⟨by rw [objects]; exact absent, by rw [ordinals]; exact ordinal⟩
+  · intro var uninitialized root resolved
+    exact valid.uninitializedTypes var uninitialized root
+      (rootOf_transfer source.interpretation var after before root resolved)
   · intro global future within
     obtain ⟨absent, ordinal⟩ := valid.futureGlobals global future within
     exact ⟨by rw [objects]; exact absent, by rw [ordinals]; exact ordinal⟩

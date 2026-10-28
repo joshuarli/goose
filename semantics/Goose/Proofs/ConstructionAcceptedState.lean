@@ -116,6 +116,8 @@ structure AcceptedFrame (config : EvalConfig) (accepted : AcceptedModule config)
   uninitializedLocals : ∀ id, frame.rootCursor.nextVar ≤ id ∨ id ∈ frame.source.initializing → ∀ root,
     rootOf frame.interpretation.environment id state = .ok root state →
     state.objects.lookup root = none ∧ state.objectOrdinals.lookup root = none
+  uninitializedTypes : ∀ id, frame.rootCursor.nextVar ≤ id ∨ id ∈ frame.source.initializing → ∀ root,
+    rootOf frame.interpretation.environment id state = .ok root state → types root = none
   futureGlobals : ∀ id, frame.initialized ≤ id → id < config.module.globals.size →
     state.objects.lookup (.global id) = none ∧ state.objectOrdinals.lookup (.global id) = none
   direct : LocalRootCorrespondence frame.interpretation frame.source.ctx frame.typing.visible state

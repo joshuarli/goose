@@ -58,7 +58,6 @@ theorem execStmt_checkedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (a
     (unnamed : (implementation.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some localVar)) = none)
     (uninitialized : frame.rootCursor.nextVar ≤ localVar ∨ localVar ∈ frame.source.initializing)
     (resolved : rootOf frame.interpretation.environment localVar before = .ok root before)
-    (compatible : RootTypeCompatible types root (.varr (.int .u8)))
     (executed : execStmt (fuel + 2) config frame.interpretation.environment
       (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin) before = .ok (.normal .unit) after) :
     ∃ (stored : StoredValue) (published : ExecutionState),
@@ -67,6 +66,10 @@ theorem execStmt_checkedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (a
         (fun other => other = root ∨ live other)
         (regions.map (fun region => extendReceivingLimit region stored.storage (storageExtent published stored.storage))) pending := by
   obtain ⟨fresh, freshType, freshSynthetic⟩ := source.uninitializedLocal_fresh localVar root uninitialized resolved
+  have compatible : RootTypeCompatible types root (.varr (.int .u8)) := by
+    intro previous present
+    rw [source.uninitializedTypes localVar uninitialized root resolved] at present
+    cases present
   exact execStmt_byteOwner_letWorld fuel config frame.initialized frame.interpretation.environment localVar descriptor
     implementation bytes origin before after root ambient types live regions pending world declared ty implementationFound
     unnamed resolved compatible True.intro fresh freshType freshSynthetic executed

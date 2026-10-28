@@ -39,8 +39,10 @@ theorem staticBytes_after_newDestination (fuel : Nat) (config : EvalConfig) (ini
         (.slice ⟨root, []⟩ 0 bytes.length) := by
   have allocatedWorld := newDestination_acceptedWorld config owner ty request origin knownCount initialized
     before allocated id ambient types liveRoots [] [] world allocatedDestination
-  exact evalValue_staticBytes_world fuel config initialized environment interpretation allocated ambient types liveRoots
-    bytes bytesOrigin allocatedWorld globals
+  obtain ⟨after, nextTypes, root, evaluated, extended, _, nextWorld, value⟩ :=
+    evalValue_staticBytes_world fuel config initialized environment interpretation allocated ambient types liveRoots
+      bytes bytesOrigin allocatedWorld globals
+  exact ⟨after, nextTypes, root, evaluated, extended, nextWorld, value⟩
 
 theorem bindStored_in_mutable_region (config : EvalConfig) (initialized : Nat) (before : ExecutionState)
     (ambient : OwnershipAmbient) (types : RootTypes) (liveRoots : Goose.Core.RootInst → Prop)

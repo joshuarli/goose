@@ -21,10 +21,11 @@ theorem AcceptedFrame.freshSyntheticRoot {config : EvalConfig} {accepted : Accep
     (id : Nat) (outside : config.module.globals.size ≤ id) (fresh : types (.global id) = none)
     (extended : RootTypesExtend types nextTypes) (acts : after.nextAct = before.nextAct)
     (scopes : before.nextScope ≤ after.nextScope)
+    (localTypes : ∀ act scope var, nextTypes (.local act scope var) = types (.local act scope var))
     (ordinals : after.objectOrdinals = before.objectOrdinals)
     (objects : ∀ root, root ≠ .global id → after.objects.lookup root = before.objects.lookup root) :
     AcceptedFrame config accepted frame after nextTypes := by
-  refine ⟨source.compatible, ?_, ?_, source.aliases, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨source.compatible, ?_, ?_, source.aliases, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simpa only [acts] using source.frontier
   · intro entry member
     exact Nat.lt_of_lt_of_le (source.scopeFrontier entry member) scopes
@@ -49,6 +50,11 @@ theorem AcceptedFrame.freshSyntheticRoot {config : EvalConfig} {accepted : Accep
       cases impossible
     obtain ⟨absent, ordinal⟩ := source.uninitializedLocals var uninitialized root prior
     exact ⟨(objects root different).trans absent, by simpa only [ordinals] using ordinal⟩
+  · intro var uninitialized root resolved
+    have prior := rootOf_transfer frame.interpretation var after before root resolved
+    obtain ⟨scope, same⟩ := rootOf_variable frame.interpretation var before root prior
+    rw [same, localTypes]
+    simpa only [same] using source.uninitializedTypes var uninitialized root prior
   · intro global future within
     have different : RootInst.global global ≠ .global id := by
       intro same
@@ -109,6 +115,7 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
       evalValue (fuel + 1) config environment (.bytes (.slice .readOnly (.int .u8)) bytes origin) state =
         .ok (.slice ⟨root, []⟩ 0 bytes.length) after ∧
       RootTypesExtend types nextTypes ∧
+      (∀ act scope var, nextTypes (.local act scope var) = types (.local act scope var)) ∧
       AcceptedWorld config initialized after ambient nextTypes (fun other => other = root ∨ liveRoots other) regions pending ∧
       AcceptedValue config.layout nextTypes interpretation after (.slice .readOnly (.int .u8)) [.static]
         (.slice ⟨root, []⟩ 0 bytes.length) := by
@@ -182,8 +189,10 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
           rw [← typedObjects, bindRoot_lookup_other root other (.fixed values) scopeState typedAfter typedResult same] at present
           exact present
         exact world.backing.identities other (retained.resolve_left same) stored old
-  refine ⟨after, registerRootType types root ownerTy, root, ?_, extended, ?_, ?_⟩
+  refine ⟨after, registerRootType types root ownerTy, root, ?_, extended, ?_, ?_, ?_⟩
   · simp only [evalValue, freshScope, bindStaticRoot, EvalM.get, EvalM.set, bind, pure, root, after, scopeState, values]
+  · intro act scope var
+    simp only [registerRootType, root, reduceCtorEq, ↓reduceIte]
   · refine ⟨⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩, ?_⟩
     · exact ⟨scopeWorld.ownership.source, scopeWorld.ownership.retention,
         ⟨scopeWorld.ownership.runtime.activations, scopeWorld.ownership.runtime.breaks⟩,
@@ -295,7 +304,7 @@ theorem evalValue_checkedStaticBytes_world (fuel : Nat) (config : EvalConfig) (a
     simp only [rpExpr, pure, StateT.run] at provenance
     obtain ⟨rfl, _⟩ := provenance
     obtain ⟨⟨rfl, _⟩, _⟩ := typing
-    obtain ⟨after, nextTypes, root, evaluated, extended, nextWorld, value⟩ :=
+    obtain ⟨after, nextTypes, root, evaluated, extended, localTypes, nextWorld, value⟩ :=
       evalValue_staticBytes_world fuel config frame.initialized frame.interpretation.environment frame.interpretation
         state ambient types liveRoots bytes origin world source.compatible.globalCount
     let freshRoot := RootInst.global (config.module.globals.size + state.nextScope)
@@ -329,7 +338,7 @@ theorem evalValue_checkedStaticBytes_world (fuel : Nat) (config : EvalConfig) (a
       exact bindRoot_lookup_other freshRoot other (.fixed values) scopeState rebound bound different
     refine ⟨expected, nextTypes, freshRoot, actual, extended, nextWorld, ?_, value⟩
     exact source.freshSyntheticRoot world.heap (config.module.globals.size + state.nextScope) (by omega) fresh
-      extended rfl (by simp [expected, scopeState]) rfl unchanged
+      extended rfl (by simp [expected, scopeState]) localTypes rfl unchanged
 
 #print axioms evalValue_staticBytes_world
 #print axioms AcceptedFrame.freshSyntheticRoot
