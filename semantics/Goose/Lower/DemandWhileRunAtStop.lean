@@ -23,15 +23,16 @@ theorem accepted_generated_target_entry_runAt_stop {cfg : Cfg} {state : St} {ctx
         ⟨(0, 0), callFrame impl state.nextAct 1 [], { state with nextAct := state.nextAct + 1 }⟩ terminal ∧
       GIR.runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ terminal.point terminal.frame
         remaining terminal.state = .stop stop after ∧
+      (∀ next, ¬ DemandInstructionStep ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ (remaining - 1) terminal next) ∧
       ((∃ source : BlockSource cfg ⟨impl.vars, state.nextAct, [], 1⟩ [] impl.body { state with nextAct := state.nextAct + 1 },
         StoppedLoopBranchBlockPrefix source ⟨[], []⟩ ⟨[], []⟩
           ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ impl.results.toList (callEntry impl) none
           (callFrame impl state.nextAct 1 []) (0, 0) taken terminal stop after) ∨
        (∃ term, instAt (lowerContextAt cfg.mod ctx impl) terminal.point = some (.term term)) ∨
        instAt (lowerContextAt cfg.mod ctx impl) terminal.point = none) := by
-  obtain ⟨taken, remaining, terminal, count, steps, terminalRun, classified⟩ := runAt_nonTimeout_stopped_prefix
+  obtain ⟨taken, remaining, terminal, count, steps, terminalRun, maximal, classified⟩ := runAt_nonTimeout_stopped_prefix
     (initial := ⟨(0, 0), callFrame impl state.nextAct 1 [], { state with nextAct := state.nextAct + 1 }⟩) nonTimeout run
-  refine ⟨taken, remaining, terminal, count, steps, terminalRun, ?_⟩
+  refine ⟨taken, remaining, terminal, count, steps, terminalRun, maximal, ?_⟩
   rcases classified with stopped | term | missing
   · exact Or.inl (accepted_generated_target_entry_body_stopped accepted expressions initialized contextAt implAt
       fragment noValue steps stopped nonTimeout)

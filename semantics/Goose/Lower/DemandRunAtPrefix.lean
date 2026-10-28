@@ -95,6 +95,7 @@ theorem runAt_nonTimeout_stopped_prefix {cx : FnCtx} {fuel : Nat} {initial : Dem
     ∃ taken remaining terminal,
       taken + remaining = fuel ∧ DemandRuntimePrefix cx taken initial terminal ∧
       GIR.runAt cx terminal.point terminal.frame remaining terminal.state = .stop stop after ∧
+      (∀ next, ¬ DemandInstructionStep cx (remaining - 1) terminal next) ∧
       (DemandInstructionStop cx remaining terminal stop after ∨
         (∃ term, instAt cx.fn terminal.point = some (.term term)) ∨ instAt cx.fn terminal.point = none) := by
   obtain ⟨taken, remaining, terminal, count, traversed, same, maximal⟩ := runAt_maximal_demand_prefix fuel initial
@@ -109,7 +110,8 @@ theorem runAt_nonTimeout_stopped_prefix {cx : FnCtx} {fuel : Nat} {initial : Dem
       rcases maximal with zero | maximal
       · omega
       · simpa using maximal
-    refine ⟨taken, remaining + 1, terminal, count, traversed.runtime, terminalRun, ?_⟩
+    refine ⟨taken, remaining + 1, terminal, count, traversed.runtime, terminalRun, ?_, ?_⟩
+    · simpa using noStep
     cases instruction : instAt cx.fn terminal.point with
     | none => exact Or.inr (Or.inr rfl)
     | some inst =>

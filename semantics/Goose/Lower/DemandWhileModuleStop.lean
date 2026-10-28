@@ -37,7 +37,7 @@ theorem accepted_generated_entry_runAt_stop_to_module {cfg : Cfg} {state : St} {
             (callEntry impl) none (callFrame impl state.nextAct 1 []) flow boundary) ∨
        (∃ term, instAt (lowerContextAt cfg.mod ctx impl) terminal.point = some (.term term)) ∨
        instAt (lowerContextAt cfg.mod ctx impl) terminal.point = none) := by
-  obtain ⟨taken, remaining, terminal, count, steps, terminalRun, classified⟩ :=
+  obtain ⟨taken, remaining, terminal, count, steps, terminalRun, maximal, classified⟩ :=
     accepted_generated_target_entry_runAt_stop accepted expressions initialized contextAt implAt fragment noValue nonTimeout run
   rcases classified with ⟨source, progress⟩ | term | missing
   · cases progress with
