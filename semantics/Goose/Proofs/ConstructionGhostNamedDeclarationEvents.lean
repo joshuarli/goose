@@ -70,6 +70,43 @@ theorem namedDeclaration_visit_sourceEvents
   rw [← actual]
   exact namedDeclarationAfterBuild_sourcePrefix descriptor root origin destination _
 
+def NamedVisitSourceEvents (config : EvalConfig) (environment : RuntimeActivation) (visits : List StatementInvocation) : Prop :=
+  ∀ visit ∈ visits, ∀ sourceFuel localVar expression origin rootReady selectedReady destinationReady renewedReady buildReady
+      descriptor root implementation result index incoming selected destination pending,
+    visit.fuel = sourceFuel + 1 → visit.statement = .letS localVar expression origin →
+    environment.vars[localVar]? = some descriptor → descriptor.ty.nonfixed = true →
+    rootOf environment localVar visit.before = .ok root rootReady →
+    config.module.impls[environment.implementation]? = some implementation →
+    (implementation.results.toList.zipIdx.find? fun (result, _) => result.namedLocal == some localVar) = some (result, index) →
+    environment.channels[index]? = some (.construct incoming) →
+    liftConstruction origin (renewReceivingDestination incoming) rootReady = .ok selected selectedReady →
+    getDestination selected selectedReady = .ok pending destinationReady → pending.capability.request = .value →
+    liftConstruction origin (renewReceivingDestination incoming) destinationReady = .ok destination renewedReady →
+    liftConstruction origin (prepareNamedBinding destination descriptor.ty) renewedReady = .ok () buildReady →
+    SourceHistory config sourceFuel [environment.act, visit.ordinal, 0] (.builder environment destination expression) buildReady
+      (buildExpr sourceFuel config environment destination expression buildReady) ∧
+    EventPrefix (Goose.Proofs.Exit.stepState (buildExpr sourceFuel config environment destination expression buildReady)).construction.events
+      (Goose.Proofs.Exit.stepState visit.outcome).construction.events
+
+theorem statementReplay_namedSourceEvents
+    (replay : StatementReplay config environment fuel offset statements before outcome visits)
+    (supported : ∀ sourceFuel localVar expression origin, .letS localVar expression origin ∈ statements → ∀ destination,
+      FuelSupport config sourceFuel (.builder environment destination expression)) :
+    NamedVisitSourceEvents config environment visits := by
+  intro visit member sourceFuel localVar expression origin rootReady selectedReady destinationReady renewedReady buildReady
+    descriptor root implementation result index incoming selected destination pending visitFuel visitStatement found nonfixed rootResult
+    implementationFound named channelFound selectedResult pendingResult valueRequest renewedResult prepared
+  have inMapped : visit.statement ∈ visits.map StatementInvocation.statement := List.mem_map_of_mem member
+  rw [replay.sourceOrder] at inMapped
+  have inStatements : .letS localVar expression origin ∈ statements := by
+    rw [← visitStatement]
+    exact List.mem_of_mem_take inMapped
+  exact namedDeclaration_visit_sourceEvents replay visit member sourceFuel localVar expression origin rootReady selectedReady
+    destinationReady renewedReady buildReady descriptor root implementation result index incoming selected destination pending
+    visitFuel visitStatement found nonfixed rootResult implementationFound named channelFound selectedResult pendingResult valueRequest
+    renewedResult prepared (supported sourceFuel localVar expression origin inStatements destination)
+
+#print axioms statementReplay_namedSourceEvents
 #print axioms namedDeclarationAfterBuild_sourcePrefix
 #print axioms namedDeclaration_visit_sourceEvents
 end Goose.Proofs.ConstructionGhostNamedDeclarationEvents
