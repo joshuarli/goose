@@ -65,6 +65,21 @@ def ClosedModule (config : EvalConfig) : Prop :=
     ∃ scope statements, implementation.body = .mk scope statements none ∧
       ∀ statement ∈ statements, StatementSyntax config statement
 
+theorem implementation_lookup_source (config : EvalConfig) (contextId : Goose.Core.ContextId)
+    (before ready : ExecutionState) (id : Goose.Core.ImplId) (implementation : Impl)
+    (lookup : getImplementation config contextId before = .ok (id, implementation) ready) :
+    ∃ context, config.module.contexts[contextId]? = some context ∧ context.impl = id ∧
+      config.module.impls[id]? = some implementation := by
+  cases found : config.module.contexts[contextId]? with
+  | none => simp [getImplementation, found, bind, fault, EvalM.stop] at lookup
+  | some context =>
+      cases implemented : config.module.impls[context.impl]? with
+      | none => simp [getImplementation, found, implemented, bind, fault, EvalM.stop] at lookup
+      | some target =>
+          simp [getImplementation, found, implemented, bind, pure] at lookup
+          obtain ⟨⟨rfl, rfl⟩, rfl⟩ := lookup
+          exact ⟨context, rfl, rfl, implemented⟩
+
 structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   value : ∀ environment expression, ValueSyntax config expression → FuelSupport config fuel (.value environment expression)
   place : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.place environment place)
@@ -92,6 +107,11 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements none))
   activation : ∀ activation pre scope statements origin, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.boundActivation activation pre (.mk scope statements none) origin)
+  channelCall : ∀ environment contextId arguments channels origin,
+    (∀ id implementation start lookupReady,
+      getImplementation config contextId start = .ok (id, implementation) lookupReady →
+      ArgumentSyntax config implementation.params.toList arguments) →
+    FuelSupport config fuel (.channelCall environment contextId arguments channels origin)
   call : ∀ environment contextId arguments origin context implementation,
     config.module.contexts[contextId]? = some context → config.module.impls[context.impl]? = some implementation →
     implementation.results = #[] → ArgumentSyntax config implementation.params.toList arguments →
@@ -178,6 +198,18 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
         exact .boundActivationBody fuel activation pre scope statements (fun environment => previous.statements environment statements derivation)
       · intro activation pre scope statements origin derivation
         exact .boundActivation fuel activation pre scope statements origin (previous.activationBody activation pre scope statements derivation)
+      · intro environment contextId arguments channels origin argumentSyntax
+        apply FuelSupport.channelCall fuel environment contextId arguments channels origin
+        · intro id implementation start lookupReady lookup
+          exact previous.arguments environment implementation.vars implementation.params.toList arguments
+            (argumentSyntax id implementation start lookupReady lookup)
+        · intro id implementation start lookupReady act pre callableChannels lookup
+          obtain ⟨context, contextFound, idEqual, implementationFound⟩ :=
+            implementation_lookup_source config contextId start lookupReady id implementation lookup
+          subst id
+          obtain ⟨scope, statements, body, derivation⟩ := closed contextId context implementation contextFound implementationFound
+          rw [body]
+          exact previous.activation ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements origin derivation
       · intro environment contextId arguments origin context implementation contextFound implementationFound resultsEmpty argumentsSyntax
         obtain ⟨scope, statements, body, derivation⟩ := closed contextId context implementation contextFound implementationFound
         apply FuelSupport.callWith fuel environment contextId arguments origin context implementation contextFound implementationFound

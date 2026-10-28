@@ -1,3 +1,5 @@
+import Goose.Proofs.ConstructionGhostChannelTransition
+import Goose.Proofs.ConstructionGhostCallActivation
 import Goose.Proofs.ConstructionGhostSourceTransition
 import Goose.Proofs.ConstructionGhostBlock
 import Goose.Proofs.ConstructionGhostResultScopeCore
@@ -12,6 +14,7 @@ open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition
 open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultScope Goose.Proofs.ConstructionGhostElements
 open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInvocation Goose.Proofs.ConstructionInitializerLoopReplay
 open Goose.Proofs.ConstructionGhostArguments Goose.Proofs.ConstructionGhostEachCore
+open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
 
 inductive SourceOperation : Type → Type
   | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
@@ -26,6 +29,8 @@ inductive SourceOperation : Type → Type
   | call (environment : RuntimeActivation) (context : Goose.Core.ContextId) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
   | callWith (environment : RuntimeActivation) (context : Goose.Core.ContextId) (arguments : List Arg)
       (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
+  | channelCall (environment : RuntimeActivation) (context : Goose.Core.ContextId) (arguments : List Arg)
+      (channels : List Channel) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
   | builder (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (expression : Expr) : SourceOperation Unit
   | bound (environment : RuntimeActivation) (count : Nat) (defaultValue : Int) (bound : Bound) : SourceOperation Int
   | place (environment : RuntimeActivation) (place : Place) : SourceOperation Goose.Core.Loc
@@ -55,6 +60,7 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .boundActivation activation pre block origin => enterActivation fuel config activation pre block origin
   | .call environment context origin => invokeCall fuel config environment context [] [] origin
   | .callWith environment context arguments origin => invokeCall fuel config environment context arguments [] origin
+  | .channelCall environment context arguments channels origin => invokeCall fuel config environment context arguments channels origin
   | .builder environment destination expression => buildExpr fuel config environment destination expression
   | .bound environment count defaultValue bound => evalBound fuel config environment count defaultValue bound
   | .place environment place => evalPlace fuel config environment place
@@ -815,6 +821,29 @@ inductive SourceHistory (config : EvalConfig) :
       SourceHistory config (fuel + 1) path
         (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments)) before
         (evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.byRef mutability place :: arguments) before)
+  | channelCall (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
+      (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (argumentChildren : ∀ id implementation lookupReady callableChannels ready,
+        getImplementation config context before = .ok (id, implementation) lookupReady →
+        channels.length = implementation.results.size →
+        prepareCallableChannels environment channels implementation origin lookupReady = .ok callableChannels ready →
+        SourceHistory config fuel (path ++ [0]) (.arguments environment implementation.vars implementation.params.toList arguments) ready
+          (evalArguments fuel config environment implementation.vars implementation.params.toList arguments ready))
+      (activationChildren : ∀ id implementation lookupReady callableChannels argumentsReady values valuesReady refreshed activationReady,
+        getImplementation config context before = .ok (id, implementation) lookupReady →
+        channels.length = implementation.results.size →
+        prepareCallableChannels environment channels implementation origin lookupReady = .ok callableChannels argumentsReady →
+        evalArguments fuel config environment implementation.vars implementation.params.toList arguments argumentsReady = .ok values valuesReady →
+        refreshCallableChannels callableChannels origin valuesReady = .ok refreshed activationReady →
+        activationReady.activations.length < Goose.Core.maxCallDepth →
+        let activation : RuntimeActivation := ⟨id, activationReady.nextAct, implementation.vars, [], refreshed⟩
+        let activated := { activationReady with nextAct := activationReady.nextAct + 1, activations := activation :: activationReady.activations }
+        let pre := (implementation.params.toList.zip values).map fun (parameter, value) => (parameter.var, value)
+        SourceHistory config fuel (path ++ [1]) (.boundActivation activation pre implementation.body origin) activated
+          (enterActivation fuel config activation pre implementation.body origin activated)) :
+      SourceHistory config (fuel + 1) path (.channelCall environment context arguments channels origin) before
+        (invokeCall (fuel + 1) config environment context arguments channels origin before)
   | ifStatement {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {condition : Expr}
       {yes : Block} {no : Option Block} {origin : Goose.Core.OriginId} {before : ExecutionState}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment condition) before
@@ -854,7 +883,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical => rfl
+  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]

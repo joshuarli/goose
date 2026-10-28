@@ -6,6 +6,17 @@ open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.Con
 open Goose.Proofs.ConstructionGhostSyntaxFuel Goose.Proofs.ConstructionGhostCallArguments
 open Goose.Proofs.ConstructionGhostCallActivation Goose.Proofs.ConstructionGhostArguments
 
+theorem channelCall_history (fuel : Nat) (config : EvalConfig) (closed : ClosedModule config)
+    (environment : RuntimeActivation) (context : Goose.Core.ContextId) (arguments : List Arg)
+    (channels : List Channel) (origin : Goose.Core.OriginId) (path : List Nat) (before : ExecutionState)
+    (argumentSyntax : ∀ id implementation start lookupReady,
+      getImplementation config context start = .ok (id, implementation) lookupReady →
+      ArgumentSyntax config implementation.params.toList arguments) :
+    SourceHistory config fuel path (.channelCall environment context arguments channels origin) before
+      (invokeCall fuel config environment context arguments channels origin before) := by
+  exact fuelHistory_exists fuel config _ path before
+    ((syntaxFuel_exists fuel config closed).channelCall environment context arguments channels origin argumentSyntax)
+
 theorem channelCall_argumentHistory (fuel : Nat) (config : EvalConfig) (closed : ClosedModule config)
     (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (arguments : List Arg)
     (channels : List Channel) (origin : Goose.Core.OriginId) (path : List Nat)
@@ -67,6 +78,63 @@ theorem channelCall_activationHistory (fuel : Nat) (config : EvalConfig) (closed
     exact fuelHistory_exists fuel config _ path _
       ((syntaxFuel_exists fuel config closed).activation _ _ scope statements origin derivation)
 
+private def witnessContext : Context := ⟨0, "channel", [], [], []⟩
+private def witnessImplementation : Impl := ⟨"channel", #[], #[⟨.unit, .register, none⟩], #[],
+  .mk 0 [.print [.text "x"] 0] none, .unknown⟩
+private def witnessConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[], #[witnessImplementation], #[witnessContext], 0, #[], #[], #[]⟩⟩
+private def witnessEnvironment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
+private def witnessState : ExecutionStep α → ExecutionState
+  | .ok _ state | .stop _ state | .escape _ _ state | .jump _ _ state => state
+
+private theorem witnessClosed : ClosedModule witnessConfig := by
+  intro contextId context implementation contextFound implementationFound
+  cases contextId with
+  | zero =>
+      have contextEq : context = witnessContext := by simpa [witnessConfig] using contextFound.symm
+      subst context
+      have implEq : implementation = witnessImplementation := by
+        simpa [witnessConfig, witnessContext] using implementationFound.symm
+      subst implementation
+      refine ⟨0, [.print [.text "x"] 0], rfl, ?_⟩
+      intro statement member
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at member
+      subst statement
+      exact .printText "x" 0
+  | succ contextId => simp [witnessConfig] at contextFound
+
+private theorem witnessArguments : ∀ id implementation start ready,
+    getImplementation witnessConfig 0 start = .ok (id, implementation) ready →
+    ArgumentSyntax witnessConfig implementation.params.toList [] := by
+  intro id implementation start ready lookup
+  obtain ⟨context, found, idEqual, implFound⟩ := implementation_lookup_source witnessConfig 0 start ready id implementation lookup
+  have contextEq : context = witnessContext := by simpa [witnessConfig] using found.symm
+  subst context
+  subst id
+  have implEq : implementation = witnessImplementation := by
+    simpa [witnessConfig, witnessContext] using implFound.symm
+  subst implementation
+  exact .nil
+
+theorem witness_registerChannel : ∃ after,
+    invokeCall 30 witnessConfig witnessEnvironment 0 [] [.register .unit] 0 .initial = .ok [.register .unit] after ∧
+    after.construction.stdout.data.toList = [120, 10] ∧
+    SourceHistory witnessConfig 30 [] (.channelCall witnessEnvironment 0 [] [.register .unit] 0) .initial (.ok [.register .unit] after) := by
+  have history := channelCall_history 30 witnessConfig witnessClosed witnessEnvironment 0 [] [.register .unit] 0 [] .initial witnessArguments
+  refine ⟨witnessState (invokeCall 30 witnessConfig witnessEnvironment 0 [] [.register .unit] 0 .initial), ?_, ?_, ?_⟩
+  · unfold witnessState witnessConfig witnessContext witnessImplementation witnessEnvironment
+    cbv
+  · unfold witnessState witnessConfig witnessContext witnessImplementation witnessEnvironment
+    cbv
+  · have actual : invokeCall 30 witnessConfig witnessEnvironment 0 [] [.register .unit] 0 .initial =
+        .ok [.register .unit] (witnessState (invokeCall 30 witnessConfig witnessEnvironment 0 [] [.register .unit] 0 .initial)) := by
+      unfold witnessState witnessConfig witnessContext witnessImplementation witnessEnvironment
+      cbv
+    rw [actual] at history
+    exact history
+
+#print axioms witness_registerChannel
+#print axioms channelCall_history
 #print axioms channelCall_argumentHistory
 #print axioms channelCall_activationHistory
 end Goose.Proofs.ConstructionGhostSyntaxChannels

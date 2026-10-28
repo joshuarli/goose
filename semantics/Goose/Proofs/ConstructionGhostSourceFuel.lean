@@ -2,6 +2,7 @@ import Goose.Proofs.ConstructionGhostSourceMutual
 
 namespace Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostArguments
+open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
 
 inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOperation α → Prop
   | timeout (operation : SourceOperation α) : FuelSupport config 0 operation
@@ -100,6 +101,15 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (body : ∀ act pre, FuelSupport config fuel
         (.boundActivation ⟨context.impl, act, implementation.vars, [], []⟩ pre implementation.body origin)) :
       FuelSupport config (fuel + 1) (.callWith environment contextId arguments origin)
+  | channelCall (fuel : Nat) (environment : RuntimeActivation) (context : Goose.Core.ContextId)
+      (arguments : List Arg) (channels : List Channel) (origin : Goose.Core.OriginId)
+      (argumentChild : ∀ id implementation start lookupReady,
+        getImplementation config context start = .ok (id, implementation) lookupReady →
+        FuelSupport config fuel (.arguments environment implementation.vars implementation.params.toList arguments))
+      (activationChild : ∀ id implementation start lookupReady act pre callableChannels,
+        getImplementation config context start = .ok (id, implementation) lookupReady →
+        FuelSupport config fuel (.boundActivation ⟨id, act, implementation.vars, [], callableChannels⟩ pre implementation.body origin)) :
+      FuelSupport config (fuel + 1) (.channelCall environment context arguments channels origin)
   | valueCallWith (fuel : Nat) (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (arguments : List Arg)
       (origin : Goose.Core.OriginId) (context : Context) (implementation : Impl)
       (contextFound : config.module.contexts[contextId]? = some context)
@@ -296,6 +306,16 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           rw [callWith_source fuel config environment contextId arguments origin context implementation before
             contextFound implementationFound resultsEmpty]
           exact .callWith contextFound implementationFound resultsEmpty argumentsHistory activationHistory
+      | channelCall _ environment context arguments channels origin argumentSupported activationSupported =>
+          refine .channelCall fuel path environment context arguments channels origin before ?_ ?_
+          · intro id implementation lookupReady callableChannels ready lookup arity prepared
+            exact ih (.arguments environment implementation.vars implementation.params.toList arguments) (path ++ [0]) ready
+              (argumentSupported id implementation before lookupReady lookup)
+          · intro id implementation lookupReady callableChannels argumentsReady values valuesReady refreshed activationReady
+              lookup arity prepared argumentsResult refresh depth
+            exact ih (.boundActivation ⟨id, activationReady.nextAct, implementation.vars, [], refreshed⟩
+                ((implementation.params.toList.zip values).map fun (parameter, value) => (parameter.var, value)) implementation.body origin)
+              (path ++ [1]) _ (activationSupported id implementation before lookupReady activationReady.nextAct _ refreshed lookup)
       | valueCallWith _ environment contextId arguments origin context implementation contextFound implementationFound resultsEmpty callee =>
           have child := ih (.callWith environment contextId arguments origin) (path ++ [0]) before callee
           simp only [execute] at child ⊢
