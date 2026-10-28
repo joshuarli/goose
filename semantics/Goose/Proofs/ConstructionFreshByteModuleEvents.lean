@@ -6,7 +6,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 
-private theorem entry_low_events (fuel : Nat) (config : EvalConfig) (state : ExecutionState)
+theorem entry_low_events (fuel : Nat) (config : EvalConfig) (state : ExecutionState)
     (original : Context) (implementation : Impl)
     (originalAt : config.module.contexts[config.module.entry]? = some original)
     (implementationAt : config.module.impls[original.impl]? = some implementation)
