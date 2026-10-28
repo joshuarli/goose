@@ -131,8 +131,24 @@ structure GeneratedBranchBlockDecomposition {cfg : Cfg} {env : Env} {block : Cor
       (GeneratedClearBlockDemand source map required cx results before loop initial))
     (GeneratedBranchBlockEnd source map required cx results before loop initial) taken ⟨start, initial, state⟩ reached
 
-theorem accepted_generated_scalar_branch_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
-    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts)
+
+structure GeneratedGenericBranchBlockDecomposition {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (map required : RetainedSsaMap) (before : LS) (loop : Option LoopCtx) (initial : GIR.Frame) (start : Pt)
+    (cursor : ∀ {statement : Stmt} {innerState : St}, StmtSource cfg
+      { env with scopes := (block.scope, state.nextScope) :: env.scopes } statement innerState →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    (taken : Nat) (reached : DemandRuntimePoint) : Prop where
+  sourceOwner : GeneratedSourceOwner selected source.context
+  coverage : map.Covers required
+  progress : DemandPrefixDecomposition cx (fun fuel => execBlock fuel cfg env [] block)
+    (GeneratedGenericBlockPrefixDemand source selected map required before loop initial cursor
+      (GeneratedClearBlockDemand source map required cx results before loop initial))
+    (GeneratedBranchBlockEnd source map required cx results before loop initial) taken ⟨start, initial, state⟩ reached
+
+theorem accepted_generated_generic_branch_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
     {before : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
@@ -145,17 +161,19 @@ theorem accepted_generated_scalar_branch_block_prefix {cfg : Cfg} {env : Env} {b
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
     (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
     (extended : ExtT (lowerBlock loop [] false block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (cursor : ∀ {statement : Stmt} {innerState : St}, StmtSource cfg
+      { env with scopes := (block.scope, state.nextScope) :: env.scopes } statement innerState →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    (bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before loop [] false block block.stmts cursor)
+    (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
+      execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts innerState = .ok flow after →
+      flow = .normal .unit)
     (noValue : block.value = none)
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
-    GeneratedBranchBlockDecomposition source selected map required before loop initial start taken reached := by
+    GeneratedGenericBranchBlockDecomposition source selected map required before loop initial start cursor taken reached := by
   refine ⟨owned, coverage, ?_⟩
-  have bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
-      cx results selected before loop [] false block block.stmts
-      (@ScalarAssignmentStatementPrefixCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results) :=
-    (accepted_generated_scalar_assignment_statements_agreement (cfg := cfg)
-    (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) (cx := cx) (results := results)
-    selected before loop [] false block fragment).1
   have progress := accepted_generated_block_statements_prefix source selected owned occurrence rows coverage admitted bounded
     realized input extended _ bodyFamily steps
   rcases progress with ⟨_, _, entry⟩ | progressed
@@ -173,7 +191,7 @@ theorem accepted_generated_scalar_branch_block_prefix {cfg : Cfg} {env : Env} {b
               { state with nextScope := state.nextScope + 1 } with
           | stop stop final => simp only [raw] at evaluated; cases evaluated
           | ok rawFlow rawState =>
-            have normal := fragment.normal raw
+            have normal := normal raw
             subst rawFlow
             simp only [raw] at evaluated
             have prepared : prepareLoopFlow { env with scopes := (block.scope, state.nextScope) :: env.scopes }
@@ -206,6 +224,41 @@ theorem accepted_generated_scalar_branch_block_prefix {cfg : Cfg} {env : Env} {b
           | interior demanded => exact .interior (.suffix demanded)
           | complete suffixCount prefixSteps residual evaluated post =>
             exact .complete (by omega) prefixSteps residual evaluated post
+
+theorem accepted_generated_scalar_branch_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block loop [] false block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock loop [] false block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (noValue : block.value = none)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
+    GeneratedBranchBlockDecomposition source selected map required before loop initial start taken reached := by
+  have bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before loop [] false block block.stmts
+      (@ScalarAssignmentStatementPrefixCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results) :=
+    (accepted_generated_scalar_assignment_statements_agreement
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      selected before loop [] false block fragment).1
+  have result := accepted_generated_generic_branch_block_prefix source selected owned occurrence rows coverage admitted bounded realized input extended
+    _ bodyFamily (fun done => fragment.normal done) noValue steps
+  refine ⟨result.sourceOwner, result.coverage, ?_⟩
+  cases result.progress with
+  | interior demanded =>
+    cases demanded with
+    | emitted cursor => exact .interior (.emitted cursor)
+    | suffix cursor => exact .interior (.suffix cursor)
+    | body canonical cursor => exact .interior (.body canonical cursor)
+  | complete count executed residual evaluated post => exact .complete count executed residual evaluated post
 
 
 #print axioms accepted_generated_scalar_branch_block_prefix
