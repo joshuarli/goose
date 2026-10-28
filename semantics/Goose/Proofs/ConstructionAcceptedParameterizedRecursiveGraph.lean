@@ -5,6 +5,8 @@ import Goose.Proofs.ConstructionAcceptedSingleArgumentCompose
 import Goose.Proofs.ConstructionAcceptedUnaryArgumentSource
 import Goose.Proofs.ConstructionAcceptedIdentityUnaryCall
 import Goose.Proofs.ConstructionAcceptedParameterizedScalarBody
+import Goose.Proofs.ConstructionAcceptedArithmeticArgument
+import Goose.Proofs.ConstructionAcceptedIdentityArithmeticCall
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -12,8 +14,8 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionRepresentation
 
-theorem invokeCall_parameterizedScalarGraph_allFuel (fuel : Nat) (config : EvalConfig) (integer : Goose.Core.IntTy)
-    (accepted : AcceptedModule config) (graph : ParameterizedScalarRegisterGraph config integer)
+theorem invokeCall_parameterizedArithmeticGraph_allFuel (fuel : Nat) (config : EvalConfig) (integer : Goose.Core.IntTy)
+    (accepted : AcceptedModule config) (graph : ParameterizedArithmeticRegisterGraph config integer)
     (argumentGraph : RegisterCallGraphWithCallLocals config (.int integer)) :
     ∀ (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -24,7 +26,7 @@ theorem invokeCall_parameterizedScalarGraph_allFuel (fuel : Nat) (config : EvalC
     (implementationAt : config.module.impls[context.impl]? = some implementation)
     (parameters : implementation.params = #[parameter]) (mode : parameter.mode = .byValue)
     (results : implementation.results = #[⟨.int integer, .register, none⟩])
-    (form : UnaryRegisterExpression config integer argument) (checkFuel : Nat) (nesting : caller.typingFuel = checkFuel + 2)
+    (form : RegisterArithmeticExpression config integer argument) (checkFuel : Nat) (nesting : caller.typingFuel = checkFuel + 2)
     (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
     (checked : CheckedValue caller (.call target [.byVal argument] origin) (.int integer) roots typingAfter rootsAfter),
     ∃ nextTypes nextLive nextAmbient,
@@ -46,7 +48,7 @@ theorem invokeCall_parameterizedScalarGraph_allFuel (fuel : Nat) (config : EvalC
     · obtain ⟨descriptor, declared, descriptorTy, body⟩ := identity
       have parameterId := validated_parameter_variable config.module context.impl implementation 0 parameter accepted.accepted implementationAt (by simp [parameters])
       have parameterDeclared : implementation.vars[parameter.var]? = some descriptor := by simpa [parameterId] using declared
-      exact invokeCall_identityUnary_allFuel caller state ambient types live regions pending target origin context implementation parameter descriptor
+      exact invokeCall_identityArithmetic_allFuel caller state ambient types live regions pending target origin context implementation parameter descriptor
         argument integer checkFuel fuel form argumentGraph world source contextAt implementationAt parameters mode parameterDeclared descriptorTy results body nesting
         (.int integer) roots typingAfter rootsAfter checked
     · obtain ⟨descriptor, summary, tailExpression, declared, descriptorTy, known, noParameters, body, tailForm⟩ := scalarTail
@@ -64,7 +66,7 @@ theorem invokeCall_parameterizedScalarGraph_allFuel (fuel : Nat) (config : EvalC
           parameters declared body tailForm (Or.inl ⟨integer, descriptorTy⟩) descriptorTy represented pointers known noParameters results
           argumentWorld argumentSource (.int integer) roots typingAfter rootsAfter checked
       · intro argumentFuel
-        exact evalArguments_unaryRegisterExpression_fromChecker caller state ambient types live regions pending target origin context implementation parameter
+        exact evalArguments_registerArithmetic_fromChecker caller state ambient types live regions pending target origin context implementation parameter
           descriptor argument integer checkFuel argumentFuel form argumentGraph world source contextAt implementationAt parameters mode parameterDeclared
           descriptorTy nesting (.int integer) roots typingAfter rootsAfter checked
     ·
@@ -80,7 +82,7 @@ theorem invokeCall_parameterizedScalarGraph_allFuel (fuel : Nat) (config : EvalC
           EarlierCallerObservations.refl _ _ _, trivial⟩
       | succ fuel =>
         obtain ⟨argumentTypes, argumentLive, argumentAmbient, extend, acts, scopes, argumentWorld, argumentSource, clear, observed, result⟩ :=
-          evalArguments_unaryRegisterExpression_fromChecker caller state ambient types live regions pending target origin context implementation parameter
+          evalArguments_registerArithmetic_fromChecker caller state ambient types live regions pending target origin context implementation parameter
             descriptor argument integer checkFuel fuel form argumentGraph world source contextAt implementationAt parameters mode parameterDeclared descriptorTy nesting
             (.int integer) roots typingAfter rootsAfter checked
         cases evaluated : evalArguments fuel config caller.interpretation.environment implementation.vars [parameter] [.byVal argument] state with
@@ -219,6 +221,39 @@ theorem invokeCall_parameterizedScalarGraph_allFuel (fuel : Nat) (config : EvalC
 
 
 
+
+theorem invokeCall_parameterizedScalarGraph_allFuel (fuel : Nat) (config : EvalConfig) (integer : Goose.Core.IntTy)
+    (accepted : AcceptedModule config) (graph : ParameterizedScalarRegisterGraph config integer)
+    (argumentGraph : RegisterCallGraphWithCallLocals config (.int integer)) :
+    ∀ (caller : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (target origin : Nat) (context : Context) (implementation : Impl) (parameter : Param) (argument : Expr)
+    (world : AcceptedWorld config caller.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted caller state types)
+    (contextAt : config.module.contexts[target]? = some context)
+    (implementationAt : config.module.impls[context.impl]? = some implementation)
+    (parameters : implementation.params = #[parameter]) (mode : parameter.mode = .byValue)
+    (results : implementation.results = #[⟨.int integer, .register, none⟩])
+    (form : UnaryRegisterExpression config integer argument) (checkFuel : Nat) (nesting : caller.typingFuel = checkFuel + 2)
+    (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue caller (.call target [.byVal argument] origin) (.int integer) roots typingAfter rootsAfter),
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := invokeCall fuel config caller.interpretation.environment target [.byVal argument] [.register (.int integer)] origin state
+      RootTypesExtend types nextTypes ∧ state.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      state.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config caller.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      AcceptedFrame config accepted caller (Goose.Proofs.Exit.stepState outcome) nextTypes ∧
+      FutureGlobalsClear config caller.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      EarlierCallerObservations state.nextAct state (Goose.Proofs.Exit.stepState outcome) types nextTypes ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation (.int integer) value
+       | .stop .. => True | .escape .. | .jump .. => False) := by
+  intro caller state ambient types live regions pending target origin context implementation parameter argument world source
+    contextAt implementationAt parameters mode results form checkFuel nesting roots typingAfter rootsAfter checked
+  exact invokeCall_parameterizedArithmeticGraph_allFuel fuel config integer accepted graph.toArithmeticGraph argumentGraph
+    caller state ambient types live regions pending target origin context implementation parameter argument world source contextAt implementationAt
+    parameters mode results (.operand form) checkFuel nesting roots typingAfter rootsAfter checked
+
 theorem invokeCall_parameterizedGeneralGraph_allFuel (fuel : Nat) (config : EvalConfig) (integer : Goose.Core.IntTy)
     (accepted : AcceptedModule config) (graph : ParameterizedRegisterGraph config integer)
     (argumentGraph : RegisterCallGraphWithCallLocals config (.int integer)) :
@@ -275,6 +310,7 @@ theorem invokeCall_parameterizedGraph_allFuel (fuel : Nat) (config : EvalConfig)
        | .stop .. => True | .escape .. | .jump .. => False) := by
   exact invokeCall_parameterizedGeneralGraph_allFuel fuel config integer accepted graph.toGraph argumentGraph
 
+#print axioms invokeCall_parameterizedArithmeticGraph_allFuel
 #print axioms invokeCall_parameterizedScalarGraph_allFuel
 #print axioms invokeCall_parameterizedGeneralGraph_allFuel
 #print axioms invokeCall_parameterizedGraph_allFuel
