@@ -11,7 +11,12 @@ private abbrev commitLookup (id : DestinationId) : ConstructionM PendingDestinat
   (fun {left right : ConstructionResult PendingDestination} (_ : left = right) => left)
     (lookupDestination_result id state)
 
-private def namedReservationCommit (token : ExitReservationId) (incoming selected : DestinationId)
+theorem namedReservationCommit_lookup (id : DestinationId) (state : ConstructionState) :
+    commitLookup id state = match state.destinations[id]? with
+      | some destination => .ok destination state
+      | none => .fault .destination state := lookupDestination_result id state
+
+def namedReservationCommit (token : ExitReservationId) (incoming selected : DestinationId)
     (snapshot : PendingDestination) : ConstructionM DestinationId := do
   restoreNamedDestination selected
   let parent ← commitLookup selected
@@ -124,6 +129,14 @@ private theorem materializeNamedReservation_dispatch (token : ExitReservationId)
 
 
 
+
+theorem materializeNamedReservation_result (token : ExitReservationId) (state : ConstructionState) :
+    materializeNamedReservation token state = match state.exitReservations[token]? with
+      | some (.active (.named .ready) incoming selected snapshot) =>
+        namedReservationCommit token incoming selected snapshot state
+      | _ => .fault .protocol state := by
+  rw [materializeNamedReservation_dispatch]
+  rfl
 
 private theorem namedReservationCommit_lifecycle (token : ExitReservationId) (incoming selected : DestinationId)
     (snapshot : PendingDestination) (state : ConstructionState) (valid : ReservationLifecycleInvariant state) :

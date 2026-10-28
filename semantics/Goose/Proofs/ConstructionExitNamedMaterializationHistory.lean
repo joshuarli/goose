@@ -2,6 +2,7 @@ import Goose.Proofs.ConstructionExitEvaluationHistoryNamed
 import Goose.Proofs.ConstructionExitCancellationHistory
 import Goose.Proofs.ConstructionExecutionProtocolNamedReservationRestore
 import Goose.Proofs.ConstructionExecutionProtocolNamedReservationChildren
+import Goose.Proofs.ConstructionExecutionProtocolNamedReservationMaterialize
 import Lean.Elab.Tactic.Split
 
 set_option Elab.async false
@@ -85,6 +86,69 @@ theorem restoreNamedDestination_ticket_count (id : Nat) (state : ConstructionSta
     exact constructionInvariant_forEach invariant _ (fun token => cancelExitReservation token []) step state initial
   exact all.2
 
+theorem namedReservationCommit_ticket_count (token incoming selected : Nat) (snapshot : PendingDestination)
+    (state : ConstructionState) (valid : ReservationLifecycleInvariant state) :
+    (namedReservationCommit token incoming selected snapshot state).finalState.exitReservations.size = state.exitReservations.size := by
+  simp only [namedReservationCommit, bind]
+  have restoredCount := restoreNamedDestination_ticket_count selected state valid
+  have restoredValid := restoreNamedDestination_lifecycle selected state valid
+  cases restored : restoreNamedDestination selected state with
+  | fault kind after =>
+    simpa only [restored, bind, ConstructionResult.finalState] using restoredCount
+  | ok ignored after =>
+    cases ignored
+    simp only [restored, ConstructionResult.finalState] at restoredCount restoredValid
+    simp only [restored, bind, namedReservationCommit_lookup, lookupDestination_result]
+    cases present : after.destinations[selected]? with
+    | none => exact restoredCount
+    | some parent =>
+      simp only [present]
+      history_named_split_if
+      · exact restoredCount
+      · cases snapshotProgress : snapshot.progress <;> simp only [snapshotProgress] <;> try exact restoredCount
+        case built count =>
+          have children := namedReservationChildren_ticket_count selected parent count after restoredValid.1
+          have childrenValid := (namedReservationChildren_lifecycle selected parent count after present restoredValid).1
+          cases childResult : namedReservationChildren selected parent count after with
+          | fault reason finalState =>
+            simp only [childResult, bind, ConstructionResult.finalState] at children ⊢
+            exact (congrArg Array.size children).trans restoredCount
+          | ok ignored finalState =>
+            cases ignored
+            simp only [childResult, ConstructionResult.finalState] at children childrenValid
+            have finish := namedReservationFinish_ticket_count token incoming selected snapshot finalState
+            simp only [childResult, bind]
+            exact finish.trans ((congrArg Array.size children).trans restoredCount)
+
+theorem materializeNamedReservation_ticket_count (token : Nat) (state : ConstructionState)
+    (valid : ReservationLifecycleInvariant state) :
+    (materializeNamedReservation token state).finalState.exitReservations.size = state.exitReservations.size := by
+  rw [materializeNamedReservation_result]
+  cases ticket : state.exitReservations[token]? with
+  | none => rfl
+  | some reservation =>
+    cases reservation with
+    | waiting incoming | restored | released => rfl
+    | active role incoming selected snapshot =>
+      cases role with
+      | fresh => rfl
+      | named stage =>
+        cases stage with
+        | awaitingSource | materialized => rfl
+        | ready => exact namedReservationCommit_ticket_count token incoming selected snapshot state valid
+
+theorem evaluationHistoryLifecycle_materialize_named (origin : Goose.Core.OriginId) (token : Nat)
+    (ambient : Goose.Proofs.ConstructionExecutionOwnership.OwnershipAmbient)
+    (pending : List PendingCarrierFrame) :
+    PreservesEvaluationHistoryLifecycle (liftConstruction origin (materializeNamedReservation token)) ambient pending := by
+  apply evaluationHistoryLifecycle_reservation origin _ (.materializeNamedReservation token) ambient pending
+  intro state valid
+  rw [materializeNamedReservation_ticket_count token state valid]
+  exact Nat.le_refl _
+
+#print axioms namedReservationCommit_ticket_count
+#print axioms materializeNamedReservation_ticket_count
+#print axioms evaluationHistoryLifecycle_materialize_named
 #print axioms restoreNamedDestination_ticket_count
 #print axioms namedReservationChildren_ticket_count
 #print axioms namedReservationFinish_ticket_count
