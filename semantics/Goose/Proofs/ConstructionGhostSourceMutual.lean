@@ -3,12 +3,14 @@ import Goose.Proofs.ConstructionGhostBlock
 import Goose.Proofs.ConstructionGhostResultScopeCore
 import Goose.Proofs.ConstructionGhostElementCore
 import Goose.Proofs.ConstructionGhostInvocationCore
+import Goose.Proofs.ConstructionGhostArgumentCore
 import Goose.Proofs.ConstructionInitializerLoopReplay
 
 namespace Goose.Proofs.ConstructionGhostSourceMutual
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition
 open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultScope Goose.Proofs.ConstructionGhostElements
 open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInvocation Goose.Proofs.ConstructionInitializerLoopReplay
+open Goose.Proofs.ConstructionGhostArguments
 
 inductive SourceOperation : Type → Type
   | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
@@ -292,6 +294,38 @@ inductive ValueAggregate : Expr → List Expr → Prop
 
 def logicalExpression (isAnd : Bool) (first second : Expr) : Expr :=
   if isAnd then .and first second else .or first second
+
+theorem constructedArgument_direct_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (vars : Array LocalVar) (parameter : Param) (operand : Expr) (localVar : LocalVar) (before : ExecutionState)
+    (found : vars[parameter.var]? = some localVar)
+    (direct : ordinaryProducerCount? fuel ⟨config.module, environment.vars⟩ operand = none) :
+    argumentValue fuel config environment vars parameter (.construct operand) before =
+      (do
+        let destination ← newDestination config.layout environment.act localVar.ty .value (expressionOrigin operand) none
+          (producerCount? ⟨config.module, environment.vars⟩ operand)
+        buildExpr fuel config environment destination operand
+        let destination ← completedReceivingDestination destination
+        publishCarriers (expressionOrigin operand) [.completed destination]
+        carrierValue (.completed destination)) before := by
+  simp only [argumentValue, found, bind, materializeProducer, direct, pure, constructLocal, EvalConfig.layout]
+  cases result : newDestination (LayoutEnv.ofModule config.module) environment.act localVar.ty .value (expressionOrigin operand) none
+    (producerCount? ⟨config.module, environment.vars⟩ operand) before with
+  | ok destination ready =>
+      simp only [result, bind, pure]
+      cases built : buildExpr fuel config environment destination operand ready with
+      | ok unit after =>
+          cases unit
+          simp only [built, bind, pure]
+          cases completed : completedReceivingDestination destination after with
+          | ok current finished =>
+              simp only [completed, bind, pure]
+              cases published : publishCarriers (expressionOrigin operand) [.completed current] finished <;>
+                simp [published, bind, pure]
+          | stop | escape | jump => simp_all [bind, pure]
+      | stop | escape | jump => simp_all [bind, pure]
+  | stop | escape | jump => simp_all [bind, pure]
+
+#print axioms constructedArgument_direct_source
 
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
@@ -640,6 +674,23 @@ inductive SourceHistory (config : EvalConfig) :
           (evalArguments fuel config environment vars parameters arguments middle)) :
       SourceHistory config (fuel + 1) path (.arguments environment vars (parameter :: parameters) (.byVal operand :: arguments))
         before (argumentResult fuel config environment vars parameters arguments outcome)
+  | argumentConstruct {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {vars : Array LocalVar}
+      {parameter : Param} {parameters : List Param} {operand : Expr} {arguments : List Arg} {before : ExecutionState}
+      (materialized : ∀ localVar count, vars[parameter.var]? = some localVar →
+        ordinaryProducerCount? fuel ⟨config.module, environment.vars⟩ operand = some count →
+        SourceHistory config fuel (path ++ [0]) (.value environment operand) before
+          (evalValue fuel config environment operand before))
+      (direct : ∀ localVar destination ready, vars[parameter.var]? = some localVar →
+        ordinaryProducerCount? fuel ⟨config.module, environment.vars⟩ operand = none →
+        newDestination config.layout environment.act localVar.ty .value (expressionOrigin operand) none
+          (producerCount? ⟨config.module, environment.vars⟩ operand) before = .ok destination ready →
+        SourceHistory config fuel (path ++ [0]) (.builder environment destination operand) ready
+          (buildExpr fuel config environment destination operand ready))
+      (tail : ∀ value middle, argumentValue fuel config environment vars parameter (.construct operand) before = .ok value middle →
+        SourceHistory config fuel (path ++ [1]) (.arguments environment vars parameters arguments) middle
+          (evalArguments fuel config environment vars parameters arguments middle)) :
+      SourceHistory config (fuel + 1) path (.arguments environment vars (parameter :: parameters) (.construct operand :: arguments)) before
+        (evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.construct operand :: arguments) before)
   | argumentReference {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {vars : Array LocalVar}
       {parameter : Param} {parameters : List Param} {mutability : Goose.Core.Mutability} {place : Place} {arguments : List Arg}
       {before : ExecutionState}
@@ -757,7 +808,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       simp only [execute] at ih ⊢
       rw [fixedElement_execution fuel config environment parent element operand before fixed, ih]
   | nonfixedElement => rfl
-  | argumentReference => rfl
+  | argumentConstruct | argumentReference => rfl
   | argumentsDone => simp [execute, evalArguments, pure]
   | @argumentValue fuel path environment vars parameter parameters operand arguments before outcome child tail ihChild ihTail =>
       simp only [execute] at ihChild ⊢
@@ -1003,6 +1054,12 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (child : SupportedOperation config (.value environment operand))
       (tail : SupportedOperation config (.arguments environment vars parameters arguments)) :
       SupportedOperation config (.arguments environment vars (parameter :: parameters) (.byVal operand :: arguments))
+  | argumentConstruct (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param)
+      (parameters : List Param) (operand : Expr) (arguments : List Arg)
+      (materialized : SupportedOperation config (.value environment operand))
+      (direct : ∀ destination, SupportedOperation config (.builder environment destination operand))
+      (tail : SupportedOperation config (.arguments environment vars parameters arguments)) :
+      SupportedOperation config (.arguments environment vars (parameter :: parameters) (.construct operand :: arguments))
   | argumentReference (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param)
       (parameters : List Param) (mutability : Goose.Core.Mutability) (place : Place) (arguments : List Arg)
       (child : SupportedOperation config (.place environment place))
@@ -1318,6 +1375,14 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute]
           rw [valueArgument_source]
           exact .argumentValue child tail
+      | argumentConstruct environment vars parameter parameters operand arguments materializedSupported directSupported tailSupported =>
+          refine .argumentConstruct ?_ ?_ ?_
+          · intro localVar count found query
+            exact ih (.value environment operand) (path ++ [0]) before materializedSupported
+          · intro localVar destination ready found query allocated
+            exact ih (.builder environment destination operand) (path ++ [0]) ready (directSupported destination)
+          · intro value middle result
+            exact ih (.arguments environment vars parameters arguments) (path ++ [1]) middle tailSupported
       | argumentReference environment vars parameter parameters mutability place arguments childSupported tailSupported =>
           refine .argumentReference (ih (.place environment place) (path ++ [0]) before childSupported) ?_
           intro location middle result
@@ -2016,6 +2081,53 @@ theorem witness_referenceArgumentStop : ∃ after,
       (invokeCall 40 referenceConfig witnessEnvironment 1 referenceArguments [] 0 .initial) at history
     rw [actual] at history
     exact history
+
+private def constructedTargetContext : Context := ⟨0, "target", [], [], []⟩
+private def constructedTargetImplementation : Impl := ⟨"target", #[⟨0, .byValue⟩], #[],
+  #[⟨"x", .varr (.int .u8), .immutable, 0, 0⟩], .mk 0 [.print [.text "y"] 0] none, .unknown⟩
+private def constructedConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[], #[constructedTargetImplementation], #[constructedTargetContext], 0, #[], #[], #[]⟩⟩
+private def constructedArguments : List Arg := [.construct (.bytes (.varr (.int .u8)) [65, 66] 0)]
+
+theorem witness_constructedArgument : ∃ after,
+    invokeCall 40 constructedConfig witnessEnvironment 0 constructedArguments [] 0 .initial = .ok [] after ∧
+    after.construction.stdout.data.toList = [121, 10] ∧
+    after.construction.events = [.begin 0, .write 0 0, .write 0 1, .publish 0] ∧
+    SourceHistory constructedConfig 40 [] (.callWith witnessEnvironment 0 constructedArguments 0) .initial (.ok [] after) := by
+  have args : SupportedOperation constructedConfig
+      (.arguments witnessEnvironment constructedTargetImplementation.vars constructedTargetImplementation.params.toList constructedArguments) := by
+    unfold constructedTargetImplementation constructedArguments
+    exact .argumentConstruct _ _ _ _ _ _ (.valueBytes witnessEnvironment (.varr (.int .u8)) [65, 66] 0)
+      (fun destination => .builderBytes witnessEnvironment destination (.varr (.int .u8)) [65, 66] 0) (.argumentsDone _ _)
+  have body : ∀ environment, SupportedOperation constructedConfig (.statements environment [.print [.text "y"] 0]) := by
+    intro environment
+    exact .sequence environment (.printText environment "y" 0) (.empty environment)
+  have supported : SupportedOperation constructedConfig (.callWith witnessEnvironment 0 constructedArguments 0) := by
+    apply SupportedOperation.callWith witnessEnvironment 0 constructedArguments 0 constructedTargetContext constructedTargetImplementation
+    · rfl
+    · rfl
+    · rfl
+    · exact args
+    · intro act pre
+      exact .boundActivation _ pre 0 _ 0 body
+  have history := history_exists 40 constructedConfig (.callWith witnessEnvironment 0 constructedArguments 0) [] .initial supported
+  refine ⟨witnessState (invokeCall 40 constructedConfig witnessEnvironment 0 constructedArguments [] 0 .initial), ?_, ?_, ?_, ?_⟩
+  · unfold witnessState constructedConfig constructedTargetContext constructedTargetImplementation constructedArguments witnessEnvironment
+    cbv
+  · unfold witnessState constructedConfig constructedTargetContext constructedTargetImplementation constructedArguments witnessEnvironment
+    cbv
+  · unfold witnessState constructedConfig constructedTargetContext constructedTargetImplementation constructedArguments witnessEnvironment
+    cbv
+  · have actual : invokeCall 40 constructedConfig witnessEnvironment 0 constructedArguments [] 0 .initial =
+        .ok [] (witnessState (invokeCall 40 constructedConfig witnessEnvironment 0 constructedArguments [] 0 .initial)) := by
+      unfold witnessState constructedConfig constructedTargetContext constructedTargetImplementation constructedArguments witnessEnvironment
+      cbv
+    change SourceHistory constructedConfig 40 [] (.callWith witnessEnvironment 0 constructedArguments 0) .initial
+      (invokeCall 40 constructedConfig witnessEnvironment 0 constructedArguments [] 0 .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_constructedArgument
 
 #print axioms witness_referenceArgumentStop
 
