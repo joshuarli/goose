@@ -533,6 +533,15 @@
   "evidence": "ConstructionAcceptedByteCursor.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Fresh local binding root correspondence",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.AcceptedFrame.visibleReferences_avoid_uninitialized; Goose.Proofs.ConstructionAcceptedExecution.AcceptedFrame.bindFreshStored_correspondence",
+  "statement": "Visible references exclude an uninitialized local root, and binding a stored value there preserves direct and content-root correspondence for existing locals and the newly visible local.",
+  "assumptions": "An accepted world and source frame, an uninitialized resolved local root, and the actual successful stored-value binding.",
+  "limits": "The other accepted source-frame fields and checker cursor still need composition for a full declaration continuation; TH-CON-01 remains open.",
+  "evidence": "ConstructionAcceptedLocalSeparation.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Published owner storage from fresh allocation",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_publishedOwner_storage; Goose.Proofs.ConstructionAcceptedExecution.bytes_publishedOwner_storage",
