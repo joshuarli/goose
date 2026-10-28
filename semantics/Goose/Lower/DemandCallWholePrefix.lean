@@ -12,10 +12,14 @@ inductive CallWholePrefix {cfg : Cfg} {env : Env} {state : St}
     (initial : GIR.Frame) (start : Pt) (taken : Nat) (reached : DemandRuntimePoint) : Prop
   | arguments {required : RetainedSsaMap}
       (cursor : CallMixedPrefix source ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results before loop map required
-        0 arguments ⟨start, initial, state⟩ taken reached) :
+        0 arguments ⟨start, initial, state⟩ taken reached)
+      (realized : map.Realizes cfg.mod source.world env reached)
+      (progress : (∃ id op, instAt caller reached.point = some (.def id op)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ fuel reached next) :
       CallWholePrefix source caller results before loop map initial start taken reached
   | ready {fuel : Nat} {values : List Val}
       (evaluated : mapList (evalArg fuel cfg env) arguments state = .ok values reached.state)
+      (realized : map.Realizes cfg.mod source.world env reached)
       (post : Post cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ before initial
         (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2 reached.frame reached.point [])
       (read : mapList (getVal reached.frame) (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 reached.state =
@@ -63,14 +67,14 @@ theorem accepted_generated_literal_call_prefix {cfg : Cfg} {env : Env} {state : 
     CallWholePrefix source caller results before loop map initial start taken reached := by
   have progress := accepted_generated_call_mixed_prefix_cells source selected owned occurrence rows coverage admitted bounded
     realized input extended shrink form steps
-  rcases progress.frontier extended with ⟨_, cursor⟩ | ⟨argumentFuel, consumed, remaining, boundary, values,
-      count, argumentSteps, residual, argumentsDone, callPost, read, instruction⟩
-  · exact .arguments cursor
+  rcases progress.frontier extended with ⟨_, cursor, current, progress⟩ | ⟨argumentFuel, consumed, remaining, boundary, values,
+      count, argumentSteps, residual, argumentsDone, current, callPost, read, instruction⟩
+  · exact .arguments cursor current progress
   · have callerPoint : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller boundary.point boundary.frame boundary.state :=
       argumentSteps.reachable callerStart
     rcases residual.uncons with ⟨_, same⟩ | ⟨rest, next, length, first, later⟩
     · subst reached
-      exact .ready argumentsDone callPost read instruction
+      exact .ready argumentsDone current callPost read instruction
     · cases next
       cases first with
       | effect found execution => cases instruction.symm.trans found

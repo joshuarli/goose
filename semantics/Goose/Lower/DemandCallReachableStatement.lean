@@ -118,6 +118,30 @@ theorem accepted_generated_reachable_control_call_statement_stopped {cfg : Cfg} 
       (.normal (by rw [lowered]; exact Post.nil finished.post.pp finished.post.mono finished.post.same finished.post.rel)
         (source.result (sourceFuel + 1) (.normal .unit) raw) (by rw [lowered]; exact finished.bounded) carried)
 
+theorem ReachableCallStatementCursor.realizes {cfg : Cfg} {env : Env} {state : St}
+    {context : ContextId} {arguments : List Arg} {origin statementOrigin : OriginId}
+    {source : StmtSource cfg env (.expr (.call context arguments origin) statementOrigin) state}
+    {caller : Func} {results : List Ty} {before : LS} {loop : Option LoopCtx} {map : RetainedSsaMap}
+    {initial : GIR.Frame} {start : Pt} {runtime : DemandRuntimePoint}
+    (cursor : ReachableCallStatementCursor source caller results before loop map initial start runtime) :
+    map.Realizes cfg.mod source.world env runtime := by
+  cases cursor with
+  | expression canonical cursor => simpa only [RetainedSsaMap.Realizes, canonical.world] using cursor.realizes
+
+theorem ReachableCallStatementCursor.progress {cfg : Cfg} {env : Env} {state : St}
+    {context : ContextId} {arguments : List Arg} {origin statementOrigin : OriginId}
+    {source : StmtSource cfg env (.expr (.call context arguments origin) statementOrigin) state}
+    {caller : Func} {results : List Ty} {before : LS} {loop : Option LoopCtx} {map : RetainedSsaMap}
+    {initial : GIR.Frame} {start : Pt} {runtime : DemandRuntimePoint}
+    (cursor : ReachableCallStatementCursor source caller results before loop map initial start runtime) :
+    (∃ id op, instAt caller runtime.point = some (.def id op)) ∨
+      ∃ next, ∀ fuel, DemandInstructionStep ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ fuel runtime next := by
+  cases cursor with
+  | expression canonical cursor => exact cursor.progress
+
+#print axioms ReachableCallStatementCursor.realizes
+#print axioms ReachableCallStatementCursor.progress
+
 #print axioms accepted_generated_reachable_control_call_statement_stopped
 
 #print axioms accepted_generated_reachable_control_call_statement

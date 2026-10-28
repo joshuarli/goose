@@ -1,3 +1,4 @@
+import Goose.Lower.DemandBooleanNext
 import Goose.Lower.DemandCallMixedPrefix
 import Goose.Lower.DemandCallArgumentCells
 
@@ -10,7 +11,10 @@ inductive CallMixedPrefixCells {cfg : Cfg} {env : Env} {initialState : St}
     (cx : FnCtx) (results : List Ty) (before : LS) (loop : Option LoopCtx) (map : RetainedSsaMap) (callFrame : GIR.Frame)
     (previousValues : List Val) (index : Nat) (rest : List Arg) (start : DemandRuntimePoint) (taken : Nat)
     (reached : DemandRuntimePoint) : Prop
-  | interior {required : RetainedSsaMap} (cursor : CallMixedPrefix source cx results before loop map required index rest start taken reached) :
+  | interior {required : RetainedSsaMap} (cursor : CallMixedPrefix source cx results before loop map required index rest start taken reached)
+      (realized : map.Realizes cfg.mod source.world env reached)
+      (progress : (∃ id op, instAt cx.fn reached.point = some (.def id op)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep cx fuel reached next) :
       CallMixedPrefixCells source cx results before loop map callFrame previousValues index rest start taken reached
   | complete {consumed remaining : Nat} {boundary : DemandRuntimePoint} {values : List Val}
       {prior : List (ValueId × RetainedAlias)}
@@ -87,7 +91,13 @@ theorem accepted_generated_call_mixed_prefix_cells_suffix {cfg : Cfg} {env : Env
           coverage admitted bounded realized input extended headForm steps
         cases stage with
         | interior cursor =>
-          exact .interior (.interior found child childCanonical cursor)
+          have carried := cursor.demanded.carried
+          have world : child.world = source.world := childCanonical.2.2.1
+          have sourceCarried : (⟨prior ++ map.values, map.runs⟩ : RetainedSsaMap).Realizes cfg.mod source.world env reached := by
+            simpa only [RetainedSsaMap.Realizes, world] using carried
+          have current : map.Realizes cfg.mod source.world env reached :=
+            ⟨fun cell member => sourceCarried.1 cell (List.mem_append_right prior member), sourceCarried.2⟩
+          exact .interior (.interior found child childCanonical cursor) current cursor.progress
         | @complete sourceFuel consumed remaining boundary value count executed residual evaluated post =>
           have done : evalArg (sourceFuel + 1) cfg env (.byVal expression) state = .ok value boundary.state := by
             simpa [evalArg] using evaluated
@@ -117,7 +127,7 @@ theorem accepted_generated_call_mixed_prefix_cells_suffix {cfg : Cfg} {env : Env
             exact ArgsSource.afterHead_callChildren source sources canonical done fuel
           have next := ih nextSources nextCanonical nextTracked nextPost nextCells nextBounded nextRealized nextInput residual
           cases next with
-          | interior cursor => exact .interior (.next count executed evaluated cursor)
+          | interior cursor current progress => exact .interior (.next count executed evaluated cursor) current progress
           | @complete consumedTail remainingTail final values finalPrior tailCount tailExecuted tailResidual trace finalTracked finalBounded finalRealized finalPost finalCells finalInput =>
             apply CallMixedPrefixCells.complete (consumed := consumed + consumedTail) (remaining := remainingTail)
               (boundary := final) (values := value :: values) (prior := finalPrior) (by omega)
@@ -151,7 +161,7 @@ theorem accepted_generated_call_mixed_prefix_cells_suffix {cfg : Cfg} {env : Env
           accepted_generated_call_reference_complete_demand source found child target childCanonical headForm occurrence rows tracked
             bounded realized input extended
         have executed := DemandRuntimePrefix.next ((first 0).runtime) tail
-        rcases executed.compare steps with ⟨remaining, count, residual⟩ | ⟨remaining, count, suffix⟩
+        rcases executed.compare_strict steps with ⟨remaining, count, residual⟩ | ⟨remaining, positive, count, suffix⟩
         ·
           have nextCells := cells.next found finalPost
           have nextPost : Post cfg env cx before callFrame
@@ -168,7 +178,7 @@ theorem accepted_generated_call_mixed_prefix_cells_suffix {cfg : Cfg} {env : Env
             exact ArgsSource.afterHead_callChildren source sources canonical done fuel
           have next := ih nextSources nextCanonical nextTracked nextPost nextCells nextBounded nextRealized nextInput residual
           cases next with
-          | interior cursor => exact .interior (.referenceNext count executed done cursor)
+          | interior cursor current progress => exact .interior (.referenceNext count executed done cursor) current progress
           | @complete consumedTail remainingTail final values finalPrior tailCount tailExecuted tailResidual trace finalTracked finalBounded finalRealized finalPost finalCells finalInput =>
             apply CallMixedPrefixCells.complete (consumed := (length + 1) + consumedTail) (remaining := remainingTail)
               (boundary := final) (values := .ref location :: values) (prior := finalPrior) (by omega)
@@ -188,8 +198,17 @@ theorem accepted_generated_call_mixed_prefix_cells_suffix {cfg : Cfg} {env : Env
             exact same
           subst actualLocation
           have currentDemand := traversal.runtimePrefix_invariant (by omega) steps
+          have world : child.world = source.world := childCanonical.2.2.1
+          have sourceCarried : (⟨prior ++ map.values, map.runs⟩ : RetainedSsaMap).Realizes cfg.mod source.world env reached := by
+            cases currentDemand with
+            | inl current => simpa only [RetainedSsaMap.Realizes, world] using current.operands
+            | inr current => simpa only [RetainedSsaMap.Realizes, world] using current.operands
+          have current : map.Realizes cfg.mod source.world env reached :=
+            ⟨fun cell member => sourceCarried.1 cell (List.mem_append_right prior member), sourceCarried.2⟩
+          have progress := traversal.runtimePrefix_next (by omega) steps
           exact .interior (required := required)
             (.referenceInterior found child target childCanonical placeEntry placeAddressed currentDemand done executed count suffix)
+            current (.inr progress)
 
 theorem accepted_generated_call_mixed_prefix_cells {cfg : Cfg} {env : Env} {state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
@@ -232,12 +251,16 @@ theorem CallMixedPrefixCells.frontier {cfg : Cfg} {env : Env} {state : St}
     {initial : GIR.Frame} {start : Pt} {taken : Nat} {reached : DemandRuntimePoint}
     (outcome : CallMixedPrefixCells source cx results before loop map initial [] 0 arguments ⟨start, initial, state⟩ taken reached)
     (extended : ExtT (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks) :
-    (∃ required, CallMixedPrefix source cx results before loop map required 0 arguments ⟨start, initial, state⟩ taken reached) ∨
+    (∃ required, CallMixedPrefix source cx results before loop map required 0 arguments ⟨start, initial, state⟩ taken reached ∧
+      map.Realizes cfg.mod source.world env reached ∧
+      ((∃ id op, instAt cx.fn reached.point = some (.def id op)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep cx fuel reached next)) ∨
     ∃ (sourceFuel consumed remaining : Nat) (boundary : DemandRuntimePoint) (values : List Val),
       consumed + remaining = taken ∧
       DemandRuntimePrefix cx consumed ⟨start, initial, state⟩ boundary ∧
       DemandRuntimePrefix cx remaining boundary reached ∧
       mapList (evalArg sourceFuel cfg env) arguments state = .ok values boundary.state ∧
+      map.Realizes cfg.mod source.world env boundary ∧
       Post cfg env cx before initial (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2
         boundary.frame boundary.point [] ∧
       mapList (getVal boundary.frame) (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 boundary.state =
@@ -245,7 +268,7 @@ theorem CallMixedPrefixCells.frontier {cfg : Cfg} {env : Env} {state : St}
       instAt cx.fn boundary.point = some (.def (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).1
         (.call context (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 (some origin))) := by
   cases outcome with
-  | interior cursor => exact Or.inl ⟨_, cursor⟩
+  | interior cursor current progress => exact Or.inl ⟨_, cursor, current, progress⟩
   | @complete consumed remaining boundary values prior count executed residual trace tracked bounded realized wholePost cells input =>
     obtain ⟨sourceFuel, evaluated⟩ := trace.fuel
     have read := cells.read boundary.state
@@ -264,8 +287,10 @@ theorem CallMixedPrefixCells.frontier {cfg : Cfg} {env : Env} {state : St}
     subst ids
     subst middle
     have instruction := (emitDef_facts definition point afterExtended).2.2.2.2
+    have current : map.Realizes cfg.mod source.world env boundary :=
+      ⟨fun cell member => realized.1 cell (List.mem_append_right prior member), realized.2⟩
     exact Or.inr ⟨sourceFuel, consumed, remaining, boundary, values, count, executed, residual, evaluated,
-      by simpa using wholePost, by simpa using read, instruction⟩
+      current, by simpa using wholePost, by simpa using read, instruction⟩
 
 #print axioms CallMixedPrefixCells.frontier
 

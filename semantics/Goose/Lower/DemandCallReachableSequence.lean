@@ -13,6 +13,26 @@ inductive ReachableCallStatementFamilyCursor {cfg : Cfg} {env : Env} (caller : F
       (cursor : ReachableCallStatementCursor source caller results before loop map initial start runtime) :
       ReachableCallStatementFamilyCursor caller results loop source before built initial start map required runtime
 
+theorem ReachableCallStatementFamilyCursor.realizes {cfg : Cfg} {env : Env} {statement : Stmt} {state : St}
+    {source : StmtSource cfg env statement state} {caller : Func} {results : List Ty} {loop : Option LoopCtx}
+    {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+    (cursor : ReachableCallStatementFamilyCursor caller results loop source before built initial start map required runtime) :
+    map.Realizes cfg.mod source.world env runtime := by
+  cases cursor with
+  | call cursor => exact cursor.realizes
+
+theorem ReachableCallStatementFamilyCursor.progress {cfg : Cfg} {env : Env} {statement : Stmt} {state : St}
+    {source : StmtSource cfg env statement state} {caller : Func} {results : List Ty} {loop : Option LoopCtx}
+    {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+    (cursor : ReachableCallStatementFamilyCursor caller results loop source before built initial start map required runtime) :
+    (∃ id op, instAt caller runtime.point = some (.def id op)) ∨
+      ∃ next, ∀ fuel, DemandInstructionStep ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ fuel runtime next := by
+  cases cursor with
+  | call cursor => exact cursor.progress
+
+#print axioms ReachableCallStatementFamilyCursor.realizes
+#print axioms ReachableCallStatementFamilyCursor.progress
+
 theorem accepted_generated_reachable_control_call_statement_family {cfg : Cfg} {env : Env}
     {context : ContextId} {arguments : List Arg} {origin statementOrigin : OriginId}
     {ctx : Context} {impl : Impl} (contextAt : cfg.mod.contexts[context]? = some ctx)

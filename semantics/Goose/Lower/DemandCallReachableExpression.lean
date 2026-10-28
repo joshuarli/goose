@@ -12,10 +12,14 @@ inductive ReachableCallExpressionCursor {cfg : Cfg} {env : Env} {state : St}
   | arguments {required : RetainedSsaMap} {taken : Nat}
       (cursor : CallMixedPrefix source ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results before loop map required
         0 arguments ⟨start, initial, state⟩ taken runtime)
+      (realized : map.Realizes cfg.mod source.world env runtime)
+      (progress : (∃ id op, instAt caller runtime.point = some (.def id op)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ fuel runtime next)
       (reachable : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller runtime.point runtime.frame runtime.state) :
       ReachableCallExpressionCursor source caller results before loop map initial start runtime
   | ready {fuel : Nat} {values : List Val}
       (evaluated : mapList (evalArg fuel cfg env) arguments state = .ok values runtime.state)
+      (realized : map.Realizes cfg.mod source.world env runtime)
       (post : Post cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ before initial
         (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2 runtime.frame runtime.point [])
       (read : mapList (getVal runtime.frame) (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 runtime.state =
@@ -57,9 +61,35 @@ theorem accepted_generated_reachable_control_call_expression {cfg : Cfg} {env : 
     coverage admitted bounded realized input extended shrink argumentsForm callerStart steps
   refine ⟨owned, coverage, ?_⟩
   cases cursor with
-  | arguments cursor => exact .interior (.arguments cursor (steps.reachable callerStart))
-  | ready evaluated post read instruction => exact .interior (.ready evaluated post read instruction (steps.reachable callerStart))
+  | arguments cursor current progress => exact .interior (.arguments cursor current progress (steps.reachable callerStart))
+  | ready evaluated current post read instruction => exact .interior (.ready evaluated current post read instruction (steps.reachable callerStart))
   | complete count executed residual evaluated result => exact .complete count executed residual evaluated result
+
+theorem ReachableCallExpressionCursor.realizes {cfg : Cfg} {env : Env} {state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    {source : ExprSource cfg env (.call context arguments origin) state}
+    {caller : Func} {results : List Ty} {before : LS} {loop : Option LoopCtx} {map : RetainedSsaMap}
+    {initial : GIR.Frame} {start : Pt} {runtime : DemandRuntimePoint}
+    (cursor : ReachableCallExpressionCursor source caller results before loop map initial start runtime) :
+    map.Realizes cfg.mod source.world env runtime := by
+  cases cursor with
+  | arguments _ realized _ _ => exact realized
+  | ready _ realized _ _ _ _ => exact realized
+
+theorem ReachableCallExpressionCursor.progress {cfg : Cfg} {env : Env} {state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    {source : ExprSource cfg env (.call context arguments origin) state}
+    {caller : Func} {results : List Ty} {before : LS} {loop : Option LoopCtx} {map : RetainedSsaMap}
+    {initial : GIR.Frame} {start : Pt} {runtime : DemandRuntimePoint}
+    (cursor : ReachableCallExpressionCursor source caller results before loop map initial start runtime) :
+    (∃ id op, instAt caller runtime.point = some (.def id op)) ∨
+      ∃ next, ∀ fuel, DemandInstructionStep ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ fuel runtime next := by
+  cases cursor with
+  | arguments _ _ progress _ => exact progress
+  | ready _ _ _ _ instruction _ => exact .inl ⟨_, _, instruction⟩
+
+#print axioms ReachableCallExpressionCursor.realizes
+#print axioms ReachableCallExpressionCursor.progress
 
 #print axioms accepted_generated_reachable_control_call_expression
 end Goose.Lower

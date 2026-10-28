@@ -31,14 +31,14 @@ theorem accepted_generated_control_call_prefix {cfg : Cfg} {env : Env} {state : 
     CallWholePrefix source caller results before loop map initial start taken reached := by
   have progress := accepted_generated_call_mixed_prefix_cells source selected owned occurrence rows coverage admitted bounded
     realized input extended shrink argumentsForm steps
-  rcases progress.frontier extended with ⟨_, cursor⟩ | ⟨argumentFuel, consumed, remaining, boundary, values,
-      count, argumentSteps, residual, argumentsDone, callPost, read, instruction⟩
-  · exact .arguments cursor
+  rcases progress.frontier extended with ⟨_, cursor, current, progress⟩ | ⟨argumentFuel, consumed, remaining, boundary, values,
+      count, argumentSteps, residual, argumentsDone, current, callPost, read, instruction⟩
+  · exact .arguments cursor current progress
   · have callerPoint : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller boundary.point boundary.frame boundary.state :=
       argumentSteps.reachable callerStart
     rcases residual.uncons with ⟨_, same⟩ | ⟨rest, next, length, first, later⟩
     · subst reached
-      exact .ready argumentsDone callPost read instruction
+      exact .ready argumentsDone current callPost read instruction
     · cases next
       cases first with
       | effect found execution => cases instruction.symm.trans found
