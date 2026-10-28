@@ -27,7 +27,7 @@ theorem evalArguments_scalarParameter_body {expression : Expr} (form : AcceptedB
           let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
           let scopedState := ownershipResultScopeState activation callee.body.scope activated
           let root := Goose.Core.RootInst.local activation.act state.nextScope 0
-          helperFrame.source.impl = callee ∧ helperFrame.interpretation.environment = activation ∧
+          helperFrame.source.impl = callee ∧ helperFrame.phase = .implementation contextId ∧ helperFrame.interpretation.environment = activation ∧
           activation.act = state.nextAct ∧ activation.scopes = [] ∧ activation.channels = [] ∧
           freshAct state = .ok activation.act { state with nextAct := state.nextAct + 1 } ∧
           freshScope activated = .ok activated.nextScope { activated with nextScope := activated.nextScope + 1 } ∧
@@ -56,12 +56,12 @@ theorem evalArguments_scalarParameter_body {expression : Expr} (form : AcceptedB
     subst after
     obtain ⟨value, equal, valid⟩ := outcome.2.2.2
     have initialWorld : AcceptedWorld config config.module.globals.size state ambient types live regions pending := initialized ▸ world
-    obtain ⟨helperFrame, activation, after, sameImpl, environment, act, scopes, channels, fresh, scopeFresh,
+    obtain ⟨helperFrame, activation, after, sameImpl, phase, environment, act, scopes, channels, fresh, scopeFresh,
       bound, extended, nextWorld, nextSource, position⟩ :=
       acceptedScalarParameterCallBody config accepted state ambient types live regions pending contextId context callee
         parameter descriptor value contextAt calleeAt parameters results declared scalar valid.represented valid.pointers initialWorld
     simp only [Goose.Proofs.Exit.stepState]
-    exact ⟨trivial, value, equal, helperFrame, activation, after, sameImpl, environment, act, scopes, channels, fresh, scopeFresh,
+    exact ⟨trivial, value, equal, helperFrame, activation, after, sameImpl, phase, environment, act, scopes, channels, fresh, scopeFresh,
       bound, nextWorld, nextSource, position⟩
 
 #print axioms evalArguments_scalarParameter_body

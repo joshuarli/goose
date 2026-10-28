@@ -23,7 +23,7 @@ theorem acceptedScalarParameterCallBody (config : EvalConfig) (accepted : Accept
       let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
       let scopeState := ownershipResultScopeState activation implementation.body.scope activated
       let root := Goose.Core.RootInst.local activation.act state.nextScope 0
-      frame.source.impl = implementation ∧ frame.interpretation.environment = activation ∧
+      frame.source.impl = implementation ∧ frame.phase = .implementation contextId ∧ frame.interpretation.environment = activation ∧
       activation.act = state.nextAct ∧ activation.scopes = [] ∧ activation.channels = [] ∧
       freshAct state = .ok activation.act { state with nextAct := state.nextAct + 1 } ∧
       freshScope activated = .ok activated.nextScope { activated with nextScope := activated.nextScope + 1 } ∧
@@ -81,7 +81,7 @@ theorem acceptedScalarParameterCallBody (config : EvalConfig) (accepted : Accept
     have position := SourcePosition.instantiate statementsPosition
       (frame.interpretation.enterScope frame.source.impl.body.scope state.nextScope) frame.initialized
     simpa [entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, sameImpl] using position
-  refine ⟨frame, activation, after, sameImpl, environment, act, scopes, channels, freshActStep, freshScopeStep, ?_, ?_, ?_, ?_, position⟩
+  refine ⟨frame, activation, after, sameImpl, phase, environment, act, scopes, channels, freshActStep, freshScopeStep, ?_, ?_, ?_, ?_, position⟩
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment, parameterId, scopeState] using bound
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment] using extended
   · simpa [parameterScopeFrame, RootInterpretation.enterScope, environment, initialized] using afterWorld
