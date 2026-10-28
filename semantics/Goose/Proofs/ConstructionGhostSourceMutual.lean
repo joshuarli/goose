@@ -4,13 +4,14 @@ import Goose.Proofs.ConstructionGhostResultScopeCore
 import Goose.Proofs.ConstructionGhostElementCore
 import Goose.Proofs.ConstructionGhostInvocationCore
 import Goose.Proofs.ConstructionGhostArgumentCore
+import Goose.Proofs.ConstructionGhostEachCore
 import Goose.Proofs.ConstructionInitializerLoopReplay
 
 namespace Goose.Proofs.ConstructionGhostSourceMutual
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition
 open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultScope Goose.Proofs.ConstructionGhostElements
 open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInvocation Goose.Proofs.ConstructionInitializerLoopReplay
-open Goose.Proofs.ConstructionGhostArguments
+open Goose.Proofs.ConstructionGhostArguments Goose.Proofs.ConstructionGhostEachCore
 
 inductive SourceOperation : Type → Type
   | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
@@ -32,6 +33,8 @@ inductive SourceOperation : Type → Type
   | blockWith (environment : RuntimeActivation) (pre : List (Goose.Core.VarId × Value)) (body : Block) : SourceOperation Flow
   | loopBodyWith (environment : RuntimeActivation) (pre : List (Goose.Core.VarId × Value)) (body : Block) : SourceOperation Flow
   | whileLoop (environment : RuntimeActivation) (condition : Expr) (body : Block) : SourceOperation Flow
+  | eachLoop (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (index : Option Goose.Core.VarId)
+      (byRef : Bool) (body : Block) (view : RuntimeView) (current : Nat) : SourceOperation Flow
   | rangeLoop (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (ty : Goose.Core.IntTy)
       (first last : Int) (body : Block) : SourceOperation Flow
   | loopBody (environment : RuntimeActivation) (body : Block) : SourceOperation Flow
@@ -59,6 +62,7 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .blockWith environment pre body => execBlock fuel config environment pre [] body
   | .loopBodyWith environment pre body => Goose.Construct.loopBody fuel config environment pre body
   | .whileLoop environment condition body => execWhile fuel config environment condition body
+  | .eachLoop environment localVar index byRef body view current => execEach fuel config environment localVar index byRef body view current
   | .rangeLoop environment localVar ty first last body => execRange fuel config environment localVar ty first last body
   | .loopBody environment body => Goose.Construct.loopBody fuel config environment [] body
   | .printArgument environment argument => evalPrintArg fuel config environment argument
@@ -569,6 +573,29 @@ inductive SourceHistory (config : EvalConfig) :
           (loopStart environment before))) :
       SourceHistory config (fuel + 1) path (.loopBody environment body) before
         (Goose.Construct.loopBody (fuel + 1) config environment [] body before)
+  | eachLoop {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {localVar : Goose.Core.VarId}
+      {index : Option Goose.Core.VarId} {byRef : Bool} {body : Block} {view : RuntimeView} {current : Nat} {before : ExecutionState}
+      (bodyChild : ∀ count countReady pre ready, eachCount fuel config view before = .ok count countReady →
+        current < count → eachElement fuel config localVar index byRef view current countReady = .ok pre ready →
+        SourceHistory config fuel (path ++ [0]) (.loopBodyWith environment pre body) ready
+          (Goose.Construct.loopBody fuel config environment pre body ready))
+      (nextChild : ∀ count countReady pre ready flow after, eachCount fuel config view before = .ok count countReady →
+        current < count → eachElement fuel config localVar index byRef view current countReady = .ok pre ready →
+        Goose.Construct.loopBody fuel config environment pre body ready = .ok flow after →
+        (flow = .continuing ∨ ∃ value, flow = .normal value) →
+        SourceHistory config fuel (path ++ [1]) (.eachLoop environment localVar index byRef body view (current + 1)) after
+          (execEach fuel config environment localVar index byRef body view (current + 1) after)) :
+      SourceHistory config (fuel + 1) path (.eachLoop environment localVar index byRef body view current) before
+        (eachCountResult fuel config environment localVar index byRef body view current (eachCount fuel config view before))
+  | eachStatement {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {localVar : Goose.Core.VarId}
+      {index : Option Goose.Core.VarId} {view : View} {byRef : Bool} {body : Block} {origin : Goose.Core.OriginId} {before : ExecutionState}
+      (viewChild : SourceHistory config fuel (path ++ [0]) (.view environment view) before
+        (evalView fuel config environment view before))
+      (loopChild : ∀ runtime ready, evalView fuel config environment view before = .ok runtime ready →
+        SourceHistory config fuel (path ++ [1]) (.eachLoop environment localVar index byRef body runtime 0) ready
+          (execEach fuel config environment localVar index byRef body runtime 0 ready)) :
+      SourceHistory config (fuel + 1) path (.statement environment (.forEach localVar index view byRef body origin)) before
+        (execStmt (fuel + 1) config environment (.forEach localVar index view byRef body origin) before)
   | rangeLoop {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {localVar : Goose.Core.VarId}
       {ty : Goose.Core.IntTy} {first last : Int} {body : Block} {before : ExecutionState}
       (bodyChild : first < last → SourceHistory config fuel (path ++ [0])
@@ -825,7 +852,7 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
   | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical => rfl
   | @negation fuel path environment operand before outcome child ih =>
@@ -900,10 +927,13 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       cases outcome <;> rfl
   | omittedBound => simp [execute, evalBound, pure]
   | expressionBound | localPlace | globalPlace | dereferencePlace | fieldPlace | elementPlace | placeView | valueView |
-    readValue | referenceValue | lengthValue | popValue | sliceValue | boundBlock | boundLoopBody | whileLoop | loopBody | rangeLoop | rangeStatement | whileStatement => rfl
+    readValue | referenceValue | lengthValue | popValue | sliceValue | boundBlock | boundLoopBody | whileLoop | loopBody | rangeLoop | rangeStatement | eachStatement | whileStatement => rfl
   | printArgumentText => simp [execute, evalPrintArg, pure]
   | printArgumentExpression | printArgumentView | printArguments | printText | ifStatement => rfl
   | builderBytes => rfl
+  | @eachLoop fuel path environment localVar index byRef body view current before bodyChild nextChild ihBody ihNext =>
+      simp only [execute]
+      exact eachCount_source fuel config environment localVar index byRef body view current before
   | @fixedElement fuel path environment parent element operand before outcome fixed child ih =>
       simp only [execute] at ih ⊢
       rw [fixedElement_execution fuel config environment parent element operand before fixed, ih]
@@ -1093,6 +1123,15 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
   | loopBody (environment : RuntimeActivation) (body : Block)
       (child : SupportedOperation config (.block environment body)) :
       SupportedOperation config (.loopBody environment body)
+  | eachLoop (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (index : Option Goose.Core.VarId)
+      (byRef : Bool) (body : Block) (view : RuntimeView) (current : Nat)
+      (bodyChild : ∀ pre, SupportedOperation config (.loopBodyWith environment pre body)) :
+      SupportedOperation config (.eachLoop environment localVar index byRef body view current)
+  | eachStatement (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (index : Option Goose.Core.VarId)
+      (view : View) (byRef : Bool) (body : Block) (origin : Goose.Core.OriginId)
+      (viewChild : SupportedOperation config (.view environment view))
+      (bodyChild : ∀ pre, SupportedOperation config (.loopBodyWith environment pre body)) :
+      SupportedOperation config (.statement environment (.forEach localVar index view byRef body origin))
   | rangeLoop (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (ty : Goose.Core.IntTy)
       (first last : Int) (body : Block)
       (bodyChild : ∀ pre, SupportedOperation config (.loopBodyWith environment pre body)) :
@@ -1203,7 +1242,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -1444,6 +1483,20 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
       | loopBody environment body bodySupported =>
           exact .loopBody (ih (.block environment body) (path ++ [0])
             (loopStart environment before) bodySupported)
+      | eachLoop environment localVar index byRef body view current bodySupported =>
+          simp only [execute]
+          rw [eachCount_source]
+          refine .eachLoop ?_ ?_
+          · intro count countReady pre ready counted inside selected
+            exact ih (.loopBodyWith environment pre body) (path ++ [0]) ready (bodySupported pre)
+          · intro count countReady pre ready flow after counted inside selected result continuing
+            exact ih (.eachLoop environment localVar index byRef body view (current + 1)) (path ++ [1]) after
+              (.eachLoop environment localVar index byRef body view (current + 1) bodySupported)
+      | eachStatement environment localVar index view byRef body origin viewSupported bodySupported =>
+          refine .eachStatement (ih (.view environment view) (path ++ [0]) before viewSupported) ?_
+          intro runtime ready result
+          exact ih (.eachLoop environment localVar index byRef body runtime 0) (path ++ [1]) ready
+            (.eachLoop environment localVar index byRef body runtime 0 bodySupported)
       | rangeLoop environment localVar ty first last body bodySupported =>
           refine .rangeLoop ?_ ?_
           · intro inside
@@ -2202,6 +2255,57 @@ theorem witness_rangeInitializers : ∃ after,
       (execStmt 40 sideEffectConfig witnessEnvironment rangeWitness .initial) at history
     rw [actual] at history
     exact history
+
+private def eachWitnessSetup : EvalM Unit := do
+  let destination ← newDestination sideEffectConfig.layout 0 (.grow (.int .u8)) .value 0 none (some 2)
+  buildExpr 40 sideEffectConfig witnessEnvironment destination (.bytes (.grow (.int .u8)) [65, 66] 0)
+  let destination ← completedReceivingDestination destination
+  publishCarriers 0 [.completed destination]
+  let stored ← storedDestination destination
+  bindRoot (.global 0) (.stored stored)
+private def eachWitnessBefore : ExecutionState := witnessState (eachWitnessSetup .initial)
+private def eachWitness : Stmt := .forEach 0 none (.of (.global 0)) false whileWitnessBody 0
+
+theorem witness_dynamicEachInitializers : ∃ after,
+    eachWitnessSetup .initial = .ok () eachWitnessBefore ∧
+    evalView 39 sideEffectConfig witnessEnvironment (.of (.global 0)) eachWitnessBefore =
+      .ok ⟨⟨.global 0, []⟩, 0, 2, true⟩ eachWitnessBefore ∧
+    execStmt 40 sideEffectConfig witnessEnvironment eachWitness eachWitnessBefore = .ok (.normal .unit) after ∧
+    after.construction.stdout.data.toList = [120, 10, 120, 10] ∧
+    SourceHistory sideEffectConfig 40 [] (.statement witnessEnvironment eachWitness) eachWitnessBefore (.ok (.normal .unit) after) := by
+  have body : ∀ pre, SupportedOperation sideEffectConfig (.loopBodyWith witnessEnvironment pre whileWitnessBody) := by
+    intro pre
+    apply SupportedOperation.boundLoopBody
+    unfold whileWitnessBody
+    apply SupportedOperation.boundBlock
+    intro environment
+    exact .sequence environment (.printText environment "x" 0)
+      (.sequence environment (.expression environment 0 (.value environment
+        (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment))
+  have supported : SupportedOperation sideEffectConfig (.statement witnessEnvironment eachWitness) := by
+    unfold eachWitness
+    exact .eachStatement witnessEnvironment 0 none (.of (.global 0)) false whileWitnessBody 0
+      (.placeView witnessEnvironment _ (.globalPlace witnessEnvironment 0)) body
+  have history := history_exists 40 sideEffectConfig (.statement witnessEnvironment eachWitness) [] eachWitnessBefore supported
+  refine ⟨witnessState (execStmt 40 sideEffectConfig witnessEnvironment eachWitness eachWitnessBefore), ?_, ?_, ?_, ?_, ?_⟩
+  · unfold eachWitnessBefore eachWitnessSetup witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · unfold eachWitnessBefore eachWitnessSetup witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · unfold eachWitnessBefore eachWitnessSetup eachWitness whileWitnessBody witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · unfold eachWitnessBefore eachWitnessSetup eachWitness whileWitnessBody witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · have actual : execStmt 40 sideEffectConfig witnessEnvironment eachWitness eachWitnessBefore =
+        .ok (.normal .unit) (witnessState (execStmt 40 sideEffectConfig witnessEnvironment eachWitness eachWitnessBefore)) := by
+      unfold eachWitnessBefore eachWitnessSetup eachWitness whileWitnessBody witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+      cbv
+    change SourceHistory sideEffectConfig 40 [] (.statement witnessEnvironment eachWitness) eachWitnessBefore
+      (execStmt 40 sideEffectConfig witnessEnvironment eachWitness eachWitnessBefore) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_dynamicEachInitializers
 
 #print axioms witness_rangeInitializers
 
