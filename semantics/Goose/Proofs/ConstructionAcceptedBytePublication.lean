@@ -144,7 +144,6 @@ theorem allocated_published_byteOwner_backing (fuel : Nat) (config : EvalConfig)
     (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion)
     (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
-    (fits : bytes.length < 2 ^ 32)
     (created : newDestination config.layout environment.act (.varr (.int .u8)) .value origin none (some bytes.length) before =
       .ok id allocated)
     (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes origin) allocated =
@@ -163,6 +162,7 @@ theorem allocated_published_byteOwner_backing (fuel : Nat) (config : EvalConfig)
     (some bytes.length) initialized before allocated id ambient types live regions pending world created
   have current := newDestination_current_self config initialized environment.act (.varr (.int .u8)) .value origin
     (some bytes.length) before allocated id ambient types live regions pending world created
+  have fits := newDestination_byteOwner_count_bound config.layout environment.act origin bytes.length before allocated id created
   obtain ⟨destination, storage, present, stored, packed', request', ty, direct, receiver, progress, interval⟩ :=
     buildExpr_byteOwner_geometry fuel config environment bytes origin id 0 allocated built ready packed request
       (by simpa using fits) allocatedWorld.ownership.source.structural.1.1.1 current constructed

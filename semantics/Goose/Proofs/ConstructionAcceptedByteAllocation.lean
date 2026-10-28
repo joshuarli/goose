@@ -44,6 +44,21 @@ theorem openDestination_packed_value (state after : ConstructionState) (target :
         | rcases executed with ⟨rfl, rfl⟩
     all_goals exact ⟨_, rfl, rfl, rfl, rfl, rfl⟩
 
+theorem openDestination_packed_count_bound (state after : ConstructionState) (target : Nat)
+    (capability : Goose.Core.Destination Ty) (count id : Nat)
+    (executed : openDestination target capability .packed (some count) state = .ok id after) :
+    count < 2 ^ 32 := by
+  by_cases fits : count < 2 ^ 32
+  · exact fits
+  · rw [openDestination_transition] at executed
+    simp only [lookupStorage_result, bind] at executed
+    cases found : state.storage[target]? with
+    | none => simp only [found] at executed; cases executed
+    | some storage =>
+      simp only [found, ConstructionM.get, available_result, fits, decide_false,
+        Bool.not_false, ↓reduceIte, ConstructionM.fail] at executed
+      split at executed <;> cases executed
+
 theorem newDestination_byteOwner_packed_value (layout : LayoutEnv) (owner : Goose.Core.ActId)
     (origin : Goose.Core.OriginId) (knownCount : Option Nat) (before after : ExecutionState) (id : Nat)
     (executed : newDestination layout owner (.varr (.int .u8)) .value origin none knownCount before = .ok id after) :
@@ -68,6 +83,26 @@ theorem newDestination_byteOwner_packed_value (layout : LayoutEnv) (owner : Goos
     cases executed
     exact openDestination_packed_value prepared.construction final before.construction.storage.size _ knownCount id rfl opened
 
+theorem newDestination_byteOwner_count_bound (layout : LayoutEnv) (owner : Goose.Core.ActId)
+    (origin : Goose.Core.OriginId) (count : Nat) (before after : ExecutionState) (id : Nat)
+    (executed : newDestination layout owner (.varr (.int .u8)) .value origin none (some count) before = .ok id after) :
+    count < 2 ^ 32 := by
+  let prepared : ExecutionState := { before with construction :=
+    { before.construction with storage := before.construction.storage.push ⟨ByteArray.empty, 0⟩ } }
+  simp only [newDestination, liftConstruction, reserveStorage, ConstructionM.get,
+    ConstructionM.set, bind, pure] at executed
+  change ((receivingLayout layout (.varr (.int .u8)) >>= fun selected => liftConstruction origin
+    (openDestination before.construction.storage.size
+      ⟨0, ⟨.local owner 0 0, []⟩, .varr (.int .u8), .varr (.int .u8), .value, 0, owner⟩ selected (some count)))
+      prepared) = .ok id after at executed
+  simp only [receivingLayout, pure, bind, liftConstruction] at executed
+  cases opened : openDestination before.construction.storage.size
+      ⟨0, ⟨.local owner 0 0, []⟩, .varr (.int .u8), .varr (.int .u8), .value, 0, owner⟩
+      .packed (some count) prepared.construction with
+  | fault reason final => simp only [opened] at executed; cases executed
+  | ok value final =>
+    exact openDestination_packed_count_bound prepared.construction final before.construction.storage.size _ count value opened
+
 theorem allocated_byteOwner_backing (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (environment : RuntimeActivation) (bytes : List UInt8) (origin : Goose.Core.OriginId)
     (before allocated built : ExecutionState) (id : Nat)
@@ -75,7 +110,6 @@ theorem allocated_byteOwner_backing (fuel : Nat) (config : EvalConfig) (initiali
     (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion)
     (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
-    (fits : bytes.length < 2 ^ 32)
     (created : newDestination config.layout environment.act (.varr (.int .u8)) .value origin none (some bytes.length) before =
       .ok id allocated)
     (constructed : buildExpr (fuel + 1) config environment id (.bytes (.varr (.int .u8)) bytes origin) allocated =
@@ -92,11 +126,14 @@ theorem allocated_byteOwner_backing (fuel : Nat) (config : EvalConfig) (initiali
     (some bytes.length) initialized before allocated id ambient types live regions pending world created
   have current := newDestination_current_self config initialized environment.act (.varr (.int .u8)) .value origin
     (some bytes.length) before allocated id ambient types live regions pending world created
+  have fits := newDestination_byteOwner_count_bound config.layout environment.act origin bytes.length before allocated id created
   exact buildExpr_byteOwner_backing fuel config environment bytes origin id 0 allocated built ready packed request
     (by simpa using fits) allocatedWorld.ownership.source.structural.1.1.1 current constructed
 
 #print axioms openDestination_packed_value
+#print axioms openDestination_packed_count_bound
 #print axioms newDestination_byteOwner_packed_value
+#print axioms newDestination_byteOwner_count_bound
 #print axioms allocated_byteOwner_backing
 
 end Goose.Proofs.ConstructionAcceptedExecution

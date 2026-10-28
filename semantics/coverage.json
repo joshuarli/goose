@@ -492,8 +492,8 @@
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.buildExpr_byteOwner_backing; Goose.Proofs.ConstructionAcceptedExecution.allocated_byteOwner_backing",
   "statement": "Successful byte-owner construction preserves the element scan through every actual write and yields a sampled stored value with backing after completion. Actual allocation in an accepted world supplies the destination readiness, layout and request.",
-  "assumptions": "An accepted world, successful allocation and construction, and a byte count below the packed count limit. The general build result instead assumes an open backed packed-value destination, a valid destination lifecycle and an unaliased current destination.",
-  "limits": "The count bound, publication and accepted-world preservation remain to be derived for the full evaluator. This result does not discharge TH-CON-01.",
+  "assumptions": "An accepted world and successful allocation and construction. The general build result instead assumes an open backed packed-value destination, a valid destination lifecycle, an unaliased current destination and a count below the packed count limit.",
+  "limits": "Accepted-world preservation remains to be derived for the full evaluator. This result does not discharge TH-CON-01.",
   "evidence": "ConstructionAcceptedByteBacking.lean and ConstructionAcceptedByteAllocation.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
@@ -501,8 +501,8 @@
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.publish_direct_packed_backing; Goose.Proofs.ConstructionAcceptedExecution.allocated_published_byteOwner_backing",
   "statement": "Actual allocation, byte construction and publication in an accepted world yield a backed stored value with the fresh storage and destination identities. Publication of a direct packed byte receiver preserves its scanned payload.",
-  "assumptions": "An accepted world, successful allocation, construction and publication, and a byte count below the packed count limit. The publication lemma assumes a built receiver with direct backing and a valid scanned byte interval.",
-  "limits": "The evaluator induction must derive the count bound and preserve the surrounding accepted world. This result does not discharge TH-CON-01.",
+  "assumptions": "An accepted world and successful allocation, construction and publication. The publication lemma assumes a built receiver with direct backing and a valid scanned byte interval.",
+  "limits": "The evaluator induction must preserve the surrounding accepted world. This result does not discharge TH-CON-01.",
   "evidence": "ConstructionAcceptedBytePublication.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
