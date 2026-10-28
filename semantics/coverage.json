@@ -577,6 +577,15 @@
   "evidence": "Goose/Lower/DemandShortCircuitStoppedFamily.lean and its stopped-family dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Recursive leaf-read stop reflection",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_load_runtime_stop; Goose.Lower.accepted_generated_read_stopped_family; Goose.Lower.accepted_generated_read_stopped_expressions",
+  "statement": "A non-timeout stop at an actual generated load reflects to the source read with the same stop and state. This extends recursive scalar and short-circuit stop reflection to global and local-slot reads, and excludes a non-timeout stop at their generated address instructions.",
+  "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and an actual successful target prefix followed by a non-timeout stopped instruction.",
+  "limits": "Compound-place reads, calls, other expression forms, timeout stops and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandLoadStopped.lean; Goose/Lower/DemandReadStoppedFamily.lean and its dependencies; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",

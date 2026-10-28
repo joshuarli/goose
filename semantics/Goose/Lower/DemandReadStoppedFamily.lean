@@ -1,0 +1,118 @@
+import Goose.Lower.DemandShortCircuitStoppedFamily
+import Goose.Lower.DemandLoadStopped
+
+namespace Goose.Lower
+
+open Goose.Core Goose.GIR Goose.Core.Sound
+
+theorem accepted_generated_read_stopped_family {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (loop : Option LoopCtx) {place : Place} (form : ScalarReadPlace place) :
+    GeneratedStoppedExpressionPrefixFamily cx results selected loop (.read place) := by
+  intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps targetFuel stop after stopped nonTimeout
+  let le := lowerEnv cfg.mod env.vars results
+  let addressed := lowerPlace place le before
+  obtain ⟨child, typing, roots, metadata⟩ := source.readChild
+  have childOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn le root child.path (.place place) before := by
+    rw [metadata.path]
+    exact .first occurrence (.expressionPlace rfl)
+  have childRows : GeneratedDemandRows cfg.mod child.rootsEnv.access childOccurrence required := by
+    have inherited : GeneratedDemandRows cfg.mod source.rootsEnv.access (.first occurrence (.expressionPlace rfl)) required := .first (first := .expressionPlace rfl) rows
+    simpa only [roots, metadata.path] using inherited
+  obtain ⟨location, placed, post, firstStep⟩ : ∃ location : Loc,
+      evalPlace 1 cfg env place state = .ok location state ∧
+      Post cfg env cx before initial addressed.2 (initial.set addressed.1 (.val (.ref location)))
+        (start.1, start.2 + 1) [(addressed.1, .val (.ref location))] ∧
+      ∀ fuel, DemandInstructionStep cx fuel ⟨start, initial, state⟩
+        ⟨(start.1, start.2 + 1), initial.set addressed.1 (.val (.ref location)), state⟩ := by
+    cases form with
+    | global global =>
+      have site := GeneratedDemandInstruction.globalAddress_auto childOccurrence childRows input.atPoint
+        (generated_read_place_extended extended)
+      have post := (Post.def_leaf (Post.init input.related input.atPoint)
+        (show emitDef (.globalAddr global) le before = (addressed.1, addressed.2) from rfl)
+        (generated_read_place_extended extended) (.val (.ref ⟨.global global, []⟩))).1
+      refine ⟨⟨.global global, []⟩, ?_, post, ?_⟩
+      · simp only [evalPlace, pure_apply]
+      · intro fuel
+        apply DemandInstructionStep.definition site.instruction
+        simp only [execOp, execPure, pure_apply]
+    | slot slot =>
+      have typed := child.typed
+      simp only [tyPlace] at typed
+      obtain ⟨binding, next, checked, resultType⟩ := (st_bind_ok _ _ _ _).1 typed
+      have visible := ((varOf_ok child.typingEnv slot child.typingStart (binding, next)).1 checked).1
+      obtain ⟨binding, scope, old, variableAt, scopeAt, parameter, stored, shape⟩ := child.frame.bindings slot visible
+      let location : Loc := ⟨.local env.act scope slot, []⟩
+      have site := GeneratedDemandInstruction.slotAddress_auto childOccurrence childRows input.atPoint
+        (generated_read_place_extended extended)
+      have post := (Post.def_leaf (Post.init input.related input.atPoint)
+        (show emitDef (.slotAddr slot) le before = (addressed.1, addressed.2) from rfl)
+        (generated_read_place_extended extended) (.val (.ref location))).1
+      refine ⟨location, ?_, post, ?_⟩
+      · simp [evalPlace, rootOf, variableAt, scopeAt, location, bind_apply, pure_apply]
+      · intro fuel
+        apply DemandInstructionStep.definition site.instruction
+        simp only [execOp, execPure, slotRoot_eq input.related]
+        simp [rootOf, variableAt, scopeAt, location, bind_apply, pure_apply]
+  let middle : DemandRuntimePoint := ⟨(start.1, start.2 + 1), initial.set addressed.1 (.val (.ref location)), state⟩
+  have carried := realized.retained post.same bounded.1 bounded.2 RetainsAliases.refl
+  rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨length, current, rfl, actual, tail⟩
+  · exact (stopped.excludes_step_nonTimeout nonTimeout (firstStep targetFuel)).elim
+  · obtain ⟨fuel, actualStep⟩ := runtimeStep_demandInstructionStep actual
+    have same := actualStep.deterministic (firstStep fuel)
+    have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
+    subst current
+    rcases tail.uncons with ⟨rfl, rfl⟩ | ⟨remaining, boundary, rfl, loaded, residual⟩
+    · have done := accepted_generated_load_runtime_stop source occurrence rows placed post extended stopped nonTimeout
+      exact .aborted 2 done
+    · obtain ⟨_, _, _, _, value, _, _, evaluated, finalPost, _, _⟩ :=
+        accepted_generated_load_runtime_step source occurrence rows coverage placed post (bounded.mono post.mono) carried extended loaded
+      have result := source.result 2 value evaluated
+      have final := ExpressionDemandBoundary.of_result result admitted bounded realized finalPost
+      exact .complete (by omega) (.next actual (.next loaded (.zero _))) residual evaluated final
+
+inductive ReadStoppedExpression : Expr → Prop
+  | control {expression : Expr} (form : ControlStoppedExpression expression) : ReadStoppedExpression expression
+  | read {place : Place} (form : ScalarReadPlace place) : ReadStoppedExpression (.read place)
+  | not {expression : Expr} (child : ReadStoppedExpression expression) : ReadStoppedExpression (.not expression)
+  | unary (operation : UnOp) {expression : Expr} (origin : OriginId) (child : ReadStoppedExpression expression) :
+      ReadStoppedExpression (.un operation expression origin)
+  | convert (kind : ConvKind) (target : IntTy) {expression : Expr} (origin : OriginId) (child : ReadStoppedExpression expression) :
+      ReadStoppedExpression (.conv kind (.int target) expression origin)
+  | binary (operation : BinOp) {left right : Expr} (origin : OriginId)
+      (first : ReadStoppedExpression left) (second : ReadStoppedExpression right) :
+      ReadStoppedExpression (.bin operation left right origin)
+  | compare (operation : CmpOp) {left right : Expr}
+      (first : ReadStoppedExpression left) (second : ReadStoppedExpression right) :
+      ReadStoppedExpression (.cmp operation left right)
+  | and {left right : Expr} (first : ReadStoppedExpression left) (second : ReadStoppedExpression right) :
+      ReadStoppedExpression (.and left right)
+  | or {left right : Expr} (first : ReadStoppedExpression left) (second : ReadStoppedExpression right) :
+      ReadStoppedExpression (.or left right)
+
+theorem accepted_generated_read_stopped_expressions {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (loop : Option LoopCtx) {expression : Expr} (form : ReadStoppedExpression expression) :
+    GeneratedStoppedExpressionPrefixFamily cx results selected loop expression := by
+  induction form with
+  | control form => exact accepted_generated_control_stopped_expressions selected loop form
+  | read form => exact accepted_generated_read_stopped_family selected loop form
+  | not child ih => exact accepted_generated_not_stopped_family selected loop _ ih
+  | unary operation origin child ih => exact accepted_generated_unary_stopped_family selected loop operation _ origin ih
+  | convert kind target origin child ih => exact accepted_generated_convert_stopped_family selected loop kind target _ origin ih
+  | binary operation origin first second firstIH secondIH =>
+    exact accepted_generated_binary_stopped_family selected loop operation _ _ origin firstIH secondIH
+  | compare operation first second firstIH secondIH =>
+    exact accepted_generated_compare_stopped_family selected loop operation _ _ firstIH secondIH
+  | and first second firstIH secondIH =>
+    exact accepted_generated_shortCircuit_stopped_family selected loop true _ _ firstIH secondIH
+  | or first second firstIH secondIH =>
+    exact accepted_generated_shortCircuit_stopped_family selected loop false _ _ firstIH secondIH
+
+#print axioms accepted_generated_read_stopped_expressions
+#print axioms accepted_generated_read_stopped_family
+
+end Goose.Lower
