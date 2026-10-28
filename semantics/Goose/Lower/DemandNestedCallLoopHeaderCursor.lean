@@ -72,6 +72,47 @@ theorem NestedCallLoopHeaderCursor.toScalar {cfg : Cfg} {env : Env} {caller : Fu
   | body iterations active world child fuel conditionCanonical evaluated branch canonical demanded =>
     exact .scalarBody iterations active world child fuel conditionCanonical evaluated branch canonical demanded
 
+inductive NestedWhileStatementCursor {cfg : Cfg} {env : Env} (caller : Func) (results : List Ty) (depth : Nat)
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner) :
+    {statement : Stmt} → {state : St} → StmtSource cfg env statement state →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop
+  | entry {condition : Expr} {body : Core.Block} {origin : OriginId} {state : St}
+      {source : StmtSource cfg env (.while condition body origin) state} {before built : LS}
+      {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap}
+      (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+      (step : ∃ next, ∀ fuel, DemandInstructionStep ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ fuel ⟨start, initial, state⟩ next) :
+      NestedWhileStatementCursor caller results depth selected source before built initial start map required ⟨start, initial, state⟩
+  | header {statement : Stmt} {state : St} {source : StmtSource cfg env statement state} {before built : LS}
+      {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+      (cursor : NestedCallLoopHeaderCursor caller results depth selected source before built initial start map required runtime) :
+      NestedWhileStatementCursor caller results depth selected source before built initial start map required runtime
+
+theorem NestedWhileStatementCursor.toNested {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty} {depth : Nat}
+    {root : DemandNode} {owner : Nat} {loop : Option LoopCtx}
+    {selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner}
+    {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+    {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+    (cursor : NestedWhileStatementCursor caller results depth selected source before built initial start map required runtime) :
+    NestedCallLoopCursor caller results (depth + 1) loop selected source before built initial start map required runtime := by
+  cases cursor with
+  | entry realized step => exact .existing (.entry realized step)
+  | header cursor => exact cursor.toStatement
+
+theorem NestedWhileStatementCursor.toScalar {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    {selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner}
+    {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+    {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+    (cursor : NestedWhileStatementCursor caller results 0 selected source before built initial start map required runtime) :
+    WhileCallStatementCursor caller results selected source before built initial start map required runtime := by
+  cases cursor with
+  | entry realized step => exact .entry realized step
+  | header cursor => exact .header cursor.toScalar
+
+#print axioms NestedWhileStatementCursor.toNested
+#print axioms NestedWhileStatementCursor.toScalar
+
 #print axioms NestedCallLoopHeaderCursor.rebase
 #print axioms NestedCallLoopHeaderCursor.toStatement
 #print axioms NestedCallLoopHeaderCursor.toScalar
