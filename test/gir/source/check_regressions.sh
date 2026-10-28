@@ -57,6 +57,19 @@ check_named_bitnot() {
     done
 }
 
+check_scalar_output() {
+    name=gir_scalar_output
+    for opt in 0 2; do
+        if ! "$goose" "-O$opt" --pipeline gir --jit "$here/$name.goose" \
+            >"$work/$name-O$opt.out" 2>"$work/$name-O$opt.err"; then
+            cat "$work/$name-O$opt.out" "$work/$name-O$opt.err" >&2
+            fail "$name failed under GIR O$opt"
+        fi
+        [ "$(tail -n 1 "$work/$name-O$opt.out")" = '-9223372036854775808 18446744073709551615 true false' ] ||
+            fail "$name produced incorrect scalar output under GIR O$opt"
+    done
+}
+
 check_named_result_later_operand() {
     name=gir_named_result_later_operand
     source=$here/$name.goose
@@ -205,6 +218,7 @@ check_refined_integer_boundary
 check_static_root gir_static_root_global stored-reference
 check_static_root gir_static_root_holder struct-whole-const
 check_named_bitnot
+check_scalar_output
 check_named_result_later_operand
 check_result_channel_lifetimes
 check_request_variant_symbols

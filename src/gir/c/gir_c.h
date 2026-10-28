@@ -19,12 +19,11 @@ namespace goose {
 // The runtime entry points the emitted C calls, and every one of them: a
 // reader of the emitter's output meets nothing else of the runtime's.
 //   data stacks     gs_rt_init, gs_stack_init, GS(i), gs_memcpy, gs_memmove, gs_rt_stats
-//   output          gs_out_int, gs_out_uint, gs_out_bool, gs_out_bytes
 //   aborts          gs_abort (GS_E_SLICE, GS_E_ASSERT), gs_abort_msg, gs_idxfail, gs_exit
 //   checked ints    gs_add_*, gs_sub_*, gs_mul_*, gs_neg_*, gs_div_*, gs_mod_*, gs_shl_*, gs_shr_*,
 //                   GS_RANGE, GS_RANGE_U
 inline constexpr const char *GIR_C_RUNTIME_ENTRY_POINTS =
-    "gs_rt_init gs_stack_init GS gs_memcpy gs_memmove gs_rt_stats gs_out_int gs_out_uint gs_out_bool "
+    "gs_rt_init gs_stack_init GS gs_memcpy gs_memmove gs_rt_stats "
     "gs_out_bytes gs_fmt_i64 gs_fmt_u64 gs_fmt_bool gs_abort gs_abort_msg gs_idxfail gs_exit gs_add gs_sub gs_mul gs_neg "
     "gs_div gs_mod gs_shl gs_shr GS_RANGE GS_RANGE_U";
 
@@ -2637,9 +2636,9 @@ private:
         (void)cx;
         auto L = [&](auto &&...parts) { Append(t, "    ", parts..., "\n"); };
         switch ((GirRt)i.idx) {
-            case GirRt::OutInt: L("gs_out_int((int64_t)", V(i.a), ");"); break;
-            case GirRt::OutUint: L("gs_out_uint((uint64_t)", V(i.a), ");"); break;
-            case GirRt::OutBool: L("gs_out_bool((int64_t)", V(i.a), ");"); break;
+            case GirRt::OutInt: L("{ uint8_t buf[GS_FMT_MAX]; int64_t n = gs_fmt_i64(buf, (int64_t)", V(i.a), "); gs_out_bytes(buf, n); }"); break;
+            case GirRt::OutUint: L("{ uint8_t buf[GS_FMT_MAX]; int64_t n = gs_fmt_u64(buf, (uint64_t)", V(i.a), "); gs_out_bytes(buf, n); }"); break;
+            case GirRt::OutBool: L("{ uint8_t buf[GS_FMT_MAX]; int64_t n = gs_fmt_bool(buf, (int64_t)", V(i.a), "); gs_out_bytes(buf, n); }"); break;
             case GirRt::OutText:
                 if (!i.text.empty()) L("gs_out_bytes(", literals.at(i.text), ", ", i.text.size(), ");");
                 break;
