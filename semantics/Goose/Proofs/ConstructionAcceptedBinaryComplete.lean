@@ -206,12 +206,160 @@ private theorem comparison_complete (operation : Goose.Core.CmpOp) (left right :
                 exact acceptedValue_boolean config.layout types frame.interpretation state _
 
 
+private def shortCircuit (conjunction : Bool) (left right : Expr) : Expr :=
+  if conjunction then .and left right else .or left right
+
+private theorem shortCircuit_typing (conjunction : Bool) (fuel : Nat) (environment : TypingEnv)
+    (left right : Expr) (before after : Nat) (ty : Ty)
+    (checked : typeExpr (fuel + 1) environment (shortCircuit conjunction left right) before = .ok ([ty], after)) :
+    ∃ middle, ty = .bool ∧
+      typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] } left before = .ok ([.bool], middle) ∧
+      typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] } right middle = .ok ([.bool], after) := by
+  cases conjunction <;> simp only [shortCircuit, Bool.false_eq_true, ↓reduceIte, typeExpr, bind, StateT.bind] at checked
+  all_goals
+    change (Except.bind (typeExpr fuel
+      { environment with use := .ordinary, request := .value, resultRequests := [] } left before) _) = _ at checked
+    cases first : typeExpr fuel
+        { environment with use := .ordinary, request := .value, resultRequests := [] } left before with
+    | error failure => simp only [first, Except.bind] at checked; cases checked
+    | ok result =>
+      obtain ⟨leftTypes, middle⟩ := result
+      simp only [first, Except.bind] at checked
+      cases leftTypes with
+      | nil => change Except.error _ = Except.ok _ at checked; cases checked
+      | cons leftType tail =>
+        cases tail with
+        | cons other rest => change Except.error _ = Except.ok _ at checked; cases checked
+        | nil =>
+          cases leftType <;> try (change Except.error _ = Except.ok _ at checked; cases checked)
+          case bool =>
+            change (Except.bind (typeExpr fuel
+              { environment with use := .ordinary, request := .value, resultRequests := [] } right middle) _) = _ at checked
+            cases second : typeExpr fuel
+                { environment with use := .ordinary, request := .value, resultRequests := [] } right middle with
+            | error failure => simp only [second, Except.bind] at checked; cases checked
+            | ok result =>
+              obtain ⟨rightTypes, next⟩ := result
+              simp only [second, Except.bind] at checked
+              cases rightTypes with
+              | nil => change Except.error _ = Except.ok _ at checked; cases checked
+              | cons rightType tail =>
+                cases tail with
+                | cons other rest => change Except.error _ = Except.ok _ at checked; cases checked
+                | nil =>
+                  cases rightType <;> try (change Except.error _ = Except.ok _ at checked; cases checked)
+                  case bool =>
+                    change Except.ok ([Ty.bool], next) = Except.ok ([ty], after) at checked
+                    cases checked
+                    exact ⟨middle, rfl, rfl, second⟩
+
+private theorem shortCircuit_operands (conjunction : Bool) (frame : ConstructionSourceFrame) (fuel : Nat)
+    (left right : Expr) (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (fuelAt : frame.typingFuel = fuel + 1)
+    (checked : CheckedValue frame (shortCircuit conjunction left right) ty roots typingAfter rootsAfter) :
+    ∃ middle leftRoots rightRoots rootMiddle,
+      ty = .bool ∧ roots = [] ∧
+      CheckedValue (ordinaryOperandFrame frame fuel) left .bool leftRoots middle rootMiddle ∧
+      CheckedValue { ordinaryOperandFrame frame fuel with typingCounter := middle, rootCursor := rootMiddle }
+        right .bool rightRoots typingAfter rootsAfter := by
+  have typing := checked.typing
+  rw [fuelAt] at typing
+  obtain ⟨middle, sameTy, leftTyping, rightTyping⟩ :=
+    shortCircuit_typing conjunction fuel frame.typing left right frame.typingCounter typingAfter ty typing
+  have provenance : rpExpr frame.source (.cmp .eq left right) frame.rootCursor = .ok (roots, rootsAfter) := by
+    cases conjunction <;> exact checked.provenance
+  obtain ⟨sameRoots, leftRoots, rightRoots, rootMiddle, leftRooted, rightRooted, included⟩ :=
+    rpExpr_cmp_operands frame.source .eq left right frame.rootCursor rootsAfter roots provenance
+  have available : GlobalEffectsAvailable frame.interpretation frame.initialized rootMiddle.eff := by
+    intro target member global rooted
+    exact checked.available target (included member) global rooted
+  exact ⟨middle, leftRoots, rightRoots, rootMiddle, sameTy, sameRoots,
+    ⟨leftTyping, leftRooted, available⟩, ⟨rightTyping, rightRooted, checked.available⟩⟩
+
+private theorem shortCircuit_complete (conjunction : Bool) (left right : Expr)
+    (leftCursor : CheckedCursor left) (leftComplete : CheckedExpressionEvaluation left)
+    (rightComplete : CheckedExpressionEvaluation right) : CheckedExpressionEvaluation (shortCircuit conjunction left right) := by
+  intro fuel config accepted frame state ambient types live regions pending world source ty roots typingAfter rootsAfter checked
+  cases depth : frame.typingFuel with
+  | zero => have typing := checked.typing; rw [depth] at typing; change Except.error _ = Except.ok _ at typing; cases typing
+  | succ n =>
+    obtain ⟨middle, leftRoots, rightRoots, rootMiddle, sameTy, sameRoots, leftChecked, rightChecked⟩ :=
+      shortCircuit_operands conjunction frame n left right ty roots typingAfter rootsAfter depth checked
+    subst ty roots
+    let leftFrame := ordinaryOperandFrame frame n
+    let rightFrame := { ordinaryOperandFrame frame n with typingCounter := middle, rootCursor := rootMiddle }
+    have leftSource := ordinaryOperandFrame_accepted accepted frame n state types source
+    have rightSource := rightFrame_accepted accepted frame n state types source leftCursor .bool leftRoots middle rootMiddle leftChecked
+    cases fuel with
+    | zero => cases conjunction <;> simp [shortCircuit, evalValue, timeout, EvalM.stop, Goose.Proofs.Exit.stepState, world, source]
+    | succ fuel =>
+      have leftResult := leftComplete fuel config accepted leftFrame state ambient types live regions pending
+        world leftSource .bool leftRoots middle rootMiddle leftChecked
+      change Goose.Proofs.Exit.stepState (evalValue fuel config frame.interpretation.environment left state) = state ∧
+        (∀ value after, evalValue fuel config frame.interpretation.environment left state = .ok value after →
+          AcceptedValue config.layout types frame.interpretation after .bool leftRoots value) ∧ _ at leftResult
+      cases evaluatedLeft : evalValue fuel config frame.interpretation.environment left state with
+      | stop reason after | escape reason carriers after | jump reason kind after =>
+        simp only [evaluatedLeft, Goose.Proofs.Exit.stepState] at leftResult
+        have same := leftResult.1
+        subst after
+        cases conjunction <;> simp only [shortCircuit, Bool.false_eq_true, ↓reduceIte, evalValue, evaluatedLeft, bind,
+          Goose.Proofs.Exit.stepState, reduceCtorEq, true_and] <;>
+          exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
+      | ok value after =>
+        have acceptedLeft := leftResult.2.1 value after evaluatedLeft
+        simp only [evaluatedLeft, Goose.Proofs.Exit.stepState] at leftResult
+        have same := leftResult.1
+        subst after
+        cases represented : acceptedLeft.represented with
+        | stored => contradiction
+        | boolean first =>
+          cases conjunction <;> cases first <;>
+            simp only [shortCircuit, Bool.false_eq_true, ↓reduceIte, evalValue, evaluatedLeft, bind, expectBool, pure,
+              Goose.Proofs.Exit.stepState, ExecutionStep.ok.injEq, true_and]
+          all_goals first
+            | refine ⟨?_, world, source⟩
+              intro output after same
+              obtain ⟨rfl, rfl⟩ := same
+              exact acceptedValue_boolean config.layout types frame.interpretation state _
+            | skip
+          all_goals
+            have rightResult := rightComplete fuel config accepted rightFrame state ambient types live regions pending
+              world rightSource .bool rightRoots typingAfter rootsAfter rightChecked
+            change Goose.Proofs.Exit.stepState (evalValue fuel config frame.interpretation.environment right state) = state ∧
+              (∀ value after, evalValue fuel config frame.interpretation.environment right state = .ok value after →
+                AcceptedValue config.layout types frame.interpretation after .bool rightRoots value) ∧ _ at rightResult
+            cases evaluatedRight : evalValue fuel config frame.interpretation.environment right state with
+            | stop reason after | escape reason carriers after | jump reason kind after =>
+              simp only [evaluatedRight, Goose.Proofs.Exit.stepState] at rightResult
+              have same := rightResult.1
+              subst after
+              simp only [reduceCtorEq, true_and]
+              exact ⟨fun _ _ impossible => False.elim impossible, world, source⟩
+            | ok value after =>
+              have acceptedRight := rightResult.2.1 value after evaluatedRight
+              simp only [evaluatedRight, Goose.Proofs.Exit.stepState] at rightResult
+              have same := rightResult.1
+              subst after
+              cases represented : acceptedRight.represented with
+              | stored => contradiction
+              | boolean second =>
+                simp only [ExecutionStep.ok.injEq, true_and]
+                refine ⟨?_, world, source⟩
+                intro output after same
+                obtain ⟨rfl, rfl⟩ := same
+                exact acceptedValue_boolean config.layout types frame.interpretation state second
+
 inductive AcceptedBinaryExpression : Expr → Prop
   | numeric {expression : Expr} : AcceptedNumericExpression expression → AcceptedBinaryExpression expression
   | binary {left right : Expr} (operation : Goose.Core.BinOp) (origin : Goose.Core.OriginId) :
       AcceptedBinaryExpression left → AcceptedBinaryExpression right → AcceptedBinaryExpression (.bin operation left right origin)
   | comparison {left right : Expr} (operation : Goose.Core.CmpOp) :
       AcceptedBinaryExpression left → AcceptedBinaryExpression right → AcceptedBinaryExpression (.cmp operation left right)
+  | conjunction {left right : Expr} : AcceptedBinaryExpression left → AcceptedBinaryExpression right →
+      AcceptedBinaryExpression (.and left right)
+  | disjunction {left right : Expr} : AcceptedBinaryExpression left → AcceptedBinaryExpression right →
+      AcceptedBinaryExpression (.or left right)
   | not {expression : Expr} : AcceptedBinaryExpression expression → AcceptedBinaryExpression (.not expression)
   | unary {expression : Expr} (operation : Goose.Core.UnOp) (origin : Goose.Core.OriginId) :
       AcceptedBinaryExpression expression → AcceptedBinaryExpression (.un operation expression origin)
@@ -269,6 +417,30 @@ private theorem binary_recursive {expression : Expr} (form : AcceptedBinaryExpre
         operandTy rightRoots typingAfter rootsAfter rightChecked
       exact ⟨rightCursor.1.trans leftCursor.1, rightCursor.2.trans leftCursor.2⟩
 
+  | @conjunction left right leftForm rightForm leftIH rightIH =>
+    refine ⟨?_, shortCircuit_complete true left right leftIH.1 leftIH.2 rightIH.2⟩
+    intro frame ty roots typingAfter rootsAfter checked
+    cases depth : frame.typingFuel with
+    | zero => have typing := checked.typing; rw [depth] at typing; change Except.error _ = Except.ok _ at typing; cases typing
+    | succ fuel =>
+      obtain ⟨middle, leftRoots, rightRoots, rootMiddle, _, _, leftChecked, rightChecked⟩ :=
+        shortCircuit_operands true frame fuel left right ty roots typingAfter rootsAfter depth checked
+      have leftCursor := leftIH.1 (ordinaryOperandFrame frame fuel) .bool leftRoots middle rootMiddle leftChecked
+      have rightCursor := rightIH.1 { ordinaryOperandFrame frame fuel with typingCounter := middle, rootCursor := rootMiddle }
+        .bool rightRoots typingAfter rootsAfter rightChecked
+      exact ⟨rightCursor.1.trans leftCursor.1, rightCursor.2.trans leftCursor.2⟩
+  | @disjunction left right leftForm rightForm leftIH rightIH =>
+    refine ⟨?_, shortCircuit_complete false left right leftIH.1 leftIH.2 rightIH.2⟩
+    intro frame ty roots typingAfter rootsAfter checked
+    cases depth : frame.typingFuel with
+    | zero => have typing := checked.typing; rw [depth] at typing; change Except.error _ = Except.ok _ at typing; cases typing
+    | succ fuel =>
+      obtain ⟨middle, leftRoots, rightRoots, rootMiddle, _, _, leftChecked, rightChecked⟩ :=
+        shortCircuit_operands false frame fuel left right ty roots typingAfter rootsAfter depth checked
+      have leftCursor := leftIH.1 (ordinaryOperandFrame frame fuel) .bool leftRoots middle rootMiddle leftChecked
+      have rightCursor := rightIH.1 { ordinaryOperandFrame frame fuel with typingCounter := middle, rootCursor := rootMiddle }
+        .bool rightRoots typingAfter rootsAfter rightChecked
+      exact ⟨rightCursor.1.trans leftCursor.1, rightCursor.2.trans leftCursor.2⟩
   | @not expression operand ih =>
     refine ⟨?_, checkedExpressionEvaluation_not expression ih.2⟩
     intro frame ty roots typingAfter rootsAfter checked
@@ -360,6 +532,8 @@ theorem checked_binary_recursive_cursor {expression : Expr} (form : AcceptedBina
     typingAfter = frame.typingCounter ∧ rootsAfter.nextVar = frame.rootCursor.nextVar :=
   (binary_recursive form).1 frame ty roots typingAfter rootsAfter checked
 
+#print axioms shortCircuit_operands
+#print axioms shortCircuit_complete
 #print axioms checked_binary_recursive_cursor
 #print axioms evalValue_checked_binary_recursive
 #print axioms evalValue_checked_comparison_complete
