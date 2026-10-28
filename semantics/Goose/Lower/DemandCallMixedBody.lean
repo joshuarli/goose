@@ -38,7 +38,7 @@ theorem accepted_generated_parameterized_mixed_body {cfg : Cfg} {env : Env} {pre
             { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
             { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store } := by
   obtain ⟨body, bodyAll, bodyScope, bodyValue, bodyOffset, bodyOccurrence, bodyRows, bodyOwned, bodyAdmitted,
-    bodyBounded, bodyRealized, bodyInput, bodyReached⟩ :=
+    bodyBounded, bodyRealized, bodyInput, prologuePost, bodyReached⟩ :=
     accepted_generated_post_prologue source selected owned occurrence rows coverage admitted bounded cells realized input extended entry
   have family : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
       cx results selected before none bindings want block block.stmts
@@ -87,7 +87,7 @@ theorem accepted_generated_parameterized_mixed_body_stopped {cfg : Cfg} {env : E
         { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
         { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store } := by
   obtain ⟨body, bodyAll, bodyScope, bodyValue, bodyOffset, bodyOccurrence, bodyRows, bodyOwned, bodyAdmitted,
-    bodyBounded, bodyRealized, bodyInput, bodyReached⟩ :=
+    bodyBounded, bodyRealized, bodyInput, prologuePost, bodyReached⟩ :=
     accepted_generated_post_prologue source selected owned occurrence rows coverage admitted bounded cells realized input extended entry
   have family : GeneratedStoppedSequencePrefixFamily
       (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before none bindings want block block.stmts :=
