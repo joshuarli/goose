@@ -1,9 +1,19 @@
 import Goose.Proofs.ConstructionAcceptedScalarInitializer
+import Lean.Elab.Tactic
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionExecutionOwnership
+
+private def typingHelperName (name : String) : Lean.Name :=
+  Lean.Name.str (Lean.Name.str (Lean.Name.str (Lean.Name.num (Lean.Name.str (Lean.Name.str (Lean.Name.str (Lean.Name.str Lean.Name.anonymous "_private") "Goose") "Construct") "Typing") 0) "Goose") "Construct") name
+
+elab "unfold_scalar_typing_helpers" : tactic => do
+  let one := Lean.mkIdent (typingHelperName "one")
+  let require := Lean.mkIdent (typingHelperName "require")
+  let fail := Lean.mkIdent (typingHelperName "fail")
+  Lean.Elab.Tactic.evalTactic (← `(tactic| unfold $one $require $fail at *))
 
 private theorem scalarLocal_bind_success {ε α β : Type} (first : Except ε α) (next : α → Except ε β)
     (result : β) (checked : first.bind next = .ok result) :
@@ -16,7 +26,8 @@ theorem typeStatement_scalarLocal_initializer (fuel : Nat) (environment next : T
     (expression : Expr) (origin before after : Nat) (form : AcceptedBinaryExpression expression)
     (typed : typeStatement (fuel + 1) environment (.letS id expression origin) before = .ok (next, after)) :
     ∃ descriptor ty typingAfter, environment.variables[id]? = some descriptor ∧ id = before ∧
-      typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] } expression (before + 1) = .ok ([ty], typingAfter) := by
+      typeExpr fuel { environment with use := .ordinary, request := .value, resultRequests := [] } expression (before + 1) = .ok ([ty], typingAfter) ∧
+      ty.passesTo descriptor.ty = true := by
   obtain ⟨descriptor, declared, scope, order⟩ := typeStatement_let_descriptor fuel environment next id expression origin before after typed
   subst id
   simp only [typeStatement, bind, StateT.bind] at typed
@@ -42,7 +53,14 @@ theorem typeStatement_scalarLocal_initializer (fuel : Nat) (environment next : T
     obtain ⟨resultTypes, typingAfter⟩ := result
     obtain ⟨ty, sameTypes⟩ := typeExpr_scalar_singleton form fuel { environment with use := .ordinary, request := .value, resultRequests := [] } (before + 1) typingAfter resultTypes expressionTyped
     subst resultTypes
-    exact ⟨descriptor, ty, typingAfter, declared, rfl, expressionTyped⟩
+    refine ⟨descriptor, ty, typingAfter, declared, rfl, expressionTyped, ?_⟩
+    unfold_scalar_typing_helpers
+    cases passing : ty.passesTo descriptor.ty with
+    | true => rfl
+    | false =>
+      simp only [pure, StateT.pure, Except.pure, passing, Bool.false_eq_true, ↓reduceIte] at remaining
+      change Except.error _ = Except.ok _ at remaining
+      cases remaining
 
 theorem checkedValue_scalarLocal_initializer (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (state : ExecutionState) (types : RootTypes)
@@ -54,10 +72,10 @@ theorem checkedValue_scalarLocal_initializer (fuel : Nat) (config : EvalConfig) 
     (typed : typeStatement (fuel + 1) frame.typing (.letS id expression origin) frame.typingCounter = .ok (next, typingAfter))
     (rooted : rpStmt frame.source (.letS id expression origin) frame.rootCursor = .ok ((), rootsAfter)) :
     ∃ descriptor ty roots expressionTypingAfter expressionRootsAfter,
-      frame.typing.variables[id]? = some descriptor ∧
+      frame.typing.variables[id]? = some descriptor ∧ ty.passesTo descriptor.ty = true ∧
       CheckedValue (letInitializerFrame frame id fuel) expression ty roots expressionTypingAfter expressionRootsAfter ∧
       AcceptedFrame config accepted (letInitializerFrame frame id fuel) state types := by
-  obtain ⟨descriptor, ty, expressionTypingAfter, declared, typingOrder, expressionTyped⟩ :=
+  obtain ⟨descriptor, ty, expressionTypingAfter, declared, typingOrder, expressionTyped, passing⟩ :=
     typeStatement_scalarLocal_initializer fuel frame.typing next id expression origin frame.typingCounter typingAfter form typed
   obtain ⟨rootOrder, roots, expressionRootsAfter, expressionRooted, included⟩ := rpStmt_letS_initializer rooted
   have initializer := source.letInitializer id fuel descriptor rootOrder typingOrder declared
@@ -72,7 +90,7 @@ theorem checkedValue_scalarLocal_initializer (fuel : Nat) (config : EvalConfig) 
     rw [initialized, ← source.compatible.globalCount]
     exact (globalEffectsAvailable_iff_bounded frame.interpretation expressionRootsAfter.eff).2
       (by simpa only [source.compatible.globalCount] using effects)
-  exact ⟨descriptor, ty, roots, expressionTypingAfter, expressionRootsAfter, declared,
+  exact ⟨descriptor, ty, roots, expressionTypingAfter, expressionRootsAfter, declared, passing,
     ⟨expressionTyped, expressionRooted, available⟩, initializer⟩
 
 #print axioms checkedValue_scalarLocal_initializer
