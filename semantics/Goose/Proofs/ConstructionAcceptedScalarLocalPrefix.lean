@@ -314,6 +314,26 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
               · simpa [nextFrame, advanceLocalFrame] using sourceSame
               · simpa [nextFrame, advanceLocalFrame] using interpretationSame
 
+theorem SourcePosition.blockTail_effects {config : EvalConfig} (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (scope : Nat) (statements : List Stmt) (expression : Expr)
+    (position : SourcePosition accepted frame (.block ⟨scope, statements, some expression⟩))
+    (available : ∀ result after, rpBlockValue frame.source [] ⟨scope, statements, some expression⟩ frame.rootCursor =
+      .ok (result, after) → GlobalEffectsAvailable frame.interpretation frame.initialized after.eff) :
+    ∃ middle roots after,
+      rpStmts { frame.source with scopes := scope :: frame.source.scopes } statements frame.rootCursor = .ok ((), middle) ∧
+      rpExpr { frame.source with scopes := scope :: frame.source.scopes } expression middle = .ok (roots, after) ∧
+      GlobalEffectsAvailable frame.interpretation frame.initialized middle.eff ∧
+      GlobalEffectsAvailable frame.interpretation frame.initialized after.eff := by
+  obtain ⟨_, _, blockRoots, blockAfter, _, blockRooted⟩ := position.checked accepted frame _
+  obtain ⟨_, middle, roots, rootedStatements, rootedTail, _⟩ := rpBlockValue_body blockRooted
+  have full := available blockRoots blockAfter blockRooted
+  have middleAvailable : GlobalEffectsAvailable frame.interpretation frame.initialized middle.eff := by
+    have included := rpExpr_effectTargetsIncluded rootedTail
+    intro target member global instantiated
+    exact full target (included member) global instantiated
+  exact ⟨middle, roots, blockAfter, by simpa using rootedStatements, rootedTail, middleAvailable, full⟩
+
+#print axioms SourcePosition.blockTail_effects
 theorem ScalarLocalReplay.blockTail_checked {config : EvalConfig} (accepted : AcceptedModule config)
     (blockFrame child final : ConstructionSourceFrame) (scope fuel : Nat) (statements : List Stmt) (expression : Expr)
     (position : SourcePosition accepted blockFrame (.block ⟨scope, statements, some expression⟩))
