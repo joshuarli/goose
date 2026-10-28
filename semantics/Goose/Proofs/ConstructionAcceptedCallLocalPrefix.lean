@@ -46,13 +46,26 @@ theorem execStmt_recursiveRegisterCallLocal_prefix (fuel checkFuel : Nat) (confi
     | .ok flow after => flow = .normal .unit ∧ ∃ nextTypes nextLive,
         RootTypesExtend types nextTypes ∧
         AcceptedWorld config frame.initialized after ambient nextTypes nextLive regions pending ∧
-        (∃ rootsAfter, rootsAfter.nextVar = frame.rootCursor.nextVar + 1 ∧
+        (∃ rootsAfter, rpStmt frame.source (.letS id (.call target [] callOrigin) statementOrigin) frame.rootCursor = .ok ((), rootsAfter) ∧
+          typeStatement (checkFuel + 2) frame.typing (.letS id (.call target [] callOrigin) statementOrigin) frame.typingCounter =
+            .ok ((advanceLocalFrame frame id).typing, (advanceLocalFrame frame id).typingCounter) ∧
+          rootsAfter.nextVar = frame.rootCursor.nextVar + 1 ∧
           AcceptedFrame config accepted { advanceLocalFrame { frame with typingFuel := checkFuel + 2 } id with rootCursor := rootsAfter } after nextTypes ∧
           SourcePosition accepted { advanceLocalFrame { frame with typingFuel := checkFuel + 2 } id with rootCursor := rootsAfter } (.statements rest)) ∧ state.nextAct ≤ after.nextAct ∧
         state.nextScope ≤ after.nextScope ∧ EarlierCallerObservations frontier state after types nextTypes
     | .escape .. | .jump .. => False := by
   have head := position.statements_head accepted frame (.letS id (.call target [] callOrigin) statementOrigin) rest
     (checkFuel + 2) (by omega)
+  obtain ⟨next, typingAfter, rootResult, typed, _⟩ := head.checked accepted _ _
+  have typingContext : frame.typing.module.contexts[target]? = some context := by simpa [source.compatible.module] using contextAt
+  have typingCallee : frame.typing.module.impls[context.impl]? = some callee := by simpa [source.compatible.module] using calleeAt
+  have typing := typeStatement_let_environment (checkFuel + 1) frame.typing next id (.call target [] callOrigin)
+    statementOrigin frame.typingCounter typingAfter typed
+  have counter := typeStatement_zeroArgumentRegisterCall_cursor (checkFuel + 1) frame.typing next id target callOrigin statementOrigin
+    frame.typingCounter typingAfter context callee ty typingContext typingCallee parameters results scalarTy typed
+  have typed' : typeStatement (checkFuel + 2) frame.typing (.letS id (.call target [] callOrigin) statementOrigin) frame.typingCounter =
+      .ok ((advanceLocalFrame frame id).typing, (advanceLocalFrame frame id).typingCounter) := by
+    simpa [advanceLocalFrame, typing, counter] using typed
   have headSource := source.withTypingFuel (checkFuel + 2)
   have tail := position.zeroArgumentCallLocal_tail frame state types id target callOrigin statementOrigin (checkFuel + 1) rest
     context callee ty source (by omega) contextAt calleeAt parameters results scalarTy localScalar
@@ -70,7 +83,7 @@ theorem execStmt_recursiveRegisterCallLocal_prefix (fuel checkFuel : Nat) (confi
     simp only [result] at execution ⊢
     obtain ⟨normal, nextTypes, nextLive, extend, world, source, acts, scopeClocks, observed⟩ := execution
     have nextSource := source.withRootCursor rootsAfter (by simpa [advanceLocalFrame] using cursor)
-    exact ⟨normal, nextTypes, nextLive, extend, world, ⟨rootsAfter, cursor, nextSource, by simpa using tailPosition⟩,
+    exact ⟨normal, nextTypes, nextLive, extend, world, ⟨rootsAfter, rooted, typed', cursor, nextSource, by simpa using tailPosition⟩,
       acts, scopeClocks, observed⟩
   | escape address carriers after | jump destination kind after => simpa only [result] using execution
 
