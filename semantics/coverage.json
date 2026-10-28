@@ -515,6 +515,15 @@
   "evidence": "ConstructionAcceptedByteSource.lean, ConstructionAcceptedByteFrame.lean, ConstructionAcceptedByteEvaluation.lean, ConstructionAcceptedByteChecked.lean, ConstructionAcceptedByteBinding.lean, ConstructionAcceptedByteStatement.lean and ConstructionAcceptedLocalFreshness.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Uninitialized local types at fresh scope entry",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.AcceptedWorld.enterScope_localType; Goose.Proofs.ConstructionAcceptedExecution.AcceptedFrame.enterScope_uninitializedTypes",
+  "statement": "Entering a newly allocated scope gives its locals fresh root types and preserves the absence of registered types for uninitialized locals from outer scopes.",
+  "assumptions": "An accepted world and source frame, the actual fresh scope instance, and the source cursor's uninitialized-local condition.",
+  "limits": "This is one field of scope-frame preservation; the mutual evaluator induction and TH-CON-01 remain open.",
+  "evidence": "ConstructionAcceptedScopeTypes.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Published owner storage from fresh allocation",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_publishedOwner_storage; Goose.Proofs.ConstructionAcceptedExecution.bytes_publishedOwner_storage",
