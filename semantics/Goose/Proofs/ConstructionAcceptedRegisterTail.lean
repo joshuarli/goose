@@ -1,4 +1,6 @@
 import Goose.Proofs.ConstructionScalarTailExecution
+import Goose.Proofs.ConstructionAcceptedCalleeScope
+import Goose.Proofs.ConstructionAcceptedScalarControl
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -66,6 +68,58 @@ theorem execActivationBody_register_statements_stopped (fuel : Nat) (config : Ev
   simp only [ownershipResultScopeState, beq_iff_eq] at stopped
   simp [execActivationBody, execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope, bindAll, stopped]
 
+theorem checkedRegisterTail_activation_world {expression : Expr} (form : AcceptedBinaryExpression expression)
+    (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (frame : ConstructionSourceFrame)
+    (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt) (before middle : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (ty : Ty)
+    (channels : activation.channels = [.register ty])
+    (environment : frame.interpretation.environment =
+      { activation with scopes := (scope, before.nextScope) :: activation.scopes })
+    (normal : execStmts (fuel + 1) config frame.interpretation.environment statements
+      (ownershipResultScopeState activation scope before) = .ok (.normal .unit) middle)
+    (world : AcceptedWorld config frame.initialized middle ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame middle types) (roots : List RootRef)
+    (typingAfter : Nat) (rootsAfter : RState) (checked : CheckedValue frame expression ty roots typingAfter rootsAfter) :
+    match execActivationBody (fuel + 2) config activation [] ⟨scope, statements, some expression⟩ before with
+    | .stop _ after => AcceptedWorld config frame.initialized after ambient types live regions pending ∧
+        FutureGlobalsClear config frame.initialized after
+    | .ok carriers after => ∃ value, carriers = [.register value] ∧
+        AcceptedValue config.layout types frame.interpretation middle ty roots value ∧
+        AcceptedWorld config frame.initialized after ambient types
+          (fun root => live root ∧ (Goose.Proofs.Exit.runtimeScopeRoots activation scope before.nextScope).contains root = false)
+          regions pending ∧ FutureGlobalsClear config frame.initialized after
+    | .escape .. | .jump .. => False := by
+  have clear : FutureGlobalsClear config frame.initialized middle := source.futureGlobals
+  have result := evalValue_checked_binary_recursive form fuel config accepted frame middle ambient types live regions pending
+    world source ty roots typingAfter rootsAfter checked
+  have normal' : execStmts (fuel + 1) config
+      { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements
+      (ownershipResultScopeState activation scope before) = .ok (.normal .unit) middle := by
+    simpa only [environment] using normal
+  have execution := execActivationBody_register_scalar_tail form fuel config activation scope statements before middle ty channels normal'
+  rw [← environment] at execution
+  rw [execution]
+  cases evaluated : evalValue fuel config frame.interpretation.environment expression middle with
+  | ok value after =>
+    have valid := result.2.1 value after evaluated
+    simp only [evaluated, Goose.Proofs.Exit.stepState] at result
+    have same := result.1
+    subst after
+    exact ⟨value, rfl, valid,
+      world.releaseScope config frame.initialized middle ambient types live regions pending activation scope before.nextScope,
+      clear.releaseScope activation scope before.nextScope⟩
+  | stop reason after =>
+    simp only [evaluated, Goose.Proofs.Exit.stepState] at result
+    have same := result.1
+    subst after
+    exact ⟨world, clear⟩
+  | escape address carriers after =>
+    exact ((evalValue_scalar_controlFree form fuel config frame.interpretation.environment).1 middle address carriers after evaluated).elim
+  | jump target kind after =>
+    exact ((evalValue_scalar_controlFree form fuel config frame.interpretation.environment).2 middle target kind after evaluated).elim
+
+#print axioms checkedRegisterTail_activation_world
 #print axioms execActivationBody_register_statements_stopped
 #print axioms execActivationBody_register_scalar_tail
 #print axioms evalProduce_register_scalar
