@@ -7,30 +7,6 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionRepresentation
 
-theorem nestedShortCircuit_operands (conjunction : Bool) (frame : ConstructionSourceFrame) (fuel : Nat)
-    (left right : Expr) (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
-    (fuelAt : frame.typingFuel = fuel + 1)
-    (checked : CheckedValue frame (scalarShortCircuit conjunction left right) ty roots typingAfter rootsAfter) :
-    ∃ middle leftRoots rightRoots rootMiddle,
-      ty = .bool ∧ roots = [] ∧
-      CheckedValue (ordinaryOperandFrame frame fuel) left .bool leftRoots middle rootMiddle ∧
-      CheckedValue { ordinaryOperandFrame frame fuel with typingCounter := middle, rootCursor := rootMiddle }
-        right .bool rightRoots typingAfter rootsAfter := by
-  have typing := checked.typing
-  rw [fuelAt] at typing
-  obtain ⟨middle, sameTy, leftTyping, rightTyping⟩ :=
-    typeExpr_shortCircuit_operands conjunction fuel frame.typing left right frame.typingCounter typingAfter ty typing
-  have provenance : rpExpr frame.source (.cmp .eq left right) frame.rootCursor = .ok (roots, rootsAfter) := by
-    cases conjunction <;> exact checked.provenance
-  obtain ⟨sameRoots, leftRoots, rightRoots, rootMiddle, leftRooted, rightRooted, included⟩ :=
-    rpExpr_cmp_operands frame.source .eq left right frame.rootCursor rootsAfter roots provenance
-  have available : GlobalEffectsAvailable frame.interpretation frame.initialized rootMiddle.eff := by
-    intro target member global rooted
-    exact checked.available target (included member) global rooted
-  exact ⟨middle, leftRoots, rightRoots, rootMiddle, sameTy, sameRoots,
-    ⟨leftTyping, leftRooted, available⟩, ⟨rightTyping, rightRooted, checked.available⟩⟩
-
-
 theorem nestedValueShortCircuit_compose (conjunction : Bool) (fuel : Nat) (config : EvalConfig)
     (accepted : AcceptedModule config) (frame : ConstructionSourceFrame) (ambient : OwnershipAmbient)
     (types : RootTypes) (live : Goose.Core.RootInst → Prop) (left right : Expr) (before : ExecutionState)
@@ -76,6 +52,58 @@ theorem nestedValueShortCircuit_compose (conjunction : Bool) (fuel : Nat) (confi
           | boolean second =>
             simpa [rightRun, bind, expectBool, pure, Goose.Proofs.Exit.stepState] using rightResult
 
+theorem nestedValueComparison_compose (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (operandTy : Ty) (operandKind : operandTy = .bool ∨ ∃ integer, operandTy = .int integer)
+    (operation : Goose.Core.CmpOp) (left right : Expr) (before : ExecutionState)
+    (leftSafe : NestedValueOutcome config accepted frame ambient types live operandTy
+      (evalValue fuel config frame.interpretation.environment left before))
+    (rightSafe : ∀ state, AcceptedWorld config frame.initialized state ambient types live [] [] →
+      AcceptedFrame config accepted frame state types →
+      NestedValueOutcome config accepted frame ambient types live operandTy
+        (evalValue fuel config frame.interpretation.environment right state)) :
+    NestedValueOutcome config accepted frame ambient types live .bool
+      (evalValue (fuel + 1) config frame.interpretation.environment (.cmp operation left right) before) := by
+  cases leftRun : evalValue fuel config frame.interpretation.environment left before with
+  | stop reason after =>
+    simp only [NestedValueOutcome, leftRun, Goose.Proofs.Exit.stepState] at leftSafe
+    simpa [NestedValueOutcome, evalValue, leftRun, bind, Goose.Proofs.Exit.stepState] using leftSafe
+  | escape address carriers after | jump target kind after =>
+    simp only [NestedValueOutcome, leftRun] at leftSafe
+    exact leftSafe.2.2.elim
+  | ok first middle =>
+    simp only [NestedValueOutcome, leftRun, Goose.Proofs.Exit.stepState] at leftSafe
+    have rightResult := rightSafe middle leftSafe.1 leftSafe.2.1
+    cases rightRun : evalValue fuel config frame.interpretation.environment right middle with
+    | stop reason after =>
+      simp only [NestedValueOutcome, rightRun, Goose.Proofs.Exit.stepState] at rightResult
+      simpa [NestedValueOutcome, evalValue, leftRun, rightRun, bind, Goose.Proofs.Exit.stepState] using rightResult
+    | escape address carriers after | jump target kind after =>
+      simp only [NestedValueOutcome, rightRun] at rightResult
+      exact rightResult.2.2.elim
+    | ok second after =>
+      simp only [NestedValueOutcome, rightRun, Goose.Proofs.Exit.stepState] at rightResult
+      rcases operandKind with boolean | ⟨integer, integerType⟩
+      · subst operandTy
+        cases leftRep : leftSafe.2.2.1 with
+        | stored => contradiction
+        | boolean first =>
+          cases rightRep : rightResult.2.2.1 with
+          | stored => contradiction
+          | boolean second =>
+            simp only [NestedValueOutcome, evalValue, leftRun, rightRun, bind, comparable, pure, Goose.Proofs.Exit.stepState]
+            exact ⟨rightResult.1, rightResult.2.1, .boolean _, .boolean _⟩
+      · subst operandTy
+        cases leftRep : leftSafe.2.2.1 with
+        | stored => contradiction
+        | integer _ first =>
+          cases rightRep : rightResult.2.2.1 with
+          | stored => contradiction
+          | integer _ second =>
+            simp only [NestedValueOutcome, evalValue, leftRun, rightRun, bind, comparable, sameIntType,
+              beq_self_eq_true, ↓reduceIte, pure, Goose.Proofs.Exit.stepState]
+            exact ⟨rightResult.1, rightResult.2.1, .boolean _, .boolean _⟩
+
+#print axioms nestedValueComparison_compose
 #print axioms nestedValueShortCircuit_compose
-#print axioms nestedShortCircuit_operands
 end Goose.Proofs.ConstructionAcceptedExecution

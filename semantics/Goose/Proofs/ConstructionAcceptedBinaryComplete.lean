@@ -206,7 +206,7 @@ private theorem comparison_complete (operation : Goose.Core.CmpOp) (left right :
                 exact acceptedValue_boolean config.layout types frame.interpretation state _
 
 
-private theorem shortCircuit_operands (conjunction : Bool) (frame : ConstructionSourceFrame) (fuel : Nat)
+theorem shortCircuit_operands (conjunction : Bool) (frame : ConstructionSourceFrame) (fuel : Nat)
     (left right : Expr) (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
     (fuelAt : frame.typingFuel = fuel + 1)
     (checked : CheckedValue frame (scalarShortCircuit conjunction left right) ty roots typingAfter rootsAfter) :
