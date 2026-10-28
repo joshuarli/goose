@@ -654,8 +654,17 @@
   "theorem": "Goose.Lower.accepted_generated_unit_block_suffix_stopped",
   "statement": "After an accepted unit block's statement body completes, its generated unit and scope-leave instructions cannot stop for a non-timeout reason. A later target stop is accompanied by the completed source block and its actual residual target prefix.",
   "assumptions": "Accepted block and body sources, completed source statements, generated occurrences, realized and bounded retained map, builder extension, and an actual non-timeout target stop.",
-  "limits": "The body-to-suffix stop proof is not yet composed into a full block theorem. Blocks with values, other statements, calls and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "limits": "The mixed unit-block result composes this suffix with body stop reflection. Blocks with values, other statements, calls and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandStoppedUnitBlockSuffix.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Mixed unit-block stop reflection",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_control_unit_block_stopped",
+  "statement": "A non-timeout target stop through a unit block with mixed expression statements and global clears either reflects to the source block with the same stop and final state or occurs after the source block completed, with its actual residual target prefix retained.",
+  "assumptions": "Accepted block source and generated occurrence, realized and bounded retained map, builder extension, no loop context or entry bindings, no block value, and the stated mixed-statement fragment.",
+  "limits": "Blocks with values, other statement forms, loop contexts, calls, timeout stops and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandStoppedControlUnitBlock.lean and its stopped-body and suffix dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted Core short-circuit control demand transfer",
