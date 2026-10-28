@@ -605,10 +605,10 @@
  },
  {
   "feature": "Byte-owner declaration prefix timeout",
-  "statement": "With sufficient run and checker fuel, a timeout after a checked sequence of unnamed byte-owner declarations occurs in the remaining statements, after every declaration has produced an accepted successor world and source frame.",
-  "assumptions": "Accepted source position and world, byte-owner and unnamed-result declarations, and enough fuel to reach the tail.",
-  "limits": "The accepted frame is at tail entry, not the final timeout state. Other construction forms and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionByteBatchTimeout.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "With sufficient run and checker fuel, a timeout after a checked sequence of unnamed byte-owner declarations occurs in the remaining statements, after every declaration has produced an accepted successor world and source frame. For a sequence consisting entirely of these declarations, every timeout fuel preserves an accepted world and source frame at the terminal state.",
+  "assumptions": "Accepted source position and world, byte-owner and unnamed-result declarations, and sufficient checker fuel. Tail decomposition also requires enough run fuel to reach the tail.",
+  "limits": "For a nonempty arbitrary tail, the accepted frame is at tail entry, not the final timeout state. Other stops, construction forms and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionByteBatchTimeout.lean; Goose/Proofs/ConstructionByteBatchTerminal.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted global byte-owner timeout",
