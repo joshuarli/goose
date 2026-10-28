@@ -19,14 +19,9 @@ theorem execResultScope_initializerForest (fuel : Nat) (config : EvalConfig) (en
         withScope environment scope before.nextScope (fun _ => resultScopeContinuation channels value
           (tailAction { environment with scopes := (scope, before.nextScope) :: environment.scopes }) outcome)
           (resultScopeStart environment scope before) := by
-  obtain ⟨visits, replay⟩ := statementReplay_exists fuel config
-    { environment with scopes := (scope, before.nextScope) :: environment.scopes } 0 statements ready
-  refine ⟨_, visits, replay, statementReplay_initializerForest replay, ?_⟩
-  simp only [resultScopeStart] at bound
-  simp only [execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope,
-    resultScopeStart, bound, resultScopeContinuation]
-  cases result : execStmts fuel config
-    { environment with scopes := (scope, before.nextScope) :: environment.scopes } statements ready <;> rfl
+  obtain ⟨outcome, visits, replay, execution⟩ :=
+    execResultScope_boundReplay fuel config environment pre channels scope statements value tailAction before ready bound
+  exact ⟨outcome, visits, replay, statementReplay_initializerForest replay, execution⟩
 
 #print axioms execResultScope_initializerForest
 end Goose.Proofs.ConstructionGhostResultScope
