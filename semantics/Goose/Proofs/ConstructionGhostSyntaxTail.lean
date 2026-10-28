@@ -4,6 +4,37 @@ namespace Goose.Proofs.ConstructionGhostSyntaxTail
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Proofs.ConstructionGhostSyntaxFuel
 
+def moduleChannelResult (fuel : Nat) (config : EvalConfig) : ExecutionStep (List Channel) → ExecutionStep Unit
+  | .ok channels ready => moduleCallResult
+      (invokeCall fuel config ⟨0, 0, #[], [], []⟩ config.module.entry [] channels 0 ready)
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+theorem moduleHistoryWithTails (fuel : Nat) (config : EvalConfig) (closed : ClosedModuleWithTails config)
+    (entryContext : Context) (entryImplementation : Impl) (noGlobals : config.module.globals.size = 0)
+    (entryFound : config.module.contexts[config.module.entry]? = some entryContext)
+    (entryImplementationFound : config.module.impls[entryContext.impl]? = some entryImplementation)
+    (argumentSyntax : ∀ id implementation start lookupReady,
+      getImplementation config config.module.entry start = .ok (id, implementation) lookupReady →
+      ArgumentSyntax config implementation.params.toList []) :
+    runModule fuel config .initial = moduleChannelResult fuel config
+      (channelsFor config.layout 0 entryImplementation.results.toList 0 .initial) ∧
+    ∀ channels ready, channelsFor config.layout 0 entryImplementation.results.toList 0 .initial = .ok channels ready →
+      SourceHistory config fuel [] (.channelCall ⟨0, 0, #[], [], []⟩ config.module.entry [] channels 0) ready
+        (invokeCall fuel config ⟨0, 0, #[], [], []⟩ config.module.entry [] channels 0 ready) := by
+  constructor
+  · simp only [runModule, noGlobals, List.range_zero, initGlobals, getImplementation, entryFound,
+      entryImplementationFound, bind, pure, moduleChannelResult]
+    cases channelsFor config.layout 0 entryImplementation.results.toList 0 .initial with
+    | ok channels ready =>
+        simp only [moduleCallResult]
+        cases invokeCall fuel config ⟨0, 0, #[], [], []⟩ config.module.entry [] channels 0 ready <;> rfl
+    | stop | escape | jump => rfl
+  · intro channels ready prepared
+    exact fuelHistory_exists fuel config _ [] ready
+      ((syntaxFuel_existsWithTails fuel config closed).channelCall ⟨0, 0, #[], [], []⟩ config.module.entry [] channels 0 argumentSyntax)
+
 private def entryContext : Context := ⟨0, "entry", [], [], []⟩
 private def targetContext : Context := ⟨1, "target", [], [], []⟩
 private def entryImplementation : Impl := ⟨"entry", #[], #[⟨.unit, .register, none⟩], #[],
@@ -90,6 +121,21 @@ theorem callTail_success : ∃ after,
     rw [actual] at history
     exact history
 
+theorem callTail_module :
+    runModule 60 config .initial = .ok () (stepState (runModule 60 config .initial)) ∧
+    (stepState (runModule 60 config .initial)).construction.stdout.data.toList = [120, 10, 121, 10] ∧
+    (∀ channels ready, channelsFor config.layout 0 entryImplementation.results.toList 0 .initial = .ok channels ready →
+      SourceHistory config 60 [] (.channelCall ⟨0, 0, #[], [], []⟩ 0 [] channels 0) ready
+        (invokeCall 60 config ⟨0, 0, #[], [], []⟩ 0 [] channels 0 ready)) := by
+  have source := moduleHistoryWithTails 60 config closed entryContext entryImplementation rfl rfl rfl (argumentsSyntax 0)
+  refine ⟨?_, ?_, source.2⟩
+  · unfold stepState config entryContext targetContext entryImplementation targetImplementation
+    cbv
+  · unfold stepState config entryContext targetContext entryImplementation targetImplementation
+    cbv
+
+#print axioms moduleHistoryWithTails
+#print axioms callTail_module
 #print axioms callTail_history
 #print axioms callTail_success
 end Goose.Proofs.ConstructionGhostSyntaxTail
