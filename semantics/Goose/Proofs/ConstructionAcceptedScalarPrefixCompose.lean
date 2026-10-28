@@ -9,12 +9,13 @@ open Goose.Proofs.ConstructionExecutionOwnership
 theorem execStmts_scalarPrefix_fromSuffix {leading : List Stmt} (form : ScalarLocalStatements leading) (suffix : List Stmt)
     (config : EvalConfig) (accepted : AcceptedModule config) (context frontier budget : Nat)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (ambientInvariant : OwnershipAmbient → Prop)
     (invariant : ConstructionSourceFrame → Prop)
     (invariantAdvance : ∀ frame id fuel roots, invariant frame →
       invariant { advanceLocalFrame { frame with typingFuel := fuel } id with rootCursor := roots })
     (suffixOutcome : ∀ fuel, fuel ≤ budget → ∀ (frame : ConstructionSourceFrame) (before : ExecutionState)
         (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop),
-      invariant frame → frontier ≤ frame.interpretation.environment.act → frontier ≤ before.nextAct →
+      ambientInvariant ambient → invariant frame → frontier ≤ frame.interpretation.environment.act → frontier ≤ before.nextAct →
       AcceptedWorld config frame.initialized before ambient types live regions pending →
       AcceptedFrame config accepted frame before types → frame.phase = .implementation context →
       SourcePosition accepted frame (.statements suffix) →
@@ -31,7 +32,7 @@ theorem execStmts_scalarPrefix_fromSuffix {leading : List Stmt} (form : ScalarLo
          | .stop .. => True | .escape .. | .jump .. => False)) :
     ∀ fuel, fuel ≤ budget → ∀ (frame : ConstructionSourceFrame) (before : ExecutionState)
       (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop),
-      invariant frame → frontier ≤ frame.interpretation.environment.act → frontier ≤ before.nextAct →
+      ambientInvariant ambient → invariant frame → frontier ≤ frame.interpretation.environment.act → frontier ≤ before.nextAct →
       AcceptedWorld config frame.initialized before ambient types live regions pending →
       AcceptedFrame config accepted frame before types → frame.phase = .implementation context →
       SourcePosition accepted frame (.statements (leading ++ suffix)) →
@@ -50,10 +51,10 @@ theorem execStmts_scalarPrefix_fromSuffix {leading : List Stmt} (form : ScalarLo
          | .stop .. => True | .escape .. | .jump .. => False) := by
   induction form with
   | nil =>
-    intro fuel bound frame before ambient types live frameInvariant frontierAct frontierClock world source phase position available scalar
-    exact suffixOutcome fuel bound frame before ambient types live frameInvariant frontierAct frontierClock world source phase position available
+    intro fuel bound frame before ambient types live ambientValid frameInvariant frontierAct frontierClock world source phase position available scalar
+    exact suffixOutcome fuel bound frame before ambient types live ambientValid frameInvariant frontierAct frontierClock world source phase position available
   | cons id expression origin rest expressionForm tail ih =>
-    intro fuel bound frame before ambient types live frameInvariant frontierAct frontierClock world source phase position available scalar
+    intro fuel bound frame before ambient types live ambientValid frameInvariant frontierAct frontierClock world source phase position available scalar
     cases fuel with
     | zero =>
       simp only [List.cons_append, execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
@@ -126,7 +127,7 @@ theorem execStmts_scalarPrefix_fromSuffix {leading : List Stmt} (form : ScalarLo
             obtain ⟨finalFrame, finalTypes, finalLive, finalAmbient, initializedEq, finalExtended, finalActClock, finalScopeClock,
               finalWorld, finalSource, finalObserved, finalFlow⟩ :=
               ih fuel (by omega) nextFrame middle ambient nextTypes nextLive
-                (invariantAdvance frame id (checkFuel + 1) rootsAfter frameInvariant) (by simpa [nextFrame, advanceLocalFrame] using frontierAct) (by omega) middleWorld middleSource
+                ambientValid (invariantAdvance frame id (checkFuel + 1) rootsAfter frameInvariant) (by simpa [nextFrame, advanceLocalFrame] using frontierAct) (by omega) middleWorld middleSource
                 (by simpa [nextFrame, advanceLocalFrame] using phase) middlePosition remainingAvailable remainingScalar
             simp only [List.cons_append, execStmts, bind, head] at finalFlow finalActClock finalScopeClock finalWorld finalSource finalObserved ⊢
             cases tailRun : execStmts fuel config nextFrame.interpretation.environment (rest ++ suffix) middle with
