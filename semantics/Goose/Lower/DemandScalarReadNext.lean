@@ -1,4 +1,6 @@
-import Goose.Lower.DemandGeneratedScalarPrefix
+import Goose.Lower.DemandGeneratedExpressionPrefix
+import Goose.Lower.DemandGeneratedLoad
+import Goose.Lower.DemandScalarPlaceAddress
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
