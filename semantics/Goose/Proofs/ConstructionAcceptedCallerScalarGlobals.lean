@@ -5,7 +5,7 @@ namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionRootCorrespondence
 
-theorem AcceptedFrame.afterFreshActivationWithScalarGlobals
+theorem AcceptedFrame.afterFreshActivationWithScalarGlobalsLocalOrdinals
     {config : EvalConfig} {accepted : AcceptedModule config} {frame : ConstructionSourceFrame}
     {state after : ExecutionState} {types nextTypes : RootTypes}
     (source : AcceptedFrame config accepted frame state types)
@@ -15,7 +15,8 @@ theorem AcceptedFrame.afterFreshActivationWithScalarGlobals
       after.objects.lookup root = state.objects.lookup root ∨
       ∃ id value, root = .global id ∧ after.objects.lookup root = some value ∧
         ((∃ intTy number, value = .int intTy number) ∨ ∃ boolean, value = .bool boolean))
-    (ordinals : ∀ root, (∀ scope id, root ≠ .local state.nextAct scope id) →
+    (ordinals : ∀ root, (∃ act scope id, root = .local act scope id) →
+      (∀ scope id, root ≠ .local state.nextAct scope id) →
       after.objectOrdinals.lookup root = state.objectOrdinals.lookup root)
     (typesPreserved : ∀ root, (∀ scope id, root ≠ .local state.nextAct scope id) → nextTypes root = types root) :
     AcceptedFrame config accepted frame after nextTypes := by
@@ -62,8 +63,11 @@ theorem AcceptedFrame.afterFreshActivationWithScalarGlobals
     exact source.localTypes id visible descriptor root declared prior
   · intro id uninitialized root resolved
     have prior := rootOf_transfer frame.interpretation id after state root resolved
+    obtain ⟨scope, localRoot⟩ := rootOf_variable frame.interpretation id state root prior
+    have isLocal : ∃ act scope id, root = Goose.Core.RootInst.local act scope id :=
+      ⟨frame.interpretation.environment.act, scope, id, localRoot⟩
     exact ⟨(localObjects id root prior).trans (source.uninitializedLocals id uninitialized root prior).1,
-      (ordinals root (localOutside id root prior)).trans (source.uninitializedLocals id uninitialized root prior).2⟩
+      (ordinals root isLocal (localOutside id root prior)).trans (source.uninitializedLocals id uninitialized root prior).2⟩
   · intro id uninitialized root resolved
     have prior := rootOf_transfer frame.interpretation id after state root resolved
     rw [typesPreserved root (localOutside id root prior)]
@@ -76,5 +80,24 @@ theorem AcceptedFrame.afterFreshActivationWithScalarGlobals
     have oldFound := (localObjects id root prior).symm.trans found
     exact source.direct id visible root value prior oldFound
 
+
+theorem AcceptedFrame.afterFreshActivationWithScalarGlobals
+    {config : EvalConfig} {accepted : AcceptedModule config} {frame : ConstructionSourceFrame}
+    {state after : ExecutionState} {types nextTypes : RootTypes}
+    (source : AcceptedFrame config accepted frame state types)
+    (initialized : frame.initialized = config.module.globals.size)
+    (acts : state.nextAct ≤ after.nextAct) (scopes : state.nextScope ≤ after.nextScope)
+    (objects : ∀ root, (∀ scope id, root ≠ .local state.nextAct scope id) →
+      after.objects.lookup root = state.objects.lookup root ∨
+      ∃ id value, root = .global id ∧ after.objects.lookup root = some value ∧
+        ((∃ intTy number, value = .int intTy number) ∨ ∃ boolean, value = .bool boolean))
+    (ordinals : ∀ root, (∀ scope id, root ≠ .local state.nextAct scope id) →
+      after.objectOrdinals.lookup root = state.objectOrdinals.lookup root)
+    (typesPreserved : ∀ root, (∀ scope id, root ≠ .local state.nextAct scope id) → nextTypes root = types root) :
+    AcceptedFrame config accepted frame after nextTypes := by
+  exact source.afterFreshActivationWithScalarGlobalsLocalOrdinals initialized acts scopes objects
+    (fun root _ outside => ordinals root outside) typesPreserved
+
+#print axioms AcceptedFrame.afterFreshActivationWithScalarGlobalsLocalOrdinals
 #print axioms AcceptedFrame.afterFreshActivationWithScalarGlobals
 end Goose.Proofs.ConstructionAcceptedExecution
