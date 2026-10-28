@@ -59,6 +59,8 @@ theorem execActivationBody_scalarLocal_registerCall_earlier (fuel : Nat) (config
       .ok (result, after) → GlobalEffectsAvailable frame.interpretation frame.initialized after.eff)
     (inner : ∀ (caller : ConstructionSourceFrame) (after : ExecutionState) (currentTypes : RootTypes)
         (currentLive : Goose.Core.RootInst → Prop) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState),
+      caller.interpretation.environment = { frame.interpretation.environment with
+        scopes := (scope, state.nextScope) :: frame.interpretation.environment.scopes } →
       AcceptedWorld config caller.initialized after ambient currentTypes currentLive regions pending →
       AcceptedFrame config accepted caller after currentTypes →
       CheckedValue caller (.call target [] origin) ty roots typingAfter rootsAfter →
@@ -177,7 +179,7 @@ theorem execActivationBody_scalarLocal_registerCall_earlier (fuel : Nat) (config
     have actBound : state.nextAct ≤ after.nextAct := by rw [finalActClock]; exact Nat.le_refl _
     have scopeBound : state.nextScope ≤ after.nextScope := by rw [finalScopeClock]; exact Nat.le_succ _
     obtain ⟨nextTypes, nextLive, nextAmbient, nextExtend, acts, scopes, callWorld, clear, callObserved, result⟩ :=
-      inner { final with typingFuel := 4095 } after finalTypes finalLive roots typingAfter rootsAfter finalWorld tailSource checked
+      inner { final with typingFuel := 4095 } after finalTypes finalLive roots typingAfter rootsAfter finalEnvironment finalWorld tailSource checked
     simp only [finalEnvironment] at acts scopes callWorld clear callObserved result
     rw [sameInitialized, childInitialized] at callWorld clear
     have observedTail := execActivationBody_registerCall_earlierObservations fuel config activation scope statements ty target origin state after
