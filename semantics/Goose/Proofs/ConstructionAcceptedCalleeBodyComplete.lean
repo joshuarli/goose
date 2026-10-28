@@ -29,6 +29,8 @@ theorem execActivationBody_scalarLocal_prefix (fuel : Nat) (config : EvalConfig)
     ∃ nextTypes nextLive,
       let outcome := execActivationBody fuel config frame.interpretation.environment [] ⟨scope, statements, some expression⟩ state
       RootTypesExtend types nextTypes ∧
+      state.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      state.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
       AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) ambient nextTypes nextLive regions pending ∧
       FutureGlobalsClear config frame.initialized (Goose.Proofs.Exit.stepState outcome) ∧
       (match outcome with
@@ -84,7 +86,7 @@ theorem execActivationBody_scalarLocal_prefix (fuel : Nat) (config : EvalConfig)
   cases fuel with
   | zero =>
     simp only [execActivationBody, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-    exact ⟨types, live, (fun _ _ found => found), world, source.futureGlobals, trivial⟩
+    exact ⟨types, live, (fun _ _ found => found), Nat.le_refl _, Nat.le_refl _, world, source.futureGlobals, trivial⟩
   | succ fuel =>
     cases fuel with
     | zero =>
@@ -92,7 +94,7 @@ theorem execActivationBody_scalarLocal_prefix (fuel : Nat) (config : EvalConfig)
         exact scopeSource.futureGlobals
       simp only [execActivationBody, execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope, bindAll,
         List.forIn_nil, execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨types, live, (fun _ _ found => found), scopeWorld, clear, trivial⟩
+      exact ⟨types, live, (fun _ _ found => found), Nat.le_refl _, Nat.le_succ _, scopeWorld, clear, trivial⟩
     | succ fuel =>
       obtain ⟨final, finalTypes, finalLive, sameInitialized, extend, finalActClock, finalScopeClock, finalWorld, finalSource, finalFlow⟩ :=
         execStmts_scalarLocal_prefix form (fuel + 1) config accepted child context (ownershipResultScopeState activation scope state)
@@ -100,16 +102,22 @@ theorem execActivationBody_scalarLocal_prefix (fuel : Nat) (config : EvalConfig)
       cases execution : execStmts (fuel + 1) config child.interpretation.environment statements
           (ownershipResultScopeState activation scope state) with
       | stop reason after =>
-        simp only [execution, Goose.Proofs.Exit.stepState] at finalWorld finalSource finalFlow
+        simp only [execution, Goose.Proofs.Exit.stepState] at finalActClock finalScopeClock finalWorld finalSource finalFlow
         have stopped : execActivationBody (fuel + 2) config activation [] ⟨scope, statements, some expression⟩ state = .stop reason after := by
           apply execActivationBody_register_statements_stopped
           simpa [childEnvironment] using execution
         rw [stopped]
-        exact ⟨finalTypes, finalLive, extend, sameInitialized ▸ finalWorld,
+        have actBound : state.nextAct ≤ after.nextAct := by
+          rw [finalActClock]
+          exact Nat.le_refl _
+        have scopeBound : state.nextScope ≤ after.nextScope := by
+          rw [finalScopeClock]
+          exact Nat.le_succ _
+        exact ⟨finalTypes, finalLive, extend, actBound, scopeBound, sameInitialized ▸ finalWorld,
           sameInitialized ▸ finalSource.futureGlobals, trivial⟩
       | escape address carriers after | jump target kind after => simp [execution] at finalFlow
       | ok flow after =>
-        simp only [execution, Goose.Proofs.Exit.stepState] at finalWorld finalSource finalFlow
+        simp only [execution, Goose.Proofs.Exit.stepState] at finalActClock finalScopeClock finalWorld finalSource finalFlow
         obtain ⟨normal, _, replay⟩ := finalFlow
         subst flow
         have finalAvailable : ∀ roots afterRoots, rpExpr final.source expression final.rootCursor = .ok (roots, afterRoots) →
@@ -147,18 +155,25 @@ theorem execActivationBody_scalarLocal_prefix (fuel : Nat) (config : EvalConfig)
         have normal : execStmts (fuel + 1) config final.interpretation.environment statements
             (ownershipResultScopeState activation scope state) = .ok (.normal .unit) after := by
           simpa [← replay.2.2.2] using execution
+        have tailClocks := checkedRegisterTail_activation_clocks tailForm fuel config accepted { final with typingFuel := 4095 }
+          activation scope statements state after ambient finalTypes finalLive regions pending ty channels finalEnvironment normal
+          finalWorld tailSource roots typingAfter rootsAfter checked
         have tailResult := checkedRegisterTail_activation_world tailForm fuel config accepted { final with typingFuel := 4095 }
           activation scope statements state after ambient finalTypes finalLive regions pending ty channels finalEnvironment normal
           finalWorld tailSource roots typingAfter rootsAfter checked
         cases result : execActivationBody (fuel + 2) config activation [] ⟨scope, statements, some expression⟩ state with
         | stop reason stopped =>
-          simp only [result] at tailResult
-          exact ⟨finalTypes, finalLive, extend, sameInitialized ▸ tailResult.1, sameInitialized ▸ tailResult.2, trivial⟩
+          simp only [result, Goose.Proofs.Exit.stepState] at tailResult tailClocks
+          have actBound : state.nextAct ≤ stopped.nextAct := by rw [tailClocks.1, finalActClock]; exact Nat.le_refl _
+          have scopeBound : state.nextScope ≤ stopped.nextScope := by rw [tailClocks.2, finalScopeClock]; exact Nat.le_succ _
+          exact ⟨finalTypes, finalLive, extend, actBound, scopeBound, sameInitialized ▸ tailResult.1, sameInitialized ▸ tailResult.2, trivial⟩
         | escape address carriers after | jump target kind after => simp [result] at tailResult
         | ok carriers done =>
-          simp only [result] at tailResult
+          simp only [result, Goose.Proofs.Exit.stepState] at tailResult tailClocks
           obtain ⟨value, same, acceptedValue, tailWorld, tailClear⟩ := tailResult
-          exact ⟨finalTypes, _, extend, sameInitialized ▸ tailWorld, sameInitialized ▸ tailClear, value, same, acceptedValue.represented⟩
+          have actBound : state.nextAct ≤ done.nextAct := by rw [tailClocks.1, finalActClock]; exact Nat.le_refl _
+          have scopeBound : state.nextScope ≤ done.nextScope := by rw [tailClocks.2, finalScopeClock]; exact Nat.le_succ _
+          exact ⟨finalTypes, _, extend, actBound, scopeBound, sameInitialized ▸ tailWorld, sameInitialized ▸ tailClear, value, same, acceptedValue.represented⟩
 
 #print axioms execActivationBody_scalarLocal_prefix
 end Goose.Proofs.ConstructionAcceptedExecution
