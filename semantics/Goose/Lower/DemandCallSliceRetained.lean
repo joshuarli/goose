@@ -22,7 +22,32 @@ def SliceSlotArgumentCell.Checked {cfg : Cfg} {env : Env} {initial : St}
   cell.slot ∈ root.typingEnv.visible ∧ env.vars[cell.slot]? = some cell.descriptor ∧
   env.scopes.lookup cell.descriptor.scope = some cell.scope ∧ cell.descriptor.ty = .slice cell.mutability cell.element ∧
   root.rootsEnv.ann cell.slot = some cell.alias.roots ∧ cell.alias.ty = .slice cell.mutability cell.element ∧
+  cell.alias.source = .operand (root.path ++ [cell.argument]) ∧
   frame.vals[cell.value]? = some (.val (.ref ⟨.local env.act cell.scope cell.slot, []⟩))
+
+theorem SliceSlotArgumentCell.query {cfg : Cfg} {env : Env} {initial : St}
+    {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
+    {root : ExprSource cfg env (.call contextId arguments origin) initial}
+    {offset : Nat} {frame : GIR.Frame} {cell : SliceSlotArgumentCell}
+    (checked : cell.Checked root offset frame) :
+    root.rootsEnv.access.aliasArg (root.path ++ [cell.argument]) (.byRef cell.borrow (.var cell.slot)) = .ok [cell.alias] := by
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, valueAt⟩ := checked
+  have accessVariable : root.rootsEnv.impl.vars[cell.slot]? = some cell.descriptor := by
+    rw [root.frame.vars_p]
+    exact variableAt
+  have rawAnn : (root.rootsEnv.ctx.varRoots.find? (·.1 == cell.slot)).map (·.2) = some cell.alias.roots := annotation
+  have aliasEq : cell.alias = ⟨.slice cell.mutability cell.element, cell.alias.roots, .operand (root.path ++ [cell.argument])⟩ := by
+    cases alias : cell.alias with
+    | mk aliasTy aliasRoots aliasSourceValue =>
+      simp only [alias] at aliasType aliasSource
+      simp [alias, aliasType, aliasSource]
+  simp [AccessEnv.aliasArg, AccessEnv.placeType?, PEnv.access, accessVariable, variableType,
+    AccessEnv.exprRoots, AccessEnv.variableRoots, rawAnn, Ty.isRefLike, Functor.map, Except.map,
+    pure, Except.pure]
+  change Except.ok [⟨.slice cell.mutability cell.element, cell.alias.roots, .operand (root.path ++ [cell.argument])⟩] = Except.ok [cell.alias]
+  rw [← aliasEq]
+
+#print axioms SliceSlotArgumentCell.query
 
 theorem SliceSlotArgumentCell.ofReference {cfg : Cfg} {env : Env} {initial state after : St}
     {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
@@ -68,6 +93,15 @@ theorem SliceSlotArgumentCell.ofReference {cfg : Cfg} {env : Env} {initial state
           AccessEnv.exprRoots, AccessEnv.variableRoots, rawAnn, Ty.isRefLike, Functor.map, Except.map] at query
         cases query
         rfl
+    have aliasSource : alias.source = .operand (root.path ++ [index]) := by
+      have actual := query
+      rw [roots] at actual
+      have rawAnn : (root.rootsEnv.ctx.varRoots.find? (·.1 == slot)).map (·.2) = some alias.roots := annotation
+      simp [AccessEnv.aliasArg, AccessEnv.placeType?, PEnv.access, accessVariable, variableType,
+        AccessEnv.exprRoots, AccessEnv.variableRoots, rawAnn, Ty.isRefLike, Functor.map, Except.map] at actual
+      have equal : (⟨.slice mutability element, alias.roots, .operand (root.path ++ [index])⟩ : RetainedAlias) = alias := by
+        simpa [pure, Except.pure] using actual
+      exact (congrArg RetainedAlias.source equal).symm
     obtain ⟨slotLoc, backing, start, length, valueAt, slotPath, slotStored, referenceTyped, aliasType, aliasAt⟩ := relation
     have slotEq : slotLoc = location := by
       have same := valueAt.symm.trans (post.has (id, .val (.ref location)) (by simp))
@@ -76,7 +110,7 @@ theorem SliceSlotArgumentCell.ofReference {cfg : Cfg} {env : Env} {initial state
     subst slotLoc
     let cell : SliceSlotArgumentCell := ⟨id, index, slot, si, lv, borrow, mutability, element, alias⟩
     refine ⟨cell, rfl, ?_, ?_⟩
-    · exact ⟨found, by change index < index + 1; omega, visible, variableAt, scope, variableType, annotation, aliasType, by simpa [locationEq] using valueAt⟩
+    · exact ⟨found, by change index < index + 1; omega, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, by simpa [locationEq] using valueAt⟩
     · simpa only [world] using (show SliceSlotAliasAt cfg.mod child.world env after.store frame id alias mutability element from
         ⟨location, backing, start, length, valueAt, slotPath, slotStored, referenceTyped, aliasType, aliasAt⟩)
   · obtain ⟨x, lv, mu0, mu, ty, ann, impossible, _⟩ := impossible
@@ -92,8 +126,8 @@ theorem SliceSlotArgumentCell.advance {cfg : Cfg} {env : Env} {initialState : St
     {cx : FnCtx} {before built : LS} {point : Pt} {results : List (ValueId × RVal)}
     (post : Post cfg env cx before initial built frame point results) (bounded : cell.value < before.vals.size) :
     cell.Checked root nextOffset frame := by
-  obtain ⟨found, prior, visible, descriptorAt, scope, descriptorType, annotation, aliasType, valueAt⟩ := checked
-  refine ⟨found, Nat.lt_of_lt_of_le prior later, visible, descriptorAt, scope, descriptorType, annotation, aliasType, ?_⟩
+  obtain ⟨found, prior, visible, descriptorAt, scope, descriptorType, annotation, aliasType, aliasSource, valueAt⟩ := checked
+  refine ⟨found, Nat.lt_of_lt_of_le prior later, visible, descriptorAt, scope, descriptorType, annotation, aliasType, aliasSource, ?_⟩
   rw [post.same cell.value bounded]
   exact valueAt
 
@@ -114,7 +148,7 @@ theorem SliceSlotArgumentCells.ofLaterValue {cfg : Cfg} {env : Env} {initial sta
     (checked : ∀ cell ∈ cells, cell.Checked root offset frame) :
     SliceSlotArgumentCells.Realizes cells cfg.mod root.world env ⟨point, frame, state⟩ := by
   intro cell member
-  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := checked cell member
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, valueAt⟩ := checked cell member
   exact SliceSlotAliasAt.ofLaterValueArgument root current found prior child canonical visible variableAt scope variableType annotation aliasType valueAt
 
 theorem SliceSlotArgumentCells.ofLaterReference {cfg : Cfg} {env : Env} {initial state : St}
@@ -129,7 +163,7 @@ theorem SliceSlotArgumentCells.ofLaterReference {cfg : Cfg} {env : Env} {initial
     (checked : ∀ cell ∈ cells, cell.Checked root offset frame) :
     SliceSlotArgumentCells.Realizes cells cfg.mod root.world env ⟨point, frame, state⟩ := by
   intro cell member
-  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := checked cell member
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, valueAt⟩ := checked cell member
   exact SliceSlotAliasAt.ofLaterReferenceArgument root current found prior child target canonical visible variableAt scope variableType annotation aliasType valueAt
 
 
@@ -147,7 +181,7 @@ theorem SliceSlotArgumentCells.ofLaterArgumentOutput {cfg : Cfg} {env : Env} {in
     SliceSlotArgumentCells.Realizes cells cfg.mod root.world env ⟨point, frame, state⟩ := by
   intro cell member
   have next := SliceSlotArgumentCell.advance (checked cell member) (Nat.le_refl offset) post (bounded cell member)
-  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := next
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, valueAt⟩ := next
   exact SliceSlotAliasAt.ofLaterArgumentOutputFrame root.context root.active root.access current source
     visible variableAt scope variableType annotation aliasType valueAt found prior
 

@@ -14,8 +14,8 @@ theorem SliceSlotArgumentCell.atControlCursor {cfg : Cfg} {env : Env} {initialSt
     {before built : LS} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
     (cursor : GeneratedControlProgressCursor cx source before built initial start map required runtime)
     (bounded : cell.value < before.vals.size) : cell.Checked root offset runtime.frame := by
-  obtain ⟨found, prior, visible, descriptorAt, scope, descriptorType, annotation, aliasType, valueAt⟩ := checked
-  refine ⟨found, prior, visible, descriptorAt, scope, descriptorType, annotation, aliasType, ?_⟩
+  obtain ⟨found, prior, visible, descriptorAt, scope, descriptorType, annotation, aliasType, aliasSource, valueAt⟩ := checked
+  refine ⟨found, prior, visible, descriptorAt, scope, descriptorType, annotation, aliasType, aliasSource, ?_⟩
   rw [cursor.same cell.value bounded]
   exact valueAt
 
@@ -34,7 +34,7 @@ theorem SliceSlotArgumentCells.ofLaterValueCursor {cfg : Cfg} {env : Env} {initi
     SliceSlotArgumentCells.Realizes cells cfg.mod root.world env runtime := by
   intro cell member
   have currentCell := SliceSlotArgumentCell.atControlCursor (checked cell member) cursor (bounded cell member)
-  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := currentCell
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, valueAt⟩ := currentCell
   obtain ⟨plans, path, world, typing, roots, childContext⟩ := canonical
   have contextEq : HEq child.context
       (root.context.child rfl offset (.expression expression) .expression
@@ -66,7 +66,7 @@ theorem SliceSlotArgumentCells.ofLaterReferencePoint {cfg : Cfg} {env : Env} {in
     (cells : List SliceSlotArgumentCell) (checked : ∀ cell ∈ cells, cell.Checked root offset runtime.frame) :
     SliceSlotArgumentCells.Realizes cells cfg.mod root.world env runtime := by
   intro cell member
-  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := checked cell member
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, valueAt⟩ := checked cell member
   obtain ⟨plans, path, world, typing, roots, childContext⟩ := canonical
   have contextEq : HEq child.context
       (root.context.child rfl offset (.place place) .place
@@ -110,8 +110,8 @@ theorem SliceSlotArgumentCells.ofLaterReferenceCursor {cfg : Cfg} {env : Env} {i
     SliceSlotArgumentCells.Realizes cells cfg.mod root.world env runtime := by
   apply SliceSlotArgumentCells.ofLaterReferencePoint root current child target canonical demanded cells
   intro cell member
-  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := checked cell member
-  refine ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, ?_⟩
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, valueAt⟩ := checked cell member
+  refine ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, aliasSource, ?_⟩
   rw [same cell.value (bounded cell member)]
   exact valueAt
 
