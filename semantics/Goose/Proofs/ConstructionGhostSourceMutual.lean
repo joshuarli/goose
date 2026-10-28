@@ -169,6 +169,12 @@ theorem valueArgument_source (fuel : Nat) (config : EvalConfig) (environment : R
   simp only [evalArguments, bind, argumentResult]
   cases evalValue fuel config environment operand before <;> rfl
 
+theorem producerCall_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (context : Goose.Core.ContextId) (origin : Goose.Core.OriginId) (before : ExecutionState) :
+    evalProduce (fuel + 1) config environment [] (.call context [] origin) before =
+      invokeCall fuel config environment context [] [] origin before := by
+  simp only [evalProduce, List.mapM, List.mapM.loop, List.reverse_nil, bind, pure]
+
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
   | timeout (path : List Nat) (operation : SourceOperation α) (before : ExecutionState) :
@@ -230,6 +236,10 @@ inductive SourceHistory (config : EvalConfig) :
       (child : SourceHistory config fuel (path ++ [0]) (.call environment contextId origin) before outcome) :
       SourceHistory config (fuel + 1) path (.value environment (.call contextId [] origin)) before
         (callValueResult origin outcome)
+  | producerCall {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
+      {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep (List Carrier)}
+      (child : SourceHistory config fuel (path ++ [0]) (.call environment contextId origin) before outcome) :
+      SourceHistory config (fuel + 1) path (.producer environment (.call contextId [] origin)) before outcome
   | callOne {path : List Nat} {environment : RuntimeActivation} {contextId : Goose.Core.ContextId}
       {origin : Goose.Core.OriginId} {before : ExecutionState} {context : Context} {implementation : Impl}
       (contextFound : config.module.contexts[contextId]? = some context)
@@ -328,6 +338,9 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       simp only [execute] at ih ⊢
       rw [valueCall_source fuel config environment contextId context implementation origin before
         contextFound implementationFound resultsEmpty, ih]
+  | @producerCall fuel path environment contextId origin before outcome child ih =>
+      simp only [execute] at ih ⊢
+      rw [producerCall_source fuel config environment contextId origin before, ih]
   | callOne contextFound implementationFound resultsEmpty =>
       exact emptyCall_one _ _ _ _ _ _ _ contextFound implementationFound resultsEmpty
   | callDepth contextFound implementationFound parametersEmpty resultsEmpty depth =>
@@ -432,6 +445,9 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (resultsEmpty : implementation.results = #[])
       (callee : SupportedOperation config (.call environment contextId origin)) :
       SupportedOperation config (.value environment (.call contextId [] origin))
+  | producerCall (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (origin : Goose.Core.OriginId)
+      (callee : SupportedOperation config (.call environment contextId origin)) :
+      SupportedOperation config (.producer environment (.call contextId [] origin))
   | call (environment : RuntimeActivation) (contextId : Goose.Core.ContextId) (origin : Goose.Core.OriginId)
       (context : Context) (implementation : Impl)
       (contextFound : config.module.contexts[contextId]? = some context)
@@ -547,6 +563,11 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           rw [valueCall_source fuel config environment contextId context implementation origin before
             contextFound implementationFound resultsEmpty]
           exact .valueCall contextFound implementationFound resultsEmpty child
+      | producerCall environment contextId origin callee =>
+          have child := ih (.call environment contextId origin) (path ++ [0]) before callee
+          simp only [execute] at child ⊢
+          rw [producerCall_source]
+          exact .producerCall child
       | call environment contextId origin context implementation contextFound implementationFound parametersEmpty resultsEmpty body =>
           cases fuel with
           | zero =>
@@ -804,6 +825,38 @@ theorem witness_nestedCallArgument : ∃ after,
     rw [actual] at history
     exact history
 
+theorem witness_producerCall : ∃ after,
+    evalProduce 40 callWitnessConfig witnessEnvironment [] (.call 0 [] 0) .initial = .ok [] after ∧
+    SourceHistory callWitnessConfig 40 [] (.producer witnessEnvironment (.call 0 [] 0)) .initial (.ok [] after) := by
+  have bodySupported : ∀ environment, SupportedOperation callWitnessConfig
+      (.statements environment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
+    intro environment
+    exact .sequence environment (.expression environment 0 (.value environment
+      (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
+  have callee : SupportedOperation callWitnessConfig (.call witnessEnvironment 0 0) := by
+    apply SupportedOperation.call witnessEnvironment 0 0 callWitnessContext callWitnessImplementation
+    · rfl
+    · rfl
+    · rfl
+    · rfl
+    · intro act
+      exact .activation _ 0 _ 0 bodySupported
+  have history := history_exists 40 callWitnessConfig (.producer witnessEnvironment (.call 0 [] 0)) [] .initial
+    (.producerCall witnessEnvironment 0 0 callee)
+  refine ⟨witnessState (evalProduce 40 callWitnessConfig witnessEnvironment [] (.call 0 [] 0) .initial), ?_, ?_⟩
+  · unfold callWitnessConfig witnessEnvironment witnessState
+    cbv
+  · have actual : evalProduce 40 callWitnessConfig witnessEnvironment [] (.call 0 [] 0) .initial =
+        .ok [] (witnessState (evalProduce 40 callWitnessConfig witnessEnvironment [] (.call 0 [] 0) .initial)) := by
+      unfold callWitnessConfig witnessEnvironment witnessState
+      cbv
+    change SourceHistory callWitnessConfig 40 [] (.producer witnessEnvironment (.call 0 [] 0)) .initial
+      (evalProduce 40 callWitnessConfig witnessEnvironment [] (.call 0 [] 0) .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_producerCall
+
 #print axioms witness_nestedCallArgument
 
 #print axioms witness_valueCall
@@ -816,6 +869,7 @@ theorem witness_nestedCallArgument : ∃ after,
 
 #print axioms witness_nestedFill
 
+#print axioms producerCall_source
 #print axioms valueArgument_source
 #print axioms valueCall_source
 #print axioms emptyCall_enter
