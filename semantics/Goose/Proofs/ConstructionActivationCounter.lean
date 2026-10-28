@@ -620,6 +620,223 @@ theorem evaluationCounter_zero (config : EvalConfig) : EvaluationPreservesActiva
       execBlock, execStmts, execStmt, evalPrintArg, execWhile, execRange, execEach, loopBody, pushValue,
       timeout, counter_stop]
 
+theorem evalBound_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (count : Nat) (defaultValue : Int) (operand : Bound) :
+    PreservesActivationCounter (evalBound (fuel + 1) config environment count defaultValue operand) := by
+  cases operand with
+  | omitted => simpa only [evalBound] using counter_pure defaultValue
+  | expr expression | fromEnd expression =>
+      simp only [evalBound]
+      apply counter_bind
+      · exact previous.value _ _
+      · intro value
+        apply counter_bind
+        · exact counter_stateQuery _ (stateQuery_expectInt value)
+        · intro pair; exact counter_pure _
+
+theorem evalPlace_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (operand : Place) :
+    PreservesActivationCounter (evalPlace (fuel + 1) config environment operand) := by
+  cases operand with
+  | var localVar =>
+      simp only [evalPlace]
+      apply counter_bind
+      · exact counter_stateQuery _ (stateQuery_rootOf _ _)
+      · intro _; exact counter_pure _
+  | global global => simpa only [evalPlace] using counter_pure (Goose.Core.Loc.mk (.global global) [])
+  | deref expression =>
+      simp only [evalPlace]
+      apply counter_bind
+      · exact previous.value _ _
+      · intro value; exact counter_stateQuery _ (stateQuery_expectRef value)
+  | elem view expression origin =>
+      simp only [evalPlace]
+      apply counter_bind
+      · exact previous.view _ _
+      · intro view
+        apply counter_bind
+        · exact previous.value _ _
+        · intro value
+          apply counter_bind
+          · exact counter_stateQuery _ (stateQuery_expectInt value)
+          · intro pair
+            rcases pair with ⟨ty, index⟩
+            split
+            · exact counter_pure _
+            · exact counter_stop _
+  | field place index =>
+      simp only [evalPlace]
+      apply counter_bind
+      · exact previous.place _ _
+      · intro _; exact counter_pure _
+
+theorem evalView_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (operand : View) :
+    PreservesActivationCounter (evalView (fuel + 1) config environment operand) := by
+  cases operand with
+  | of place =>
+      simp only [evalView]
+      apply counter_bind
+      · exact previous.place _ _
+      · intro location
+        apply counter_bind
+        · exact counter_stateQuery _ (stateQuery_readLoc _ _ _)
+        · intro value
+          apply counter_bind
+          · exact counter_stateQuery _ (stateQuery_arrayLength value)
+          · intro pair
+            rcases pair with ⟨count, dynamic⟩
+            exact counter_pure _
+  | val expression =>
+      simp only [evalView]
+      apply counter_bind
+      · exact previous.value _ _
+      · intro value
+        cases value <;> first
+          | exact counter_pure _
+          | (apply counter_bind
+             · exact counter_stateQuery _ (stateQuery_arrayLength _)
+             · intro pair
+               rcases pair with ⟨count, dynamic⟩
+               apply counter_bind
+               · exact counter_freshScope
+               · intro index
+                 apply counter_bind
+                 · exact counter_bindRoot _ _
+                 · intro _; exact counter_pure _)
+
+theorem evalOperands_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (channels : List Channel) (operands : List Expr) :
+    PreservesActivationCounter (evalOperands (fuel + 1) config environment channels operands) := by
+  cases channels <;> cases operands <;> simp only [evalOperands]
+  all_goals first
+    | exact counter_pure _
+    | exact counter_stop _
+    | (apply counter_bind
+       · exact previous.produce _ _ _
+       · intro carriers
+         apply counter_bind
+         · exact counter_stateQuery _ (stateQuery_singleCarrier carriers)
+         · intro carrier
+           apply counter_bind
+           · exact previous.operands _ _ _
+           · intro _; exact counter_pure _)
+
+theorem evalPrintArg_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (argument : PrintArg) :
+    PreservesActivationCounter (evalPrintArg (fuel + 1) config environment argument) := by
+  cases argument with
+  | text text => simpa only [evalPrintArg] using counter_pure text.toUTF8
+  | expr expression =>
+      simp only [evalPrintArg]
+      apply counter_bind
+      · exact previous.value _ _
+      · intro value; exact counter_stateQuery _ ((rendering_stateQueries fuel config.layout).1 _ _)
+  | view view =>
+      simp only [evalPrintArg]
+      apply counter_bind
+      · exact previous.view _ _
+      · intro view; exact counter_stateQuery _ ((rendering_stateQueries fuel config.layout).2.2.2 _ _)
+
+theorem evalArguments_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (vars : Array LocalVar) (parameters : List Param) (arguments : List Arg) :
+    PreservesActivationCounter (evalArguments (fuel + 1) config environment vars parameters arguments) := by
+  cases parameters with
+  | nil =>
+      cases arguments <;> simp only [evalArguments]
+      · exact counter_pure _
+      · exact counter_stop _
+  | cons parameter parameters =>
+      cases arguments with
+      | nil => simpa only [evalArguments, fault] using counter_stop (Goose.Core.Stop.fault .arity)
+      | cons argument arguments =>
+          have finish (value : Value) : PreservesActivationCounter (do
+              let values ← evalArguments fuel config environment vars parameters arguments
+              pure (value :: values)) := by
+            apply counter_bind
+            · exact previous.arguments _ _ _ _
+            · intro _; exact counter_pure _
+          cases argument with
+          | byVal expression =>
+              simp only [evalArguments]
+              apply counter_bind
+              · exact previous.value _ _
+              · intro value; exact finish value
+          | byRef mutability place =>
+              simp only [evalArguments]
+              apply counter_bind
+              · exact previous.place _ _
+              · intro location
+                apply counter_bind
+                · exact counter_pure _
+                · intro value; exact finish value
+          | construct expression =>
+              simp only [evalArguments]
+              split
+              · apply counter_bind
+                · apply counter_materializeProducer
+                  exact previous.value _ _
+                · intro materialized
+                  have finishCarrier (carrier : Carrier) : PreservesActivationCounter (do
+                      let value ← carrierValue carrier
+                      let values ← evalArguments fuel config environment vars parameters arguments
+                      pure (value :: values)) := by
+                    apply counter_bind
+                    · exact counter_stateQuery _ (stateQuery_carrierValue carrier)
+                    · intro value; exact finish value
+                  cases materialized with
+                  | none =>
+                      apply counter_bind
+                      · apply counter_constructLocal
+                        intro destination; exact previous.build _ _ _
+                      · exact finishCarrier
+                  | some source =>
+                      apply counter_bind
+                      · exact counter_materializedDestination _ _ _ _ _ _ _
+                      · intro destination
+                        apply counter_bind
+                        · exact counter_publishCarriers _ _
+                        · intro ignored
+                          apply counter_bind
+                          · exact counter_pure _
+                          · exact finishCarrier
+              · apply counter_bind
+                · exact counter_stop _
+                · intro value; exact finish value
+
+theorem execStmts_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (statements : List Stmt) : PreservesActivationCounter (execStmts (fuel + 1) config environment statements) := by
+  cases statements with
+  | nil => simpa only [execStmts] using counter_pure (Flow.normal .unit)
+  | cons statement statements =>
+      simp only [execStmts]
+      apply counter_bind
+      · exact previous.statement _ _
+      · intro flow
+        cases flow with
+        | normal value => exact previous.statements _ _
+        | breaking value | continuing => exact counter_pure _
+
+theorem execResultBlock_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (channels : List Channel) (body : Block) :
+    PreservesActivationCounter (execResultBlock (fuel + 1) config environment channels body) := by
+  simpa only [execResultBlock] using previous.resultBlockWith environment [] channels body
+
+theorem enterActivation_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (body : Block) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (enterActivation (fuel + 1) config environment pre body origin) := by
+  simp only [enterActivation]
+  split
+  · apply counter_finishActivation
+    exact previous.activationBody _ _ _
+  · exact counter_stop _
+
 theorem evalValue_not_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (expression : Expr) :
     PreservesActivationCounter (evalValue (fuel + 1) config environment (.not expression)) := by
