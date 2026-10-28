@@ -18,7 +18,7 @@ theorem accepted_generated_scalar_assignment_value_block_stopped {cfg : Cfg} {en
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
     (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
     (extended : ExtT (lowerBlock none [] true block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
-    (fragment : ScalarAssignmentStatements block.stmts) {expression : Expr} (hasValue : block.value = some expression)
+    (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts) {expression : Expr} (hasValue : block.value = some expression)
     (valueForm : ControlPrefixExpression expression)
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)

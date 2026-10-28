@@ -747,16 +747,16 @@
  },
  {
   "feature": "Mixed scalar assignment statement agreement",
-  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, global clears and scalar assignments whose values include literals, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
-  "assumptions": "Accepted source and generated sequence, related builder, admitted bounded realized retained map, generated rows and builder extension.",
-  "limits": "Assignment destinations are local or global scalar places; reads at the top level of assignment values, other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, global clears and assignments whose values include literals, local or global reads, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
+  "assumptions": "Accepted source and generated sequence, related builder, admitted bounded realized retained map, generated rows and builder extension. Direct read assignments require a reference-target type proof for their value.",
+  "limits": "Assignment destinations and direct-read sources are local or global places; other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandScalarAssignmentExpressions.lean; Goose/Lower/DemandScalarAssignmentStatementAgreement.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Mixed scalar assignment block agreement",
   "statement": "Successful generated prefixes and non-timeout stops agree with source execution through scope entry, mixed statement sequences and scope exit for blocks containing supported scalar assignments, including a supported final scalar or short-circuit expression. Intermediate successful prefixes preserve the accepted frame.",
   "assumptions": "Accepted block source, generated block and statement rows, related builder, admitted bounded realized retained map and builder extension.",
-  "limits": "No loop context in the stop theorems; assignments use supported scalar expressions and local or global scalar destinations. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "limits": "No loop context in the stop theorems; direct read assignments require a reference-target type proof. Assignments use supported expressions and local or global destinations. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandScalarAssignmentBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentUnitBlock.lean; Goose/Lower/DemandScalarAssignmentValueBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentValueBlock.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {

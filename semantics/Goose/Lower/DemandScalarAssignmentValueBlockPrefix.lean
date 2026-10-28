@@ -6,7 +6,7 @@ namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
 
 theorem accepted_generated_scalar_assignment_value_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
-    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements block.stmts)
+    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts)
     {expression : Expr} (hasValue : block.value = some expression) (valueForm : ControlPrefixExpression expression)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)

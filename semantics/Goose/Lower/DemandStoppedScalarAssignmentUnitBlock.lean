@@ -18,7 +18,7 @@ theorem accepted_generated_scalar_assignment_unit_block_stopped {cfg : Cfg} {env
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
     (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before initial start)
     (extended : ExtT (lowerBlock none [] true block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
-    (fragment : ScalarAssignmentStatements block.stmts) (noValue : block.value = none)
+    (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts) (noValue : block.value = none)
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
     {targetFuel : Nat} {stop : Stop} {after : St}

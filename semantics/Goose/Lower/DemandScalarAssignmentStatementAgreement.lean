@@ -1,4 +1,5 @@
 import Goose.Lower.DemandScalarAssignmentExpressions
+import Goose.Lower.DemandReadAssignment
 
 namespace Goose.Lower
 
@@ -16,21 +17,27 @@ inductive ScalarAssignmentStatementPrefixCursor {cfg : Cfg} {env : Env} (cx : Fn
       (cursor : ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime) :
       ScalarAssignmentStatementPrefixCursor cx results source before built initial start map required runtime
 
-inductive ScalarAssignmentStatements : List Stmt → Prop
-  | nil : ScalarAssignmentStatements []
-  | clear (global : GlobalId) (origin : OriginId) {rest : List Stmt} (tail : ScalarAssignmentStatements rest) :
-      ScalarAssignmentStatements (.clear (.global global) origin :: rest)
+inductive ScalarAssignmentStatements (cfg : Cfg) (env : Env) : List Stmt → Prop
+  | nil : ScalarAssignmentStatements cfg env []
+  | clear (global : GlobalId) (origin : OriginId) {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
+      ScalarAssignmentStatements cfg env (.clear (.global global) origin :: rest)
   | expression {expression : Expr} (origin : OriginId) (form : ControlPrefixExpression expression)
-      {rest : List Stmt} (tail : ScalarAssignmentStatements rest) : ScalarAssignmentStatements (.expr expression origin :: rest)
+      {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) : ScalarAssignmentStatements cfg env (.expr expression origin :: rest)
   | assignment {place : Place} (form : ScalarReadPlace place) {expression : Expr} (value : ScalarControlExpression expression) (origin : OriginId)
-      {rest : List Stmt} (tail : ScalarAssignmentStatements rest) :
-      ScalarAssignmentStatements (.assign place expression origin :: rest)
+      {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
+      ScalarAssignmentStatements cfg env (.assign place expression origin :: rest)
+  | readAssignment {place read : Place} (destination : ScalarReadPlace place) (readable : ScalarReadPlace read)
+      (origin : OriginId) (target : ∀ {state after : St}
+        (source : StmtSource cfg env (.assign place (.read read) origin) state)
+        (child : ExprSource cfg env (.read read) after), source.AssignmentValueAt child → child.ty.refTarget = true)
+      {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
+      ScalarAssignmentStatements cfg env (.assign place (.read read) origin :: rest)
 
 theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool)
-    (block : Core.Block) {statements : List Stmt} (fragment : ScalarAssignmentStatements statements) :
+    (block : Core.Block) {statements : List Stmt} (fragment : ScalarAssignmentStatements cfg env statements) :
     GeneratedSequencePrefixFamily cx results selected before loop bindings want block statements
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) ∧
       GeneratedStoppedSequencePrefixFamily cx results selected before loop bindings want block statements := by
@@ -76,6 +83,17 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
             rcases value.scalar child with boolean | ⟨type, integer⟩
             · simp [boolean, Ty.refTarget]
             · simp [integer, Ty.refTarget]) (accepted_generated_read_stopped_expressions selected loop value.control.stopped)) ih.2⟩
+
+  | @readAssignment place read destination readable origin target rest tail ih =>
+    have head : GeneratedStatementPrefixFamily cx results selected loop (.assign place (.read read) origin)
+        (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
+      apply GeneratedStatementPrefixFamily.mapCursor
+        (accepted_generated_read_assignment_prefix selected loop place destination read readable origin target)
+      intro statement state source before built initial start map required runtime cursor
+      exact .assignment cursor
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+      fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
+        (accepted_generated_read_assignment_stopped selected loop place destination read readable origin target) ih.2⟩
 
 theorem ScalarAssignmentStatementPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}

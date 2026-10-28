@@ -26,7 +26,7 @@ inductive GeneratedScalarAssignmentBlockPrefixDemand {cfg : Cfg} {env : Env} {bl
       GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial suffixCursor runtime
 
 theorem accepted_generated_scalar_assignment_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
-    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements block.stmts)
+    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
     {before : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
@@ -103,7 +103,7 @@ theorem accepted_generated_scalar_assignment_block_prefix {cfg : Cfg} {env : Env
             exact .complete (by omega) prefixSteps residual evaluated post
 
 theorem accepted_generated_scalar_assignment_unit_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
-    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements block.stmts)
+    (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts)
     (noValue : block.value = none) {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
     {before : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
