@@ -15,7 +15,7 @@ theorem accepted_generated_read_assignment_prefix {cfg : Cfg} {env : Env} {cx : 
     GeneratedStatementPrefixFamily cx results selected loop (.assign place (.read read) origin)
       (@ScalarAssignmentPrefixCursor cfg env cx results) :=
   accepted_generated_scalar_assignment_prefix selected loop place destination (.read read) origin target
-    (accepted_generated_read_prefix_family selected loop readable)
+    (accepted_generated_control_progress_prefix_family selected loop readable.control)
 
 theorem accepted_generated_read_assignment_stopped {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}

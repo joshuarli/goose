@@ -121,7 +121,7 @@ theorem accepted_generated_index_assignment_value_prefix {cfg : Cfg} {env : Env}
     {rootOwner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root rootOwner)
     (owned : GeneratedSourceOwner selected source.context)
-    (family : GeneratedExpressionPrefixFamily cx results selected loop value (@CanonicalExpressionPrefixCursor cfg env cx))
+    (family : GeneratedExpressionPrefixFamily cx results selected loop value (@GeneratedControlProgressCursor cfg env cx))
     {next : Pt} {nextFrame : GIR.Frame}
     (step : Goose.Evidence.RuntimeStep cx.cfg cx.fn point frame indexedState next nextFrame after)
     {taken : Nat} {reached : DemandRuntimePoint} (steps : DemandRuntimePrefix cx taken ⟨next, nextFrame, after⟩ reached) :
@@ -132,7 +132,13 @@ theorem accepted_generated_index_assignment_value_prefix {cfg : Cfg} {env : Env}
       Post cfg env cx before initial (lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before).2
         nextFrame next [((lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before).1, .val (.ref location))] ∧
       DemandPrefixDecomposition cx (fun fuel => evalExpr fuel cfg env value)
-        (CanonicalExpressionDemand (map.addValues (lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before).1 valueAliases) cx child)
+        (GeneratedControlProgressCursor cx child
+          (lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before).2
+          (lowerExpr value (lowerEnv cfg.mod env.vars results)
+            (lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before).2).2
+          nextFrame next
+          (map.addValues (lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before).1 valueAliases)
+          (required.addValues (lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before).1 valueAliases))
         (GeneratedExpressionPrefixEnd child
           (map.addValues (lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before).1 valueAliases)
           cx (lowerPlace (.elem (.of owner) index indexOrigin) (lowerEnv cfg.mod env.vars results) before).2 nextFrame
@@ -262,7 +268,7 @@ theorem accepted_generated_index_assignment_store_prefix {cfg : Cfg} {env : Env}
     {rootOwner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root rootOwner)
     (owned : GeneratedSourceOwner selected source.context)
-    (family : GeneratedExpressionPrefixFamily cx results selected loop value (@CanonicalExpressionPrefixCursor cfg env cx))
+    (family : GeneratedExpressionPrefixFamily cx results selected loop value (@GeneratedControlProgressCursor cfg env cx))
     {next : Pt} {nextFrame : GIR.Frame}
     (step : Goose.Evidence.RuntimeStep cx.cfg cx.fn point frame indexedState next nextFrame after)
     {taken : Nat} {reached : DemandRuntimePoint} (steps : DemandRuntimePrefix cx taken ⟨next, nextFrame, after⟩ reached) :
@@ -277,7 +283,7 @@ theorem accepted_generated_index_assignment_store_prefix {cfg : Cfg} {env : Env}
     accepted_generated_index_assignment_value_prefix source form occurrence rows coverage admitted query viewed indexed viewPost indexPost
       bounded realized input extended target selected owned family step steps
   cases progress with
-  | interior demanded => exact .interior (.value child canonical valueAliases demanded)
+  | interior cursor => exact .interior (.value child canonical valueAliases cursor.demanded cursor.progress)
   | @complete rightFuel rightCount left boundary result count rightTrace residual rightDone rightBoundary =>
     let place := Place.elem (.of owner) index indexOrigin
     let le := lowerEnv cfg.mod env.vars results

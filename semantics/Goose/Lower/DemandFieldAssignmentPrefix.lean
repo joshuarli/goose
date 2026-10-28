@@ -25,7 +25,7 @@ theorem accepted_generated_field_assignment_prefix {cfg : Cfg} {env : Env} {cx :
     (loop : Option LoopCtx) (ownerPlace : Place) (index : Nat) (form : ScalarReadPlace ownerPlace) (expression : Expr) (origin : OriginId)
     (target : ∀ {state after : St} (source : StmtSource cfg env (.assign (.field ownerPlace index) expression origin) state)
       (child : ExprSource cfg env expression after), source.AssignmentValueAt child → child.ty.refTarget = true)
-    (valueFamily : GeneratedExpressionPrefixFamily cx results selected loop expression (@CanonicalExpressionPrefixCursor cfg env cx)) :
+    (valueFamily : GeneratedExpressionPrefixFamily cx results selected loop expression (@GeneratedControlProgressCursor cfg env cx)) :
     GeneratedStatementPrefixFamily cx results selected loop (.assign (.field ownerPlace index) expression origin)
       (@FieldAssignmentPrefixCursor cfg env cx results) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps
@@ -90,7 +90,7 @@ theorem accepted_generated_field_assignment_prefix {cfg : Cfg} {env : Env} {cx :
       have childProgress := valueFamily
         child childOwner childOccurrence childRows nextCoverage nextAdmitted nextBounded nextRealized childInput childExtended tail'
       cases childProgress.progress with
-      | interior demanded => exact .interior (.scalar (.value child childAt aliases demanded))
+      | interior cursor => exact .interior (.scalar (.value child childAt aliases cursor.demanded cursor.progress))
       | @complete rightFuel rightCount left boundary result count rightTrace residual rightDone rightBoundary =>
         have post := addressPost.comp rightBoundary.post
         have combinedPost : Post cfg env cx before initial

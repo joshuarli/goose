@@ -25,7 +25,7 @@ theorem accepted_generated_index_assignment_prefix {cfg : Cfg} {env : Env} {cx :
     (target : ∀ {state after : St} (source : StmtSource cfg env (.assign (.elem (.of owner) index indexOrigin) value origin) state)
       (child : ExprSource cfg env value after), source.AssignmentValueAt child → child.ty.refTarget = true)
     (indexFamily : GeneratedExpressionPrefixFamily cx results selected loop index (@CanonicalExpressionPrefixCursor cfg env cx))
-    (valueFamily : GeneratedExpressionPrefixFamily cx results selected loop value (@CanonicalExpressionPrefixCursor cfg env cx)) :
+    (valueFamily : GeneratedExpressionPrefixFamily cx results selected loop value (@GeneratedControlProgressCursor cfg env cx)) :
     GeneratedStatementPrefixFamily cx results selected loop (.assign (.elem (.of owner) index indexOrigin) value origin)
       (@IndexAssignmentPrefixCursor cfg env cx results) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps

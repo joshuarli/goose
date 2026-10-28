@@ -199,7 +199,7 @@ theorem ScalarAssignmentPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} 
   cases cursor with
   | destination child canonical demanded step =>
     exact ⟨_, _, _, ⟨demanded.builder, by simpa only [canonical.world] using demanded.source, carried⟩⟩
-  | value child canonical aliases demanded =>
+  | value child canonical aliases demanded progress =>
     obtain ⟨typing, roots, future, frame⟩ := demanded.frame
     exact ⟨typing, roots, future, ⟨frame.builder, by simpa only [canonical.world] using frame.source, carried⟩⟩
   | store child canonical aliases site demanded =>

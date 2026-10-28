@@ -1,10 +1,15 @@
-import Goose.Lower.DemandShortCircuitPrefixFamily
+import Goose.Lower.DemandControlProgressCursor
 import Goose.Lower.DemandScalarPlaceAddress
 import Goose.Lower.DemandAssignmentStore
 
 namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Proofs.Fuel
+
+theorem ScalarReadPlace.control {place : Place} (form : ScalarReadPlace place) : ControlPrefixExpression (.read place) := by
+  cases form with
+  | global global => exact .scalar (.globalRead global)
+  | slot slot => exact .scalar (.slotRead slot)
 
 inductive ScalarAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (results : List Ty) :
     {statement : Stmt} → {state : St} → StmtSource cfg env statement state →
@@ -23,7 +28,9 @@ inductive ScalarAssignmentPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (res
       (child : ExprSource cfg env expression after) (canonical : source.AssignmentValueAt child)
       (aliases : List RetainedAlias)
       (demanded : CanonicalExpressionDemand (map.addValues (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1 aliases)
-        cx child runtime) :
+        cx child runtime)
+      (progress : (∃ id op, instAt cx.fn runtime.point = some (.def id op)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
       ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime
   | store {place : Place} {expression : Expr} {origin : OriginId} {state after : St}
       {source : StmtSource cfg env (.assign place expression origin) state}
@@ -44,7 +51,7 @@ theorem accepted_generated_scalar_assignment_prefix {cfg : Cfg} {env : Env} {cx 
     (loop : Option LoopCtx) (place : Place) (form : ScalarReadPlace place) (expression : Expr) (origin : OriginId)
     (target : ∀ {state after : St} (source : StmtSource cfg env (.assign place expression origin) state)
       (child : ExprSource cfg env expression after), source.AssignmentValueAt child → child.ty.refTarget = true)
-    (valueFamily : GeneratedExpressionPrefixFamily cx results selected loop expression (@CanonicalExpressionPrefixCursor cfg env cx)) :
+    (valueFamily : GeneratedExpressionPrefixFamily cx results selected loop expression (@GeneratedControlProgressCursor cfg env cx)) :
     GeneratedStatementPrefixFamily cx results selected loop (.assign place expression origin)
       (@ScalarAssignmentPrefixCursor cfg env cx results) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended taken reached steps
@@ -93,7 +100,7 @@ theorem accepted_generated_scalar_assignment_prefix {cfg : Cfg} {env : Env} {cx 
     have childProgress := valueFamily
       child childOwner childOccurrence childRows nextCoverage nextAdmitted nextBounded nextRealized childInput childExtended tail
     cases childProgress.progress with
-    | interior demanded => exact .interior (.value child childAt aliases demanded)
+    | interior cursor => exact .interior (.value child childAt aliases cursor.demanded cursor.progress)
     | @complete rightFuel rightCount left boundary result count rightTrace residual rightDone rightBoundary =>
       have post := addressPost.comp rightBoundary.post
       have combinedPost : Post cfg env cx before initial
@@ -127,7 +134,7 @@ theorem ScalarAssignmentPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCt
   | destination child canonical demanded step =>
     change RetainedOperandsAt cfg.mod source.world env state.store initial map.values map.runs
     simpa only [canonical.world] using demanded.operands
-  | value child canonical aliases demanded =>
+  | value child canonical aliases demanded progress =>
     have coverage (id : ValueId) : (map.addValues id aliases).Covers map := by
       constructor
       · intro cell member

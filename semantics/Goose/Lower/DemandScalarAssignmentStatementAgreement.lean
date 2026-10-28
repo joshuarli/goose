@@ -137,7 +137,7 @@ theorem accepted_generated_scalar_assignment_statements_prepend {cfg : Cfg} {env
           (fun source child _ => by
             rcases value.scalar child with boolean | ⟨type, integer⟩
             · simp [boolean, Ty.refTarget]
-            · simp [integer, Ty.refTarget]) (accepted_generated_control_prefix_family selected loop value.control))
+            · simp [integer, Ty.refTarget]) (accepted_generated_control_progress_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .assignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
@@ -157,7 +157,7 @@ theorem accepted_generated_scalar_assignment_statements_prepend {cfg : Cfg} {env
             rcases value.scalar child with boolean | ⟨type, integer⟩
             · simp [boolean, Ty.refTarget]
             · simp [integer, Ty.refTarget]) (accepted_generated_control_prefix_family selected loop indexForm)
-          (accepted_generated_control_prefix_family selected loop value.control))
+          (accepted_generated_control_progress_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .indexAssignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
@@ -178,7 +178,7 @@ theorem accepted_generated_scalar_assignment_statements_prepend {cfg : Cfg} {env
             rcases value.scalar child with boolean | ⟨type, integer⟩
             · simp [boolean, Ty.refTarget]
             · simp [integer, Ty.refTarget]) (accepted_generated_control_prefix_family selected loop indexForm)
-          (accepted_generated_control_prefix_family selected loop value.control))
+          (accepted_generated_control_progress_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .indexAssignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
@@ -197,7 +197,7 @@ theorem accepted_generated_scalar_assignment_statements_prepend {cfg : Cfg} {env
           (fun source child _ => by
             rcases value.scalar child with boolean | ⟨type, integer⟩
             · simp [boolean, Ty.refTarget]
-            · simp [integer, Ty.refTarget]) (accepted_generated_control_prefix_family selected loop value.control))
+            · simp [integer, Ty.refTarget]) (accepted_generated_control_progress_prefix_family selected loop value.control))
       intro statement state source before built initial start map required runtime cursor
       exact .fieldAssignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
@@ -213,7 +213,7 @@ theorem accepted_generated_scalar_assignment_statements_prepend {cfg : Cfg} {env
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
       apply GeneratedStatementPrefixFamily.mapCursor
         (accepted_generated_index_assignment_prefix selected loop owner (.scalar form) index (.read read) indexOrigin origin target
-          (accepted_generated_control_prefix_family selected loop indexForm) (accepted_generated_read_prefix_family selected loop readable))
+          (accepted_generated_control_prefix_family selected loop indexForm) (accepted_generated_control_progress_prefix_family selected loop readable.control))
       intro statement state source before built initial start map required runtime cursor
       exact .indexAssignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
@@ -227,7 +227,7 @@ theorem accepted_generated_scalar_assignment_statements_prepend {cfg : Cfg} {env
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
       apply GeneratedStatementPrefixFamily.mapCursor
         (accepted_generated_index_assignment_prefix selected loop (.field owner field) (.field field form) index (.read read) indexOrigin origin target
-          (accepted_generated_control_prefix_family selected loop indexForm) (accepted_generated_read_prefix_family selected loop readable))
+          (accepted_generated_control_prefix_family selected loop indexForm) (accepted_generated_control_progress_prefix_family selected loop readable.control))
       intro statement state source before built initial start map required runtime cursor
       exact .indexAssignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
@@ -241,7 +241,7 @@ theorem accepted_generated_scalar_assignment_statements_prepend {cfg : Cfg} {env
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
       apply GeneratedStatementPrefixFamily.mapCursor
         (accepted_generated_field_assignment_prefix selected loop owner index destination (.read read) origin target
-          (accepted_generated_read_prefix_family selected loop readable))
+          (accepted_generated_control_progress_prefix_family selected loop readable.control))
       intro statement state source before built initial start map required runtime cursor
       exact .fieldAssignment cursor
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
