@@ -1,11 +1,11 @@
-import Goose.Proofs.ConstructionGhostArrayElementEvents
+import Goose.Proofs.ConstructionGhostElementOccurrence
 import Goose.Proofs.ConstructionGhostReplayDeterminism
 
 namespace Goose.Proofs.ConstructionGhostNonfixedArrayWitness
 open Goose.Construct Goose.Proofs.ConstructionExecution Goose.Proofs.ConstructionInvocationReplay
 open Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Proofs.ConstructionGhostDeclarationOnce Goose.Proofs.ConstructionGhostArrayElementEvents
-open Goose.Proofs.ConstructionGhostReplayDeterminism
+open Goose.Proofs.ConstructionGhostReplayDeterminism Goose.Proofs.ConstructionGhostElementOccurrence
 
 private def element : Ty := .varr (.int .u8)
 private def descriptor : LocalVar := ⟨"nested", .varr element, .immutable, 0, 0⟩
@@ -89,6 +89,15 @@ theorem nonfixedArray_succeeds :
   simp only [stepState, config, implementation, environment, descriptor, element, expression, operands, operand]
   cbv
 
+theorem nonfixedArray_elementOccurrence : ElementOccurrence config environment 0 element operand ready (some 1) childReady := by
+  apply ElementOccurrence.nonfixed layout layoutReady 1 childReady
+  · rfl
+  · simp only [layout, layoutReady, ready, pending, prepared, initial, stepState, config, implementation, environment, descriptor, element, expression, operands, operand]
+    cbv
+  · simp only [childReady, layout, layoutReady, ready, pending, prepared, initial, stepState, config, implementation, environment, descriptor, element, expression, operands, operand]
+    cbv
+
+#print axioms nonfixedArray_elementOccurrence
 #print axioms nonfixedArray_succeeds
 #print axioms nonfixedArray_childEvents
 end Goose.Proofs.ConstructionGhostNonfixedArrayWitness
