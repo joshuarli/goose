@@ -33,7 +33,7 @@ inductive IfElseStatementPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (resu
       (evaluated : evalExpr fuel cfg env condition state = .ok (.bool boolean) middle)
       (branch : BlockSource cfg env [] (if boolean then yes else no) middle)
       (demanded : GeneratedScalarAssignmentBlockPrefixDemand branch selected map required branchStart none conditionFrame
-        (GeneratedClearBlockDemand branch map required cx results branchStart none conditionFrame) runtime) :
+        (GeneratedBranchBlockEffectDemand branch map required cx results branchStart none conditionFrame) runtime) :
       IfElseStatementPrefixCursor cx results selected source before built initial start map required runtime
   | join {condition : Expr} {yes no : Core.Block} {origin : OriginId} {state : St}
       {source : StmtSource cfg env (.ifS condition yes (some no) origin) state} {before built : LS}

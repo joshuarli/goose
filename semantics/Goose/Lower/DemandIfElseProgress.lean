@@ -185,7 +185,7 @@ theorem accepted_generated_if_generic_selected_prefix_canonical {cfg : Cfg} {env
             some (.block (if takeYes then yes else no)),
           index = (if takeYes then 1 else 2) ∧ source.BlockChildAt branch index found) ∧
         GeneratedGenericBlockPrefixDemand branch selected map required (if takeYes then yesStart else noStart) loop conditionFrame cursor
-          (GeneratedClearBlockDemand branch map required cx results (if takeYes then yesStart else noStart) loop conditionFrame) reached) ∨
+          (GeneratedBranchBlockEffectDemand branch map required cx results (if takeYes then yesStart else noStart) loop conditionFrame) reached) ∨
       ∃ consumed remaining current fuel,
         consumed + remaining = taken ∧
         DemandRuntimePrefix cx consumed ⟨(if takeYes then yesBlock else noBlock, 0), conditionFrame, middle⟩ current ∧
@@ -260,7 +260,7 @@ theorem accepted_generated_if_generic_selected_prefix {cfg : Cfg} {env : Env} {c
     (steps : DemandRuntimePrefix cx taken ⟨(if takeYes then yesBlock else noBlock, 0), conditionFrame, middle⟩ reached)
     : (∃ branch : BlockSource cfg env [] (if takeYes then yes else no) middle,
         GeneratedGenericBlockPrefixDemand branch selected map required (if takeYes then yesStart else noStart) none conditionFrame cursor
-          (GeneratedClearBlockDemand branch map required cx results (if takeYes then yesStart else noStart) none conditionFrame) reached) ∨
+          (GeneratedBranchBlockEffectDemand branch map required cx results (if takeYes then yesStart else noStart) none conditionFrame) reached) ∨
       ∃ consumed remaining current fuel,
         consumed + remaining = taken ∧
         DemandRuntimePrefix cx consumed ⟨(if takeYes then yesBlock else noBlock, 0), conditionFrame, middle⟩ current ∧
@@ -313,7 +313,7 @@ theorem accepted_generated_if_selected_prefix {cfg : Cfg} {env : Env} {condition
     (steps : DemandRuntimePrefix cx taken ⟨(if takeYes then yesBlock else noBlock, 0), conditionFrame, middle⟩ reached)
     : (∃ branch : BlockSource cfg env [] (if takeYes then yes else no) middle,
         GeneratedScalarAssignmentBlockPrefixDemand branch selected map required (if takeYes then yesStart else noStart) none conditionFrame
-          (GeneratedClearBlockDemand branch map required cx results (if takeYes then yesStart else noStart) none conditionFrame) reached) ∨
+          (GeneratedBranchBlockEffectDemand branch map required cx results (if takeYes then yesStart else noStart) none conditionFrame) reached) ∨
       ∃ consumed remaining current fuel,
         consumed + remaining = taken ∧
         DemandRuntimePrefix cx consumed ⟨(if takeYes then yesBlock else noBlock, 0), conditionFrame, middle⟩ current ∧

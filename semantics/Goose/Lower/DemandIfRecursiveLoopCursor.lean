@@ -52,7 +52,7 @@ inductive RecursiveLoopIfCursorStep {cfg : Cfg} (cx : FnCtx) (results : List Ty)
       (branch : BlockSource cfg env [] block middle) (canonical : source.BlockChildAt branch index found)
       (demanded : GeneratedGenericBlockPrefixDemand branch selected map required branchStart loop branchFrame
         (@inner { env with scopes := (block.scope, middle.nextScope) :: env.scopes } selected)
-        (GeneratedClearBlockDemand branch map required cx results branchStart loop branchFrame) runtime) :
+        (GeneratedBranchBlockEffectDemand branch map required cx results branchStart loop branchFrame) runtime) :
       RecursiveLoopIfCursorStep cx results loop inner selected source before built initial start map required runtime
   | join {env : Env} {selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner}
       {condition : Expr} {yes : Core.Block} {no : Option Core.Block} {origin : OriginId} {state : St}

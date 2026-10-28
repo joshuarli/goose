@@ -41,7 +41,7 @@ theorem accepted_generated_while_recursive_body_prefix {cfg : Cfg} {env : Env} {
       (@RecursiveLoopIfCursor cfg cx results root owner
         (some ⟨(lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2.stack.length, exitBlock, .jump header⟩)
         (Place._sizeOf_11 body.stmts) { env with scopes := (body.scope, middle.nextScope) :: env.scopes } selected)
-      (GeneratedClearBlockDemand branch map required cx results bodyStart
+      (GeneratedBranchBlockEffectDemand branch map required cx results bodyStart
         (some ⟨(lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2.stack.length, exitBlock, .jump header⟩)
         conditionFrame) reached) ∨
     ∃ (consumed remaining : Nat) (current : DemandRuntimePoint) (fuel : Nat) (next : StmtSource cfg env (.while condition body origin) current.state),

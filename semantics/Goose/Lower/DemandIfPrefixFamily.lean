@@ -33,7 +33,7 @@ inductive IfStatementPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (results 
       (evaluated : evalExpr fuel cfg env condition state = .ok (.bool true) middle)
       (branch : BlockSource cfg env [] yes middle)
       (demanded : GeneratedScalarAssignmentBlockPrefixDemand branch selected map required branchStart none conditionFrame
-        (GeneratedClearBlockDemand branch map required cx results branchStart none conditionFrame) runtime) :
+        (GeneratedBranchBlockEffectDemand branch map required cx results branchStart none conditionFrame) runtime) :
       IfStatementPrefixCursor cx results selected source before built initial start map required runtime
   | join {condition : Expr} {yes : Core.Block} {origin : OriginId} {state : St}
       {source : StmtSource cfg env (.ifS condition yes none origin) state} {before built : LS}

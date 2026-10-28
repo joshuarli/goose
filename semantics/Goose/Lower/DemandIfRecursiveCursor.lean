@@ -28,7 +28,7 @@ inductive RecursiveIfCursorStep {cfg : Cfg} (cx : FnCtx) (results : List Ty) {ro
       (branch : BlockSource cfg env [] block middle) (canonical : source.BlockChildAt branch index found)
       (demanded : GeneratedGenericBlockPrefixDemand branch selected map required branchStart none branchFrame
         (@inner { env with scopes := (block.scope, middle.nextScope) :: env.scopes } selected)
-        (GeneratedClearBlockDemand branch map required cx results branchStart none branchFrame) runtime) :
+        (GeneratedBranchBlockEffectDemand branch map required cx results branchStart none branchFrame) runtime) :
       RecursiveIfCursorStep cx results inner selected source before built initial start map required runtime
 
 def RecursiveIfCursor {cfg : Cfg} (cx : FnCtx) (results : List Ty) {root : DemandNode} {owner : Nat}
@@ -58,7 +58,7 @@ theorem GeneratedGenericBlockPrefixDemand.mapCursor {cfg : Cfg} {env : Env} {blo
     (demanded : GeneratedGenericBlockPrefixDemand source selected map required before loop initial cursor suffix runtime) :
     GeneratedGenericBlockPrefixDemand source selected map required before loop initial next suffix runtime := by
   cases demanded with
-  | emitted cursor => exact .emitted cursor
+  | emitted cursor instruction => exact .emitted cursor instruction
   | suffix cursor => exact .suffix cursor
   | body canonical cursor => exact .body canonical (cursor.map convert)
 

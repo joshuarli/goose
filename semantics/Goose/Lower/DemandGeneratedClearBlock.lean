@@ -102,6 +102,13 @@ inductive GeneratedClearBlockDemand {cfg : Cfg} {env : Env} {block : Core.Block}
         map.values map.runs ⟨point, frame, after⟩) :
       GeneratedClearBlockDemand source map required cx results before loop initial ⟨point, frame, after⟩
 
+def GeneratedBranchBlockEffectDemand {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) (map required : RetainedSsaMap) (cx : FnCtx)
+    (results : List Ty) (before : LS) (loop : Option LoopCtx) (initial : GIR.Frame)
+    (runtime : DemandRuntimePoint) : Prop :=
+  GeneratedClearBlockDemand source map required cx results before loop initial runtime ∧
+    ∃ effect, instAt cx.fn runtime.point = some (.eff effect)
+
 theorem GeneratedClearBlockDemand.frame {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     {source : BlockSource cfg env [] block state} {map required : RetainedSsaMap} {cx : FnCtx}
     {results : List Ty} {before : LS} {loop : Option LoopCtx} {initial : GIR.Frame} {runtime : DemandRuntimePoint}

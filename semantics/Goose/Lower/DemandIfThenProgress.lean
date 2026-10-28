@@ -170,7 +170,7 @@ theorem accepted_generated_if_generic_then_prefix_canonical {cfg : Cfg} {env : E
     : (∃ branch : BlockSource cfg env [] yes middle,
         source.BlockChildAt branch 1 (by simp [DemandNode.child?, DemandNode.children]) ∧
         GeneratedGenericBlockPrefixDemand branch selected map required branchStart loop conditionFrame cursor
-          (GeneratedClearBlockDemand branch map required cx results branchStart loop conditionFrame) reached) ∨
+          (GeneratedBranchBlockEffectDemand branch map required cx results branchStart loop conditionFrame) reached) ∨
       ∃ consumed remaining current fuel,
         consumed + remaining = taken ∧
         DemandRuntimePrefix cx consumed ⟨(yesBlock, 0), conditionFrame, middle⟩ current ∧
@@ -233,7 +233,7 @@ theorem accepted_generated_if_then_prefix {cfg : Cfg} {env : Env} {condition : E
     (steps : DemandRuntimePrefix cx taken ⟨(yesBlock, 0), conditionFrame, middle⟩ reached)
     : (∃ branch : BlockSource cfg env [] yes middle,
         GeneratedScalarAssignmentBlockPrefixDemand branch selected map required branchStart none conditionFrame
-          (GeneratedClearBlockDemand branch map required cx results branchStart none conditionFrame) reached) ∨
+          (GeneratedBranchBlockEffectDemand branch map required cx results branchStart none conditionFrame) reached) ∨
       ∃ consumed remaining current fuel,
         consumed + remaining = taken ∧
         DemandRuntimePrefix cx consumed ⟨(yesBlock, 0), conditionFrame, middle⟩ current ∧

@@ -34,7 +34,8 @@ inductive GeneratedGenericBlockPrefixDemand {cfg : Cfg} {env : Env} {block : Cor
       LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
     (suffixCursor : DemandRuntimePoint → Prop) : DemandRuntimePoint → Prop
   | emitted {runtime : DemandRuntimePoint}
-      (demanded : GeneratedClearBlockDemand source map required cx results before loop initial runtime) :
+      (demanded : GeneratedClearBlockDemand source map required cx results before loop initial runtime)
+      (instruction : ∃ effect, instAt cx.fn runtime.point = some (.eff effect)) :
       GeneratedGenericBlockPrefixDemand source selected map required before loop initial cursor suffixCursor runtime
   | suffix {runtime : DemandRuntimePoint} (demanded : suffixCursor runtime) :
       GeneratedGenericBlockPrefixDemand source selected map required before loop initial cursor suffixCursor runtime
@@ -79,8 +80,9 @@ theorem accepted_generated_generic_block_prefix {cfg : Cfg} {env : Env} {block :
   refine ⟨owned, coverage, ?_⟩
   have progress := accepted_generated_block_statements_prefix source selected owned occurrence rows coverage admitted bounded
     realized input extended _ bodyFamily steps
-  rcases progress with ⟨_, _, entry⟩ | progressed
-  · exact .interior (.emitted entry)
+  rcases progress with ⟨_, rfl, entry⟩ | progressed
+  · have site := GeneratedDemandInstruction.blockEnter_auto occurrence rows input.atPoint extended
+    exact .interior (.emitted entry ⟨_, site.instruction⟩)
   · cases progressed with
     | intro body canonical bodyOccurrence bodyRows remaining count enterStep _bodyInput bodyProgress =>
       cases bodyProgress.progress with
@@ -159,7 +161,7 @@ theorem accepted_generated_scalar_assignment_block_prefix {cfg : Cfg} {env : Env
   cases result.progress with
   | interior demanded =>
     cases demanded with
-    | emitted cursor => exact .interior (.emitted cursor)
+    | emitted cursor instruction => exact .interior (.emitted cursor)
     | suffix cursor => exact .interior (.suffix cursor)
     | body canonical cursor => exact .interior (.body canonical cursor)
   | complete count executed residual evaluated post => exact .complete count executed residual evaluated post

@@ -34,7 +34,7 @@ inductive NestedIfElseStatementPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx)
       (branch : BlockSource cfg env [] (if boolean then yes else no) middle)
       (demanded : GeneratedGenericBlockPrefixDemand branch selected map required branchStart none conditionFrame
         (@IfMixedStatementCursor cfg { env with scopes := ((if boolean then yes else no).scope, middle.nextScope) :: env.scopes } cx results root owner selected)
-        (GeneratedClearBlockDemand branch map required cx results branchStart none conditionFrame) runtime) :
+        (GeneratedBranchBlockEffectDemand branch map required cx results branchStart none conditionFrame) runtime) :
       NestedIfElseStatementPrefixCursor cx results selected source before built initial start map required runtime
   | join {condition : Expr} {yes no : Core.Block} {origin : OriginId} {state : St}
       {source : StmtSource cfg env (.ifS condition yes (some no) origin) state} {before built : LS}

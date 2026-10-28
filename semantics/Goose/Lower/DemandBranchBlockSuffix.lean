@@ -39,7 +39,7 @@ theorem accepted_generated_branch_leave_prefix {cfg : Cfg} {env : Env} {block : 
     (prefixSteps : DemandRuntimePrefix cx consumed ⟨start, initial, state⟩ current)
     (residual : DemandRuntimePrefix cx taken current reached) :
     DemandPrefixDecomposition cx (fun fuel => execBlock fuel cfg env [] block)
-      (GeneratedClearBlockDemand source map required cx results before loop initial)
+      (GeneratedBranchBlockEffectDemand source map required cx results before loop initial)
       (GeneratedBranchBlockEnd source map required cx results before loop initial)
       (consumed + taken) ⟨start, initial, state⟩ reached := by
   have bodyResult := body.result fuel (.normal .unit) statements
@@ -58,7 +58,7 @@ theorem accepted_generated_branch_leave_prefix {cfg : Cfg} {env : Env} {block : 
   have demanded : GeneratedClearBlockDemand source map required cx results before loop initial current :=
     .leave canonical (leaveLabel ▸ leaveSite) coverage ⟨⟨_, post.pp, post.rel⟩, frame, bodyRealized⟩
   rcases residual.uncons with ⟨_, rfl⟩ | ⟨remaining, final, _, step, afterLeave⟩
-  · exact .interior demanded
+  · exact .interior ⟨demanded, _, leaveSite.instruction⟩
   · have valueDone : valueFlow fuel cfg block.value
         { env with scopes := (block.scope, state.nextScope) :: env.scopes } (.normal .unit) current.state =
         .ok (.normal .unit) current.state := by rw [noValue]; rfl
@@ -128,7 +128,7 @@ structure GeneratedBranchBlockDecomposition {cfg : Cfg} {env : Env} {block : Cor
   coverage : map.Covers required
   progress : DemandPrefixDecomposition cx (fun fuel => execBlock fuel cfg env [] block)
     (GeneratedScalarAssignmentBlockPrefixDemand source selected map required before loop initial
-      (GeneratedClearBlockDemand source map required cx results before loop initial))
+      (GeneratedBranchBlockEffectDemand source map required cx results before loop initial))
     (GeneratedBranchBlockEnd source map required cx results before loop initial) taken ⟨start, initial, state⟩ reached
 
 
@@ -144,7 +144,7 @@ structure GeneratedGenericBranchBlockDecomposition {cfg : Cfg} {env : Env} {bloc
   coverage : map.Covers required
   progress : DemandPrefixDecomposition cx (fun fuel => execBlock fuel cfg env [] block)
     (GeneratedGenericBlockPrefixDemand source selected map required before loop initial cursor
-      (GeneratedClearBlockDemand source map required cx results before loop initial))
+      (GeneratedBranchBlockEffectDemand source map required cx results before loop initial))
     (GeneratedBranchBlockEnd source map required cx results before loop initial) taken ⟨start, initial, state⟩ reached
 
 theorem accepted_generated_generic_branch_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
@@ -176,8 +176,9 @@ theorem accepted_generated_generic_branch_block_prefix {cfg : Cfg} {env : Env} {
   refine ⟨owned, coverage, ?_⟩
   have progress := accepted_generated_block_statements_prefix source selected owned occurrence rows coverage admitted bounded
     realized input extended _ bodyFamily steps
-  rcases progress with ⟨_, _, entry⟩ | progressed
-  · exact .interior (.emitted entry)
+  rcases progress with ⟨_, rfl, entry⟩ | progressed
+  · have site := GeneratedDemandInstruction.blockEnter_auto occurrence rows input.atPoint extended
+    exact .interior (.emitted entry ⟨_, site.instruction⟩)
   · cases progressed with
     | intro body canonical bodyOccurrence bodyRows remaining count enterStep _bodyInput bodyProgress =>
       cases bodyProgress.progress with
@@ -255,7 +256,7 @@ theorem accepted_generated_scalar_branch_block_prefix {cfg : Cfg} {env : Env} {b
   cases result.progress with
   | interior demanded =>
     cases demanded with
-    | emitted cursor => exact .interior (.emitted cursor)
+    | emitted cursor instruction => exact .interior (.emitted cursor)
     | suffix cursor => exact .interior (.suffix cursor)
     | body canonical cursor => exact .interior (.body canonical cursor)
   | complete count executed residual evaluated post => exact .complete count executed residual evaluated post
