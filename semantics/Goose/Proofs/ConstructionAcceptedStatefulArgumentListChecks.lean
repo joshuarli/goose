@@ -1,6 +1,7 @@
 import Goose.Proofs.ConstructionAcceptedArgumentListPosition
 import Goose.Proofs.ConstructionAcceptedStatefulBlockCursors
 import Goose.Proofs.ConstructionAcceptedScalarArgumentListChecks
+import Goose.Proofs.ConstructionAcceptedIntegerBlockTyping
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -23,6 +24,7 @@ theorem checkedStatefulArgumentList_cursors {config : EvalConfig} {accepted : Ac
     (position : SourcePosition accepted frame (.expression (.call contextId
       (.byVal (.blockE ⟨scope, [.assign (.global id) expression origin], some (.lit intTy literal)⟩ blockOrigin) :: rest.map Arg.byVal) callOrigin))) :
     ∃ (middle : Nat) (leftAfter tailAfter : RState) (tailRoots : List (List RootRef)),
+      firstDescriptor.ty = .int intTy ∧
       leftAfter.nextVar = frame.rootCursor.nextVar ∧
       SourcePosition accepted (ordinaryOperandFrame frame (checkFuel + 4)) (.expression (.blockE
         ⟨scope, [.assign (.global id) expression origin], some (.lit intTy literal)⟩ blockOrigin)) ∧
@@ -51,7 +53,12 @@ theorem checkedStatefulArgumentList_cursors {config : EvalConfig} {accepted : Ac
   have cursors := statefulBlock_expression_cursors checkFuel config accepted (ordinaryOperandFrame frame (checkFuel + 4))
     state types scope id origin blockOrigin expression intTy literal form firstSource initialized fresh absent firstPosition rfl
     [firstDescriptor.ty] firstAfter leftRoots leftAfter firstTyped leftRooted
-  refine ⟨middle, leftAfter, tailAfter, tailRoots, ?_, firstPosition, ?_, tailRooted⟩
+  have firstType := typeExpr_integerTail_result (checkFuel + 1)
+    { frame.typing with use := .ordinary, request := .value, resultRequests := [] } scope
+    [.assign (.global id) expression origin] intTy literal blockOrigin frame.typingCounter firstAfter [firstDescriptor.ty]
+    (by simpa [left, Nat.add_assoc] using firstTyped)
+  refine ⟨middle, leftAfter, tailAfter, tailRoots, ?_, ?_, firstPosition, ?_, tailRooted⟩
+  · simpa using firstType
   · simpa [ordinaryOperandFrame] using cursors.2
   · simpa [ordinaryOperandFrame] using cursors.1 ▸ tailTyped
 
