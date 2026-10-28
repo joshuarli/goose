@@ -488,6 +488,15 @@
   "evidence": "ConstructionAcceptedFreshness.lean, ConstructionAcceptedStaticBytes.lean and ConstructionAcceptedFreshnessChecks.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Fresh receiving-region storage limit counterexample",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.freshRegion_excludes_later_sample",
+  "statement": "A fresh receiving region cannot protect a later stored root whose sampled byte run starts beyond the region's frozen limit for that storage row.",
+  "assumptions": "The region is fresh, the storage row did not exist when it opened, and the current stored root and sampled run satisfy the stated facts.",
+  "limits": "The executable controls separately validate and run a nested-owner module and exercise its inner let after opening an outer destination; they do not prove a full evaluator-prefix reachability theorem.",
+  "evidence": "ConstructionAcceptedRegionChecks.lean; scoped Lean 4.35 closure and axiom check."
+ },
+ {
   "feature": "Construction receiver fixed-width storage write",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.storage_count; Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.other_storage; Goose.Proofs.ConstructionStorage.FixedWidthStorageWrite.byte_count; Goose.Proofs.ConstructionStorage.writeElement_receiver_fixedWidth",
