@@ -1,5 +1,4 @@
-import Goose.Proofs.ConstructionByteBatchComplete
-import Goose.Proofs.ConstructionAcceptedEntryInvocation
+import Goose.Proofs.ConstructionByteEntryFrameComplete
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 
@@ -49,29 +48,12 @@ theorem acceptedZeroGlobalEntryByteBody (fuel : Nat) (config : EvalConfig) (acce
   have entryEq : entry = original := Option.some.inj (entryAt.symm.trans originalAt)
   subst entry
   have implementationEq : frame.source.impl = implementation := Option.some.inj (implAt.symm.trans implementationAt)
-  have position' : SourcePosition accepted entryFrame (.statements (declarations.map ByteOwnerDeclaration.statement)) := by
-    rw [← body, ← implementationEq]
-    exact position
-  have owners' : ∀ declaration ∈ declarations,
-      (entryFrame.typing.variables[declaration.id]?).map (·.ty) = some (.varr (.int .u8)) := by
-    intro declaration member
-    simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, implementationEq] using owners declaration member
-  have unnamed : ∀ declaration ∈ declarations,
-      (entryFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none := by
-    intro declaration member
-    simp only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, results,
-      Array.toList_empty, List.zipIdx_nil, List.find?_nil]
   obtain ⟨next, types, live, regions, initializedEq, extended, finalWorld, finalSource, finalFlow⟩ :=
-    execStmts_byteOwners_accepted_world declarations fuel 4094 config accepted entryFrame config.module.entry before
-      [.callChannels activation []] (declaredRootTypes config.module) (fun _ => False) [] [] checkFuel rfl
-      world source (by simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using phase)
-      position' owners' unnamed
-  refine ⟨frame, next, activation, types, live, regions, moduleStep, callStep, implementationEq, initializedEq, extended, ?_, ?_, ?_⟩
-  · simpa only [← body, ← implementationEq] using finalWorld
-  · simpa only [← body, ← implementationEq] using finalSource
-  · rw [← body, ← implementationEq] at finalFlow
-    cases evaluated : execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before <;>
-      simp only [evaluated] at finalFlow ⊢ <;> exact finalFlow
+    entryByteStatements_accepted_world fuel config accepted frame activation activated before declarations (fun _ => False)
+      world source position phase results (by simpa only [implementationEq] using body)
+      (by simpa only [implementationEq] using owners) checkFuel
+  exact ⟨frame, next, activation, types, live, regions, moduleStep, callStep, implementationEq, initializedEq, extended,
+    finalWorld, finalSource, finalFlow⟩
 
 #print axioms acceptedZeroGlobalEntryByteBody
 
