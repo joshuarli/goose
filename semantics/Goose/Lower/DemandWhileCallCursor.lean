@@ -1,5 +1,6 @@
 import Goose.Lower.DemandWhileCallTrueBody
 import Goose.Lower.DemandCallLoopTerminal
+import Goose.Lower.DemandCallLoopMixedTerminal
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -34,6 +35,26 @@ inductive WhileCallHeaderCursor {cfg : Cfg} {env : Env} (caller : Func) (results
           (some ⟨(lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2.stack.length, exitBlock, .jump header⟩)
           conditionFrame) runtime) :
       WhileCallHeaderCursor caller results selected source before built initial start map required runtime
+  | scalarBody {condition : Expr} {body : Core.Block} {origin : OriginId} {state current middle : St} {count : Nat}
+      {source : StmtSource cfg env (.while condition body origin) state} {before built branchStart headerState : LS}
+      {header exitBlock : BlockId} {initial conditionFrame : GIR.Frame} {start : Pt}
+      {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+      (iterations : WhileIterations cfg env condition body count state current)
+      (active : StmtSource cfg env (.while condition body origin) current) (world : active.world = source.world)
+      (child : ExprSource cfg env condition current) (fuel : Nat)
+      (conditionCanonical : active.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]))
+      (evaluated : evalExpr fuel cfg env condition current = .ok (.bool true) middle)
+      (branch : BlockSource cfg env [] body middle)
+      (canonical : active.BlockChildAt branch 1 (by simp [DemandNode.child?, DemandNode.children]))
+      (demanded : GeneratedGenericBlockPrefixDemand (cx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩) branch selected map required branchStart
+        (some ⟨(lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2.stack.length, exitBlock, .jump header⟩)
+        conditionFrame
+        (@ReachableScalarCallCursor cfg { env with scopes := (body.scope, middle.nextScope) :: env.scopes } caller results
+          (some ⟨(lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2.stack.length, exitBlock, .jump header⟩))
+        (GeneratedBranchBlockEffectDemand branch map required ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results branchStart
+          (some ⟨(lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2.stack.length, exitBlock, .jump header⟩)
+          conditionFrame) runtime) :
+      WhileCallHeaderCursor caller results selected source before built initial start map required runtime
 
 theorem WhileCallHeaderCursor.rebase {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
     {root : DemandNode} {owner : Nat}
@@ -47,6 +68,8 @@ theorem WhileCallHeaderCursor.rebase {cfg : Cfg} {env : Env} {caller : Func} {re
   | existing cursor => exact .existing cursor.rebase
   | body iterations active world child fuel conditionCanonical evaluated branch canonical demanded =>
     exact .body iterations active world child fuel conditionCanonical evaluated branch canonical demanded
+  | scalarBody iterations active world child fuel conditionCanonical evaluated branch canonical demanded =>
+    exact .scalarBody iterations active world child fuel conditionCanonical evaluated branch canonical demanded
 
 theorem WhileCallHeaderCursor.excludes_maximal_terminal {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
     {root : DemandNode} {owner : Nat}
@@ -60,6 +83,8 @@ theorem WhileCallHeaderCursor.excludes_maximal_terminal {cfg : Cfg} {env : Env} 
   | existing cursor => exact (WhileStatementPrefixCursor.header cursor).excludes_maximal_terminal terminal maximal
   | body iterations active world child sourceFuel conditionCanonical evaluated branch canonical demanded =>
     exact demanded.call_excludes_maximal_terminal terminal maximal
+  | scalarBody iterations active world child sourceFuel conditionCanonical evaluated branch canonical demanded =>
+    exact demanded.scalarCall_excludes_maximal_terminal terminal maximal
 
 inductive WhileCallStatementCursor {cfg : Cfg} {env : Env} (caller : Func) (results : List Ty)
     {root : DemandNode} {owner : Nat}
