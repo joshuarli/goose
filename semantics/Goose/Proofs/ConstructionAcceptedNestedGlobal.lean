@@ -115,7 +115,7 @@ theorem initGlobals_nestedScalar_single (fuel id : Nat) (config : EvalConfig) (a
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (descriptor : Global) (world : AcceptedWorld config id before ambient types live [] [])
     (clear : FutureGlobalsClear config id before) (present : config.module.globals[id]? = some descriptor)
-    (form : NestedScalarExpression descriptor.init) (scalars : AllGlobalScalars config)
+    (form : NestedScalarExpression descriptor.init) (scalars : FlatGlobalsAreScalar config)
     (scalar : (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool) :
     ∃ completed nextLive,
       let outcome := initGlobals fuel config [id] before

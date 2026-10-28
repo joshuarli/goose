@@ -13,8 +13,8 @@ private theorem nestedComplete_bind_success {ε α β : Type} (first : Except ε
   | error failure => cases checked
   | ok value => exact ⟨value, rfl, checked⟩
 
-def AllGlobalScalars (config : EvalConfig) : Prop :=
-  ∀ (id : Nat) (descriptor : Global), config.module.globals[id]? = some descriptor → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool
+def FlatGlobalsAreScalar (config : EvalConfig) : Prop :=
+  ∀ (id : Nat) (descriptor : Global), config.module.globals[id]? = some descriptor → descriptor.ty.flat = true → (∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool
 
 mutual
 theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalarExpression expression)
@@ -24,7 +24,7 @@ theorem nestedScalarExpression_complete {expression : Expr} (form : NestedScalar
     (source : AcceptedFrame config accepted frame before types) (empty : frame.interpretation.environment.vars = #[])
     (globalLimit : frame.typing.globalLimit ≤ frame.initialized)
     (noParameters : ∀ parameter global, ¬ frame.interpretation.parameters parameter (.global global))
-    (scalars : AllGlobalScalars config) (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (scalars : FlatGlobalsAreScalar config) (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
     (checked : CheckedValue frame expression ty roots typingAfter rootsAfter) :
     NestedValueOutcome config accepted frame ambient types live ty (evalValue fuel config frame.interpretation.environment expression before) := by
   cases form with
@@ -104,7 +104,7 @@ theorem nestedScalarBlock_complete {block : Block} (form : NestedScalarBlock blo
     (source : AcceptedFrame config accepted frame before types) (empty : frame.interpretation.environment.vars = #[])
     (globalLimit : frame.typing.globalLimit ≤ frame.initialized)
     (noParameters : ∀ parameter global, ¬ frame.interpretation.parameters parameter (.global global))
-    (scalars : AllGlobalScalars config) (ty : Ty) (typingAfter : Nat) (result : List RootRef × (Nat × Nat)) (rootsAfter : RState)
+    (scalars : FlatGlobalsAreScalar config) (ty : Ty) (typingAfter : Nat) (result : List RootRef × (Nat × Nat)) (rootsAfter : RState)
     (checked : CheckedConditionalBlock frame block [ty] typingAfter result rootsAfter) :
     NestedBlockOutcome config accepted frame ambient types live ty (execBlock fuel config frame.interpretation.environment [] [] block before) := by
   cases form with
@@ -152,7 +152,7 @@ theorem nestedScalarStatements_complete {statements : List Stmt} (form : NestedS
     (source : AcceptedFrame config accepted frame before types) (empty : frame.interpretation.environment.vars = #[])
     (globalLimit : frame.typing.globalLimit ≤ frame.initialized)
     (noParameters : ∀ parameter global, ¬ frame.interpretation.parameters parameter (.global global))
-    (scalars : AllGlobalScalars config) (next : TypingEnv) (typingAfter : Nat) (rootsAfter : RState)
+    (scalars : FlatGlobalsAreScalar config) (next : TypingEnv) (typingAfter : Nat) (rootsAfter : RState)
     (typed : typeStatements frame.typingFuel frame.typing statements frame.typingCounter = .ok (next, typingAfter))
     (rooted : rpStmts frame.source statements frame.rootCursor = .ok ((), rootsAfter))
     (available : GlobalEffectsAvailable frame.interpretation frame.initialized rootsAfter.eff) :
@@ -241,7 +241,7 @@ theorem nestedScalarStatements_complete {statements : List Stmt} (form : NestedS
           simp only [typeStatements, bind, StateT.bind] at allTyped
           obtain ⟨result, headTyped, tailTyped⟩ := nestedComplete_bind_success _ _ _ allTyped
           obtain ⟨headEnvironment, headCounter⟩ := result
-          obtain ⟨descriptor, operandRoots, operandCounter, operandCursor, declared, inside, mutable, sameEnv, sameAfter, operandChecked⟩ :=
+          obtain ⟨descriptor, operandRoots, operandCounter, operandCursor, declared, inside, mutable, flat, sameEnv, sameAfter, operandChecked⟩ :=
             checkedValue_nestedGlobalAssign_operand checkFuel frame id expression origin expressionForm headEnvironment headCounter rootMiddle
               headTyped headRooted headAvailable
           have moduleDeclared : config.module.globals[id]? = some descriptor := by
@@ -280,7 +280,7 @@ theorem nestedScalarStatements_complete {statements : List Stmt} (form : NestedS
                     (evalValue (fuel + 1) config frame.interpretation.environment expression before) :=
                   safe.retarget config accepted frame operandFrame ambient types live descriptor.ty before _ source empty rfl rfl
                 exact nestedGlobalAssign_compose fuel config accepted frame ambient types live id descriptor expression origin before
-                  earlier moduleDeclared (scalars id descriptor moduleDeclared) safe'
+                  earlier moduleDeclared (scalars id descriptor moduleDeclared flat) safe'
           have tailSafe : ∀ state, AcceptedWorld config frame.initialized state ambient types live [] [] →
               AcceptedFrame config accepted frame state types →
               NestedStatementsOutcome config accepted frame ambient types live

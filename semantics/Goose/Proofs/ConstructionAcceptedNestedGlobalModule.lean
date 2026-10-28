@@ -6,7 +6,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 
-theorem acceptedNestedGlobalModule_lowFuel (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : AllGlobalScalars config)
+theorem acceptedNestedGlobalModule_lowFuel (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : FlatGlobalsAreScalar config)
     (declarations : ∀ id, id < config.module.globals.size →
       ∃ descriptor, config.module.globals[id]? = some descriptor ∧ NestedGlobalInitializer descriptor)
     (low : fuel < 3) :
@@ -31,7 +31,7 @@ theorem acceptedNestedGlobalModule_lowFuel (fuel : Nat) (config : EvalConfig) (a
   | escape target carriers after | jump target kind after =>
     simp only [globals] at final
 
-theorem acceptedNestedGlobalModule_noTail (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : AllGlobalScalars config)
+theorem acceptedNestedGlobalModule_noTail (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : FlatGlobalsAreScalar config)
     (original : Context) (implementation : Impl)
     (globals : ∀ id, id < config.module.globals.size →
       ∃ descriptor, config.module.globals[id]? = some descriptor ∧ NestedGlobalInitializer descriptor)
@@ -119,7 +119,7 @@ theorem acceptedNestedGlobalModule_noTail (fuel : Nat) (config : EvalConfig) (ac
         | _ => cases bodyResult
 
 
-theorem acceptedNestedGlobalModule_allFuel (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : AllGlobalScalars config)
+theorem acceptedNestedGlobalModule_allFuel (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : FlatGlobalsAreScalar config)
     (original : Context) (implementation : Impl)
     (globals : ∀ id, id < config.module.globals.size →
       ∃ descriptor, config.module.globals[id]? = some descriptor ∧ NestedGlobalInitializer descriptor)

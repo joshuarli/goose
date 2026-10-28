@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedNestedGlobal
+import Goose.Proofs.ConstructionAcceptedMixedGlobal
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -7,10 +8,12 @@ open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionExecutionOwnership
 
 def NestedGlobalInitializer (descriptor : Global) : Prop :=
-  NestedScalarExpression descriptor.init ∧ ((∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool)
+  (NestedScalarExpression descriptor.init ∧ ((∃ intTy, descriptor.ty = .int intTy) ∨ descriptor.ty = .bool)) ∨
+    ∃ bytes bytesOrigin, descriptor.ty = .varr (.int .u8) ∧
+      descriptor.init = .bytes (.varr (.int .u8)) bytes bytesOrigin
 
 theorem initGlobals_nested_head (fuel initialized : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
-    (scalars : AllGlobalScalars config)
+    (scalars : FlatGlobalsAreScalar config)
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (descriptor : Global) (world : AcceptedWorld config initialized before ambient types live [] [])
     (clear : FutureGlobalsClear config initialized before)
@@ -25,19 +28,22 @@ theorem initGlobals_nested_head (fuel initialized : Nat) (config : EvalConfig) (
       | .ok _ _ => completed = initialized + 1 ∧ regions = [] ∧ FutureGlobalsClear config completed after
       | .stop _ _ => completed < initialized + 1
       | .escape .. | .jump .. => False) := by
-  obtain ⟨completed, nextLive, lower, upper, nextWorld, nextFlow⟩ :=
-    initGlobals_nestedScalar_single fuel initialized config accepted before ambient types live descriptor world clear declared initializer.1 scalars initializer.2
-  refine ⟨completed, nextLive, [], lower, upper, nextWorld, ?_⟩
-  cases execution : initGlobals fuel config [initialized] before with
-  | ok value after =>
-    cases value
-    simp only [execution, Goose.Proofs.Exit.stepState] at nextFlow ⊢
-    exact ⟨nextFlow.1, trivial, nextFlow.2⟩
-  | stop reason after => simp only [execution] at nextFlow ⊢; omega
-  | escape address carriers after | jump target kind after => simp only [execution] at nextFlow
+  rcases initializer with scalarForm | ⟨bytes, bytesOrigin, ty, init⟩
+  · obtain ⟨completed, nextLive, lower, upper, nextWorld, nextFlow⟩ :=
+      initGlobals_nestedScalar_single fuel initialized config accepted before ambient types live descriptor world clear declared scalarForm.1 scalars scalarForm.2
+    refine ⟨completed, nextLive, [], lower, upper, nextWorld, ?_⟩
+    cases execution : initGlobals fuel config [initialized] before with
+    | ok value after =>
+      cases value
+      simp only [execution, Goose.Proofs.Exit.stepState] at nextFlow ⊢
+      exact ⟨nextFlow.1, trivial, nextFlow.2⟩
+    | stop reason after => simp only [execution] at nextFlow ⊢; omega
+    | escape address carriers after | jump target kind after => simp only [execution] at nextFlow
+  · exact initGlobals_mixed_single fuel initialized config before ambient types live descriptor world clear declared
+      (Or.inr ⟨bytes, bytesOrigin, ty, init⟩)
 
 theorem initGlobals_nested_complete (count : Nat) :
-    ∀ (fuel initialized : Nat) (config : EvalConfig) (_accepted : AcceptedModule config) (_scalars : AllGlobalScalars config) (before : ExecutionState)
+    ∀ (fuel initialized : Nat) (config : EvalConfig) (_accepted : AcceptedModule config) (_scalars : FlatGlobalsAreScalar config) (before : ExecutionState)
       (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop),
       initialized + count ≤ config.module.globals.size →
       (∀ id, initialized ≤ id → id < initialized + count →
@@ -97,7 +103,7 @@ theorem initGlobals_nested_complete (count : Nat) :
       | escape address carriers after | jump target kind after => simp only [tail] at finalFlow
 
 
-theorem initGlobals_nested_initial_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : AllGlobalScalars config)
+theorem initGlobals_nested_initial_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config) (scalars : FlatGlobalsAreScalar config)
     (declarations : ∀ id, id < config.module.globals.size →
       ∃ descriptor, config.module.globals[id]? = some descriptor ∧ NestedGlobalInitializer descriptor) :
     ∃ completed live regions,

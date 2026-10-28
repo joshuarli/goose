@@ -156,7 +156,7 @@ theorem nestedScalarStatements_cursors {statements : List Stmt} (form : NestedSc
         simp only [typeStatements, bind, StateT.bind] at typed
         obtain ⟨result, headTyped, tailTyped⟩ := nestedCursor_bind_success _ _ _ typed
         obtain ⟨headEnvironment, headCounter⟩ := result
-        obtain ⟨descriptor, operandRoots, operandCounter, operandCursor, declared, inside, mutable, sameEnv, sameAfter, checked⟩ :=
+        obtain ⟨descriptor, operandRoots, operandCounter, operandCursor, declared, inside, mutable, flat, sameEnv, sameAfter, checked⟩ :=
           checkedValue_nestedGlobalAssign_operand checkFuel frame id expression origin expressionForm headEnvironment headCounter rootMiddle
             headTyped headRooted headAvailable
         have operandFacts := nestedScalarExpression_cursors expressionForm checkFuel (scalarAssignmentOperandFrame frame checkFuel)

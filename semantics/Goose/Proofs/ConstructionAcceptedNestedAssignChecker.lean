@@ -97,7 +97,7 @@ theorem checkedValue_nestedGlobalAssign_operand (fuel : Nat) (frame : Constructi
     (available : GlobalEffectsAvailable frame.interpretation frame.initialized rootsAfter.eff) :
     ∃ descriptor roots expressionTypingAfter expressionRootsAfter,
       frame.typing.module.globals[id]? = some descriptor ∧ id < frame.typing.globalLimit ∧ descriptor.kind = .mutable ∧
-      next = frame.typing ∧ typingAfter = expressionTypingAfter ∧
+      descriptor.ty.flat = true ∧ next = frame.typing ∧ typingAfter = expressionTypingAfter ∧
       CheckedValue (scalarAssignmentOperandFrame frame fuel) expression descriptor.ty roots expressionTypingAfter expressionRootsAfter := by
   obtain ⟨ty, writable, binding, middle, expressionAfter, placeTyped, expressionTyped, flat, mutable, sameNext, sameAfter⟩ :=
     typeStatement_nestedScalarAssign fuel frame.typing next (.global id) expression origin frame.typingCounter typingAfter form typed
@@ -114,7 +114,7 @@ theorem checkedValue_nestedGlobalAssign_operand (fuel : Nat) (frame : Constructi
   have operandAvailable : GlobalEffectsAvailable frame.interpretation frame.initialized expressionRootsAfter.eff := by
     intro target member global instantiates
     exact available target (included member) global instantiates
-  exact ⟨descriptor, roots, expressionAfter, expressionRootsAfter, declared, inside, mutableDescriptor, sameNext, sameAfter,
+  exact ⟨descriptor, roots, expressionAfter, expressionRootsAfter, declared, inside, mutableDescriptor, flat, sameNext, sameAfter,
     ⟨expressionTyped, expressionRooted, operandAvailable⟩⟩
 
 #print axioms checkedValue_nestedGlobalAssign_operand

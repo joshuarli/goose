@@ -15,8 +15,9 @@ private def nestedConditionalExpression : Expr :=
     (.mk 3 [] (some (.lit .i64 5))) 0
 
 private def nestedConditionalModule : Module :=
-  ⟨#["nested.goose"], #[.int .i64],
+  ⟨#["nested.goose"], #[.int .i64, .varr (.int .u8)],
     #[⟨"source", .int .i64, .mutable, .lit .i64 1, 0⟩,
+      ⟨"bytes", .varr (.int .u8), .immutable, .bytes (.varr (.int .u8)) [65] 0, 0⟩,
       ⟨"number", .int .i64, .immutable, nestedConditionalExpression, 0⟩],
     #[nestedConditionalEntry], #[⟨0, "entry", [], [], []⟩], 0, #[⟨0, 1, "assign"⟩], #[], #[]⟩
 
@@ -34,7 +35,7 @@ theorem nestedConditional_validated : validate nestedConditionalModule = .ok () 
 
 private def nestedConditionalObservation : Option (Int × Int) :=
   match runModule 100 nestedConditionalConfig .initial with
-  | .ok () state => match state.objects.lookup (.global 0), state.objects.lookup (.global 1) with
+  | .ok () state => match state.objects.lookup (.global 0), state.objects.lookup (.global 2) with
     | some (.int .i64 first), some (.int .i64 second) => some (first, second)
     | _, _ => none
   | _ => none
@@ -59,8 +60,8 @@ theorem nestedConditional_allFuel (fuel : Nat) :
       AcceptedWorld nestedConditionalConfig initialized
         (Goose.Proofs.Exit.stepState (runModule fuel nestedConditionalConfig .initial)) ambient types live regions [] ∧
       (match runModule fuel nestedConditionalConfig .initial with | .ok .. | .stop .. => True | .escape .. | .jump .. => False) := by
-  have scalars : AllGlobalScalars nestedConditionalConfig := by
-    intro id descriptor declared
+  have scalars : FlatGlobalsAreScalar nestedConditionalConfig := by
+    intro id descriptor declared flat
     cases id with
     | zero =>
       have same : descriptor = ⟨"source", .int .i64, .mutable, .lit .i64 1, 0⟩ := by
@@ -70,21 +71,31 @@ theorem nestedConditional_allFuel (fuel : Nat) :
     | succ id =>
       cases id with
       | zero =>
-        have same : descriptor = ⟨"number", .int .i64, .immutable, nestedConditionalExpression, 0⟩ := by
+        have same : descriptor = ⟨"bytes", .varr (.int .u8), .immutable, .bytes (.varr (.int .u8)) [65] 0, 0⟩ := by
           simpa [nestedConditionalConfig, nestedConditionalModule] using declared.symm
         subst descriptor
-        exact Or.inl ⟨.i64, rfl⟩
-      | succ id => simp [nestedConditionalConfig, nestedConditionalModule] at declared
+        simp [Ty.flat] at flat
+      | succ id =>
+        cases id with
+        | zero =>
+          have same : descriptor = ⟨"number", .int .i64, .immutable, nestedConditionalExpression, 0⟩ := by
+            simpa [nestedConditionalConfig, nestedConditionalModule] using declared.symm
+          subst descriptor
+          exact Or.inl ⟨.i64, rfl⟩
+        | succ id => simp [nestedConditionalConfig, nestedConditionalModule] at declared
   apply acceptedNestedGlobalModule_allFuel fuel nestedConditionalConfig
     (acceptedModule nestedConditionalConfig nestedConditional_validated) scalars ⟨0, "entry", [], [], []⟩ nestedConditionalEntry
   · intro id inside
-    change id < 2 at inside
+    change id < 3 at inside
     cases id with
-    | zero => exact ⟨_, rfl, .scalar (.numeric (.scalar (.scalar (.integer .i64 1)))), Or.inl ⟨.i64, rfl⟩⟩
+    | zero => exact ⟨_, rfl, Or.inl ⟨.scalar (.numeric (.scalar (.scalar (.integer .i64 1)))), Or.inl ⟨.i64, rfl⟩⟩⟩
     | succ id =>
       cases id with
-      | zero => exact ⟨_, rfl, nestedConditional_form, Or.inl ⟨.i64, rfl⟩⟩
-      | succ id => omega
+      | zero => exact ⟨_, rfl, Or.inr ⟨[65], 0, rfl, rfl⟩⟩
+      | succ id =>
+        cases id with
+        | zero => exact ⟨_, rfl, Or.inl ⟨nestedConditional_form, Or.inl ⟨.i64, rfl⟩⟩⟩
+        | succ id => omega
   · rfl
   · rfl
   · exact .nil
