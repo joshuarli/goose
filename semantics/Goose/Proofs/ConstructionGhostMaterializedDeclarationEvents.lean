@@ -78,6 +78,37 @@ theorem materializedDeclaration_visit_sourceEvents
           | exact eventPrefix_refl _
     | stop | escape | jump => simp [source, materializationContinuation, declarationAfterMaterialization, Goose.Proofs.Exit.stepState, eventPrefix_refl]
 
+def MaterializedVisitSourceEvents (config : EvalConfig) (environment : RuntimeActivation) (visits : List StatementInvocation) : Prop :=
+  ∀ visit ∈ visits, ∀ sourceFuel localVar expression origin descriptor root implementation count ready,
+    visit.fuel = sourceFuel + 1 → visit.statement = .letS localVar expression origin →
+    environment.vars[localVar]? = some descriptor → descriptor.ty.nonfixed = true →
+    rootOf environment localVar visit.before = .ok root ready →
+    config.module.impls[environment.implementation]? = some implementation →
+    (implementation.results.toList.zipIdx.find? fun (result, _) => result.namedLocal == some localVar) = none →
+    ordinaryProducerCount? sourceFuel ⟨config.module, environment.vars⟩ expression = some count →
+    SourceHistory config sourceFuel [environment.act, visit.ordinal, 0] (.value environment expression) ready
+      (evalValue sourceFuel config environment expression ready) ∧
+    ready.construction.events = visit.before.construction.events ∧
+    EventPrefix (Goose.Proofs.Exit.stepState (evalValue sourceFuel config environment expression ready)).construction.events
+      (Goose.Proofs.Exit.stepState visit.outcome).construction.events
+
+theorem statementReplay_materializedSourceEvents
+    (replay : StatementReplay config environment fuel offset statements before outcome visits)
+    (supported : ∀ sourceFuel localVar expression origin, .letS localVar expression origin ∈ statements →
+      FuelSupport config sourceFuel (.value environment expression)) :
+    MaterializedVisitSourceEvents config environment visits := by
+  intro visit member sourceFuel localVar expression origin descriptor root implementation count ready visitFuel visitStatement
+    found nonfixed rootResult implementationFound notNamed materialized
+  have inMapped : visit.statement ∈ visits.map StatementInvocation.statement := List.mem_map_of_mem member
+  rw [replay.sourceOrder] at inMapped
+  have inStatements : .letS localVar expression origin ∈ statements := by
+    rw [← visitStatement]
+    exact List.mem_of_mem_take inMapped
+  exact materializedDeclaration_visit_sourceEvents replay visit member sourceFuel localVar expression origin descriptor root implementation
+    count ready visitFuel visitStatement found nonfixed rootResult implementationFound notNamed materialized
+    (supported sourceFuel localVar expression origin inStatements)
+
+#print axioms statementReplay_materializedSourceEvents
 #print axioms declarationContinuation_keepsEventPrefix
 #print axioms materializedDeclaration_visit_sourceEvents
 end Goose.Proofs.ConstructionGhostMaterializedDeclarationEvents
