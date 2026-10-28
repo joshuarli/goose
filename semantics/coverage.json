@@ -488,6 +488,15 @@
   "evidence": "ConstructionAcceptedFreshness.lean, ConstructionAcceptedStaticBytes.lean and ConstructionAcceptedFreshnessChecks.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Constructed byte owner backing",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.buildExpr_byteOwner_backing",
+  "statement": "Successful byte-owner construction preserves the element scan through every actual write and yields a sampled stored value with backing after completion.",
+  "assumptions": "An open backed destination with packed value layout, a valid destination lifecycle, an unaliased current destination, and a resulting element count below the packed count limit.",
+  "limits": "The destination readiness, count bound, publication and accepted-world preservation remain to be derived for the full evaluator. This result does not discharge TH-CON-01.",
+  "evidence": "ConstructionAcceptedByteBacking.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Published owner storage from fresh allocation",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.newDestination_publishedOwner_storage; Goose.Proofs.ConstructionAcceptedExecution.bytes_publishedOwner_storage",

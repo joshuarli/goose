@@ -98,7 +98,7 @@ theorem newDestination_publishedOwner_storage (config : EvalConfig) (initialized
   cases sampled
   exact ⟨storage.trans receiverStorage, rfl⟩
 
-private theorem protectDestination_success (origin : OriginId) (id : Nat) (action : EvalM α)
+theorem protectDestination_success (origin : OriginId) (id : Nat) (action : EvalM α)
     (before after : ExecutionState) (value : α)
     (executed : protectDestination origin id action before = .ok value after) :
     action before = .ok value after := by
