@@ -24,7 +24,7 @@ private theorem mixedAssignEntryFrame_fullInitialization (config : EvalConfig) (
   have lower : frame.initialized ≤ id := Nat.le_trans source.compatible.initialized future
   exact source.futureGlobals id lower within
 
-theorem acceptedMixedAssignEntry_normal_scope (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+theorem acceptedMixedAssignEntry_normal_scope_events (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (state : ExecutionState) (live : Goose.Core.RootInst → Prop)
     (original : Context) (implementation : Impl)
     (world : AcceptedWorld config config.module.globals.size state [] (declaredRootTypes config.module) live [] [])
@@ -53,6 +53,8 @@ theorem acceptedMixedAssignEntry_normal_scope (fuel : Nat) (config : EvalConfig)
       invokeCall (fuel + 3) config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 state =
         (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
           deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
+      (∃ suffix, (Goose.Proofs.Exit.stepState outcome).construction.events = before.construction.events ++ suffix ∧
+        ∀ event ∈ suffix, ByteOwnerSequenceEvent event) ∧
       (match outcome with
       | .ok (.normal .unit) after =>
         execActivationBody (fuel + 1) config activation [] frame.source.impl.body activated =
@@ -149,15 +151,19 @@ theorem acceptedMixedAssignEntry_normal_scope (fuel : Nat) (config : EvalConfig)
     intro declaration member
     simp only [full, entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, results,
       Array.toList_empty, List.zipIdx_nil, List.find?_nil]
-  obtain ⟨next, finalTypes, nextLive, regions, initializedEq, extended, finalWorld, finalSource, finalFlow⟩ :=
-    execStmts_mixedAssign_accepted_world form' fuel config accepted full config.module.entry before
+  obtain ⟨next, finalTypes, nextLive, regions, initializedEq, extended, finalWorld, finalSource, finalFlow, suffix, trace, validEvents⟩ :=
+    execStmts_mixedAssign_accepted_world_events form' fuel config accepted full config.module.entry before
       [.callChannels activation []] types live [] [] fullWorld fullSource phase fullPosition rfl limit initialBound owners' scalarOwners' localTargets' globalTargets' unnamed
   change (match execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before with
     | .ok result _ => result = .normal .unit | .stop _ _ => True | .escape .. | .jump .. => False) at finalFlow
   change AcceptedWorld config next.initialized
     (Goose.Proofs.Exit.stepState (execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before))
     [.callChannels activation []] finalTypes nextLive regions [] at finalWorld
-  refine ⟨frame, next, activation, finalTypes, nextLive, regions, channels, implementationEq, step, ?_⟩
+  have trace' : (Goose.Proofs.Exit.stepState (execStmts fuel config entryFrame.interpretation.environment
+      frame.source.impl.body.stmts before)).construction.events = before.construction.events ++ suffix := by
+    exact trace
+  refine ⟨frame, next, activation, finalTypes, nextLive, regions, channels, implementationEq, step,
+    ⟨suffix, trace', validEvents⟩, ?_⟩
   change (match execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before with
     | .ok (.normal .unit) after => _ | .stop reason after => _ | _ => False)
   cases outcome : execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before with
@@ -182,6 +188,53 @@ theorem acceptedMixedAssignEntry_normal_scope (fuel : Nat) (config : EvalConfig)
       (by simpa only [implementationEq] using tail) normal,
       finalWorld'.releaseScope config next.initialized after [.callChannels activation []] finalTypes nextLive regions []
         activation frame.source.impl.body.scope activated.nextScope⟩
+
+
+theorem acceptedMixedAssignEntry_normal_scope (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (state : ExecutionState) (live : Goose.Core.RootInst → Prop)
+    (original : Context) (implementation : Impl)
+    (world : AcceptedWorld config config.module.globals.size state [] (declaredRootTypes config.module) live [] [])
+    (originalAt : config.module.contexts[config.module.entry]? = some original)
+    (implementationAt : config.module.impls[original.impl]? = some implementation)
+    (form : MixedAssignStatements implementation.body.stmts)
+    (owners : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ implementation.body.stmts →
+      (implementation.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
+    (scalarOwners : ∀ id expression origin, .letS id expression origin ∈ implementation.body.stmts →
+      AcceptedBinaryExpression expression → ∀ descriptor, implementation.vars[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool)
+    (localTargets : ∀ id expression origin, .assign (.var id) expression origin ∈ implementation.body.stmts →
+      ∀ descriptor, implementation.vars[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool)
+    (globalTargets : ∀ id expression origin, .assign (.global id) expression origin ∈ implementation.body.stmts →
+      ∀ descriptor, config.module.globals[id]? = some descriptor →
+        (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool)
+    (tail : implementation.body.value = none) :
+    ∃ (frame next : ConstructionSourceFrame) (activation : RuntimeActivation)
+      (types : RootTypes) (nextLive : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion),
+        let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
+      let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
+      let entryFrame := entryStatementsFrame config frame activated.nextScope
+      let outcome := execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before
+      activation.channels = [] ∧ frame.source.impl = implementation ∧
+      invokeCall (fuel + 3) config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 state =
+        (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
+          deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
+      (match outcome with
+      | .ok (.normal .unit) after =>
+        execActivationBody (fuel + 1) config activation [] frame.source.impl.body activated =
+          .ok [] (releaseScopeState activation frame.source.impl.body.scope activated.nextScope after) ∧
+        AcceptedWorld config next.initialized (releaseScopeState activation frame.source.impl.body.scope activated.nextScope after)
+          [.callChannels activation []] types
+          (fun root => nextLive root ∧ (Goose.Proofs.Exit.runtimeScopeRoots activation frame.source.impl.body.scope activated.nextScope).contains root = false)
+          regions []
+      | .stop reason after =>
+        execActivationBody (fuel + 1) config activation [] frame.source.impl.body activated = .stop reason after ∧
+        AcceptedWorld config next.initialized after [.callChannels activation []] types nextLive regions []
+      | _ => False) := by
+  obtain ⟨frame, next, activation, types, nextLive, regions, channels, implementationEq, step, trace, outcome⟩ :=
+    acceptedMixedAssignEntry_normal_scope_events fuel config accepted state live original implementation world
+      originalAt implementationAt form owners scalarOwners localTargets globalTargets tail
+  exact ⟨frame, next, activation, types, nextLive, regions, channels, implementationEq, step, outcome⟩
 
 
 theorem acceptedMixedAssignModule_noTail (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
@@ -313,6 +366,7 @@ theorem acceptedMixedAssignModule_allFuel (fuel : Nat) (config : EvalConfig) (ac
       exact ⟨initialized, [], types, live, regions, world, trivial⟩
 
 #print axioms acceptedMixedAssignModule_allFuel
+#print axioms acceptedMixedAssignEntry_normal_scope_events
 #print axioms acceptedMixedAssignEntry_normal_scope
 #print axioms acceptedMixedAssignModule_noTail
 end Goose.Proofs.ConstructionAcceptedExecution
