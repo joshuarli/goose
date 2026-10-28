@@ -89,9 +89,6 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.value environment (.fill (.arr element count) operand origin))
-  | valueBlock (fuel : Nat) (environment : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId)
-      (child : FuelSupport config fuel (.block environment block)) :
-      FuelSupport config (fuel + 1) (.value environment (.blockE block origin))
   | conditional (fuel : Nat) (environment : RuntimeActivation) (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
       (conditionChild : FuelSupport config fuel (.value environment condition))
       (yesChild : FuelSupport config fuel (.block environment yes)) (noChild : FuelSupport config fuel (.block environment no)) :
@@ -423,8 +420,6 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           simp only [execute] at child ⊢
           rw [actual]
           exact .fill fixed child
-      | valueBlock _ environment block origin child =>
-          exact .valueBlock fuel path environment block origin before (ih (.block environment block) (path ++ [0]) before child)
       | conditional _ environment condition yes no origin conditionSupported yesSupported noSupported =>
           have child := ih (.value environment condition) (path ++ [0]) before conditionSupported
           have branch : ∀ value middle selected ready,

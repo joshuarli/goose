@@ -15,8 +15,6 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
       (viewChild : ViewSyntax config view) (loChild : BoundSyntax config lo) (hiChild : BoundSyntax config hi) :
       ValueSyntax config (.slice mutability view lo hi origin)
   | pop (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.pop place origin)
-  | blockValue (block : Block) (origin : Goose.Core.OriginId) (child : BlockValueSyntax config block) :
-      ValueSyntax config (.blockE block origin)
   | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
       (conditionChild : ValueSyntax config condition) (yesChild : BlockValueSyntax config yes) (noChild : BlockValueSyntax config no) :
       ValueSyntax config (.ifE condition yes no origin)
@@ -334,7 +332,6 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | reference mutability place child => exact .referenceValue fuel environment mutability place (previous.place environment place child)
         | length view child => exact .lengthValue fuel environment view (previous.view environment view child)
         | pop place origin child => exact .popValue fuel environment place origin (previous.place environment place child)
-        | blockValue block origin child => exact .valueBlock fuel environment block origin (previous.valueBlock environment block child)
         | conditional condition yes no origin conditionChild yesChild noChild =>
             exact .conditional fuel environment condition yes no origin (previous.value environment condition conditionChild)
               (previous.valueBlock environment yes yesChild) (previous.valueBlock environment no noChild)
