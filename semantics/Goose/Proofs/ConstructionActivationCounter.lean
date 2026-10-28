@@ -1295,6 +1295,37 @@ theorem invokeCall_counter_succ (fuel : Nat) (config : EvalConfig)
                   exact counter_deliverCarriers _ _ _ _ _
 
 #print axioms invokeCall_counter_succ
+local macro "counter_channel" : tactic => `(tactic|
+  repeat' first
+    | exact counter_pure _
+    | exact counter_stop _
+    | exact counter_get
+    | exact counter_lift _ _
+    | exact counter_stateQuery _ (stateQuery_receivingDestination _)
+    | exact counter_stateQuery _ (stateQuery_getDestination _)
+    | exact counter_stateQuery _ (stateQuery_exitSource _ _ _)
+    | apply counter_bind
+    | dsimp only
+    | split
+    | intro)
+
+theorem counter_selectCompletionChannel (source : RuntimeActivation) (operand : Expr)
+    (channel : Channel) : PreservesActivationCounter (selectCompletionChannel source operand channel) := by
+  cases channel <;> simp only [selectCompletionChannel]
+  all_goals counter_channel
+
+theorem counter_prepareNamedCarrier (origin : Goose.Core.OriginId)
+    (incoming : Goose.Core.DestinationId) (stored : StoredValue) :
+    PreservesActivationCounter (prepareNamedCarrier origin incoming stored) := by
+  unfold prepareNamedCarrier
+  counter_channel
+
+theorem counter_prepareNamedCarrierAt (origin : Goose.Core.OriginId)
+    (token : ExitReservationId) (incoming : Goose.Core.DestinationId) (stored : StoredValue) :
+    PreservesActivationCounter (prepareNamedCarrierAt origin token incoming stored) := by
+  unfold prepareNamedCarrierAt
+  counter_channel
+
 theorem counter_conditional (condition : Prop) [Decidable condition]
     (yes no : EvalM α) (left : PreservesActivationCounter yes) (right : PreservesActivationCounter no) :
     PreservesActivationCounter (if condition then yes else no) := by
@@ -1324,11 +1355,18 @@ macro_rules
       | with_reducible exact counter_bindStaticRoot _ _
       | with_reducible exact counter_publishCarriers _ _
       | with_reducible exact counter_channelsFor _ _ _ _
+      | with_reducible exact counter_selectCompletionChannel _ _ _
+      | with_reducible exact counter_prepareNamedCarrier _ _ _
+      | with_reducible exact counter_prepareNamedCarrierAt _ _ _ _
+      | with_reducible exact counter_landCarriersInto _ _ _
       | with_reducible exact counter_truncateOwner _ _ _ _ _
       | with_reducible exact counter_stateQuery _ (stateQuery_getImplementation _ _)
       | with_reducible exact counter_stateQuery _ (stateQuery_sampledStored _)
       | with_reducible exact counter_stateQuery _ (stateQuery_readStoredElement _ _ _ _)
       | with_reducible exact counter_stateQuery _ (stateQuery_expectInt _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_enclosingActivation _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_targetActivation _ _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_currentBreak _ _)
       | with_reducible exact counter_stateQuery _ (stateQuery_expectRef _)
       | with_reducible exact counter_stateQuery _ (stateQuery_sameIntType _ _)
       | with_reducible exact counter_stateQuery _ (stateQuery_comparable _ _)
@@ -1350,6 +1388,10 @@ macro_rules
       | with_reducible exact ($previous).place _ _
       | with_reducible exact ($previous).view _ _
       | with_reducible exact ($previous).produce _ _ _
+      | with_reducible exact ($previous).operands _ _ _
+      | with_reducible exact ($previous).element _ _ _ _
+      | with_reducible exact ($previous).resultBlock _ _ _
+      | with_reducible exact ($previous).resultBlockWith _ _ _ _
       | with_reducible exact ($previous).call _ _ _ _ _
       | with_reducible exact ($previous).block _ _ _ _
       | with_reducible exact ($previous).push _ _ _ _
@@ -1358,6 +1400,9 @@ macro_rules
       | with_reducible exact ($previous).whileLoop _ _ _
       | with_reducible exact ($previous).rangeLoop _ _ _ _ _ _
       | with_reducible exact ($previous).eachLoop _ _ _ _ _ _ _
+      | with_reducible apply counter_withBreakTarget
+      | with_reducible apply counter_protectDestination
+      | with_reducible apply counter_withCompletionChannels
       | with_reducible apply counter_constructLocal
       | with_reducible apply counter_listMapM
       | with_reducible apply counter_bind
@@ -1373,6 +1418,7 @@ theorem buildElement_counter_succ (fuel : Nat) (config : EvalConfig)
   counter_eval_simple previous
 
 #print axioms buildElement_counter_succ
+set_option maxHeartbeats 2000000 in
 theorem evalValue_counter_succ (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (expression : Expr) :
     PreservesActivationCounter (evalValue (fuel + 1) config environment expression) := by
@@ -1398,6 +1444,15 @@ theorem evalValue_counter_succ (fuel : Nat) (config : EvalConfig)
       cases operands <;> simp only [evalValue] <;> counter_eval_simple previous
 
 #print axioms evalValue_counter_succ
+set_option maxHeartbeats 2000000 in
+theorem evalProduce_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (channels : List Channel) (expression : Expr) :
+    PreservesActivationCounter (evalProduce (fuel + 1) config environment channels expression) := by
+  cases expression <;> simp only [evalProduce]
+  all_goals counter_eval_simple previous
+
+#print axioms evalProduce_counter_succ
 theorem execWhile_counter_succ (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
     (condition : Expr) (body : Block) :
