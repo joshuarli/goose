@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionAcceptedRegisterCall
 import Goose.Proofs.ConstructionAcceptedEntryActivation
 import Goose.Proofs.ConstructionAcceptedGlobalPrefix
 
@@ -5,51 +6,6 @@ namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionExecutionOwnership
-
-theorem acceptedWorld_pushRegisterActivation (config : EvalConfig) (initialized : Nat) (state : ExecutionState)
-    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
-    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (activation : RuntimeActivation)
-    (world : AcceptedWorld config initialized state ambient types live regions pending)
-    (identifier : activation.act = state.nextAct) (ty : Ty) (channels : activation.channels = [.register ty]) :
-    AcceptedWorld config initialized
-      { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
-      (.callChannels activation [] :: ambient) types live regions pending := by
-  let after := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
-  let nextAmbient := OwnershipAmbientFrame.callChannels activation [] :: ambient
-  have retained : OwnershipAmbientInvariant state.construction nextAmbient := by
-    refine ⟨world.ownership.retention.structural, ?_, ?_⟩
-    · simpa only [nextAmbient, OwnershipAmbient.retained, List.flatMap_cons, OwnershipAmbientFrame.carriers,
-        List.nil_append] using world.ownership.retention.anchors
-    · refine ⟨?_, world.ownership.retention.boundaries⟩
-      intro token incoming reserved selected snapshot member
-      cases member
-  have runtime : OwnershipRuntimeFrames after nextAmbient := by
-    have pushed := ownershipRuntimeFrames_call_push state ambient activation world.ownership.runtime
-    exact ⟨pushed.activations, pushed.breaks⟩
-  have reservations : OwnershipReservationFrames state.construction nextAmbient := by
-    intro token reservation present needs
-    obtain ⟨frame, member, owned⟩ := world.ownership.reservations token reservation present needs
-    exact ⟨frame, List.mem_cons_of_mem _ member, owned⟩
-  have receiving : OwnershipCapturedReceivingFrames state.construction nextAmbient := by
-    apply ownershipCapturedReceivingFrames_call_push state.construction ambient activation world.ownership.receiving
-    intro channel member
-    rw [channels] at member
-    simp only [List.mem_singleton] at member
-    subst channel
-    trivial
-  have bounds : OwnershipCapturedReceivingBounds state.construction nextAmbient := by
-    refine ⟨?_, world.ownership.bounds⟩
-    intro channel member
-    rw [channels] at member
-    simp only [List.mem_singleton] at member
-    subst channel
-    trivial
-  have ownership : OwnershipExecutionContext after nextAmbient :=
-    ⟨world.ownership.source, retained, runtime, reservations, receiving, bounds,
-      ownershipRuntimeIdentities_activation_push world.ownership.identities activation identifier⟩
-  exact acceptedWorld_clockFrame config initialized state after nextAmbient types live world ownership rfl rfl rfl
-    (Nat.le_succ _) (Nat.le_refl _)
-
 
 theorem FutureGlobalsClear.pushActivation {config : EvalConfig} {initialized : Nat} {state : ExecutionState}
     (clear : FutureGlobalsClear config initialized state) (activation : RuntimeActivation) :
@@ -148,17 +104,10 @@ theorem finishActivation_register_stopped (config : EvalConfig) (initialized : N
   exact ⟨by simp [finishActivation, evaluated], world, clear⟩
 
 #print axioms finishActivation_register_stopped
-theorem deliverCarriers_register (fuel : Nat) (config : EvalConfig) (ty : Ty) (value : Value)
-    (origin : Nat) (state : ExecutionState) :
-    deliverCarriers fuel config.layout [.register ty] [.register value] origin state = .ok [.register value] state := by
-  simp [deliverCarriers, bind, pure]
-
 #print axioms finishActivation_register_normal
-#print axioms deliverCarriers_register
 #print axioms ownershipAmbient_call_fresh
 #print axioms ownershipExecutionContext_finishRegisterCall
 #print axioms AcceptedWorld.finishRegisterCall
 #print axioms FutureGlobalsClear.finishActivation
-#print axioms acceptedWorld_pushRegisterActivation
 #print axioms FutureGlobalsClear.pushActivation
 end Goose.Proofs.ConstructionAcceptedExecution

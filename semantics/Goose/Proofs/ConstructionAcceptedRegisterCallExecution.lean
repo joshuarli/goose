@@ -140,7 +140,7 @@ theorem invokeCall_scalarLocal_prefix (fuel : Nat) (config : EvalConfig) (accept
             rw [transition]
             change (do let carriers ← enterActivation (fuel + 1) config activation [] implementation.body origin
                        deliverCarriers (fuel + 1) config.layout [.register ty] carriers origin) pushed = _
-            simpa only [bind, entered] using deliverCarriers_register (fuel + 1) config ty value origin
+            simpa only [bind, entered] using deliverCarriers_register (fuel + 1) config.layout ty value origin
               { after with activations := after.activations.filter (fun current => current.act != activation.act) }
           rw [callRun]
           exact ⟨nextTypes, nextLive, ambient, extend, Nat.le_trans (Nat.le_succ _) bodyActClock, bodyScopeClock, initialized ▸ finishedWorld, initialized ▸ finishedClear, rfl, value, rfl, represented⟩

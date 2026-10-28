@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionAcceptedRegisterTail
 import Goose.Proofs.ConstructionAcceptedScalarArgument
 import Goose.Proofs.ConstructionAcceptedRegisterCall
 
@@ -6,33 +7,12 @@ open Goose.Construct
 open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 
-theorem evalProduce_register_scalar {expression : Expr} (form : AcceptedBinaryExpression expression)
-    (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation) (ty : Ty) (state : ExecutionState) :
-    evalProduce (fuel + 1) config environment [.register ty] expression state =
-      (do let value ← evalValue fuel config environment expression; pure [Carrier.register value]) state := by
-  cases form with
-  | numeric form =>
-    cases form with
-    | scalar form =>
-      cases form with
-      | scalar form => cases form <;> simp [evalProduce, selectCompletionChannel, bind, pure]
-      | not form => simp [evalProduce, selectCompletionChannel, bind, pure]
-    | unary operation origin form => simp [evalProduce, selectCompletionChannel, bind, pure]
-    | conversion kind target origin form => simp [evalProduce, selectCompletionChannel, bind, pure]
-  | binary operation origin left right => simp [evalProduce, selectCompletionChannel, bind, pure]
-  | comparison operation left right => simp [evalProduce, selectCompletionChannel, bind, pure]
-  | conjunction left right => simp [evalProduce, selectCompletionChannel, bind, pure]
-  | disjunction left right => simp [evalProduce, selectCompletionChannel, bind, pure]
-  | not form => simp [evalProduce, selectCompletionChannel, bind, pure]
-  | unary operation origin form => simp [evalProduce, selectCompletionChannel, bind, pure]
-  | conversion kind target origin form => simp [evalProduce, selectCompletionChannel, bind, pure]
-
 theorem withCompletion_register_scalar {expression : Expr} (form : AcceptedBinaryExpression expression)
     (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation) (ty : Ty) (state : ExecutionState) :
     withCompletionChannels [.register ty] (expressionOrigin expression)
       (fun channels => evalProduce (fuel + 1) config environment channels expression) state =
       (do let value ← evalValue fuel config environment expression; pure [Carrier.register value]) state := by
-  have produced := evalProduce_register_scalar form fuel config environment ty state
+  have produced := evalProduce_register_scalar form fuel config environment state ty
   cases evaluated : evalValue fuel config environment expression state <;>
     simp [withCompletionChannels, materializeOwnedCarriers, bind, pure, produced, evaluated]
 
@@ -74,5 +54,4 @@ theorem evalProduce_checkedScalar_register_world {expression : Expr} (form : Acc
 
 #print axioms evalProduce_checkedScalar_register_world
 #print axioms withCompletion_register_scalar
-#print axioms evalProduce_register_scalar
 end Goose.Proofs.ConstructionAcceptedExecution
