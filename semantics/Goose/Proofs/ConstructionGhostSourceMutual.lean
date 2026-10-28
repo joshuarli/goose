@@ -2,10 +2,13 @@ import Goose.Proofs.ConstructionGhostSourceTransition
 import Goose.Proofs.ConstructionGhostBlock
 import Goose.Proofs.ConstructionGhostResultScopeCore
 import Goose.Proofs.ConstructionGhostElementCore
+import Goose.Proofs.ConstructionGhostInvocationCore
+import Goose.Proofs.ConstructionInitializerLoopReplay
 
 namespace Goose.Proofs.ConstructionGhostSourceMutual
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition
 open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultScope Goose.Proofs.ConstructionGhostElements
+open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInvocation Goose.Proofs.ConstructionInitializerLoopReplay
 
 inductive SourceOperation : Type → Type
   | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
@@ -189,6 +192,10 @@ inductive SourceHistory (config : EvalConfig) :
       SourceHistory config (fuel + 1) path (.value environment (.lit ty value)) before (.ok (.int ty value) before)
   | boolean (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (value : Bool) (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.value environment (.bool value)) before (.ok (.bool value) before)
+  | valueBytes (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (ty : Ty)
+      (bytes : List UInt8) (origin : Goose.Core.OriginId) (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.value environment (.bytes ty bytes origin)) before
+        (evalValue (fuel + 1) config environment (.bytes ty bytes origin) before)
   | negation {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -283,6 +290,18 @@ inductive SourceHistory (config : EvalConfig) :
       (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.builder environment destination (.bytes ty bytes origin)) before
         (buildExpr (fuel + 1) config environment destination (.bytes ty bytes origin) before)
+  | builderArray (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (incoming : Goose.Core.DestinationId) (ty : Ty) (operands : List Expr) (origin : Goose.Core.OriginId)
+      (before : ExecutionState)
+      (elements : ∀ current prepared ready pending element outcome visits,
+        liftConstruction origin (renewReceivingDestination incoming) before = .ok current prepared →
+        getDestination current prepared = .ok pending ready →
+        elementType pending.capability.logicalType = some element →
+        OperandReplay (fun operand => buildElement fuel config environment current element operand) 0 operands [] ready outcome visits →
+        ∀ visit ∈ visits, SourceHistory config fuel (path ++ [visit.ordinal])
+          (.element environment current element visit.operand) visit.before visit.outcome) :
+      SourceHistory config (fuel + 1) path (.builder environment incoming (.arrLit ty operands origin)) before
+        (buildExpr (fuel + 1) config environment incoming (.arrLit ty operands origin) before)
   | fixedElement {fuel : Nat} {path : List Nat} {environment : RuntimeActivation}
       {parent : Goose.Core.DestinationId} {element : Ty} {operand : Expr} {before : ExecutionState}
       {outcome : ExecutionStep Value} (fixed : element.nonfixed = false)
@@ -337,6 +356,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
+  | valueBytes | builderArray => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]
@@ -459,6 +479,8 @@ theorem statements_exist (fuel : Nat) (config : EvalConfig) (environment : Runti
 inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOperation α → Prop
   | value (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
       SupportedOperation config (.value environment expression)
+  | valueBytes (environment : RuntimeActivation) (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
+      SupportedOperation config (.value environment (.bytes ty bytes origin))
   | fill (environment : RuntimeActivation) (element : Ty) (count : Nat) (origin : Goose.Core.OriginId)
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : SupportedOperation config (.value environment operand)) :
@@ -512,6 +534,11 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
   | builderBytes (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (ty : Ty)
       (bytes : List UInt8) (origin : Goose.Core.OriginId) :
       SupportedOperation config (.builder environment destination (.bytes ty bytes origin))
+  | builderArray (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId) (ty : Ty)
+      (operands : List Expr) (origin : Goose.Core.OriginId)
+      (elements : ∀ operand ∈ operands, ∀ current element,
+        SupportedOperation config (.element environment current element operand)) :
+      SupportedOperation config (.builder environment incoming (.arrLit ty operands origin))
   | fixedElement (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty)
       (operand : Expr) (fixed : element.nonfixed = false)
       (child : SupportedOperation config (.value environment operand)) :
@@ -541,6 +568,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
       cases supported with
       | value environment supported =>
           exact value_exists (fuel + 1) config environment path _ before supported
+      | valueBytes environment ty bytes origin => exact .valueBytes fuel path environment ty bytes origin before
       | fill environment element count origin operand fixed childSupported =>
           have child := ih (.value environment operand) (path ++ [0]) before childSupported
           have actual : evalValue (fuel + 1) config environment (.fill (.arr element count) operand origin) before =
@@ -675,6 +703,17 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
                     SourceHistory config (fuel + 2) path (.call environment contextId origin) before _)
       | printText environment text origin => exact .printText fuel path environment text origin before
       | builderBytes environment destination ty bytes origin => exact .builderBytes fuel path environment destination ty bytes origin before
+      | builderArray environment incoming ty operands origin elementsSupported =>
+          refine .builderArray fuel path environment incoming ty operands origin before ?_
+          intro current prepared ready pending element outcome visits renewed found elementFound replay visit member
+          have inMapped : visit.operand ∈ visits.map Invocation.operand := List.mem_map_of_mem member
+          rw [replay.sourceOrder] at inMapped
+          have inOperands : visit.operand ∈ operands := List.mem_of_mem_take inMapped
+          have child := ih (.element environment current element visit.operand) (path ++ [visit.ordinal]) visit.before
+            (elementsSupported visit.operand inOperands current element)
+          simp only [execute] at child
+          rw [← visit_executes replay visit member]
+          exact child
       | fixedElement environment parent element operand fixed childSupported =>
           have child := ih (.value environment operand) (path ++ [0]) before childSupported
           simp only [execute] at child ⊢
@@ -1020,6 +1059,58 @@ theorem witness_nonfixedElement : ∃ after,
         (.bytes (.varr (.int .u8)) [65, 66] 0) nestedElementBefore) at history
     rw [actual] at history
     exact history
+
+theorem byteElement_supported (config : EvalConfig) (environment : RuntimeActivation)
+    (parent : Goose.Core.DestinationId) (element ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
+    SupportedOperation config (.element environment parent element (.bytes ty bytes origin)) := by
+  cases fixed : element.nonfixed with
+  | false => exact .fixedElement environment parent element _ fixed (.valueBytes environment ty bytes origin)
+  | true =>
+    exact .nonfixedElement environment parent element _ fixed
+      (fun destination => .builderBytes environment destination ty bytes origin)
+
+#print axioms byteElement_supported
+
+private def nestedArrayOperand : Expr := .bytes (.varr (.int .u8)) [65, 66] 0
+private def nestedArraySource : Expr := .arrLit (.varr (.varr (.int .u8))) [nestedArrayOperand, nestedArrayOperand] 0
+private def nestedArrayBefore : ExecutionState := witnessState
+  (newDestination sideEffectConfig.layout 0 (.varr (.varr (.int .u8))) .value 0 none (some 2) .initial)
+
+private theorem nestedArray_supported : SupportedOperation sideEffectConfig
+    (.builder witnessEnvironment 0 nestedArraySource) := by
+  unfold nestedArraySource
+  apply SupportedOperation.builderArray
+  intro operand member current element
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at member
+  rcases member with rfl | rfl
+  all_goals exact byteElement_supported sideEffectConfig witnessEnvironment current element (.varr (.int .u8)) [65, 66] 0
+
+theorem witness_nestedArray : ∃ after,
+    newDestination sideEffectConfig.layout 0 (.varr (.varr (.int .u8))) .value 0 none (some 2) .initial =
+      .ok 0 nestedArrayBefore ∧
+    buildExpr 40 sideEffectConfig witnessEnvironment 0 nestedArraySource nestedArrayBefore = .ok () after ∧
+    after.construction.events = [.begin 0, .begin 1, .write 1 0, .write 1 1, .write 0 0,
+      .begin 2, .write 2 0, .write 2 1, .write 0 1] ∧
+    SourceHistory sideEffectConfig 40 [] (.builder witnessEnvironment 0 nestedArraySource) nestedArrayBefore (.ok () after) := by
+  have history := history_exists 40 sideEffectConfig (.builder witnessEnvironment 0 nestedArraySource) []
+    nestedArrayBefore nestedArray_supported
+  refine ⟨witnessState (buildExpr 40 sideEffectConfig witnessEnvironment 0 nestedArraySource nestedArrayBefore), ?_, ?_, ?_, ?_⟩
+  · unfold nestedArrayBefore witnessState sideEffectConfig sideEffectContext sideEffectImplementation
+    cbv
+  · unfold nestedArrayBefore nestedArraySource nestedArrayOperand witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · unfold nestedArrayBefore nestedArraySource nestedArrayOperand witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+    cbv
+  · have actual : buildExpr 40 sideEffectConfig witnessEnvironment 0 nestedArraySource nestedArrayBefore =
+        .ok () (witnessState (buildExpr 40 sideEffectConfig witnessEnvironment 0 nestedArraySource nestedArrayBefore)) := by
+      unfold nestedArrayBefore nestedArraySource nestedArrayOperand witnessState sideEffectConfig sideEffectContext sideEffectImplementation witnessEnvironment
+      cbv
+    change SourceHistory sideEffectConfig 40 [] (.builder witnessEnvironment 0 nestedArraySource) nestedArrayBefore
+      (buildExpr 40 sideEffectConfig witnessEnvironment 0 nestedArraySource nestedArrayBefore) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_nestedArray
 
 #print axioms witness_nonfixedElement
 
