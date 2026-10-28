@@ -137,8 +137,61 @@ theorem bytes_writeLoop_stopped_world (bytes : List UInt8) (origin : Goose.Core.
     exact protection
   · exact inherited.protections region member
 
+theorem evalValue_byteOwner_writeStop_world (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (sourceFrame : ConstructionSourceFrame) (before allocated after : ExecutionState)
+    (bytes : List UInt8) (origin : Goose.Core.OriginId) (id : Nat) (stop : Goose.Core.Stop)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config sourceFrame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted sourceFrame before types)
+    (created : newDestination config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin none
+      (some bytes.length) before = .ok id allocated)
+    (stopped : ((forIn bytes PUnit.unit fun byte _ => do
+      receivingAction origin id (fun destination => writeElement destination ⟨#[byte]⟩)
+      pure (.yield PUnit.unit)) : EvalM PUnit) allocated = .stop stop after) :
+    evalValue (fuel + 2) config sourceFrame.interpretation.environment (.bytes (.varr (.int .u8)) bytes origin) before =
+        .stop stop after ∧
+      AcceptedWorld config sourceFrame.initialized after ambient types live (freshReceivingRegion before id :: regions) pending ∧
+      AcceptedFrame config accepted sourceFrame after types := by
+  have freshId := newDestination_fresh_id config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
+    (some bytes.length) before allocated id created
+  subst id
+  obtain ⟨frame⟩ := newDestination_fresh_frame config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
+    (some bytes.length) before allocated before.construction.destinations.size world.ownership.source.structural.1.1.1 created
+  obtain ⟨ready⟩ := newDestination_initial_backing config.layout sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
+    (some bytes.length) before allocated before.construction.destinations.size (.int .u8) rfl created
+  obtain ⟨row, present, packed, request, direct, receiver⟩ := newDestination_byteOwner_packed_value config.layout
+    sourceFrame.interpretation.environment.act origin (some bytes.length) before allocated before.construction.destinations.size created
+  have framePresent : allocated.construction.destinations[before.construction.destinations.size]? = some frame.row := by
+    rw [frame.destinations]
+    exact Array.getElem?_push_size
+  have same : row = frame.row := Option.some.inj (present.symm.trans framePresent)
+  subst row
+  have readySame : ready.destination = frame.row := Option.some.inj (ready.present.symm.trans framePresent)
+  have opened : frame.row.progress = .open 0 := by rw [← readySame]; exact ready.opened
+  have allocatedWorld := newDestination_acceptedWorld config sourceFrame.interpretation.environment.act (.varr (.int .u8)) .value origin
+    (some bytes.length) sourceFrame.initialized before allocated before.construction.destinations.size ambient types live regions pending world created
+  have current := newDestination_current_self config sourceFrame.initialized sourceFrame.interpretation.environment.act (.varr (.int .u8))
+    .value origin (some bytes.length) before allocated before.construction.destinations.size ambient types live regions pending world created
+  have preserved := bytes_writeLoop_stopped_world bytes origin config accepted sourceFrame before allocated after frame 0 direct opened
+    ambient types live regions pending world source allocatedWorld.ownership.source current stop stopped
+  have renewal : renewReceivingDestination before.construction.destinations.size allocated.construction =
+      .ok before.construction.destinations.size allocated.construction := by
+    simp only [renewReceivingDestination, ConstructionM.get, bind, current, pure, lookupDestination_result, framePresent, opened]
+  have built : buildExpr (fuel + 1) config sourceFrame.interpretation.environment before.construction.destinations.size
+      (.bytes (.varr (.int .u8)) bytes origin) allocated = .stop stop after := by
+    have stopped' := stopped
+    simp only [bind] at stopped'
+    simp only [buildExpr, liftConstruction, renewal, bind, protectDestination]
+    rw [stopped']
+  refine ⟨?_, preserved⟩
+  have created' := created
+  simp only [EvalConfig.layout] at created'
+  simp only [evalValue, Ty.nonfixed, constructLocal, producerCount?, literalCount, bind, ↓reduceIte, created', built]
+
 #print axioms bytes_writeLoop_stopped_invariants
 #print axioms FreshDestinationFrame.freshProtection
 #print axioms bytes_writeLoop_stopped_world
+#print axioms evalValue_byteOwner_writeStop_world
 
 end Goose.Proofs.ConstructionAcceptedExecution

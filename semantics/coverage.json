@@ -421,10 +421,10 @@
  },
  {
   "feature": "Scoped nonlocal return selection",
-  "statement": "An actual block whose first statement returns from a nonlocal target selects the nearest matching activation and releases its enclosing scope without changing construction state.",
-  "assumptions": "Successful block binding, target selection and return-channel completion.",
-  "limits": "Handler landing, channel ownership validity, intervening call scopes and general statement positions remain open. This component does not close TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ExitExecutionBlockNonlocal.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "An actual block whose first statement returns from a nonlocal target selects the nearest matching activation and releases its enclosing scope without changing construction state. An actual activation with a nested conditional block catches a return to itself after releasing both scopes.",
+  "assumptions": "Successful block binding, target selection and return-channel completion. The activation case also assumes that return carriers are already landed and normalized.",
+  "limits": "Deriving channel ownership validity and landing readiness, crossing another activation and general statement positions remain open. This component does not close TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ExitExecutionBlockNonlocal.lean; Goose/Proofs/ExitExecutionActivationBlock.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted construction value representation fragment",
@@ -627,11 +627,11 @@
   "evidence": "Goose/Proofs/ConstructionAcceptedByteGlobalTimeout.lean; Goose/Proofs/ConstructionByteGlobalLocal.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
-  "feature": "Byte-owner write stop preservation",
-  "statement": "If the actual byte-writing loop stops after any number of writes, its terminal state retains the accepted world and source frame, including protection for the fresh receiving region.",
-  "assumptions": "Accepted world and source frame before allocation, fresh direct destination frame, open destination, valid ownership state and current destination at loop entry.",
-  "limits": "This covers stops in the byte-writing loop. Destination allocation, finishing, publication and other construction forms need separate stop preservation. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionByteWriteStopped.lean; scoped Lean 4.35 closure and axiom checks."
+  "feature": "Byte-owner construction stop preservation",
+  "statement": "If actual byte construction stops after successful destination allocation, its terminal state retains the accepted world and source frame, including protection for the fresh receiving region. This covers stops during writes and destination finishing.",
+  "assumptions": "Accepted world and source frame before allocation, a successful fresh byte-owner destination allocation, and an actual positive-fuel builder stop.",
+  "limits": "Destination allocation and publication stops and other construction forms need separate preservation. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionByteWriteStopped.lean; Goose/Proofs/ConstructionByteFinishStopped.lean; Goose/Proofs/ConstructionByteBuildStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Expression-statement sequence stop reflection",
