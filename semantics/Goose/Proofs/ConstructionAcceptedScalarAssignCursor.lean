@@ -134,7 +134,7 @@ theorem rpStmt_directAssign_effects_bounded (env : PEnv) (place : Place) (expres
   · exact beforeBounded id (by simp [Eff.accessTargets, oldShrink])
   · exact operandBounded id (by simp [Eff.accessTargets, newShrink])
 
-theorem SourcePosition.scalarAssign_tail {config : EvalConfig} (accepted : AcceptedModule config)
+theorem SourcePosition.scalarAssign_tailReplay {config : EvalConfig} (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (before : ExecutionState) (types : RootTypes)
     (place : Place) (expression : Expr) (origin : Goose.Core.OriginId) (rest : List Stmt)
     (checkFuel : Nat) (form : AcceptedBinaryExpression expression)
@@ -146,6 +146,8 @@ theorem SourcePosition.scalarAssign_tail {config : EvalConfig} (accepted : Accep
     (direct : (∃ id, place = .var id) ∨ ∃ id, place = .global id) :
     ∃ rootsAfter, rootsAfter.nextVar = frame.rootCursor.nextVar ∧
       GlobalEffectTargetsBounded rootsAfter.eff config.module.globals.size ∧
+      typeStatement (checkFuel + 1) frame.typing (.assign place expression origin) frame.typingCounter = .ok (frame.typing, frame.typingCounter) ∧
+      rpStmt frame.source (.assign place expression origin) frame.rootCursor = .ok ((), rootsAfter) ∧
       SourcePosition accepted { frame with typingFuel := checkFuel + 1, rootCursor := rootsAfter } (.statements rest) := by
   have headPosition := position.statements_head accepted frame (.assign place expression origin) rest (checkFuel + 1) nesting
   obtain ⟨next, typingAfter, rootsAfter, typed, rooted⟩ := headPosition.checked accepted _ _
@@ -181,10 +183,31 @@ theorem SourcePosition.scalarAssign_tail {config : EvalConfig} (accepted : Accep
   have sameCounter : typingAfter = frame.typingCounter := by
     rw [sameAfter]
     simpa [scalarAssignmentOperandFrame, ordinaryOperandFrame] using cursor.1
-  refine ⟨rootsAfter, sameRoot, finalBounded, ?_⟩
-  simpa [sameNext, sameCounter] using tail
+  refine ⟨rootsAfter, sameRoot, finalBounded, ?_, rooted, ?_⟩
+  · simpa [sameNext, sameCounter] using typed
+  · simpa [sameNext, sameCounter] using tail
+
+
+
+theorem SourcePosition.scalarAssign_tail {config : EvalConfig} (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (before : ExecutionState) (types : RootTypes)
+    (place : Place) (expression : Expr) (origin : Goose.Core.OriginId) (rest : List Stmt)
+    (checkFuel : Nat) (form : AcceptedBinaryExpression expression)
+    (source : AcceptedFrame config accepted frame before types)
+    (initialized : frame.initialized = config.module.globals.size)
+    (bounded : GlobalEffectTargetsBounded frame.rootCursor.eff config.module.globals.size)
+    (position : SourcePosition accepted frame (.statements (.assign place expression origin :: rest)))
+    (nesting : frame.typingFuel = checkFuel + 2)
+    (direct : (∃ id, place = .var id) ∨ ∃ id, place = .global id) :
+    ∃ rootsAfter, rootsAfter.nextVar = frame.rootCursor.nextVar ∧
+      GlobalEffectTargetsBounded rootsAfter.eff config.module.globals.size ∧
+      SourcePosition accepted { frame with typingFuel := checkFuel + 1, rootCursor := rootsAfter } (.statements rest) := by
+  obtain ⟨rootsAfter, sameRoot, finalBounded, typed, rooted, tail⟩ :=
+    position.scalarAssign_tailReplay accepted frame before types place expression origin rest checkFuel form source initialized bounded nesting direct
+  exact ⟨rootsAfter, sameRoot, finalBounded, tail⟩
 
 #print axioms SourcePosition.scalarAssign_tail
+#print axioms SourcePosition.scalarAssign_tailReplay
 #print axioms rpStmt_directAssign_effects_bounded
 #print axioms rpStmt_directAssign_accessTargets
 #print axioms rpStmt_directAssign_cursor
