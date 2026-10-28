@@ -73,7 +73,7 @@ theorem mixedLocal_registerResultBody_observedWorld (fuel : Nat) (config : EvalC
     intro declaration member
     simp [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, helperEq, results]
   obtain ⟨next, nextTypes, nextLive, nextRegions, nextInitialized, extended, finalWorld, finalSource, finalFlow,
-      sourceEq, interpretationEq, phaseEq, limitEq, finalBounded, finalProtected, finalObserved, finalReplay⟩ :=
+      sourceEq, interpretationEq, phaseEq, limitEq, finalBounded, finalProtected, finalCounters, finalObserved, finalReplay⟩ :=
     execStmts_mixedLocal_observed_world form fuel config accepted entryFrame contextId boundState
       (.callChannels activation [] :: ambient) types live regions pending frameWorld source entryPhase position
       fullInitialized limit initialBound owners' scalarOwners' unnamed

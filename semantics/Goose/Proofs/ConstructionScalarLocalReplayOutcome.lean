@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedScalarLocalAdvance
+import Goose.Proofs.ConstructionAcceptedBindingCounters
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -34,6 +35,7 @@ theorem execStmt_acceptedScalarLocal_observedOutcome (fuel checkFuel : Nat) (con
         AcceptedFrame config accepted next after (registerRootType types root descriptor.ty) ∧
         SourcePosition accepted next (.statements rest) ∧
         GlobalEffectTargetsBounded rootsAfter.eff config.module.globals.size ∧
+        (after.nextAct = before.nextAct ∧ after.nextScope = before.nextScope) ∧
         (∀ other, (∀ scope id, other ≠ Goose.Core.RootInst.local frame.interpretation.environment.act scope id) →
           after.objects.lookup other = before.objects.lookup other ∧
           after.objectOrdinals.lookup other = before.objectOrdinals.lookup other)
@@ -154,7 +156,7 @@ theorem execStmt_acceptedScalarLocal_observedOutcome (fuel checkFuel : Nat) (con
           simpa [nextFrame, advanceLocalFrame, nextTyping, nextCounter] using typed
         have replayRooted : rpStmt frame.source (.letS id expression origin) frame.rootCursor =
             .ok ((), nextFrame.rootCursor) := by simpa [nextFrame] using rooted
-        refine ⟨trivial, scopeInst, descriptor, rootsAfter, replayTyped, replayRooted, extended, afterWorld, nextSource, tailPosition, effects, ?_⟩
+        refine ⟨trivial, scopeInst, descriptor, rootsAfter, replayTyped, replayRooted, extended, afterWorld, nextSource, tailPosition, effects, bindRoot_counters _ value before after bound, ?_⟩
         intro other outside
         exact ⟨bindRoot_lookup_other _ other value before after bound (outside scopeInst id),
           bindRoot_ordinals_other _ other value before after bound (outside scopeInst id)⟩
@@ -196,7 +198,7 @@ theorem execStmt_acceptedScalarLocal_replayOutcome (fuel checkFuel : Nat) (confi
   | jump target kind after => simpa only [executed] using result
   | ok flow after =>
     simp only [executed] at result ⊢
-    obtain ⟨normal, scopeInst, descriptor, rootsAfter, typed, rooted, extended, finalWorld, finalSource, tailPosition, effects, observations⟩ := result
+    obtain ⟨normal, scopeInst, descriptor, rootsAfter, typed, rooted, extended, finalWorld, finalSource, tailPosition, effects, counters, observations⟩ := result
     exact ⟨normal, scopeInst, descriptor, rootsAfter, typed, rooted, extended, finalWorld, finalSource, tailPosition, effects⟩
 
 #print axioms execStmt_acceptedScalarLocal_replayOutcome

@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedByteContinuation
+import Goose.Proofs.ConstructionAcceptedBindingCounters
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -112,6 +113,16 @@ theorem freshDestination_bindRoot_outside (before published after : ExecutionSta
   · rw [bindRoot_lookup_other root other (.stored stored) published after bound different, frame.outer]
   · rw [bindRoot_ordinals_other root other (.stored stored) published after bound different, frame.outer]
 
+theorem freshDestination_bindRoot_counters (before published after : ExecutionState)
+    (root : Goose.Core.RootInst) (stored : StoredValue)
+    (frame : FreshDestinationFrame before published)
+    (bound : bindRoot root (.stored stored) published = .ok () after) :
+    after.nextAct = before.nextAct ∧ after.nextScope = before.nextScope := by
+  have counters := bindRoot_counters root (.stored stored) published after bound
+  have acts : published.nextAct = before.nextAct := by rw [frame.outer]
+  have scopes : published.nextScope = before.nextScope := by rw [frame.outer]
+  exact ⟨counters.1.trans acts, counters.2.trans scopes⟩
+
 theorem execStmt_byteOwner_outside (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (context id : Nat) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
     (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
@@ -136,6 +147,7 @@ theorem execStmt_byteOwner_outside (fuel : Nat) (config : EvalConfig) (accepted 
       ambient types live regions pending rootAfter typingNext typingAfter world source phase rootChecked typed byteOwner unnamed executed
   exact freshDestination_bindRoot_outside before published after _ other stored publishedFrame bound (outside scopeInst id)
 
+#print axioms freshDestination_bindRoot_counters
 #print axioms execStmt_byteOwner_outside
 #print axioms execStmt_byteOwner_observation
 #print axioms freshDestination_bindRoot_outside

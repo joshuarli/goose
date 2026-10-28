@@ -45,6 +45,9 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
         next.typing.globalLimit = frame.typing.globalLimit ∧ GlobalEffectTargetsBounded next.rootCursor.eff config.module.globals.size ∧
         (∀ root, (∀ scope id, root ≠ Goose.Core.RootInst.local frame.interpretation.environment.act scope id) → nextTypes root = types root) ∧
         (match outcome with
+        | .ok _ _ => after.nextAct = before.nextAct ∧ after.nextScope = before.nextScope
+        | _ => True) ∧
+        (match outcome with
         | .ok _ _ => ∀ other, (∀ scope id, other ≠ Goose.Core.RootInst.local frame.interpretation.environment.act scope id) →
             after.objects.lookup other = before.objects.lookup other ∧ after.objectOrdinals.lookup other = before.objectOrdinals.lookup other
         | _ => True) ∧
@@ -58,7 +61,7 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial⟩
+      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial, trivial⟩
     | succ fuel =>
       obtain ⟨next, counter, roots, typed, rooted⟩ := position.checked accepted frame _
       cases check : frame.typingFuel with
@@ -67,13 +70,13 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
         have replay : typeStatements frame.typingFuel frame.typing [] frame.typingCounter = .ok (frame.typing, frame.typingCounter) := by
           simp [check, typeStatements, pure, StateT.pure, Except.pure]
         simp only [execStmts, pure, Goose.Proofs.Exit.stepState]
-        exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), (fun _ _ => ⟨trivial, trivial⟩), ⟨(by simpa only [check] using replay), rfl⟩⟩
+        exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), ⟨trivial, trivial⟩, (fun _ _ => ⟨trivial, trivial⟩), ⟨(by simpa only [check] using replay), rfl⟩⟩
   | byte declaration rest tail ih =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position initialized limit bounded owners scalarOwners unnamed
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial⟩
+      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial, trivial⟩
     | succ fuel =>
       obtain ⟨_, _, _, typedAll, _⟩ := position.checked accepted frame _
       cases nesting : frame.typingFuel with
@@ -99,7 +102,7 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
             simp only [head'] at headOutcome
             obtain ⟨nextRegions, finalWorld, finalSource⟩ := headOutcome
             simp only [execStmts, bind, head, Goose.Proofs.Exit.stepState]
-            exact ⟨frame, types, live, nextRegions, rfl, (fun _ _ found => found), finalWorld, finalSource, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial⟩
+            exact ⟨frame, types, live, nextRegions, rfl, (fun _ _ found => found), finalWorld, finalSource, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial, trivial⟩
           | escape address carriers after | jump target kind after =>
             have head' := head
             simp only [ByteOwnerDeclaration.statement] at head'
@@ -140,17 +143,44 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
             have remainingUnnamed : ∀ item : ByteOwnerDeclaration, item.statement ∈ rest →
                 (nextFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some item.id)) = none := by
               intro item member; exact unnamed item (List.mem_cons_of_mem declaration.statement member)
-            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, finalProtected, finalObserved, finalReplay⟩ :=
+            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, finalProtected, finalCounters, finalObserved, finalReplay⟩ :=
               ih fuel config accepted nextFrame context middle ambient nextTypes nextLive nextRegions pending middleWorld middleSource
                 (by simpa [nextFrame, advanceLocalFrame] using phase) middlePosition initialized limit bounded remainingOwners (by intro id expression origin member shape descriptor found; exact scalarOwners id expression origin (List.mem_cons_of_mem _ member) shape descriptor found) remainingUnnamed
             simp only [execStmts, bind, head]
-            refine ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, ?_, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, ?_, ?_, ?_⟩
+            refine ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, ?_, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, ?_, ?_, ?_, ?_⟩
             · intro oldRoot ty found
               exact finalExtended oldRoot ty (extended oldRoot ty found)
             · intro other outside
               have different : other ≠ root := outside scopeInst _
               have unchanged := finalProtected other (by simpa [nextFrame, advanceLocalFrame] using outside)
               simpa [nextTypes, registerRootType, different] using unchanged
+            · simp only [nextFrame, advanceLocalFrame] at finalCounters
+              cases tailExecution : execStmts fuel config frame.interpretation.environment rest middle with
+              | ok result after =>
+                simp only [tailExecution, Goose.Proofs.Exit.stepState] at finalCounters ⊢
+                cases fuel with
+                | zero => simp [execStmt, ByteOwnerDeclaration.statement, timeout, EvalM.stop] at head
+                | succ fuel =>
+                  cases fuel with
+                  | zero =>
+                    have hp := headPosition.statements_head accepted frame declaration.statement rest (checkFuel + 1) nesting
+                    obtain ⟨typingNext, typingAfter, rootsAfter, typed, rooted⟩ := hp.checked accepted _ _
+                    have impossible := execStmt_acceptedByteOwner_one_ne_ok config accepted
+                      { frame with typingFuel := checkFuel + 1 } context declaration.id declaration.bytes declaration.origin
+                      declaration.bytesOrigin before middle (.normal .unit) types typingNext typingAfter
+                      (source.withTypingFuel (checkFuel + 1)) phase
+                      (by simpa [ByteOwnerDeclaration.statement] using typed) byteOwner headUnnamed
+                    exact (impossible (by simpa [ByteOwnerDeclaration.statement] using head)).elim
+                  | succ fuel =>
+                    obtain ⟨scopeInst, stored, published, ⟨frame⟩, bound⟩ :=
+                      execStmt_byteOwner_observation fuel config accepted { frame with typingFuel := checkFuel + 1 }
+                        context declaration.id declaration.bytes declaration.origin declaration.bytesOrigin before middle ambient types live
+                        regions pending nextFrame.rootCursor nextFrame.typing nextFrame.typingCounter world
+                        (source.withTypingFuel (checkFuel + 1)) phase headReplay.2 headReplay.1 byteOwner headUnnamed
+                        (by simpa [ByteOwnerDeclaration.statement] using head)
+                    have first := freshDestination_bindRoot_counters before published middle _ stored frame bound
+                    exact ⟨finalCounters.1.trans first.1, finalCounters.2.trans first.2⟩
+              | stop reason after | escape _ _ after | jump _ _ after => simp only [tailExecution]
             · simp only [nextFrame, advanceLocalFrame] at finalObserved
               cases tailExecution : execStmts fuel config frame.interpretation.environment rest middle with
               | ok result after =>
@@ -191,7 +221,7 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial⟩
+      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial, trivial⟩
     | succ fuel =>
       obtain ⟨finalTyping, finalCounter, finalRoots, typedAll, rootedAll⟩ := position.checked accepted frame _
       obtain ⟨rootMiddle, headRooted, tailRooted⟩ := rpStmts_cons rootedAll
@@ -237,7 +267,7 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
             have same := headOutcome.1
             subst after
             simp only [execStmts, bind, head, Goose.Proofs.Exit.stepState]
-            exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial⟩
+            exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial, trivial⟩
           | escape address carriers after => exact (control.1 before address carriers after head).elim
           | jump target kind after => exact (control.2 before target kind after head).elim
           | ok flow middle =>
@@ -249,14 +279,18 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
             have remainingUnnamed : ∀ item : ByteOwnerDeclaration, item.statement ∈ rest →
                 (nextFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some item.id)) = none := by
               intro item member; exact unnamed item (List.mem_cons_of_mem _ member)
-            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, finalProtected, finalObserved, finalReplay⟩ :=
+            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, finalProtected, finalCounters, finalObserved, finalReplay⟩ :=
               ih fuel config accepted nextFrame context before ambient types live regions pending world nextSource phase nextPosition
                 initialized limit middleBounded remainingOwners (by intro id expression origin member shape descriptor found; exact scalarOwners id expression origin (List.mem_cons_of_mem _ member) shape descriptor found) remainingUnnamed
             simp only [execStmts, bind, head]
             refine ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow,
-              finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, ?_, ?_, ?_⟩
+              finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, ?_, ?_, ?_, ?_⟩
             · intro other outside
               exact finalProtected other (by simpa [nextFrame] using outside)
+            · simp only [nextFrame] at finalCounters
+              cases tailExecution : execStmts fuel config frame.interpretation.environment rest before with
+              | ok result after => simpa only [tailExecution, Goose.Proofs.Exit.stepState] using finalCounters
+              | stop reason after | escape _ _ after | jump _ _ after => simp only [tailExecution]
             · simp only [nextFrame] at finalObserved
               cases tailExecution : execStmts fuel config frame.interpretation.environment rest before with
               | ok result after =>
@@ -277,7 +311,7 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial⟩
+      exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), world, source, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial, trivial⟩
     | succ fuel =>
       obtain ⟨_, _, _, typedAll, _⟩ := position.checked accepted frame _
       cases nesting : frame.typingFuel with
@@ -298,11 +332,11 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
             simp only [head] at headOutcome
             obtain ⟨finalWorld, finalSource⟩ := headOutcome
             simp only [execStmts, bind, head, Goose.Proofs.Exit.stepState]
-            exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), finalWorld, finalSource, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial⟩
+            exact ⟨frame, types, live, regions, rfl, (fun _ _ found => found), finalWorld, finalSource, trivial, rfl, rfl, rfl, rfl, bounded, (fun _ _ => rfl), trivial, trivial, trivial⟩
           | escape address carriers after | jump target kind after => simp only [head] at headOutcome
           | ok flow middle =>
             simp only [head] at headOutcome
-            obtain ⟨normal, scopeInst, descriptor, rootsAfter, headReplayTyped, headReplayRooted, extended, middleWorld, middleSource, middlePosition, middleBounded, headObserved⟩ := headOutcome
+            obtain ⟨normal, scopeInst, descriptor, rootsAfter, headReplayTyped, headReplayRooted, extended, middleWorld, middleSource, middlePosition, middleBounded, headCounters, headObserved⟩ := headOutcome
             subst flow
             let root := Goose.Core.RootInst.local frame.interpretation.environment.act scopeInst id
             let nextTypes := registerRootType types root descriptor.ty
@@ -319,18 +353,24 @@ theorem execStmts_mixedLocal_observed_world {statements : List Stmt} (form : Mix
             have remainingUnnamed : ∀ item : ByteOwnerDeclaration, item.statement ∈ rest →
                 (nextFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some item.id)) = none := by
               intro item member; exact unnamed item (List.mem_cons_of_mem _ member)
-            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, finalProtected, finalObserved, finalReplay⟩ :=
+            obtain ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, finalExtended, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, finalProtected, finalCounters, finalObserved, finalReplay⟩ :=
               ih fuel config accepted nextFrame context middle ambient nextTypes nextLive regions pending middleWorld middleSource
                 (by simpa [nextFrame, advanceLocalFrame] using phase) middlePosition initialized limit middleBounded
                   remainingOwners remainingScalar remainingUnnamed
             simp only [execStmts, bind, head]
-            refine ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, ?_, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, ?_, ?_, ?_⟩
+            refine ⟨finalFrame, finalTypes, finalLive, finalRegions, initializedEq, ?_, finalWorld, finalSource, finalFlow, finalSourceEq, finalInterpretationEq, finalPhaseEq, finalLimitEq, finalBounded, ?_, ?_, ?_, ?_⟩
             · intro oldRoot ty found
               exact finalExtended oldRoot ty (extended oldRoot ty found)
             · intro other outside
               have different : other ≠ root := outside scopeInst _
               have unchanged := finalProtected other (by simpa [nextFrame, advanceLocalFrame] using outside)
               simpa [nextTypes, registerRootType, different] using unchanged
+            · simp only [nextFrame, advanceLocalFrame] at finalCounters
+              cases tailExecution : execStmts fuel config frame.interpretation.environment rest middle with
+              | ok result after =>
+                simp only [tailExecution, Goose.Proofs.Exit.stepState] at finalCounters ⊢
+                exact ⟨finalCounters.1.trans headCounters.1, finalCounters.2.trans headCounters.2⟩
+              | stop reason after | escape _ _ after | jump _ _ after => simp only [tailExecution]
             · simp only [nextFrame, advanceLocalFrame] at finalObserved
               cases tailExecution : execStmts fuel config frame.interpretation.environment rest middle with
               | ok result after =>
@@ -384,7 +424,7 @@ theorem execStmts_mixedLocal_protectedTypes_world {statements : List Stmt} (form
         | _ => True) := by
   intro fuel config accepted frame context before ambient types live regions pending world source phase position initialized limit bounded owners scalarOwners unnamed
   obtain ⟨next, nextTypes, nextLive, nextRegions, initializedEq, extended, finalWorld, finalSource, flow,
-    sourceEq, interpretationEq, phaseEq, limitEq, finalBounded, protectedTypes, observations, replay⟩ :=
+    sourceEq, interpretationEq, phaseEq, limitEq, finalBounded, protectedTypes, counters, observations, replay⟩ :=
     execStmts_mixedLocal_observed_world form fuel config accepted frame context before ambient types live regions pending
       world source phase position initialized limit bounded owners scalarOwners unnamed
   exact ⟨next, nextTypes, nextLive, nextRegions, initializedEq, extended, finalWorld, finalSource, flow,
