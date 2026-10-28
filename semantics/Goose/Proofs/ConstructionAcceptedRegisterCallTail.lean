@@ -6,6 +6,8 @@ import Goose.Proofs.ConstructionAcceptedScalarLocalPrefix
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionExecutionOwnership
+open Goose.Proofs.ConstructionRootCorrespondence
+open Goose.Proofs.ConstructionRepresentation
 
 private theorem materialize_noTokens (origin : Nat) (carriers : List Carrier) (state : ExecutionState) :
     materializeOwnedCarriers origin [] carriers state = .ok carriers state := by
@@ -47,6 +49,58 @@ theorem execActivationBody_register_call_tail (fuel : Nat) (config : EvalConfig)
     simp [execActivationBody, execResultScope, freshScope, EvalM.get, EvalM.set, bind, pure, withScope, bindAll,
       channels, beq_iff_eq, normal, tail, executed, releaseScope, expressionOrigin]
 
+theorem execActivationBody_empty_registerCall_compose (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (activation : RuntimeActivation) (scope : Nat) (ty : Ty) (target origin : Nat) (before : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (channels : activation.channels = [.register ty])
+    (inner : ∃ nextTypes nextLive nextAmbient,
+      let scopedState := ownershipResultScopeState activation scope before
+      let environment := { activation with scopes := (scope, before.nextScope) :: activation.scopes }
+      let outcome := invokeCall fuel config environment target [] [.register ty] origin scopedState
+      RootTypesExtend types nextTypes ∧ scopedState.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      scopedState.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      FutureGlobalsClear config initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation ty value
+       | .stop .. => True
+       | .escape .. | .jump .. => False)) :
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := execActivationBody (fuel + 2) config activation [] ⟨scope, [], some (.call target [] origin)⟩ before
+      RootTypesExtend types nextTypes ∧ before.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      before.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      FutureGlobalsClear config initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation ty value
+       | .stop .. => True
+       | .escape .. | .jump .. => False) := by
+  let scopedState := ownershipResultScopeState activation scope before
+  let environment := { activation with scopes := (scope, before.nextScope) :: activation.scopes }
+  have normal : execStmts (fuel + 1) config environment [] scopedState = .ok (.normal .unit) scopedState := by
+    simp [execStmts, pure]
+  have body := execActivationBody_register_call_tail fuel config activation scope [] before scopedState ty target origin channels normal
+  obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, world, clear, result⟩ := inner
+  cases execution : invokeCall fuel config environment target [] [.register ty] origin scopedState with
+  | stop reason after =>
+    simp only [scopedState, environment] at execution
+    simp only [execution, Goose.Proofs.Exit.stepState] at acts scopes world clear result
+    rw [body, execution]
+    exact ⟨nextTypes, nextLive, nextAmbient, extend, acts, Nat.le_trans (Nat.le_succ _) scopes, world, clear, trivial⟩
+  | escape address carriers after | jump destination kind after =>
+    simp only [scopedState, environment] at execution
+    simp [execution] at result
+  | ok carriers after =>
+    simp only [scopedState, environment] at execution
+    simp only [execution, Goose.Proofs.Exit.stepState] at acts scopes world clear result
+    obtain ⟨rfl, value, rfl, represented⟩ := result
+    rw [body, execution]
+    have released := world.releaseScope config initialized after nextAmbient nextTypes nextLive regions pending
+      activation scope before.nextScope
+    exact ⟨nextTypes, _, nextAmbient, extend, acts, Nat.le_trans (Nat.le_succ _) scopes, released,
+      clear.releaseScope activation scope before.nextScope, rfl, value, rfl, represented⟩
+
+#print axioms execActivationBody_empty_registerCall_compose
 theorem SourcePosition.emptyBlock_registerCall_checked {config : EvalConfig} (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (scope fuel target origin : Nat) (context : Context) (callee : Impl) (ty : Ty)
     (position : SourcePosition accepted frame (.block ⟨scope, [], some (.call target [] origin)⟩))
