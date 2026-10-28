@@ -4,16 +4,22 @@ import Goose.Lower.DemandWhilePrefixFamily
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 
-theorem accepted_generated_while_scalar_call_prefix_family {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
-    {root : DemandNode} {owner : Nat} {loop : Option LoopCtx}
+theorem accepted_generated_while_bounded_nested_call_prefix_family {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
+    {root : DemandNode} {owner : Nat} {loop : Option LoopCtx} {depth : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
     (condition : Expr) (body : Core.Block) (origin : OriginId)
-    (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
+    (fragment : ∀ middle : St, BoundedNestedCallLoopStatements cfg depth
       { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
     (noValue : body.value = none)
+    (families : ∀ (middle : St) (before : LS) (innerLoop : Option LoopCtx),
+      ReachableSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes })
+        ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before innerLoop [] false body body.stmts
+        (@NestedCallLoopCursor cfg caller results root owner depth { env with scopes := (body.scope, middle.nextScope) :: env.scopes } innerLoop selected) ∧
+      ReachableStoppedSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes })
+        ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before innerLoop [] false body body.stmts)
     (family : GeneratedExpressionPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop condition (@GeneratedControlProgressCursor cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩)) :
     ReachableStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop (.while condition body origin)
-      (@WhileCallStatementCursor cfg env caller results root owner selected) := by
+      (@NestedWhileStatementCursor cfg env caller results depth root owner selected) := by
   intro state source before owned occurrence required map rows coverage admitted bounded initial start realized input extended callerStart taken reached steps
   let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩
   refine ⟨owned, coverage, ?_⟩
@@ -42,7 +48,7 @@ theorem accepted_generated_while_scalar_call_prefix_family {cfg : Cfg} {env : En
     have equal := actual.deterministic (headerStep stepFuel)
     have nextEq : nextPoint = ⟨(header, 0), initial, state⟩ := by cases nextPoint; exact equal
     subst nextPoint
-    rcases accepted_generated_while_scalar_call_header_prefix_complete (WhileIterations.zero state) source source rfl fragment noValue rfl selected owned
+    rcases accepted_generated_while_bounded_nested_call_header_prefix_complete (WhileIterations.zero state) source source rfl fragment noValue rfl selected families owned
       headerInput headerTarget headerId headerEq occurrence rows coverage admitted headerBounded headerRealized family loopRun extended
       (Evidence.RuntimePoint.step callerStart first) residual with demanded | ⟨sourceFuel, consumed, rest, final, finalCount, executed, suffix,
         sourceDone, finalPost, finalBounded, finalRealized⟩
@@ -55,6 +61,33 @@ theorem accepted_generated_while_scalar_call_prefix_family {cfg : Cfg} {env : En
       · cases loop <;> simp [bind_apply, sourceDone, prepareLoopFlow, prepareReturn, prepareLoopExit, pure_apply]
       · exact .normal (headerPost.comp finalPost) (source.result sourceFuel _ sourceDone) finalBounded finalRealized
 
+
+
+theorem accepted_generated_while_scalar_call_prefix_family {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
+    {root : DemandNode} {owner : Nat} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
+    (condition : Expr) (body : Core.Block) (origin : OriginId)
+    (fragment : ∀ middle : St, ReachableScalarCallStatements cfg
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts)
+    (noValue : body.value = none)
+    (family : GeneratedExpressionPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop condition (@GeneratedControlProgressCursor cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩)) :
+    ReachableStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop (.while condition body origin)
+      (@WhileCallStatementCursor cfg env caller results root owner selected) := by
+  have boundedBody : ∀ middle : St, BoundedNestedCallLoopStatements cfg 0
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts := fun middle => .mixed (fragment middle)
+  have families : ∀ (middle : St) (before : LS) (innerLoop : Option LoopCtx),
+      ReachableSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes })
+        ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before innerLoop [] false body body.stmts
+        (@NestedCallLoopCursor cfg caller results root owner 0 { env with scopes := (body.scope, middle.nextScope) :: env.scopes } innerLoop selected) ∧
+      ReachableStoppedSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes })
+        ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before innerLoop [] false body body.stmts := by
+    intro middle before innerLoop
+    exact accepted_generated_reachable_scalar_call_statements (fragment middle) selected before innerLoop [] false body
+  apply ReachableStatementPrefixFamily.mapCursor
+    (cursor := @NestedWhileStatementCursor cfg env caller results 0 root owner selected)
+    (accepted_generated_while_bounded_nested_call_prefix_family selected condition body origin boundedBody noValue families family)
+  intro statement state source before built initial start map required runtime cursor
+  exact cursor.toScalar
 
 theorem accepted_generated_while_call_prefix_family {cfg : Cfg} {env : Env} {caller : Func} {results : List Ty}
     {root : DemandNode} {owner : Nat}
@@ -88,4 +121,5 @@ theorem accepted_generated_while_call_prefix_family {cfg : Cfg} {env : Env} {cal
 
 #print axioms accepted_generated_while_call_prefix_family
 #print axioms accepted_generated_while_scalar_call_prefix_family
+#print axioms accepted_generated_while_bounded_nested_call_prefix_family
 end Goose.Lower
