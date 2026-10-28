@@ -12,6 +12,15 @@ inductive NestedScalarExpression : Expr → Prop
   | binary {left right : Expr} (operation : Goose.Core.BinOp) (origin : Nat)
       (leftForm : NestedScalarExpression left) (rightForm : NestedScalarExpression right) :
       NestedScalarExpression (.bin operation left right origin)
+  | comparison {left right : Expr} (operation : Goose.Core.CmpOp)
+      (leftForm : NestedScalarExpression left) (rightForm : NestedScalarExpression right) :
+      NestedScalarExpression (.cmp operation left right)
+  | conjunction {left right : Expr} (leftForm : NestedScalarExpression left) (rightForm : NestedScalarExpression right) :
+      NestedScalarExpression (.and left right)
+  | disjunction {left right : Expr} (leftForm : NestedScalarExpression left) (rightForm : NestedScalarExpression right) :
+      NestedScalarExpression (.or left right)
+  | conversion {expression : Expr} (kind : Goose.Core.ConvKind) (target : Ty) (origin : Nat)
+      (operand : NestedScalarExpression expression) : NestedScalarExpression (.conv kind target expression origin)
   | conditional {condition : Expr} {yes no : Block} (origin : Nat)
       (conditionForm : NestedScalarExpression condition) (yesForm : NestedScalarBlock yes) (noForm : NestedScalarBlock no) :
       NestedScalarExpression (.ifE condition yes no origin)
@@ -46,6 +55,24 @@ theorem nestedScalarExpressionFlow_next {expression : Expr} (form : NestedScalar
     | succ fuel =>
       flow_simp
       exact ⟨nextFlowPrivate, nestedScalarExpressionFlow_next leftForm fuel, nestedScalarExpressionFlow_next rightForm fuel⟩
+  | conversion kind target origin operand =>
+    cases fuel with
+    | zero => flow_simp
+    | succ fuel => flow_simpa using nestedScalarExpressionFlow_next operand fuel
+  | comparison operation leftForm rightForm =>
+    cases fuel with
+    | zero => flow_simp
+    | succ fuel =>
+      flow_simp
+      exact ⟨nextFlowPrivate, nestedScalarExpressionFlow_next leftForm fuel, nestedScalarExpressionFlow_next rightForm fuel⟩
+  | @conjunction lhs rhs left right | @disjunction lhs rhs left right =>
+    cases fuel with
+    | zero => flow_simp
+    | succ fuel =>
+      flow_simp
+      refine ⟨nextFlowPrivate, nestedScalarExpressionFlow_next left fuel, ?_⟩
+      cases lhs <;> flow_simp_all <;> (rename_i b; cases b <;> flow_simp_all)
+      all_goals exact nestedScalarExpressionFlow_next right fuel
   | conditional origin conditionForm yesForm noForm =>
     cases fuel with
     | zero => flow_simp
@@ -112,6 +139,10 @@ theorem nestedScalarExpression_singleton {expression : Expr} (form : NestedScala
   | scalar form => exact typeExpr_scalar_singleton form fuel environment before after types typed
   | unary operation origin operand => exact typeExpr_unary_singleton fuel environment _ operation origin before after types typed
   | binary operation origin left right => exact typeExpr_binary_singleton fuel environment _ _ operation origin before after types typed
+  | comparison operation left right => exact ⟨.bool, typeExpr_comparison_singleton fuel environment _ _ operation before after types typed⟩
+  | conjunction left right => exact ⟨.bool, typeExpr_booleanBinary_singleton fuel environment _ _ true before after types typed⟩
+  | disjunction left right => exact ⟨.bool, typeExpr_booleanBinary_singleton fuel environment _ _ false before after types typed⟩
+  | conversion kind target origin operand => exact ⟨target, typeExpr_conversion_singleton fuel environment _ kind target origin before after types typed⟩
   | conditional origin conditionForm yesForm noForm =>
     cases fuel with
     | zero => change Except.error _ = Except.ok _ at typed; cases typed

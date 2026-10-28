@@ -104,6 +104,34 @@ theorem nestedValueComparison_compose (fuel : Nat) (config : EvalConfig) (accept
               beq_self_eq_true, ↓reduceIte, pure, Goose.Proofs.Exit.stepState]
             exact ⟨rightResult.1, rightResult.2.1, .boolean _, .boolean _⟩
 
+theorem nestedValueConversion_compose (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (source target : Goose.Core.IntTy) (kind : Goose.Core.ConvKind) (expression : Expr) (origin : Nat) (before : ExecutionState)
+    (operandSafe : NestedValueOutcome config accepted frame ambient types live (.int source)
+      (evalValue fuel config frame.interpretation.environment expression before)) :
+    NestedValueOutcome config accepted frame ambient types live (.int target)
+      (evalValue (fuel + 1) config frame.interpretation.environment (.conv kind (.int target) expression origin) before) := by
+  cases execution : evalValue fuel config frame.interpretation.environment expression before with
+  | stop reason after =>
+    simp only [NestedValueOutcome, execution, Goose.Proofs.Exit.stepState] at operandSafe
+    simpa [NestedValueOutcome, evalValue, execution, bind, Goose.Proofs.Exit.stepState] using operandSafe
+  | escape address carriers after | jump target kind after =>
+    simp only [NestedValueOutcome, execution] at operandSafe
+    exact operandSafe.2.2.elim
+  | ok value after =>
+    simp only [NestedValueOutcome, execution, Goose.Proofs.Exit.stepState] at operandSafe
+    cases represented : operandSafe.2.2.1 with
+    | stored => contradiction
+    | integer _ number =>
+      cases computed : Goose.Core.evalConv config.profile kind source target number with
+      | error reason =>
+        simp only [NestedValueOutcome, evalValue, execution, bind, expectInt, pure, computed, abortAt, EvalM.stop, Goose.Proofs.Exit.stepState]
+        exact ⟨operandSafe.1, operandSafe.2.1, trivial⟩
+      | ok result =>
+        simp only [NestedValueOutcome, evalValue, execution, bind, expectInt, pure, computed, Goose.Proofs.Exit.stepState]
+        exact ⟨operandSafe.1, operandSafe.2.1, .integer target result, .integer target result⟩
+
+#print axioms nestedValueConversion_compose
 #print axioms nestedValueComparison_compose
 #print axioms nestedValueShortCircuit_compose
 end Goose.Proofs.ConstructionAcceptedExecution

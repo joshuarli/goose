@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedNestedAssignChecker
+import Goose.Proofs.ConstructionAcceptedBinaryComplete
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -73,6 +74,60 @@ theorem nestedScalarExpression_cursors {expression : Expr} (form : NestedScalarE
         checked.provenance leftChecked.provenance rightChecked.provenance
       exact ⟨by simpa [leftFrame, rightFrame, ordinaryOperandFrame] using rightFacts.1.trans leftFacts.1,
         lastRoot.trans (by simpa [leftFrame, rightFrame, ordinaryOperandFrame] using rightFacts.2.trans leftFacts.2)⟩
+  | conversion kind target origin operand =>
+    cases fuel with
+    | zero =>
+      have typed := checked.typing
+      rw [fuelAt] at typed
+      change Except.error _ = Except.ok _ at typed
+      cases typed
+    | succ fuel =>
+      obtain ⟨integer, _, operandRoots, operandAfter, _, _, _, operandChecked⟩ :=
+        checkedValue_conv_operand frame fuel kind target _ origin ty roots typingAfter rootsAfter fuelAt checked
+      obtain ⟨otherRoots, otherAfter, otherRooted, nextVar⟩ := rpExpr_conv_nextVar frame.source kind target _ origin
+        frame.rootCursor rootsAfter roots checked.provenance
+      have same : operandAfter = otherAfter := by
+        have pair := operandChecked.provenance.symm.trans otherRooted
+        exact (Prod.mk.inj (Except.ok.inj pair)).2
+      subst otherAfter
+      have facts := nestedScalarExpression_cursors operand fuel (ordinaryOperandFrame frame fuel) (.int integer)
+        operandRoots typingAfter operandAfter rfl operandChecked
+      exact ⟨by simpa [ordinaryOperandFrame] using facts.1,
+        nextVar.trans (by simpa [ordinaryOperandFrame] using facts.2)⟩
+  | comparison operation leftForm rightForm =>
+    cases fuel with
+    | zero =>
+      have typed := checked.typing
+      rw [fuelAt] at typed
+      change Except.error _ = Except.ok _ at typed
+      cases typed
+    | succ fuel =>
+      obtain ⟨operandTy, middle, leftRoots, rightRoots, rootMiddle, _, _, _, leftChecked, rightChecked⟩ :=
+        checkedValue_cmp_operands frame fuel operation _ _ ty roots typingAfter rootsAfter fuelAt checked
+      let leftFrame := ordinaryOperandFrame frame fuel
+      let rightFrame := { leftFrame with typingCounter := middle, rootCursor := rootMiddle }
+      have leftFacts := nestedScalarExpression_cursors leftForm fuel leftFrame operandTy leftRoots middle rootMiddle rfl leftChecked
+      have rightFacts := nestedScalarExpression_cursors rightForm fuel rightFrame operandTy rightRoots typingAfter rootsAfter rfl rightChecked
+      exact ⟨by simpa [leftFrame, rightFrame, ordinaryOperandFrame] using rightFacts.1.trans leftFacts.1,
+        by simpa [leftFrame, rightFrame, ordinaryOperandFrame] using rightFacts.2.trans leftFacts.2⟩
+  | @conjunction left right leftForm rightForm | @disjunction left right leftForm rightForm =>
+    cases fuel with
+    | zero =>
+      have typed := checked.typing
+      rw [fuelAt] at typed
+      change Except.error _ = Except.ok _ at typed
+      cases typed
+    | succ fuel =>
+      obtain ⟨middle, leftRoots, rightRoots, rootMiddle, _, _, leftChecked, rightChecked⟩ := by
+        first
+        | exact shortCircuit_operands true frame fuel left right ty roots typingAfter rootsAfter fuelAt checked
+        | exact shortCircuit_operands false frame fuel left right ty roots typingAfter rootsAfter fuelAt checked
+      let leftFrame := ordinaryOperandFrame frame fuel
+      let rightFrame := { leftFrame with typingCounter := middle, rootCursor := rootMiddle }
+      have leftFacts := nestedScalarExpression_cursors leftForm fuel leftFrame .bool leftRoots middle rootMiddle rfl leftChecked
+      have rightFacts := nestedScalarExpression_cursors rightForm fuel rightFrame .bool rightRoots typingAfter rootsAfter rfl rightChecked
+      exact ⟨by simpa [leftFrame, rightFrame, ordinaryOperandFrame] using rightFacts.1.trans leftFacts.1,
+        by simpa [leftFrame, rightFrame, ordinaryOperandFrame] using rightFacts.2.trans leftFacts.2⟩
   | conditional origin conditionForm yesForm noForm =>
     cases fuel with
     | zero =>
