@@ -691,10 +691,10 @@
  },
  {
   "feature": "Accepted scalar expression statements",
-  "statement": "Every outcome of a sequence of checked recursive scalar expression statements preserves an accepted world and source frame; successful sequences advance the source position to the empty tail. The per-expression checks and cursor transitions follow from the source position and sequence checker. At fully initialized entry, the checker also supplies the required global-effect availability; a statement stop reaches the actual module stop for a zero-global module.",
+  "statement": "Every outcome of a sequence of checked recursive scalar expression statements preserves an accepted world and source frame; successful sequences advance the source position to the empty tail. The per-expression checks and cursor transitions follow from the source position and sequence checker. At fully initialized entry, the checker also supplies the required global-effect availability; a statement stop reaches the actual module stop after byte-owner global initialization.",
   "assumptions": "Accepted initial frame, world and source position, scalar sequence syntax, and availability of accumulated global effects. The entry result derives availability from full initialization and validated global targets.",
-  "limits": "A source position alone does not imply global effect availability: a positioned global read may have no initialized globals. The module-stop connection for nonzero globals, other statements and the general evaluator induction remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionAcceptedScalarStatement.lean; Goose/Proofs/ConstructionAcceptedScalarPosition.lean; Goose/Proofs/ConstructionAcceptedScalarEntryWitness.lean; Goose/Proofs/ConstructionAcceptedScalarEffectSequence.lean; Goose/Proofs/ConstructionAcceptedScalarRun.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "A source position alone does not imply global effect availability: a positioned global read may have no initialized globals. Normal module completion for scalar statements, other statements and the general evaluator induction remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedScalarStatement.lean; Goose/Proofs/ConstructionAcceptedScalarPosition.lean; Goose/Proofs/ConstructionAcceptedScalarEntryWitness.lean; Goose/Proofs/ConstructionAcceptedScalarEffectSequence.lean; Goose/Proofs/ConstructionAcceptedScalarRun.lean; Goose/Proofs/ConstructionAcceptedScalarGlobalRun.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Byte-only module world preservation",
@@ -735,10 +735,10 @@
  },
  {
   "feature": "Indexed assignment demand prerequisites",
-  "statement": "An accepted indexed local or global assignment retains its destination alias and value demand. A non-timeout stop in the generated snapshot reflects to source view evaluation after the owner address is evaluated. After the view and index stages, a generated bounds stop reflects to the containing source assignment with its index-out-of-bounds origin.",
-  "assumptions": "Accepted indexed source and generated occurrence, related builder and retained demand; snapshot stop reflection assumes the owner address was evaluated.",
-  "limits": "Index-expression and bounds-check prefixes and their composition into an assignment or block remain open. The bounds-stop theorem assumes the preceding view and index results and retained-run coverage. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandAssignmentIndexAlias.lean; Goose/Lower/DemandGeneratedSnapshotStop.lean; Goose/Lower/DemandIndexAssignmentStop.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "An accepted indexed local or global assignment retains its destination alias and value demand. Successful prefixes and non-timeout stops agree through owner addressing, snapshot, index evaluation and bounds check, value evaluation, and store. These cases compose into mixed unit and value blocks.",
+  "assumptions": "Accepted indexed source and generated occurrence, local or global owner, supported index and value expressions, related builder and retained demand.",
+  "limits": "Indexed owners are local slots or globals; nested projections, other statement forms, timeout reflection and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandAssignmentIndexAlias.lean; Goose/Lower/DemandIndexAssignmentPrefix.lean; Goose/Lower/DemandIndexAssignmentStopped.lean; Goose/Lower/DemandScalarAssignmentStatementAgreement.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Mixed expression and global-clear stop reflection",
@@ -866,16 +866,16 @@
  },
  {
   "feature": "Mixed scalar assignment statement agreement",
-  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, local or global clears and assignments to local or global places or their fields. Assignment values include literals, local or global reads, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
+  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing supported expression statements, local or global clears and assignments to local or global places, their fields or indexed elements. Assignment values include literals, local or global reads, arithmetic, comparisons and short-circuit Boolean expressions over supported expressions.",
   "assumptions": "Accepted source and generated sequence, related builder, admitted bounded realized retained map, generated rows and builder extension. Direct read assignments require a reference-target type proof, derivable from the local or global declaration.",
-  "limits": "Field destinations cover one projection; direct-read sources are local or global places. Other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "limits": "Field and indexed destinations cover one projection; direct-read sources are local or global places. Other statements, timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandScalarAssignmentExpressions.lean; Goose/Lower/DemandScalarAssignmentStatementAgreement.lean; Goose/Lower/DemandScalarClear.lean; Goose/Lower/DemandReadAssignmentTyping.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Mixed scalar assignment block agreement",
   "statement": "Successful generated prefixes and non-timeout stops agree with source execution through scope entry, mixed statement sequences and scope exit for blocks containing supported scalar assignments, including a supported final scalar or short-circuit expression. Intermediate successful prefixes preserve the accepted frame.",
   "assumptions": "Accepted block source, generated block and statement rows, related builder, admitted bounded realized retained map and builder extension.",
-  "limits": "No loop context in the stop theorems; direct read assignments require a reference-target type proof. Assignments use supported expressions and local or global destinations, including one field projection. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "limits": "No loop context in the stop theorems; direct read assignments require a reference-target type proof. Assignments use supported expressions and local or global destinations, including one field or index projection. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandScalarAssignmentBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentUnitBlock.lean; Goose/Lower/DemandScalarAssignmentValueBlockPrefix.lean; Goose/Lower/DemandStoppedScalarAssignmentValueBlock.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
