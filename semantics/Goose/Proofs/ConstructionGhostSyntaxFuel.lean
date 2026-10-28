@@ -8,6 +8,17 @@ mutual
 inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | base {expression : Expr} (supported : Goose.Proofs.ConstructionGhostSourceTransition.SupportedValue expression) :
       ValueSyntax config expression
+  | unary (operation : Goose.Core.UnOp) (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
+      ValueSyntax config (.un operation operand origin)
+  | conversion (kind : Goose.Core.ConvKind) (target : Ty) (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
+      ValueSyntax config (.conv kind target operand origin)
+  | negation (operand : Expr) (child : ValueSyntax config operand) : ValueSyntax config (.not operand)
+  | comparison (operation : Goose.Core.CmpOp) (first second : Expr) (left : ValueSyntax config first) (right : ValueSyntax config second) :
+      ValueSyntax config (.cmp operation first second)
+  | binary (operation : Goose.Core.BinOp) (first second : Expr) (origin : Goose.Core.OriginId)
+      (left : ValueSyntax config first) (right : ValueSyntax config second) : ValueSyntax config (.bin operation first second origin)
+  | logical (isAnd : Bool) (first second : Expr) (left : ValueSyntax config first) (right : ValueSyntax config second) :
+      ValueSyntax config (logicalExpression isAnd first second)
   | bytes (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
       ValueSyntax config (.bytes ty bytes origin)
   | fill (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId)
@@ -179,6 +190,15 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
       · intro environment expression derivation
         cases derivation with
         | base supported => exact .legacy (fuel + 1) (.value environment supported)
+        | unary operation operand origin child => exact .unary fuel environment operation operand origin (previous.value environment operand child)
+        | conversion kind target operand origin child => exact .conversion fuel environment kind target operand origin (previous.value environment operand child)
+        | negation operand child => exact .negation fuel environment operand (previous.value environment operand child)
+        | comparison operation first second left right =>
+            exact .comparison fuel environment operation first second (previous.value environment first left) (previous.value environment second right)
+        | binary operation first second origin left right =>
+            exact .binary fuel environment operation first second origin (previous.value environment first left) (previous.value environment second right)
+        | logical isAnd first second left right =>
+            exact .logical fuel environment isAnd first second (previous.value environment first left) (previous.value environment second right)
         | bytes ty bytes origin => exact .legacy (fuel + 1) (.valueBytes environment ty bytes origin)
         | fill element count operand origin fixed child =>
             exact .fill fuel environment element count origin operand fixed (previous.value environment operand child)

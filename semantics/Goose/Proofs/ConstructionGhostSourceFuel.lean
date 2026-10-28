@@ -10,6 +10,24 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | timeout (operation : SourceOperation α) : FuelSupport config 0 operation
   | legacy (fuel : Nat) {operation : SourceOperation α} (supported : SupportedOperation config operation) :
       FuelSupport config fuel operation
+  | unary (fuel : Nat) (environment : RuntimeActivation) (operation : Goose.Core.UnOp) (operand : Expr) (origin : Goose.Core.OriginId)
+      (child : FuelSupport config fuel (.value environment operand)) :
+      FuelSupport config (fuel + 1) (.value environment (.un operation operand origin))
+  | conversion (fuel : Nat) (environment : RuntimeActivation) (kind : Goose.Core.ConvKind) (target : Ty) (operand : Expr) (origin : Goose.Core.OriginId)
+      (child : FuelSupport config fuel (.value environment operand)) :
+      FuelSupport config (fuel + 1) (.value environment (.conv kind target operand origin))
+  | negation (fuel : Nat) (environment : RuntimeActivation) (operand : Expr)
+      (child : FuelSupport config fuel (.value environment operand)) :
+      FuelSupport config (fuel + 1) (.value environment (.not operand))
+  | comparison (fuel : Nat) (environment : RuntimeActivation) (operation : Goose.Core.CmpOp) (first second : Expr)
+      (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
+      FuelSupport config (fuel + 1) (.value environment (.cmp operation first second))
+  | binary (fuel : Nat) (environment : RuntimeActivation) (operation : Goose.Core.BinOp) (first second : Expr) (origin : Goose.Core.OriginId)
+      (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
+      FuelSupport config (fuel + 1) (.value environment (.bin operation first second origin))
+  | logical (fuel : Nat) (environment : RuntimeActivation) (isAnd : Bool) (first second : Expr)
+      (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
+      FuelSupport config (fuel + 1) (.value environment (logicalExpression isAnd first second))
   | fill (fuel : Nat) (environment : RuntimeActivation) (element : Ty) (count : Nat) (origin : Goose.Core.OriginId)
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : FuelSupport config fuel (.value environment operand)) :
@@ -182,6 +200,31 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
   | succ fuel ih =>
       cases supported with
       | legacy fuel supported => exact history_exists (fuel + 1) config _ path before supported
+      | unary _ environment operation operand origin childSupported =>
+          exact .unary (ih (.value environment operand) (path ++ [0]) before childSupported)
+      | conversion _ environment kind target operand origin childSupported =>
+          exact .conversion (ih (.value environment operand) (path ++ [0]) before childSupported)
+      | negation _ environment operand childSupported =>
+          have child := ih (.value environment operand) (path ++ [0]) before childSupported
+          have actual : evalValue (fuel + 1) config environment (.not operand) before =
+              negationResult (evalValue fuel config environment operand before) := by
+            simp only [evalValue, bind, negationResult]
+            cases evalValue fuel config environment operand before <;> rfl
+          simp only [execute] at child ⊢
+          rw [actual]
+          exact .negation child
+      | comparison _ environment operation first second leftSupported rightSupported =>
+          refine .comparison (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
+          intro value middle result
+          exact ih (.value environment second) (path ++ [1]) middle rightSupported
+      | binary _ environment operation first second origin leftSupported rightSupported =>
+          refine .binary (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
+          intro value middle ty number ready result checked
+          exact ih (.value environment second) (path ++ [1]) ready rightSupported
+      | logical _ environment isAnd first second leftSupported rightSupported =>
+          refine .logical (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
+          intro value middle ready result checked
+          exact ih (.value environment second) (path ++ [1]) ready rightSupported
       | fill _ environment element count origin operand fixed childSupported =>
           have child := ih (.value environment operand) (path ++ [0]) before childSupported
           have actual : evalValue (fuel + 1) config environment (.fill (.arr element count) operand origin) before =

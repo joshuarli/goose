@@ -63,6 +63,35 @@ theorem valueTail_success : ∃ after,
     rw [actual] at history
     exact history
 
+theorem comparisonCall_history (fuel : Nat) :
+    SourceHistory config fuel [] (.value environment (.cmp .eq (.call 0 [] 0) (.lit .i64 7))) .initial
+      (evalValue fuel config environment (.cmp .eq (.call 0 [] 0) (.lit .i64 7)) .initial) := by
+  exact fuelHistory_exists fuel config _ [] .initial
+    ((syntaxFuel_existsWithTails fuel config closed).value environment _
+      (.comparison .eq (.call 0 [] 0) (.lit .i64 7) (.channelCall 0 [] 0 argumentsSyntax) (.base (.integer .i64 7))))
+
+theorem comparisonCall_success : ∃ after,
+    evalValue 40 config environment (.cmp .eq (.call 0 [] 0) (.lit .i64 7)) .initial = .ok (.bool true) after ∧
+    after.construction.stdout.data.toList = [120, 10] ∧
+    SourceHistory config 40 [] (.value environment (.cmp .eq (.call 0 [] 0) (.lit .i64 7))) .initial (.ok (.bool true) after) := by
+  have history := comparisonCall_history 40
+  refine ⟨stepState (evalValue 40 config environment (.cmp .eq (.call 0 [] 0) (.lit .i64 7)) .initial), ?_, ?_, ?_⟩
+  · unfold stepState config context implementation environment
+    unfold evalValue
+    cbv
+  · unfold stepState config context implementation environment
+    unfold evalValue
+    cbv
+  · have actual : evalValue 40 config environment (.cmp .eq (.call 0 [] 0) (.lit .i64 7)) .initial =
+        .ok (.bool true) (stepState (evalValue 40 config environment (.cmp .eq (.call 0 [] 0) (.lit .i64 7)) .initial)) := by
+      unfold stepState config context implementation environment
+      unfold evalValue
+      cbv
+    rw [actual] at history
+    exact history
+
+#print axioms comparisonCall_history
+#print axioms comparisonCall_success
 #print axioms valueTail_history
 #print axioms valueTail_success
 end Goose.Proofs.ConstructionGhostSyntaxValueTail
