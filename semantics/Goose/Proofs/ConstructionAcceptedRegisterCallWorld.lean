@@ -135,6 +135,19 @@ theorem finishActivation_register_normal (config : EvalConfig) (initialized : Na
   simp [finishActivation, evaluated, channels, finishChannels, landCarriersInto, finishChannel,
     List.forIn_cons, List.forIn_nil, bind, pure]
 
+theorem finishActivation_register_stopped (config : EvalConfig) (initialized : Nat) (activation : RuntimeActivation)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (resultTypes : List Ty) (origin : Nat)
+    (action : EvalM (List Carrier)) (before after : ExecutionState) (reason : Goose.Core.Stop)
+    (evaluated : action before = .stop reason after)
+    (world : AcceptedWorld config initialized after (.callChannels activation [] :: ambient) types live regions pending)
+    (clear : FutureGlobalsClear config initialized after) :
+    finishActivation config.layout activation resultTypes origin action before = .stop reason after ∧
+      AcceptedWorld config initialized after (.callChannels activation [] :: ambient) types live regions pending ∧
+      FutureGlobalsClear config initialized after := by
+  exact ⟨by simp [finishActivation, evaluated], world, clear⟩
+
+#print axioms finishActivation_register_stopped
 theorem deliverCarriers_register (fuel : Nat) (config : EvalConfig) (ty : Ty) (value : Value)
     (origin : Nat) (state : ExecutionState) :
     deliverCarriers fuel config.layout [.register ty] [.register value] origin state = .ok [.register value] state := by
