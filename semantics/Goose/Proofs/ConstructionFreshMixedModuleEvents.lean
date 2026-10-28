@@ -7,12 +7,10 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 
-private theorem mixedEntry_high_events (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+theorem mixedEntry_world_events (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (initialized : ExecutionState) (original : Context) (implementation : Impl)
-    (globalDeclarations : ∀ id, id < config.module.globals.size →
-      ∃ descriptor bytes bytesOrigin, config.module.globals[id]? = some descriptor ∧
-        descriptor.ty = .varr (.int .u8) ∧ descriptor.init = .bytes (.varr (.int .u8)) bytes bytesOrigin)
-    (globals : initGlobals (fuel + 3) config (List.range config.module.globals.size) .initial = .ok () initialized)
+    (globalLive : Goose.Core.RootInst → Prop)
+    (globalWorld : AcceptedWorld config config.module.globals.size initialized [] (declaredRootTypes config.module) globalLive [] [])
     (originalAt : config.module.contexts[config.module.entry]? = some original)
     (implementationAt : config.module.impls[original.impl]? = some implementation)
     (form : MixedAssignStatements implementation.body.stmts)
@@ -32,9 +30,6 @@ private theorem mixedEntry_high_events (fuel : Nat) (config : EvalConfig) (accep
       (Goose.Proofs.Exit.stepState ((invokeCall (fuel + 3) config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 >>=
         fun carriers => publishCarriers 0 carriers) initialized)).construction.events = initialized.construction.events ++ suffix ∧
       ∀ event ∈ suffix, ByteOwnerSequenceEvent event := by
-  have globals' : initGlobals ((fuel + 2) + 1) config (List.range config.module.globals.size) .initial = .ok () initialized := by
-    simpa only [Nat.add_assoc] using globals
-  obtain ⟨globalLive, globalWorld, clear⟩ := initGlobals_byteOwners_initial (fuel + 2) config accepted initialized globalDeclarations globals'
   obtain ⟨frame, next, activation, types, nextLive, regions, channels, implementationEq, call,
     ⟨suffix, trace, valid⟩, bodyResult⟩ :=
       acceptedMixedAssignEntry_normal_scope_events fuel config accepted initialized globalLive original implementation globalWorld
@@ -141,8 +136,11 @@ theorem runModule_mixedByteScalar_fresh_events (fuel : Nat) (config : EvalConfig
       have fuelEq : fuel = remaining + 3 := by dsimp [remaining]; omega
       have globals' : initGlobals (remaining + 3) config (List.range config.module.globals.size) .initial = .ok () initialized := by
         rw [← fuelEq]; exact globals
-      obtain ⟨localEvents, localTrace, localValid⟩ := mixedEntry_high_events remaining config accepted initialized original implementation
-        globalDeclarations globals' originalAt implementationAt form owners scalarOwners localTargets globalTargets tail
+      have globals'' : initGlobals ((remaining + 2) + 1) config (List.range config.module.globals.size) .initial = .ok () initialized := by
+        simpa only [Nat.add_assoc] using globals'
+      obtain ⟨globalLive, globalWorld, clear⟩ := initGlobals_byteOwners_initial (remaining + 2) config accepted initialized globalDeclarations globals''
+      obtain ⟨localEvents, localTrace, localValid⟩ := mixedEntry_world_events remaining config accepted initialized original implementation
+        globalLive globalWorld originalAt implementationAt form owners scalarOwners localTargets globalTargets tail
       have localTrace' : (Goose.Proofs.Exit.stepState ((invokeCall fuel config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 >>=
           fun carriers => publishCarriers 0 carriers) initialized)).construction.events = initialized.construction.events ++ localEvents := by
         rw [fuelEq]; exact localTrace
