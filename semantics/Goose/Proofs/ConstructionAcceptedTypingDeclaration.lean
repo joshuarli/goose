@@ -4,6 +4,7 @@ namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
+open Goose.Proofs.ConstructionRootCorrespondence
 
 theorem typeStatement_let_descriptor (fuel : Nat) (env next : TypingEnv) (id : Nat)
     (expression : Expr) (origin before after : Nat)
@@ -35,6 +36,15 @@ theorem typeStatement_let_descriptor (fuel : Nat) (env next : TypingEnv) (id : N
   · simp [StateT.bind, ordered, throwState] at checked
     change Except.error _ = Except.ok _ at checked
     cases checked
+
+theorem typeStatement_let_environment (fuel : Nat) (env next : TypingEnv) (id : Nat)
+    (expression : Expr) (origin before after : Nat)
+    (checked : typeStatement (fuel + 1) env (.letS id expression origin) before = .ok (next, after)) :
+    next = { env with visible := id :: env.visible } := by
+  simp only [typeStatement, bind, StateT.bind, Except.bind] at checked
+  repeat' split at checked
+  all_goals try cases checked
+  all_goals rfl
 
 theorem execStmt_typedScopedByteOwner_letWorld (fuel typeFuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (context localVar scope scopeInst : Nat) (outer : List (Nat × Nat))
@@ -118,8 +128,43 @@ theorem execStmt_typedByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (acc
       typingAfter world source phase rootChecked (by simpa only [fuelCase] using typed) byteOwner scopes unnamed executed
     exact ⟨scopeInst, stored, published, extended, preserved⟩
 
+theorem execStmt_entryByteOwner_letWorld (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (localVar : Nat) (bytes : List UInt8) (origin : Goose.Core.OriginId)
+    (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (rootAfter : RState)
+    (typingNext : TypingEnv) (typingAfter : Nat)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation config.module.entry)
+    (rootChecked : rpStmt frame.source (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+      frame.rootCursor = .ok ((), rootAfter))
+    (typed : typeStatement frame.typingFuel frame.typing (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin)
+      frame.typingCounter = .ok (typingNext, typingAfter))
+    (byteOwner : (frame.typing.variables[localVar]?).map (·.ty) = some (.varr (.int .u8)))
+    (executed : execStmt (fuel + 2) config frame.interpretation.environment
+      (.letS localVar (.bytes (.varr (.int .u8)) bytes origin) origin) before = .ok (.normal .unit) after) :
+    ∃ (scopeInst : Nat) (stored : StoredValue) (published : ExecutionState),
+      RootTypesExtend types (registerRootType types (.local frame.interpretation.environment.act scopeInst localVar) (.varr (.int .u8))) ∧
+      AcceptedWorld config frame.initialized after ambient
+        (registerRootType types (.local frame.interpretation.environment.act scopeInst localVar) (.varr (.int .u8)))
+        (fun other => other = .local frame.interpretation.environment.act scopeInst localVar ∨ live other)
+        (regions.map (fun region => extendReceivingLimit region stored.storage (storageExtent published stored.storage))) pending := by
+  obtain ⟨entry, implementation, entryFound, implFound, paramsEmpty, resultsEmpty⟩ := validated_entry config.module accepted.accepted
+  have originFact := source.compatible.origin
+  unfold SourceOrigin at originFact
+  rw [phase] at originFact
+  obtain ⟨actual, calls, actualFound, actualImpl, rest⟩ := originFact
+  have same : actual = entry := Option.some.inj (actualFound.symm.trans entryFound)
+  subst actual
+  have sameImpl : frame.source.impl = implementation := Option.some.inj (actualImpl.symm.trans implFound)
+  have unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some localVar)) = none := by
+    simp only [sameImpl, resultsEmpty, Array.toList_empty, List.zipIdx_nil, List.find?_nil]
+  exact execStmt_typedByteOwner_letWorld fuel config accepted frame config.module.entry localVar bytes origin before after
+    ambient types live regions pending rootAfter typingNext typingAfter world source phase rootChecked typed byteOwner unnamed executed
+
 #print axioms typeStatement_let_descriptor
+#print axioms typeStatement_let_environment
 #print axioms execStmt_typedScopedByteOwner_letWorld
 #print axioms execStmt_typedByteOwner_letWorld
+#print axioms execStmt_entryByteOwner_letWorld
 
 end Goose.Proofs.ConstructionAcceptedExecution
