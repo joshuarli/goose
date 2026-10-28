@@ -1,4 +1,4 @@
-import Goose.Lower.DemandShortCircuitPrefixFamily
+import Goose.Lower.DemandControlProgressCursor
 import Goose.Lower.DemandGeneratedExpressionStatementPrefix
 import Goose.Lower.DemandGeneratedBlockPrefix
 
@@ -15,7 +15,7 @@ inductive ControlStatementPrefixCursor {cfg : Cfg} {env : Env} (cx : FnCtx) (res
       ControlStatementPrefixCursor cx results source before built initial start map required runtime
   | expression {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
-      (cursor : GeneratedExpressionStatementPrefixCursor (@CanonicalExpressionPrefixCursor cfg env cx)
+      (cursor : GeneratedExpressionStatementPrefixCursor (@GeneratedControlProgressCursor cfg env cx)
         source before built initial start map required runtime) :
       ControlStatementPrefixCursor cx results source before built initial start map required runtime
 
@@ -66,7 +66,7 @@ theorem accepted_generated_control_statements_prefix {cfg : Cfg} {env : Env} {cx
         (@ControlStatementPrefixCursor cfg env cx results) := by
       apply GeneratedStatementPrefixFamily.mapCursor
         (accepted_generated_expression_statement_prefix selected loop _ origin _
-          (accepted_generated_control_prefix_family selected loop form))
+          (accepted_generated_control_progress_prefix_family selected loop form))
       intro statement state source before built initial start map required runtime cursor
       exact .expression cursor
     intro state
@@ -83,7 +83,7 @@ theorem ControlStatementPrefixCursor.realizes {cfg : Cfg} {env : Env} {cx : FnCt
     exact demanded.operands
   | expression cursor =>
     cases cursor with
-    | expression metadata demanded => simpa only [metadata.world] using demanded.carried
+    | expression metadata demanded => simpa only [metadata.world] using demanded.demanded.carried
 
 theorem GeneratedSequencePrefixCursor.control_realizes {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {map required : RetainedSsaMap} {before : LS} {loop : Option LoopCtx}

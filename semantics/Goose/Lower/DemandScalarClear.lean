@@ -9,7 +9,9 @@ open Goose.Core Goose.GIR Goose.Core.Sound
 inductive ScalarClearCursor {cfg : Cfg} {env : Env} {place : Place} {origin : OriginId} {state : St}
     (source : StmtSource cfg env (.clear place origin) state) (map : RetainedSsaMap) (cx : FnCtx) : DemandRuntimePoint → Prop
   | atFrame {runtime : DemandRuntimePoint} {typing : TEnv} {roots : PEnv} {future : _}
-      (frame : DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime) :
+      (frame : DemandFrameAt cfg env cx source.world typing roots future map.values map.runs runtime)
+      (progress : (∃ effect, instAt cx.fn runtime.point = some (.eff effect)) ∨
+        ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
       ScalarClearCursor source map cx runtime
 
 theorem accepted_generated_scalar_clear_prefix {cfg : Cfg} {env : Env} {place : Place} {origin : OriginId} {state : St}
@@ -45,7 +47,7 @@ theorem accepted_generated_scalar_clear_prefix {cfg : Cfg} {env : Env} {place : 
   have middleCarried := realized.retained addressPost.same bounded.1 bounded.2 RetainsAliases.refl
   refine ⟨owned, coverage, ?_⟩
   rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨length, current, rfl, actual, tail⟩
-  · exact .interior (.atFrame ⟨⟨_, atPoint, related⟩, source.frame, realized⟩)
+  · exact .interior (.atFrame ⟨⟨_, atPoint, related⟩, source.frame, realized⟩ (Or.inr ⟨middle, firstStep⟩))
   · obtain ⟨actualFuel, actualStep⟩ := runtimeStep_demandInstructionStep actual
     have same := actualStep.deterministic (firstStep actualFuel)
     have currentEq : current = middle := (show current = ⟨current.point, current.frame, current.state⟩ from by cases current; rfl).trans same
@@ -55,7 +57,9 @@ theorem accepted_generated_scalar_clear_prefix {cfg : Cfg} {env : Env} {place : 
       apply ScalarClearCursor.atFrame
       have childFrame := placeResult.frame
       rw [canonical.world] at childFrame
-      exact ⟨⟨_, addressPost.pp, addressPost.rel⟩, childFrame, middleCarried⟩
+      · exact ⟨⟨_, addressPost.pp, addressPost.rel⟩, childFrame, middleCarried⟩
+      · have site := GeneratedDemandInstruction.clear_auto occurrence rows addressPost.pp extended
+        exact Or.inl ⟨_, site.instruction⟩
     · obtain ⟨_, _, _, _, _, _, _, evaluated, post, result, finalBounded, demanded⟩ :=
         accepted_generated_clear_runtime_step source occurrence rows coverage admitted bounded realized placed addressPost extended cleared
       have prepared : (execStmt 2 cfg env (.clear place origin) >>= prepareLoopFlow env loop) state =

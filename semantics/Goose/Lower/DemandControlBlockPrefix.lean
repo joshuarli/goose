@@ -148,7 +148,7 @@ theorem ControlStatementPrefixCursor.frame {cfg : Cfg} {env : Env} {cx : FnCtx} 
   | expression cursor =>
     cases cursor with
     | expression metadata demanded =>
-      obtain ⟨typing, roots, future, frame⟩ := demanded.frame
+      obtain ⟨typing, roots, future, frame⟩ := demanded.demanded.frame
       exact ⟨typing, roots, future, by simpa only [metadata.world] using frame⟩
 
 theorem GeneratedSequencePrefixCursor.control_frame {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}

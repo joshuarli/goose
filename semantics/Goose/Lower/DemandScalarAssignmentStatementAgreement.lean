@@ -123,7 +123,7 @@ theorem accepted_generated_scalar_assignment_statements_prepend {cfg : Cfg} {env
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
       apply GeneratedStatementPrefixFamily.mapCursor
         (accepted_generated_expression_statement_prefix selected loop _ origin _
-          (accepted_generated_control_prefix_family selected loop form))
+          (accepted_generated_control_progress_prefix_family selected loop form))
       intro statement state source before built initial start map required runtime cursor
       exact .control (.expression cursor)
     exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ (GeneratedStatementPrefixFamily.mapCursor head convert) ih.1,
@@ -287,7 +287,7 @@ theorem ScalarAssignmentStatementPrefixCursor.realizes {cfg : Cfg} {env : Env} {
   | scalarClear cursor =>
     cases cursor with
     | clear demanded => cases demanded with
-      | atFrame frame => exact frame.operands
+      | atFrame frame progress => exact frame.operands
   | indexAssignment cursor => exact cursor.realizes
   | fieldAssignment cursor => exact cursor.realizes
   | assignment cursor => exact cursor.realizes

@@ -215,7 +215,7 @@ theorem ScalarAssignmentStatementPrefixCursor.frame {cfg : Cfg} {env : Env} {cx 
   | scalarClear cursor =>
     cases cursor with
     | clear demanded => cases demanded with
-      | atFrame frame => exact ⟨_, _, _, frame⟩
+      | atFrame frame progress => exact ⟨_, _, _, frame⟩
   | indexAssignment cursor =>
     cases cursor with
     | frame frame => exact ⟨_, _, _, frame⟩
