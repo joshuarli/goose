@@ -58,7 +58,8 @@ private theorem replacementPath_use (state : ConstructionState) (receiving sourc
     exact ⟨parent, use⟩
 
 inductive CompletedCarrierLandingFrame (before : ExecutionState) (incoming source : Nat) : ExecutionState → Prop
-  | current : CompletedCarrierLandingFrame before incoming source before
+  | current (resolved : destinationCurrent before.construction incoming = .ok source) :
+      CompletedCarrierLandingFrame before incoming source before
   | commit (receiving count : Nat) (replacement anchor : PendingDestination) (storage : ReceivingStorage)
       (parentUpdate : Option (DestinationId × PendingDestination)) (chain : List DestinationId)
       (resolved : destinationCurrent before.construction incoming = .ok receiving)
@@ -87,7 +88,7 @@ theorem landCarriersInto_construct_completed (layout : LayoutEnv) (origin : Orig
       after.construction.exitReservations = state.construction.exitReservations ∧
       CompletedCarrierLandingFrame state incoming source after := by
   by_cases current : ready.receiving = source
-  · exact ⟨state, landCarriersInto_current origin state incoming source ready current, backed, ⟨ready⟩, rfl, .current⟩
+  · exact ⟨state, landCarriersInto_current origin state incoming source ready current, backed, ⟨ready⟩, rfl, .current (by simpa only [current] using ready.resolved)⟩
   cases backed with
   | completed id count replacement stored present built sampled backing =>
     have same := Option.some.inj (ready.sourcePresent.symm.trans present)

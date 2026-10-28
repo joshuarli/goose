@@ -73,7 +73,7 @@ theorem landCarriersInto_construct_protected (module : Goose.Construct.Module) (
     landCarriersInto_construct_completed (.ofModule module) origin state ambient incoming source context backed ready
   refine ⟨after, success, sourceBacked, .construct incoming source postReady, tickets, ?_⟩
   cases frame with
-  | current => exact ⟨protection.observations, rfl, by intros; rfl⟩
+  | current resolved => exact ⟨protection.observations, rfl, by intros; rfl⟩
   | commit receiving count replacement anchor storage parentUpdate chain resolved present built receivingPresent
       stored sameStorage ordered inside parentBound parentDifferent parentFootprint =>
     have receivingSame : receiving = ready.receiving := Except.ok.inj (resolved.symm.trans ready.resolved)

@@ -19,7 +19,7 @@ theorem CompletedCarrierLandingFrame.receiverStorage (layout : LayoutEnv) (state
     have sameBacking := ready.path.backing context.source.structural.1.2.2.1
       ready.receivingDestination replacement ready.receivingPresent present supported
     cases landing with
-    | current => exact ⟨replacement, present, congrArg DestinationBacking.receiverStorage sameBacking⟩
+    | current resolved => exact ⟨replacement, present, congrArg DestinationBacking.receiverStorage sameBacking⟩
     | commit receiving count current anchor storage parentUpdate chain resolved currentPresent currentBuilt
         anchorPresent storagePresent sameStorage ordered inside parentBound parentDifferent parentFootprint =>
       have sameReceiver : receiving = ready.receiving := Except.ok.inj (resolved.symm.trans ready.resolved)
