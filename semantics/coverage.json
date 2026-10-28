@@ -699,8 +699,17 @@
   "theorem": "Goose.Lower.generated_assignment_place_extended; Goose.Lower.GeneratedAssignmentStoreSite.instruction; Goose.Lower.GeneratedAssignmentStoreSite.valueRows",
   "statement": "Generated assignment occurrences identify the destination and right-hand side, retain the destination aliases in the value's demand rows, and identify the generated store instruction after the value.",
   "assumptions": "Generated assignment occurrence and demand rows, a successful destination-alias query, current builder point and function extension.",
-  "limits": "Accepted source child reconstruction, operand execution, store preservation, aborts and assignment prefix composition remain open. This component does not close TH-LOWER-03.",
+  "limits": "Operand execution, retained alias realization, store preservation, aborts and assignment prefix composition remain open. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandGeneratedAssignment.lean and occurrence and row definitions; scoped Lean 4.35 closure and downstream block closure."
+ },
+ {
+  "feature": "Accepted assignment demand children",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.StmtSource.assignChildrenDemand; Goose.Lower.accepted_generated_assignment_children",
+  "statement": "An accepted assignment yields canonical source and generated occurrences for its destination and, after actual destination evaluation, its right-hand side. The destination alias query determines the right-hand side's retained demand rows.",
+  "assumptions": "Accepted assignment source, generated occurrence and rows, successful destination evaluation, and successful destination-alias query.",
+  "limits": "Retained alias realization, operand-prefix traversal, store preservation, stops and assignment completion remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/SourceContexts.lean; Goose/Lower/DemandAssignmentSource.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted Core short-circuit control demand transfer",
