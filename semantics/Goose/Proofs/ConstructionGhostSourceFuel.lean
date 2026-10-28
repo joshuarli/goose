@@ -40,6 +40,18 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | logical (fuel : Nat) (environment : RuntimeActivation) (isAnd : Bool) (first second : Expr)
       (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
       FuelSupport config (fuel + 1) (.value environment (logicalExpression isAnd first second))
+  | valueNonfixedArray (fuel : Nat) (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
+      (origin : Goose.Core.OriginId) (nonfixed : ty.nonfixed = true)
+      (child : ∀ destination, FuelSupport config fuel (.builder environment destination (.arrLit ty operands origin))) :
+      FuelSupport config (fuel + 1) (.value environment (.arrLit ty operands origin))
+  | builderArray (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId) (ty : Ty)
+      (operands : List Expr) (origin : Goose.Core.OriginId)
+      (children : ∀ operand ∈ operands, ∀ parent element, FuelSupport config fuel (.element environment parent element operand)) :
+      FuelSupport config (fuel + 1) (.builder environment incoming (.arrLit ty operands origin))
+  | element (fuel : Nat) (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty) (operand : Expr)
+      (valueChild : FuelSupport config fuel (.value environment operand))
+      (builderChild : ∀ destination, FuelSupport config fuel (.builder environment destination operand)) :
+      FuelSupport config (fuel + 1) (.element environment parent element operand)
   | valueNonfixedFill (fuel : Nat) (environment : RuntimeActivation) (element : Ty) (count : Nat)
       (operand : Expr) (origin : Goose.Core.OriginId) (nonfixed : (Ty.arr element count).nonfixed = true)
       (child : ∀ destination, FuelSupport config fuel (.builder environment destination (.fill (.arr element count) operand origin))) :
@@ -284,6 +296,32 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .logical (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
           intro value middle ready result checked
           exact ih (.value environment second) (path ++ [1]) ready rightSupported
+      | valueNonfixedArray _ environment ty operands origin nonfixed childSupported =>
+          refine .valueNonfixedArray fuel path environment ty operands origin before nonfixed ?_
+          intro destination ready allocated
+          exact ih (.builder environment destination (.arrLit ty operands origin)) (path ++ [0]) ready (childSupported destination)
+      | builderArray _ environment incoming ty operands origin childrenSupported =>
+          refine .builderArray fuel path environment incoming ty operands origin before ?_
+          intro current prepared ready pending element outcome visits renewed found elementFound replay visit member
+          have inMapped : visit.operand ∈ visits.map Goose.Proofs.ConstructionInvocationReplay.Invocation.operand := List.mem_map_of_mem member
+          rw [replay.sourceOrder] at inMapped
+          have inOperands := List.mem_of_mem_take inMapped
+          have child := ih (.element environment current element visit.operand) (path ++ [visit.ordinal]) visit.before
+            (childrenSupported visit.operand inOperands current element)
+          simp only [execute] at child
+          rw [← Goose.Proofs.ConstructionGhostInvocation.visit_executes replay visit member]
+          exact child
+      | element _ environment parent element operand valueSupported builderSupported =>
+          cases fixed : element.nonfixed with
+          | false =>
+              have child := ih (.value environment operand) (path ++ [0]) before valueSupported
+              simp only [execute] at child ⊢
+              rw [Goose.Proofs.ConstructionGhostElements.fixedElement_execution fuel config environment parent element operand before fixed]
+              exact .fixedElement fixed child
+          | true =>
+              refine .nonfixedElement fixed ?_
+              intro layout layoutReady destination ready layoutResult opened
+              exact ih (.builder environment destination operand) (path ++ [0]) ready (builderSupported destination)
       | valueNonfixedFill _ environment element count operand origin nonfixed childSupported =>
           refine .valueNonfixedFill fuel path environment element count operand origin before nonfixed ?_
           intro destination ready allocated

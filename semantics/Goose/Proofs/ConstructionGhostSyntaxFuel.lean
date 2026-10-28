@@ -26,6 +26,9 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
       ValueSyntax config (logicalExpression isAnd first second)
   | bytes (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
       ValueSyntax config (.bytes ty bytes origin)
+  | nonfixedArray (ty : Ty) (operands : List Expr) (origin : Goose.Core.OriginId) (nonfixed : ty.nonfixed = true)
+      (builder : DeclarationBuilderSyntax config (.arrLit ty operands origin)) :
+      ValueSyntax config (.arrLit ty operands origin)
   | nonfixedFill (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId)
       (nonfixed : (Ty.arr element count).nonfixed = true)
       (builder : DeclarationBuilderSyntax config (.fill (.arr element count) operand origin)) :
@@ -54,6 +57,10 @@ inductive DeclarationBuilderSyntax (config : EvalConfig) : Expr → Prop
   | supported (expression : Expr) (source : SupportedValue expression) : DeclarationBuilderSyntax config expression
   | static (expression : Expr) (source : ∀ environment destination, SupportedOperation config (.builder environment destination expression)) :
       DeclarationBuilderSyntax config expression
+  | array (ty : Ty) (operands : List Expr) (origin : Goose.Core.OriginId)
+      (values : ∀ operand ∈ operands, ValueSyntax config operand)
+      (builders : ∀ operand ∈ operands, DeclarationBuilderSyntax config operand) :
+      DeclarationBuilderSyntax config (.arrLit ty operands origin)
   | fill (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId)
       (value : ValueSyntax config operand) (builder : DeclarationBuilderSyntax config operand) :
       DeclarationBuilderSyntax config (.fill (.arr element count) operand origin)
@@ -168,6 +175,8 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   value : ∀ environment expression, ValueSyntax config expression → FuelSupport config fuel (.value environment expression)
   builder : ∀ environment destination expression, DeclarationBuilderSyntax config expression →
     FuelSupport config fuel (.builder environment destination expression)
+  element : ∀ environment parent element operand, ValueSyntax config operand → DeclarationBuilderSyntax config operand →
+    FuelSupport config fuel (.element environment parent element operand)
   place : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.place environment place)
   view : ∀ environment view, ViewSyntax config view → FuelSupport config fuel (.view environment view)
   placeView : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.view environment (.of place))
@@ -269,6 +278,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | logical isAnd first second left right =>
             exact .logical fuel environment isAnd first second (previous.value environment first left) (previous.value environment second right)
         | bytes ty bytes origin => exact .legacy (fuel + 1) (.valueBytes environment ty bytes origin)
+        | nonfixedArray ty operands origin nonfixed builder =>
+            exact .valueNonfixedArray fuel environment ty operands origin nonfixed
+              (fun destination => previous.builder environment destination (.arrLit ty operands origin) builder)
         | nonfixedFill element count operand origin nonfixed builder =>
             exact .valueNonfixedFill fuel environment element count operand origin nonfixed
               (fun destination => previous.builder environment destination (.fill (.arr element count) operand origin) builder)
@@ -291,9 +303,16 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
               (previous.value environment (supportedBuilderOperand expression) (.base operandSupported))
               (fun child => previous.supportedBuilder environment child (supportedBuilderOperand expression) operandSupported)
         | static expression source => exact .legacy (fuel + 1) (source environment destination)
+        | array ty operands origin values builders =>
+            exact .builderArray fuel environment destination ty operands origin
+              (fun operand member parent element => previous.element environment parent element operand
+                (values operand member) (builders operand member))
         | fill element count operand origin value builder =>
             exact .fillBuilder fuel environment destination element count operand origin (previous.value environment operand value)
               (fun child => previous.builder environment child operand builder)
+      · intro environment parent element operand value builder
+        exact .element fuel environment parent element operand (previous.value environment operand value)
+          (fun destination => previous.builder environment destination operand builder)
       · intro environment place derivation
         cases derivation with
         | localPlace localVar => exact .legacy (fuel + 1) (.localPlace environment localVar)
