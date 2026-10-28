@@ -104,14 +104,10 @@ private theorem FreshDestinationFrame.boundaries {before after : ExecutionState}
     rw [frame.ancestry valid.structural.1.1.1.2.2.2 current retained currentInside]
     exact boundaries.1 token incoming reserved current snapshot member oldTicket oldResolved retained kept
 
-theorem newDestination_ownershipContext (layout : LayoutEnv) (owner : Goose.Core.ActId)
-    (ty : Ty) (request : Goose.Core.ConstructionRequest) (origin : Goose.Core.OriginId)
-    (knownCount : Option Nat) (before after : ExecutionState) (id : Nat) (ambient : OwnershipAmbient)
-    (valid : OwnershipExecutionContext before ambient)
-    (executed : newDestination layout owner ty request origin none knownCount before = .ok id after) :
+theorem FreshDestinationFrame.ownershipContext {before after : ExecutionState}
+    (frame : FreshDestinationFrame before after) (ambient : OwnershipAmbient)
+    (valid : OwnershipExecutionContext before ambient) (source : OwnershipSourceState after.construction) :
     OwnershipExecutionContext after ambient := by
-  obtain ⟨frame⟩ := newDestination_fresh_frame layout owner ty request origin knownCount before after id valid.source.structural.1.1.1 executed
-  have source := newDestination_sourceState layout owner ty request origin knownCount before after id valid.source executed
   have captures := ownershipCapturedReceivingFrames_sourceExtension before.construction after.construction ambient
     valid.source.structural.1.1 valid.source.structural.2.1 source.structural.1.1.1.2.2.2 frame.source
     frame.successors frame.size frame.tickets valid.bounds valid.receiving
@@ -126,6 +122,17 @@ theorem newDestination_ownershipContext (layout : LayoutEnv) (owner : Goose.Core
   · rw [frame.outer]
     exact ⟨valid.identities.activations, valid.identities.breaks⟩
 
+theorem newDestination_ownershipContext (layout : LayoutEnv) (owner : Goose.Core.ActId)
+    (ty : Ty) (request : Goose.Core.ConstructionRequest) (origin : Goose.Core.OriginId)
+    (knownCount : Option Nat) (before after : ExecutionState) (id : Nat) (ambient : OwnershipAmbient)
+    (valid : OwnershipExecutionContext before ambient)
+    (executed : newDestination layout owner ty request origin none knownCount before = .ok id after) :
+    OwnershipExecutionContext after ambient := by
+  obtain ⟨frame⟩ := newDestination_fresh_frame layout owner ty request origin knownCount before after id valid.source.structural.1.1.1 executed
+  have source := newDestination_sourceState layout owner ty request origin knownCount before after id valid.source executed
+  exact frame.ownershipContext ambient valid source
+
+#print axioms FreshDestinationFrame.ownershipContext
 #print axioms newDestination_ownershipContext
 
 end Goose.Proofs.ConstructionAcceptedExecution
