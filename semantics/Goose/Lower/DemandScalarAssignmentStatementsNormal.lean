@@ -109,12 +109,36 @@ theorem ScalarAssignmentStatements.normal {cfg : Cfg} {env : Env} {statements : 
         subst headFlow
         simp only [head] at done
         exact ih done
+  | @indexAssignment owner form index indexForm indexOrigin expression value origin rest tail ih =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, bind_apply] at done
+      cases head : execStmt fuel cfg env (.assign (.elem (.of owner) index indexOrigin) expression origin) state with
+      | stop stop final => simp only [head] at done; cases done
+      | ok headFlow middle =>
+        have normal := assignment_normal head
+        subst headFlow
+        simp only [head] at done
+        exact ih done
   | @fieldAssignment owner index form expression value origin rest tail ih =>
     cases fuel with
     | zero => simp [execStmts, timeout, M.stop] at done
     | succ fuel =>
       simp only [execStmts, bind_apply] at done
       cases head : execStmt fuel cfg env (.assign (.field owner index) expression origin) state with
+      | stop stop final => simp only [head] at done; cases done
+      | ok headFlow middle =>
+        have normal := assignment_normal head
+        subst headFlow
+        simp only [head] at done
+        exact ih done
+  | @indexReadAssignment owner read form index indexForm indexOrigin readable origin target rest tail ih =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, bind_apply] at done
+      cases head : execStmt fuel cfg env (.assign (.elem (.of owner) index indexOrigin) (.read read) origin) state with
       | stop stop final => simp only [head] at done; cases done
       | ok headFlow middle =>
         have normal := assignment_normal head

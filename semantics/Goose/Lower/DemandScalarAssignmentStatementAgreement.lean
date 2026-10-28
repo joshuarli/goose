@@ -2,6 +2,7 @@ import Goose.Lower.DemandScalarAssignmentExpressions
 import Goose.Lower.DemandReadAssignment
 import Goose.Lower.DemandScalarClear
 import Goose.Lower.DemandFieldAssignmentStopped
+import Goose.Lower.DemandIndexAssignmentStopped
 
 namespace Goose.Lower
 
@@ -22,6 +23,10 @@ inductive ScalarAssignmentStatementPrefixCursor {cfg : Cfg} {env : Env} (cx : Fn
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
       (cursor : FieldAssignmentPrefixCursor cx results source before built initial start map required runtime) :
       ScalarAssignmentStatementPrefixCursor cx results source before built initial start map required runtime
+  | indexAssignment {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+      {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+      (cursor : IndexAssignmentPrefixCursor cx results source before built initial start map required runtime) :
+      ScalarAssignmentStatementPrefixCursor cx results source before built initial start map required runtime
   | assignment {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
       (cursor : ScalarAssignmentPrefixCursor cx results source before built initial start map required runtime) :
@@ -38,10 +43,21 @@ inductive ScalarAssignmentStatements (cfg : Cfg) (env : Env) : List Stmt → Pro
   | assignment {place : Place} (form : ScalarReadPlace place) {expression : Expr} (value : ScalarControlExpression expression) (origin : OriginId)
       {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
       ScalarAssignmentStatements cfg env (.assign place expression origin :: rest)
+  | indexAssignment {owner : Place} (form : ScalarReadPlace owner) {index : Expr} (indexForm : ControlPrefixExpression index)
+      (indexOrigin : OriginId) {expression : Expr} (value : ScalarControlExpression expression) (origin : OriginId)
+      {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
+      ScalarAssignmentStatements cfg env (.assign (.elem (.of owner) index indexOrigin) expression origin :: rest)
   | fieldAssignment {owner : Place} (index : Nat) (form : ScalarReadPlace owner) {expression : Expr}
       (value : ScalarControlExpression expression) (origin : OriginId)
       {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
       ScalarAssignmentStatements cfg env (.assign (.field owner index) expression origin :: rest)
+  | indexReadAssignment {owner read : Place} (form : ScalarReadPlace owner) {index : Expr}
+      (indexForm : ControlPrefixExpression index) (indexOrigin : OriginId) (readable : ScalarReadPlace read)
+      (origin : OriginId) (target : ∀ {state after : St}
+        (source : StmtSource cfg env (.assign (.elem (.of owner) index indexOrigin) (.read read) origin) state)
+        (child : ExprSource cfg env (.read read) after), source.AssignmentValueAt child → child.ty.refTarget = true)
+      {rest : List Stmt} (tail : ScalarAssignmentStatements cfg env rest) :
+      ScalarAssignmentStatements cfg env (.assign (.elem (.of owner) index indexOrigin) (.read read) origin :: rest)
   | fieldReadAssignment {owner read : Place} (index : Nat) (destination : ScalarReadPlace owner) (readable : ScalarReadPlace read)
       (origin : OriginId) (target : ∀ {state after : St}
         (source : StmtSource cfg env (.assign (.field owner index) (.read read) origin) state)
@@ -115,6 +131,27 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
             · simp [boolean, Ty.refTarget]
             · simp [integer, Ty.refTarget]) (accepted_generated_read_stopped_expressions selected loop value.control.stopped)) ih.2⟩
 
+  | @indexAssignment owner form index indexForm indexOrigin expression value origin rest tail ih =>
+    have head : GeneratedStatementPrefixFamily cx results selected loop (.assign (.elem (.of owner) index indexOrigin) expression origin)
+        (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
+      apply GeneratedStatementPrefixFamily.mapCursor
+        (accepted_generated_index_assignment_prefix selected loop owner form index expression indexOrigin origin
+          (fun source child _ => by
+            rcases value.scalar child with boolean | ⟨type, integer⟩
+            · simp [boolean, Ty.refTarget]
+            · simp [integer, Ty.refTarget]) (accepted_generated_control_prefix_family selected loop indexForm)
+          (accepted_generated_control_prefix_family selected loop value.control))
+      intro statement state source before built initial start map required runtime cursor
+      exact .indexAssignment cursor
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+      fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
+        (accepted_generated_index_assignment_stopped selected loop owner form index expression indexOrigin origin
+          (fun source child _ => by
+            rcases value.scalar child with boolean | ⟨type, integer⟩
+            · simp [boolean, Ty.refTarget]
+            · simp [integer, Ty.refTarget]) (accepted_generated_read_stopped_expressions selected loop indexForm.stopped)
+          (accepted_generated_read_stopped_expressions selected loop value.control.stopped)) ih.2⟩
+
   | @fieldAssignment owner index form expression value origin rest tail ih =>
     have head : GeneratedStatementPrefixFamily cx results selected loop (.assign (.field owner index) expression origin)
         (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
@@ -132,6 +169,20 @@ theorem accepted_generated_scalar_assignment_statements_agreement {cfg : Cfg} {e
             rcases value.scalar child with boolean | ⟨type, integer⟩
             · simp [boolean, Ty.refTarget]
             · simp [integer, Ty.refTarget]) (accepted_generated_read_stopped_expressions selected loop value.control.stopped)) ih.2⟩
+
+  | @indexReadAssignment owner read form index indexForm indexOrigin readable origin target rest tail ih =>
+    have head : GeneratedStatementPrefixFamily cx results selected loop (.assign (.elem (.of owner) index indexOrigin) (.read read) origin)
+        (@ScalarAssignmentStatementPrefixCursor cfg env cx results) := by
+      apply GeneratedStatementPrefixFamily.mapCursor
+        (accepted_generated_index_assignment_prefix selected loop owner form index (.read read) indexOrigin origin target
+          (accepted_generated_control_prefix_family selected loop indexForm) (accepted_generated_read_prefix_family selected loop readable))
+      intro statement state source before built initial start map required runtime cursor
+      exact .indexAssignment cursor
+    exact ⟨fun {state} => accepted_generated_sequence_prefix_cons selected before loop bindings want block _ head ih.1,
+      fun {state} => accepted_generated_stopped_sequence_cons selected before loop bindings want block
+        (accepted_generated_index_assignment_stopped selected loop owner form index (.read read) indexOrigin origin target
+          (accepted_generated_read_stopped_expressions selected loop indexForm.stopped)
+          (accepted_generated_read_stopped_family selected loop readable)) ih.2⟩
 
   | @fieldReadAssignment owner read index destination readable origin target rest tail ih =>
     have head : GeneratedStatementPrefixFamily cx results selected loop (.assign (.field owner index) (.read read) origin)
@@ -168,6 +219,7 @@ theorem ScalarAssignmentStatementPrefixCursor.realizes {cfg : Cfg} {env : Env} {
     cases cursor with
     | clear demanded => cases demanded with
       | atFrame frame => exact frame.operands
+  | indexAssignment cursor => exact cursor.realizes
   | fieldAssignment cursor => exact cursor.realizes
   | assignment cursor => exact cursor.realizes
 
