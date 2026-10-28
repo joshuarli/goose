@@ -27,7 +27,7 @@ theorem accepted_generated_shortCircuit_left_prefix {cfg : Cfg} {env : Env} {cx 
       (leftOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
         root left.path (.expression a) before)
       (leftRows : GeneratedDemandRows cfg.mod left.rootsEnv.access leftOccurrence required),
-      left.ty = .bool ∧
+      left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧ left.ty = .bool ∧
       GeneratedExpressionPrefixDecomposition left selected leftOccurrence leftRows map initial start
         (CanonicalExpressionPrefixCursor cx left before (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2
           initial start map required) taken reached := by
@@ -55,7 +55,7 @@ theorem accepted_generated_shortCircuit_left_prefix {cfg : Cfg} {env : Env} {cx 
   have leftExtended : ExtT (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks := by
     cases isAnd <;> simp only [Bool.false_eq_true, ite_false, ite_true, lowerExpr, bind_run] at extended
     all_goals exact extended.of_adv (advB_shortCircuit _ _ (advB_lowerExpr b) _ _ _ _ rfl)
-  exact ⟨left, metadata, leftOccurrence, leftRows, type,
+  exact ⟨left, metadata, leftOccurrence, leftRows, typing, roots, type,
     leftFamily left leftOwned leftOccurrence leftRows coverage leftAdmitted bounded leftRealized leftInput leftExtended steps⟩
 
 theorem accepted_generated_shortCircuit_actual_branch {cfg : Cfg} {env : Env} {a b : Expr} {state after : St}

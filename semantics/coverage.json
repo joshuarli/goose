@@ -510,7 +510,7 @@
   "theorem": "Goose.Lower.accepted_generated_shortCircuit_left_prefix; Goose.Lower.accepted_generated_shortCircuit_actual_branch; Goose.Lower.accepted_generated_shortCircuit_right_entry; Goose.Lower.generated_shortCircuit_right_input",
   "statement": "A generated short-circuit expression inherits the finite target-prefix decomposition of its accepted left operand. After that operand completes, the actual next runtime instruction selects the matching right-operand or skip destination and carries its accepted demand frame. A taken branch establishes the canonical right operand, its accepted typing and roots, generated entry point, and builder and loop context for a right-operand prefix proof.",
   "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and a left-operand prefix family; the branch result assumes an actual successful target instruction.",
-  "limits": "Right-operand prefixes, stopping prefixes and whole-expression composition remain open. This component does not close TH-LOWER-03.",
+  "limits": "Stopping prefixes and whole-module composition remain open; successful whole-expression prefixes are covered by the recursive expression-family result. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandGeneratedShortCircuitPrefix.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
@@ -519,8 +519,17 @@
   "theorem": "Goose.Lower.shortCircuit_join_builder; Goose.Lower.accepted_shortCircuit_skip_boundary; Goose.Lower.accepted_shortCircuit_right_boundary",
   "statement": "The generated short-circuit join retains its result slot, stack and program point. A skipped branch or a completed right operand followed by its actual target jump reaches a complete source expression boundary with the same Boolean result and retained demand.",
   "assumptions": "Accepted source and completed operand boundaries, realized and bounded retained map, builder extension, and an actual successful target branch or jump. The right case assumes the right operand starts with the left boundary frame.",
-  "limits": "Right-operand interior prefixes, branch-to-operand composition, whole-expression prefix composition and stopping prefixes remain open. This component does not close TH-LOWER-03.",
+  "limits": "Stopping prefixes and whole-module composition remain open; successful operand and branch composition is covered by the recursive expression-family result. This component does not close TH-LOWER-03.",
   "evidence": "Goose/Lower/DemandShortCircuitJoin.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Recursive scalar and short-circuit expression prefixes",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_shortCircuit_prefix_family; Goose.Lower.accepted_generated_control_prefix_family",
+  "statement": "Every finite successful generated target prefix of recursively nested scalar and short-circuit expressions retains its canonical source demand or reaches a complete expression boundary. The proof follows actual left and right operand prefixes, taken and skipped branches, and the generated join.",
+  "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and source validation of expression types. Leaf reads cover globals and local slots.",
+  "limits": "Compound-place reads, calls, other expression forms, stopping prefixes and whole-module cursor reconstruction remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandShortCircuitPrefixFamily.lean and its expression-family dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted Core short-circuit control demand transfer",
