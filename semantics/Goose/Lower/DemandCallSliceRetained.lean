@@ -89,8 +89,8 @@ theorem SliceSlotArgumentCell.advance {cfg : Cfg} {env : Env} {initialState : St
     {root : ExprSource cfg env (.call contextId arguments origin) initialState}
     {offset nextOffset : Nat} {initial frame : GIR.Frame} {cell : SliceSlotArgumentCell}
     (checked : cell.Checked root offset initial) (later : offset ≤ nextOffset)
-    {cx : FnCtx} {before built : LS} {point : Pt}
-    (post : Post cfg env cx before initial built frame point []) (bounded : cell.value < before.vals.size) :
+    {cx : FnCtx} {before built : LS} {point : Pt} {results : List (ValueId × RVal)}
+    (post : Post cfg env cx before initial built frame point results) (bounded : cell.value < before.vals.size) :
     cell.Checked root nextOffset frame := by
   obtain ⟨found, prior, visible, descriptorAt, scope, descriptorType, annotation, aliasType, valueAt⟩ := checked
   refine ⟨found, Nat.lt_of_lt_of_le prior later, visible, descriptorAt, scope, descriptorType, annotation, aliasType, ?_⟩
@@ -131,6 +131,27 @@ theorem SliceSlotArgumentCells.ofLaterReference {cfg : Cfg} {env : Env} {initial
   intro cell member
   obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := checked cell member
   exact SliceSlotAliasAt.ofLaterReferenceArgument root current found prior child target canonical visible variableAt scope variableType annotation aliasType valueAt
+
+
+theorem SliceSlotArgumentCells.ofLaterArgumentOutput {cfg : Cfg} {env : Env} {initial state : St}
+    {contextId : ContextId} {arguments : List Arg} {origin : OriginId}
+    (root : ExprSource cfg env (.call contextId arguments origin) initial)
+    {offset : Nat} {argument : Arg} (current : arguments[offset]? = some argument)
+    {cx : FnCtx} {before built : LS} {initialFrame frame : GIR.Frame} {point : Pt} {results : List (ValueId × RVal)}
+    (post : Post cfg env cx before initialFrame built frame point results)
+    (source : Core.Sound.Frame cfg.mod root.world root.typingEnv root.rootsEnv env state
+      (callArgContext root.context offset argument current).outputFuture)
+    (cells : List SliceSlotArgumentCell)
+    (checked : ∀ cell ∈ cells, cell.Checked root offset initialFrame)
+    (bounded : ∀ cell ∈ cells, cell.value < before.vals.size) :
+    SliceSlotArgumentCells.Realizes cells cfg.mod root.world env ⟨point, frame, state⟩ := by
+  intro cell member
+  have next := SliceSlotArgumentCell.advance (checked cell member) (Nat.le_refl offset) post (bounded cell member)
+  obtain ⟨found, prior, visible, variableAt, scope, variableType, annotation, aliasType, valueAt⟩ := next
+  exact SliceSlotAliasAt.ofLaterArgumentOutputFrame root.context root.active root.access current source
+    visible variableAt scope variableType annotation aliasType valueAt found prior
+
+#print axioms SliceSlotArgumentCells.ofLaterArgumentOutput
 
 #print axioms SliceSlotArgumentCells.ofLaterValue
 #print axioms SliceSlotArgumentCells.ofLaterReference
