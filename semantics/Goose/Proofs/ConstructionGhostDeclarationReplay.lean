@@ -7,14 +7,8 @@ open Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSo
 open Goose.Proofs.ConstructionGhostDeclarationOnce Goose.Proofs.ConstructionGhostDeclarationSelection
 open Goose.Proofs.ConstructionGhostDeclarationFallback Goose.Proofs.ConstructionGhostSyntaxFuel
 
-theorem declaration_visit_classification
-    {config : EvalConfig} {environment : RuntimeActivation} {fuel offset : Nat} {statements : List Stmt}
-    {before : ExecutionState} {outcome : ExecutionStep Flow} {visits : List StatementInvocation}
-    (replay : StatementReplay config environment fuel offset statements before outcome visits)
-    (visit : StatementInvocation) (member : visit ∈ visits)
-    (sourceFuel : Nat) (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId)
-    (visitFuel : visit.fuel = sourceFuel + 1) (visitStatement : visit.statement = .letS localVar expression origin)
-    (closed : ClosedModuleWithTails config) (derivation : StatementSyntax config visit.statement) :
+def VisitClassification (config : EvalConfig) (environment : RuntimeActivation) (visit : StatementInvocation)
+    (sourceFuel : Nat) (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId) : Prop :=
     (∃ destination ready, DeclarationOccurrence sourceFuel config environment localVar expression origin visit.before destination ready ∧
       (∀ other otherReady, DeclarationOccurrence sourceFuel config environment localVar expression origin visit.before other otherReady →
         destination = other ∧ ready = otherReady) ∧
@@ -30,7 +24,17 @@ theorem declaration_visit_classification
             (Goose.Proofs.Exit.stepState (buildExpr sourceFuel config environment destination expression ready)).construction.events
             (Goose.Proofs.Exit.stepState visit.outcome).construction.events) ∨
     ((∃ terminal : DeclarationTerminal, visit.outcome = terminal.step) ∧
-      ¬ ∃ destination ready, DeclarationOccurrence sourceFuel config environment localVar expression origin visit.before destination ready) := by
+      ¬ ∃ destination ready, DeclarationOccurrence sourceFuel config environment localVar expression origin visit.before destination ready)
+
+theorem declaration_visit_classification
+    {config : EvalConfig} {environment : RuntimeActivation} {fuel offset : Nat} {statements : List Stmt}
+    {before : ExecutionState} {outcome : ExecutionStep Flow} {visits : List StatementInvocation}
+    (replay : StatementReplay config environment fuel offset statements before outcome visits)
+    (visit : StatementInvocation) (member : visit ∈ visits)
+    (sourceFuel : Nat) (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId)
+    (visitFuel : visit.fuel = sourceFuel + 1) (visitStatement : visit.statement = .letS localVar expression origin)
+    (closed : ClosedModuleWithTails config) (derivation : StatementSyntax config visit.statement) :
+    VisitClassification config environment visit sourceFuel localVar expression origin := by
   have supported := (syntaxFuel_existsWithTails visit.fuel config closed).statement environment visit.statement derivation
   have actual := statementVisit_executes replay visit member
   have history := fuelHistory_exists visit.fuel config (.statement environment visit.statement)
