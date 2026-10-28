@@ -8,6 +8,9 @@ mutual
 inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | base {expression : Expr} (supported : Goose.Proofs.ConstructionGhostSourceTransition.SupportedValue expression) :
       ValueSyntax config expression
+  | read (place : Place) (child : PlaceSyntax config place) : ValueSyntax config (.read place)
+  | reference (mutability : Goose.Core.Mutability) (place : Place) (child : PlaceSyntax config place) : ValueSyntax config (.ref mutability place)
+  | length (view : View) (child : ViewSyntax config view) : ValueSyntax config (.len view)
   | aggregate (expression : Expr) (operands : List Expr) (shape : ValueAggregate expression operands)
       (children : ∀ operand ∈ operands, ValueSyntax config operand) : ValueSyntax config expression
   | unary (operation : Goose.Core.UnOp) (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
@@ -52,6 +55,10 @@ inductive ArgumentSyntax (config : EvalConfig) : List Param → List Arg → Pro
       (direct : ∀ environment destination, SupportedOperation config (.builder environment destination operand))
       (tail : ArgumentSyntax config parameters arguments) :
       ArgumentSyntax config (⟨parameter, .byValue⟩ :: parameters) (.construct operand :: arguments)
+
+inductive ViewSyntax (config : EvalConfig) : View → Prop
+  | place (place : Place) (child : PlaceSyntax config place) : ViewSyntax config (.of place)
+  | value (operand : Expr) (child : ValueSyntax config operand) : ViewSyntax config (.val operand)
 
 inductive PlaceSyntax (config : EvalConfig) : Place → Prop
   | localPlace (localVar : Goose.Core.VarId) : PlaceSyntax config (.var localVar)
@@ -124,6 +131,7 @@ theorem implementation_lookup_source (config : EvalConfig) (contextId : Goose.Co
 structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
   value : ∀ environment expression, ValueSyntax config expression → FuelSupport config fuel (.value environment expression)
   place : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.place environment place)
+  view : ∀ environment view, ViewSyntax config view → FuelSupport config fuel (.view environment view)
   placeView : ∀ environment place, PlaceSyntax config place → FuelSupport config fuel (.view environment (.of place))
   arguments : ∀ environment vars parameters arguments, ArgumentSyntax config parameters arguments →
     FuelSupport config fuel (.arguments environment vars parameters arguments)
@@ -204,6 +212,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
       · intro environment expression derivation
         cases derivation with
         | base supported => exact .legacy (fuel + 1) (.value environment supported)
+        | read place child => exact .readValue fuel environment place (previous.place environment place child)
+        | reference mutability place child => exact .referenceValue fuel environment mutability place (previous.place environment place child)
+        | length view child => exact .lengthValue fuel environment view (previous.view environment view child)
         | aggregate expression operands shape children =>
             exact .aggregate fuel environment expression operands shape
               (fun operand member => previous.value environment operand (children operand member))
@@ -231,6 +242,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | localPlace localVar => exact .legacy (fuel + 1) (.localPlace environment localVar)
         | globalPlace global => exact .legacy (fuel + 1) (.globalPlace environment global)
         | dereference operand child => exact .dereferencePlace fuel environment operand (previous.value environment operand child)
+      · intro environment view derivation
+        cases derivation with
+        | place place child => exact .placeView fuel environment place (previous.place environment place child)
+        | value operand child => exact .valueView fuel environment operand (previous.value environment operand child)
       · intro environment place derivation
         exact .placeView fuel environment place (previous.place environment place derivation)
       · intro environment vars parameters arguments derivation

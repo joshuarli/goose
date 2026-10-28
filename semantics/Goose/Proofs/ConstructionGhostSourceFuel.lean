@@ -10,6 +10,14 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | timeout (operation : SourceOperation α) : FuelSupport config 0 operation
   | legacy (fuel : Nat) {operation : SourceOperation α} (supported : SupportedOperation config operation) :
       FuelSupport config fuel operation
+  | readValue (fuel : Nat) (environment : RuntimeActivation) (place : Place)
+      (child : FuelSupport config fuel (.place environment place)) : FuelSupport config (fuel + 1) (.value environment (.read place))
+  | referenceValue (fuel : Nat) (environment : RuntimeActivation) (mutability : Goose.Core.Mutability) (place : Place)
+      (child : FuelSupport config fuel (.place environment place)) : FuelSupport config (fuel + 1) (.value environment (.ref mutability place))
+  | lengthValue (fuel : Nat) (environment : RuntimeActivation) (view : View)
+      (child : FuelSupport config fuel (.view environment view)) : FuelSupport config (fuel + 1) (.value environment (.len view))
+  | valueView (fuel : Nat) (environment : RuntimeActivation) (operand : Expr)
+      (child : FuelSupport config fuel (.value environment operand)) : FuelSupport config (fuel + 1) (.view environment (.val operand))
   | aggregate (fuel : Nat) (environment : RuntimeActivation) (expression : Expr) (operands : List Expr)
       (shape : ValueAggregate expression operands)
       (children : ∀ operand ∈ operands, FuelSupport config fuel (.value environment operand)) :
@@ -207,6 +215,14 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
   | succ fuel ih =>
       cases supported with
       | legacy fuel supported => exact history_exists (fuel + 1) config _ path before supported
+      | readValue _ environment place child =>
+          exact .readValue (ih (.place environment place) (path ++ [0]) before child)
+      | referenceValue _ environment mutability place child =>
+          exact .referenceValue (ih (.place environment place) (path ++ [0]) before child)
+      | lengthValue _ environment view child =>
+          exact .lengthValue (ih (.view environment view) (path ++ [0]) before child)
+      | valueView _ environment operand child =>
+          exact .valueView (ih (.value environment operand) (path ++ [0]) before child)
       | aggregate _ environment expression operands shape childrenSupported =>
           refine .aggregate fuel path environment expression operands before shape ?_
           intro outcome visits replay visit member
