@@ -760,6 +760,13 @@
   "evidence": "Goose/Lower/DemandAssignmentStatementAgreement.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Mixed scalar assignment unit block agreement",
+  "statement": "Successful generated prefixes and non-timeout stops agree with source execution through scope entry, mixed statement sequences and scope exit for unit blocks containing scalar literal assignments.",
+  "assumptions": "Accepted block source, generated block and statement rows, related builder, admitted bounded realized retained map and builder extension.",
+  "limits": "No block value or loop context in the stop theorem; assignments have integer literal values and local or global scalar destinations. Timeout and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandAssignmentBlockPrefix.lean; Goose/Lower/DemandStoppedAssignmentUnitBlock.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
