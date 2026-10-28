@@ -624,10 +624,10 @@
  },
  {
   "feature": "Conditional condition agreement",
-  "statement": "An accepted conditional without else has successful-prefix agreement and non-timeout stop reflection through condition, selected branch and join. These conditionals compose at arbitrary positions in mixed statement sequences and enclosing unit and value blocks.",
-  "assumptions": "Accepted source and generated occurrence, supported condition expression, no loop context or trailing branch value, mixed branch fragment and supplied expression prefix and stop families, related builder and retained demand.",
-  "limits": "Conditionals with else, loop contexts, branch tail values and whole-function traversal remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandIfPrefixFamily.lean; Goose/Lower/DemandIfStoppedFamily.lean; Goose/Lower/DemandIfMixedStatements.lean; Goose/Lower/DemandIfMixedBlockPrefix.lean; Goose/Lower/DemandIfMixedBlockStopped.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "Accepted conditionals with or without else have successful-prefix agreement and non-timeout stop reflection through condition, selected branch and join. These conditionals compose at arbitrary positions in mixed statement sequences and enclosing unit and value blocks.",
+  "assumptions": "Accepted source and generated occurrence, supported condition expression, no loop context or trailing branch values, scalar assignment branch fragments and supplied expression prefix and stop families, related builder and retained demand.",
+  "limits": "Nested conditional branches, loop contexts, branch tail values and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandIfPrefixFamily.lean; Goose/Lower/DemandIfStoppedFamily.lean; Goose/Lower/DemandIfElsePrefixFamily.lean; Goose/Lower/DemandIfElseStoppedFamily.lean; Goose/Lower/DemandIfMixedBlockPrefix.lean; Goose/Lower/DemandIfMixedBlockStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted byte-owner allocation timeout",
