@@ -184,6 +184,31 @@ theorem execStmt_byteOwner_local (fuel : Nat) (config : EvalConfig) (environment
   intro result
   exact LocalConstructionAction.pure _
 
+theorem execStmt_acceptedByteOwner_local (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (context id : Nat) (bytes : List UInt8) (origin bytesOrigin : Goose.Core.OriginId)
+    (before : ExecutionState) (types : RootTypes)
+    (source : AcceptedFrame config accepted frame before types) (phase : frame.phase = .implementation context)
+    (byteOwner : (frame.typing.variables[id]?).map (·.ty) = some (.varr (.int .u8)))
+    (unnamed : (frame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some id)) = none) :
+    LocalConstructionAction (execStmt (fuel + 2) config frame.interpretation.environment
+      (.letS id (.bytes (.varr (.int .u8)) bytes bytesOrigin) origin)) := by
+  cases declared : frame.typing.variables[id]? with
+  | none => simp [declared] at byteOwner
+  | some descriptor =>
+    have descriptorType : descriptor.ty = .varr (.int .u8) := by simpa [declared] using byteOwner
+    have runtimeDeclared : frame.interpretation.environment.vars[id]? = some descriptor := by
+      rw [source.compatible.variables]
+      exact declared
+    have originFact := source.compatible.origin
+    unfold SourceOrigin at originFact
+    rw [phase] at originFact
+    obtain ⟨original, calls, contextFound, implementationFound, implementationId, restOrigin⟩ := originFact
+    have implementation : config.module.impls[frame.interpretation.environment.implementation]? = some frame.source.impl := by
+      rw [implementationId]
+      exact implementationFound
+    exact execStmt_byteOwner_local fuel config frame.interpretation.environment id descriptor frame.source.impl
+      bytes origin bytesOrigin runtimeDeclared descriptorType implementation unnamed
+
 theorem evalValue_byteOwner_timeout_complete (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (before after : ExecutionState)
     (bytes : List UInt8) (origin : Goose.Core.OriginId)
@@ -239,24 +264,10 @@ theorem execStmt_acceptedByteOwner_timeout_complete (fuel : Nat) (config : EvalC
       exact Or.inr (execStmt_acceptedByteOwner_timeout_world config accepted frame context id bytes origin bytesOrigin
         before after ambient types live regions pending typingNext typingAfter world source phase typed byteOwner unnamed executed)
     | succ fuel =>
-      cases declared : frame.typing.variables[id]? with
-      | none => simp [declared] at byteOwner
-      | some descriptor =>
-        have descriptorType : descriptor.ty = .varr (.int .u8) := by simpa [declared] using byteOwner
-        have runtimeDeclared : frame.interpretation.environment.vars[id]? = some descriptor := by
-          rw [source.compatible.variables]
-          exact declared
-        have originFact := source.compatible.origin
-        unfold SourceOrigin at originFact
-        rw [phase] at originFact
-        obtain ⟨original, calls, contextFound, implementationFound, implementationId, restOrigin⟩ := originFact
-        have implementation : config.module.impls[frame.interpretation.environment.implementation]? = some frame.source.impl := by
-          rw [implementationId]
-          exact implementationFound
-        have noTimeout := execStmt_byteOwner_local fuel config frame.interpretation.environment id descriptor frame.source.impl
-          bytes origin bytesOrigin runtimeDeclared descriptorType implementation unnamed before
-        rw [executed] at noTimeout
-        exact (noTimeout rfl).elim
+      have noTimeout := execStmt_acceptedByteOwner_local fuel config accepted frame context id bytes origin bytesOrigin
+        before types source phase byteOwner unnamed before
+      rw [executed] at noTimeout
+      exact (noTimeout rfl).elim
 
 #print axioms buildExpr_byteOwner_local
 #print axioms evalValue_byteOwner_local
