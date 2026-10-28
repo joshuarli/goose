@@ -499,10 +499,10 @@
  {
   "feature": "Published direct byte owner backing",
   "label": "model-proved",
-  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.publish_direct_packed_backing",
-  "statement": "Successful publication of a direct packed byte receiver preserves its scanned payload and yields a backed stored value at the published destination.",
-  "assumptions": "A built receiver with direct backing and a valid scanned byte interval, together with the actual successful publication.",
-  "limits": "The evaluator induction must connect construction and publication and preserve the surrounding accepted world. This result does not discharge TH-CON-01.",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.publish_direct_packed_backing; Goose.Proofs.ConstructionAcceptedExecution.allocated_published_byteOwner_backing",
+  "statement": "Actual allocation, byte construction and publication in an accepted world yield a backed stored value with the fresh storage and destination identities. Publication of a direct packed byte receiver preserves its scanned payload.",
+  "assumptions": "An accepted world, successful allocation, construction and publication, and a byte count below the packed count limit. The publication lemma assumes a built receiver with direct backing and a valid scanned byte interval.",
+  "limits": "The evaluator induction must derive the count bound and preserve the surrounding accepted world. This result does not discharge TH-CON-01.",
   "evidence": "ConstructionAcceptedBytePublication.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
