@@ -711,6 +711,13 @@
   "evidence": "Goose/Proofs/ConstructionAcceptedScalarControl.lean; Goose/Proofs/ConstructionAcceptedScalarGlobalRun.lean; Goose/Proofs/ConstructionAcceptedScalarModule.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Mixed byte and scalar module world preservation",
+  "statement": "At every fuel, a validated module with byte-owner globals and a no-tail entry body interleaving unnamed byte-owner declarations and recursive scalar expression statements preserves an accepted world at the actual module result. Escape and jump outcomes are impossible.",
+  "assumptions": "Accepted module, the specified byte-owner globals, mixed entry syntax and byte-owner local types.",
+  "limits": "Tail expressions, scalar declarations, other statements and global forms, and general construction trace claims remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedMixedEffects.lean; Goose/Proofs/ConstructionAcceptedMixedExecution.lean; Goose/Proofs/ConstructionAcceptedMixedModule.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Stopped byte-owner local construction",
   "statement": "At every fuel, an actual stop in local construction of a byte owner preserves the accepted world and source frame, including a fresh receiving region when allocation succeeded.",
   "assumptions": "Accepted world and source frame before construction. Allocation and byte expression origins may differ.",
