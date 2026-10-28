@@ -12,7 +12,7 @@ private theorem nestedCursor_bind_success {ε α β : Type} (first : Except ε �
   | error failure => cases checked
   | ok value => exact ⟨value, rfl, checked⟩
 
-private theorem nestedBin_final_nextVar (frame : ConstructionSourceFrame) (operation : Goose.Core.BinOp) (left right : Expr)
+theorem nestedBin_final_nextVar (frame : ConstructionSourceFrame) (operation : Goose.Core.BinOp) (left right : Expr)
     (origin : Goose.Core.OriginId) (roots leftRoots rightRoots : List RootRef) (after middle final : RState)
     (checked : rpExpr frame.source (.bin operation left right origin) frame.rootCursor = .ok (roots, after))
     (first : rpExpr frame.source left frame.rootCursor = .ok (leftRoots, middle))
@@ -293,6 +293,7 @@ theorem nestedScalarStatements_cursors {statements : List Stmt} (form : NestedSc
 termination_by fuel
 end
 
+#print axioms nestedBin_final_nextVar
 #print axioms nestedScalarExpression_cursors
 #print axioms nestedScalarBlock_cursors
 #print axioms nestedScalarStatements_cursors
