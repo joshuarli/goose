@@ -5,6 +5,7 @@ namespace Goose.Proofs.ConstructionGhostSourceGlobal
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual
 open Goose.Proofs.ConstructionGhostGlobalStep Goose.Proofs.ConstructionGhostGlobalReplay
 open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInvocation
+open Goose.Proofs.ConstructionGhostMaterialization
 
 def FixedSourceForest (fuel : Nat) (config : EvalConfig)
     (visits : List (Invocation Goose.Core.GlobalId Unit)) : Prop :=
@@ -40,6 +41,55 @@ theorem runModule_fixedSourceForest (fuel : Nat) (config : EvalConfig) (before :
       runModule fuel config before = moduleAfterGlobals fuel config (discardGlobalValues outcome) := by
   obtain ⟨outcome, visits, replay, fixed, ordered, once, execution⟩ := runModule_globalReplay fuel config before
   exact ⟨outcome, visits, replay, globalReplay_sourceForest replay supported, ordered, once, execution⟩
+
+def MaterializedSourceForest (fuel : Nat) (config : EvalConfig)
+    (visits : List (Invocation Goose.Core.GlobalId Unit)) : Prop :=
+  ∀ visit ∈ visits, ∀ descriptor count,
+    config.module.globals[visit.operand]? = some descriptor → descriptor.ty.nonfixed = true →
+    ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = some count →
+    let environment : RuntimeActivation := ⟨0, visit.before.nextAct, #[], [], []⟩
+    let ready := { visit.before with nextAct := visit.before.nextAct + 1 }
+    SourceHistory config fuel [visit.ordinal, 0] (.value environment descriptor.init) ready
+      (evalValue fuel config environment descriptor.init ready) ∧
+    visit.outcome = globalAfterMaterialization fuel config visit.operand descriptor visit.before.nextAct
+      (materializationContinuation (evalValue fuel config environment descriptor.init ready))
+
+theorem globalReplay_materializedSourceForest {fuel : Nat} {config : EvalConfig} {offset : Nat}
+    {globals : List Goose.Core.GlobalId} {accumulator : List Unit} {before : ExecutionState}
+    {outcome : ExecutionStep (List Unit)} {visits : List (Invocation Goose.Core.GlobalId Unit)}
+    (replay : OperandReplay (globalInitializer fuel config) offset globals accumulator before outcome visits)
+    (supported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global) count,
+      config.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+      ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = some count →
+      ∀ environment, SupportedOperation config (.value environment descriptor.init)) :
+    MaterializedSourceForest fuel config visits := by
+  intro visit member descriptor count found nonfixed materialized
+  dsimp only
+  refine ⟨history_exists fuel config _ _ _ (supported visit.operand descriptor count found nonfixed materialized _), ?_⟩
+  obtain ⟨tree, execution⟩ := materializedGlobal_initializer_ghost fuel config [visit.ordinal] visit.operand
+    visit.before descriptor count found nonfixed materialized
+  exact (visit_executes replay visit member).symm.trans execution
+
+theorem runModule_sourceForests (fuel : Nat) (config : EvalConfig) (before : ExecutionState)
+    (fixedSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global), config.module.globals[global]? = some descriptor →
+      descriptor.ty.nonfixed = false → ∀ environment, SupportedOperation config (.value environment descriptor.init))
+    (materializedSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global) count,
+      config.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+      ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = some count →
+      ∀ environment, SupportedOperation config (.value environment descriptor.init)) :
+    ∃ outcome visits,
+      OperandReplay (globalInitializer fuel config) 0 (List.range config.module.globals.size) [] before outcome visits ∧
+      FixedSourceForest fuel config visits ∧ MaterializedSourceForest fuel config visits ∧
+      visits.map Invocation.operand = (List.range config.module.globals.size).take visits.length ∧
+      (visits.map Invocation.ordinal).Nodup ∧
+      runModule fuel config before = moduleAfterGlobals fuel config (discardGlobalValues outcome) := by
+  obtain ⟨outcome, visits, replay, forest, ordered, once, execution⟩ :=
+    runModule_fixedSourceForest fuel config before fixedSupported
+  exact ⟨outcome, visits, replay, forest, globalReplay_materializedSourceForest replay materializedSupported,
+    ordered, once, execution⟩
+
+#print axioms globalReplay_materializedSourceForest
+#print axioms runModule_sourceForests
 
 def entryCallResult : ExecutionStep (List Carrier) → ExecutionStep Unit
   | .ok carriers state => publishCarriers 0 carriers state
@@ -149,6 +199,49 @@ theorem witness_globalFillOnce : ∃ outcome visits state,
     runModule_fixedSourceForest 40 witnessConfig .initial witness_supported
   refine ⟨outcome, visits, witnessState (runModule 40 witnessConfig .initial), replay, forest, ?_, ?_⟩ <;>
     unfold witnessState witnessConfig witnessEntry witnessCallee witnessCalleeContext witnessGlobal <;> cbv
+
+private def materializedGlobal : Global := ⟨"g", .varr (.int .i64), .immutable,
+  .values [.fill (.arr (.int .i64) 3) (.lit .i64 7) 0], 0⟩
+private def materializedConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[materializedGlobal], #[witnessEntry], #[witnessEntryContext], 0, #[], #[], #[]⟩⟩
+
+private theorem materialized_descriptor (global : Goose.Core.GlobalId) (descriptor : Global)
+    (found : materializedConfig.module.globals[global]? = some descriptor) : descriptor = materializedGlobal := by
+  cases global with
+  | zero => simpa [materializedConfig] using found.symm
+  | succ global => simp [materializedConfig] at found
+
+private theorem materialized_fixedSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global),
+    materializedConfig.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = false →
+    ∀ environment, SupportedOperation materializedConfig (.value environment descriptor.init) := by
+  intro global descriptor found fixed environment
+  have descriptorEq := materialized_descriptor global descriptor found
+  subst descriptor
+  simp [materializedGlobal, Ty.nonfixed] at fixed
+
+private theorem materialized_supported (fuel : Nat) : ∀ (global : Goose.Core.GlobalId) (descriptor : Global) count,
+    materializedConfig.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+    ordinaryProducerCount? fuel ⟨materializedConfig.module, #[]⟩ descriptor.init = some count →
+    ∀ environment, SupportedOperation materializedConfig (.value environment descriptor.init) := by
+  intro global descriptor count found nonfixed countFound environment
+  have descriptorEq := materialized_descriptor global descriptor found
+  subst descriptor
+  exact .singleton environment _ (.value environment (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))
+
+theorem witness_materializedGlobal : ∃ outcome visits state,
+    ordinaryProducerCount? 40 ⟨materializedConfig.module, #[]⟩ materializedGlobal.init = some 3 ∧
+    OperandReplay (globalInitializer 40 materializedConfig) 0 (List.range materializedConfig.module.globals.size) [] .initial outcome visits ∧
+    MaterializedSourceForest 40 materializedConfig visits ∧
+    runModule 40 materializedConfig .initial = .ok () state := by
+  obtain ⟨outcome, visits, replay, fixed, materialized, ordered, once, execution⟩ :=
+    runModule_sourceForests 40 materializedConfig .initial materialized_fixedSupported (materialized_supported 40)
+  refine ⟨outcome, visits, witnessState (runModule 40 materializedConfig .initial), ?_, replay, materialized, ?_⟩
+  · unfold materializedConfig materializedGlobal
+    cbv
+  · unfold witnessState materializedConfig materializedGlobal witnessEntry witnessEntryContext
+    cbv
+
+#print axioms witness_materializedGlobal
 
 #print axioms witness_globalFillOnce
 

@@ -194,6 +194,10 @@ inductive SourceHistory (config : EvalConfig) :
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
       SourceHistory config (fuel + 1) path (.value environment (.fill (.arr element count) operand origin)) before
         (fillResult count outcome)
+  | singleton {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
+      {before : ExecutionState} {outcome : ExecutionStep Value}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
+      SourceHistory config (fuel + 1) path (.value environment (.values [operand])) before outcome
   | conditional {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {condition : Expr}
       {yes no : Block} {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment condition) before outcome)
@@ -314,6 +318,9 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       simp only [execute] at ih ⊢
       simp only [evalValue, fixed, Bool.false_eq_true, ↓reduceIte, bind, ih, fillResult]
       cases outcome <;> rfl
+  | @singleton fuel path environment operand before outcome child ih =>
+      simp only [execute] at ih ⊢
+      simpa [evalValue, bind] using ih
   | @conditional fuel path environment condition yes no origin before outcome child branch ihChild ihBranch =>
       simp only [execute] at ihChild ⊢
       simp only [evalValue, bind, ihChild, conditionalResult]
@@ -424,6 +431,9 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : SupportedOperation config (.value environment operand)) :
       SupportedOperation config (.value environment (.fill (.arr element count) operand origin))
+  | singleton (environment : RuntimeActivation) (operand : Expr)
+      (child : SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.value environment (.values [operand]))
   | conditional (environment : RuntimeActivation) {condition : Expr} {yes no : Block} (origin : Goose.Core.OriginId)
       (conditionSupported : SupportedOperation config (.value environment condition))
       (yesSupported : SupportedOperation config (.block environment yes))
@@ -497,6 +507,9 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute] at child ⊢
           rw [actual]
           exact .fill fixed child
+      | singleton environment operand childSupported =>
+          have child := ih (.value environment operand) (path ++ [0]) before childSupported
+          simpa [execute, evalValue, bind] using (SourceHistory.singleton child)
       | @conditional environment condition yes no origin conditionSupported yesSupported noSupported =>
           have child := ih (.value environment condition) (path ++ [0]) before conditionSupported
           have branch : ∀ value middle selected ready,
