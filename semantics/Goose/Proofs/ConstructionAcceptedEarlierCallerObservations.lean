@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionAcceptedScopeWorld
 import Goose.Proofs.ConstructionAcceptedEarlierCallerFrame
 import Goose.Proofs.ConstructionRootCorrespondenceWrites
 import Goose.Proofs.ConstructionAcceptedBindings
@@ -5,6 +6,7 @@ import Goose.Proofs.ConstructionAcceptedBindings
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionRootCorrespondence
+open Goose.Proofs.ConstructionExecutionOwnership
 
 def EarlierCallerObservations (frontier : Nat) (before after : ExecutionState) (types nextTypes : RootTypes) : Prop :=
   ∀ root, EarlierCallerRoot frontier root →
@@ -45,6 +47,44 @@ theorem EarlierCallerObservations.bindFreshLocal (frontier act scope id : Nat) (
     bindRoot_ordinals_other _ root value before after boundRoot different,
     by simp [registerRootType, different]⟩
 
+theorem EarlierCallerRoot.outsideScope {frontier : Nat} (activation : RuntimeActivation) (scope scopeInst : Nat)
+    (bound : frontier ≤ activation.act) (root : Goose.Core.RootInst) (earlier : EarlierCallerRoot frontier root) :
+    (Goose.Proofs.Exit.runtimeScopeRoots activation scope scopeInst).contains root = false := by
+  apply Bool.eq_false_iff.mpr
+  intro contains
+  have member := List.contains_iff_mem.mp contains
+  simp only [Goose.Proofs.Exit.runtimeScopeRoots, List.mem_filterMap] at member
+  obtain ⟨entry, _, found⟩ := member
+  split at found
+  · have same : .local activation.act scopeInst entry.2 = root := Option.some.inj found
+    rw [← same] at earlier
+    exact (Nat.not_lt_of_ge bound) earlier
+  · cases found
+
+theorem EarlierCallerObservations.releaseScope (frontier : Nat) (activation : RuntimeActivation) (scope scopeInst : Nat)
+    (state : ExecutionState) (types : RootTypes) (bound : frontier ≤ activation.act) :
+    EarlierCallerObservations frontier state (releaseScopeState activation scope scopeInst state) types types := by
+  intro root earlier
+  have outside := earlier.outsideScope activation scope scopeInst bound root
+  exact ⟨Goose.Proofs.ExitExecution.releaseScopeState_root_lookup activation scope scopeInst state root outside,
+    releaseScopeState_ordinal_lookup activation scope scopeInst state root outside, rfl⟩
+
+theorem EarlierCallerObservations.enterScope (frontier : Nat) (activation : RuntimeActivation) (scope : Nat)
+    (state : ExecutionState) (types : RootTypes) :
+    EarlierCallerObservations frontier state (ownershipResultScopeState activation scope state) types types := by
+  intro root earlier
+  exact ⟨rfl, rfl, rfl⟩
+
+theorem EarlierCallerObservations.finishActivation (frontier : Nat) (activation : RuntimeActivation)
+    (state : ExecutionState) (types : RootTypes) :
+    EarlierCallerObservations frontier state
+      { state with activations := state.activations.filter (fun current => current.act != activation.act) } types types := by
+  intro root earlier
+  exact ⟨rfl, rfl, rfl⟩
+
+#print axioms EarlierCallerObservations.releaseScope
+#print axioms EarlierCallerObservations.enterScope
+#print axioms EarlierCallerObservations.finishActivation
 theorem AcceptedFrame.afterEarlierObservations
     {config : EvalConfig} {accepted : AcceptedModule config} {frame : ConstructionSourceFrame}
     {before after : ExecutionState} {types nextTypes : RootTypes}
