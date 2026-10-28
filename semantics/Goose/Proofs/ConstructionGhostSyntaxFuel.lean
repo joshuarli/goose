@@ -11,6 +11,7 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | read (place : Place) (child : PlaceSyntax config place) : ValueSyntax config (.read place)
   | reference (mutability : Goose.Core.Mutability) (place : Place) (child : PlaceSyntax config place) : ValueSyntax config (.ref mutability place)
   | length (view : View) (child : ViewSyntax config view) : ValueSyntax config (.len view)
+  | pop (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.pop place origin)
   | aggregate (expression : Expr) (operands : List Expr) (shape : ValueAggregate expression operands)
       (children : ∀ operand ∈ operands, ValueSyntax config operand) : ValueSyntax config expression
   | unary (operation : Goose.Core.UnOp) (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
@@ -96,6 +97,9 @@ inductive PlaceSyntax (config : EvalConfig) : Place → Prop
   | localPlace (localVar : Goose.Core.VarId) : PlaceSyntax config (.var localVar)
   | globalPlace (global : Goose.Core.GlobalId) : PlaceSyntax config (.global global)
   | dereference (operand : Expr) (child : ValueSyntax config operand) : PlaceSyntax config (.deref operand)
+  | field (owner : Place) (index : Nat) (child : PlaceSyntax config owner) : PlaceSyntax config (.field owner index)
+  | element (view : View) (operand : Expr) (origin : Goose.Core.OriginId)
+      (viewChild : ViewSyntax config view) (indexChild : ValueSyntax config operand) : PlaceSyntax config (.elem view operand origin)
 
 end
 
@@ -285,6 +289,7 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | read place child => exact .readValue fuel environment place (previous.place environment place child)
         | reference mutability place child => exact .referenceValue fuel environment mutability place (previous.place environment place child)
         | length view child => exact .lengthValue fuel environment view (previous.view environment view child)
+        | pop place origin child => exact .popValue fuel environment place origin (previous.place environment place child)
         | aggregate expression operands shape children =>
             exact .aggregate fuel environment expression operands shape
               (fun operand member => previous.value environment operand (children operand member))
@@ -341,6 +346,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | localPlace localVar => exact .legacy (fuel + 1) (.localPlace environment localVar)
         | globalPlace global => exact .legacy (fuel + 1) (.globalPlace environment global)
         | dereference operand child => exact .dereferencePlace fuel environment operand (previous.value environment operand child)
+        | field owner index child => exact .fieldPlace fuel environment owner index (previous.place environment owner child)
+        | element view operand origin viewChild indexChild =>
+            exact .elementPlace fuel environment view operand origin (previous.view environment view viewChild) (previous.value environment operand indexChild)
       · intro environment view derivation
         cases derivation with
         | place place child => exact .placeView fuel environment place (previous.place environment place child)

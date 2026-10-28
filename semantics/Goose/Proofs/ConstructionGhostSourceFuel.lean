@@ -16,6 +16,8 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (child : FuelSupport config fuel (.place environment place)) : FuelSupport config (fuel + 1) (.value environment (.ref mutability place))
   | lengthValue (fuel : Nat) (environment : RuntimeActivation) (view : View)
       (child : FuelSupport config fuel (.view environment view)) : FuelSupport config (fuel + 1) (.value environment (.len view))
+  | popValue (fuel : Nat) (environment : RuntimeActivation) (place : Place) (origin : Goose.Core.OriginId)
+      (child : FuelSupport config fuel (.place environment place)) : FuelSupport config (fuel + 1) (.value environment (.pop place origin))
   | valueView (fuel : Nat) (environment : RuntimeActivation) (operand : Expr)
       (child : FuelSupport config fuel (.value environment operand)) : FuelSupport config (fuel + 1) (.view environment (.val operand))
   | aggregate (fuel : Nat) (environment : RuntimeActivation) (expression : Expr) (operands : List Expr)
@@ -91,6 +93,13 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | dereferencePlace (fuel : Nat) (environment : RuntimeActivation) (operand : Expr)
       (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.place environment (.deref operand))
+  | fieldPlace (fuel : Nat) (environment : RuntimeActivation) (owner : Place) (index : Nat)
+      (child : FuelSupport config fuel (.place environment owner)) :
+      FuelSupport config (fuel + 1) (.place environment (.field owner index))
+  | elementPlace (fuel : Nat) (environment : RuntimeActivation) (view : View) (operand : Expr) (origin : Goose.Core.OriginId)
+      (viewChild : FuelSupport config fuel (.view environment view))
+      (indexChild : FuelSupport config fuel (.value environment operand)) :
+      FuelSupport config (fuel + 1) (.place environment (.elem view operand origin))
   | block (fuel : Nat) (environment : RuntimeActivation) (scope : Nat) (statements : List Stmt)
       (body : ∀ scopedEnvironment, FuelSupport config fuel (.statements scopedEnvironment statements)) :
       FuelSupport config (fuel + 1) (.block environment (.mk scope statements none))
@@ -262,6 +271,8 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           exact .referenceValue (ih (.place environment place) (path ++ [0]) before child)
       | lengthValue _ environment view child =>
           exact .lengthValue (ih (.view environment view) (path ++ [0]) before child)
+      | popValue _ environment place origin child =>
+          exact .popValue (ih (.place environment place) (path ++ [0]) before child)
       | valueView _ environment operand child =>
           exact .valueView (ih (.value environment operand) (path ++ [0]) before child)
       | aggregate _ environment expression operands shape childrenSupported =>
@@ -407,6 +418,12 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           exact .activation body
       | dereferencePlace _ environment operand childSupported =>
           exact .dereferencePlace (ih (.value environment operand) (path ++ [0]) before childSupported)
+      | fieldPlace _ environment owner index childSupported =>
+          exact .fieldPlace (ih (.place environment owner) (path ++ [0]) before childSupported)
+      | elementPlace _ environment view operand origin viewSupported indexSupported =>
+          refine .elementPlace (ih (.view environment view) (path ++ [0]) before viewSupported) ?_
+          intro value ready viewed
+          exact ih (.value environment operand) (path ++ [1]) ready indexSupported
       | block _ environment scope statements bodySupported =>
           let scopedEnvironment := { environment with scopes := (scope, before.nextScope) :: environment.scopes }
           let ready := { before with nextScope := before.nextScope + 1 }
