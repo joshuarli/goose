@@ -449,6 +449,29 @@ theorem counter_receivingAction (origin : Goose.Core.OriginId)
   unfold receivingAction
   exact counter_lift _ _
 
+theorem counter_repeatElement (fuel : Nat) (layout : LayoutEnv) (parent : Goose.Core.DestinationId)
+    (element : Ty) (source : Goose.Core.DestinationId) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (repeatElement fuel layout parent element source origin) := by
+  cases fuel with
+  | zero => exact counter_stop _
+  | succ fuel =>
+      unfold repeatElement
+      apply counter_bind
+      · exact counter_lift _ _
+      · intro current
+        apply counter_bind
+        · exact counter_stateQuery _ (stateQuery_storedDestination source)
+        · intro stored
+          apply counter_bind
+          · exact counter_stateQuery _ (stateQuery_getStorage stored.storage)
+          · intro storage
+            apply counter_bind
+            · exact counter_stateQuery _ (stateQuery_liftLayout _)
+            · intro finish
+              apply counter_bind
+              · exact counter_lift _ _
+              · intro _; exact counter_lift _ _
+
 theorem counter_receivingDestination (id : Goose.Core.DestinationId) :
     PreservesActivationCounter (receivingDestination id) := by
   exact counter_lift _ _
@@ -1355,6 +1378,11 @@ macro_rules
       | with_reducible exact counter_bindStaticRoot _ _
       | with_reducible exact counter_publishCarriers _ _
       | with_reducible exact counter_channelsFor _ _ _ _
+      | with_reducible exact counter_copyValue _ _ _ _ _ _
+      | with_reducible exact counter_receivingDestination _
+      | with_reducible exact counter_repeatElement _ _ _ _ _ _
+      | with_reducible exact counter_newDestination _ _ _ _ _ _ _
+      | with_reducible exact counter_get
       | with_reducible exact counter_selectCompletionChannel _ _ _
       | with_reducible exact counter_prepareNamedCarrier _ _ _
       | with_reducible exact counter_prepareNamedCarrierAt _ _ _ _
@@ -1390,6 +1418,7 @@ macro_rules
       | with_reducible exact ($previous).produce _ _ _
       | with_reducible exact ($previous).operands _ _ _
       | with_reducible exact ($previous).element _ _ _ _
+      | with_reducible exact ($previous).printArgument _ _
       | with_reducible exact ($previous).resultBlock _ _ _
       | with_reducible exact ($previous).resultBlockWith _ _ _ _
       | with_reducible exact ($previous).call _ _ _ _ _
@@ -1404,6 +1433,9 @@ macro_rules
       | with_reducible apply counter_protectDestination
       | with_reducible apply counter_withCompletionChannels
       | with_reducible apply counter_constructLocal
+      | with_reducible apply counter_listForIn
+      | with_reducible apply counter_arrayForIn
+      | with_reducible apply counter_rangeForIn
       | with_reducible apply counter_listMapM
       | with_reducible apply counter_bind
       | with_reducible split
@@ -1453,6 +1485,15 @@ theorem evalProduce_counter_succ (fuel : Nat) (config : EvalConfig)
   all_goals counter_eval_simple previous
 
 #print axioms evalProduce_counter_succ
+set_option maxHeartbeats 2000000 in
+theorem buildExpr_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (destination : Goose.Core.DestinationId) (expression : Expr) :
+    PreservesActivationCounter (buildExpr (fuel + 1) config environment destination expression) := by
+  cases expression <;> try simp only [buildExpr]
+  all_goals counter_eval_simple previous
+
+#print axioms buildExpr_counter_succ
 theorem execWhile_counter_succ (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
     (condition : Expr) (body : Block) :
