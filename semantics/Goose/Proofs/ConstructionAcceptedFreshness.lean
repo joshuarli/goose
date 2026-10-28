@@ -109,13 +109,8 @@ private theorem acceptedWorld_clockFrame (config : EvalConfig) (initialized : Na
         exact valid.observations.backing.identities root retained stored found
       · intro root retained value found stored occurrence
         rw [objects] at found
-        obtain ⟨storage, run, fuel, finish, present, sampled, measured, lower, upper⟩ :=
-          (valid.observations.observations root retained value found stored occurrence).observed
-        have current : after.construction.storage[stored.storage]? = some storage := by
-          simpa only [construction] using present
-        refine ⟨storage, run, fuel, finish, current, ?_, measured, lower, upper⟩
-        exact sampledStored_storage_transport stored before after storage storage run present current rfl
-          (by intro id named; simp only [construction]) sampled
+        exact (valid.observations.observations root retained value found stored occurrence).construction_frame
+          config.layout before after region.limit stored construction
     · intro row found
       exact valid.cutoff row (by simpa only [construction] using found)
     · intro row found

@@ -6,6 +6,7 @@ namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRootCorrespondence
+open Goose.Proofs.ConstructionRepresentation
 
 theorem freshScope_after_newDestination (config : EvalConfig) (initialized : Nat)
     (owner : Goose.Core.ActId) (ty : Ty) (request : Goose.Core.ConstructionRequest)
@@ -41,7 +42,31 @@ theorem staticBytes_after_newDestination (fuel : Nat) (config : EvalConfig) (ini
   exact evalValue_staticBytes_world fuel config initialized environment interpretation allocated ambient types liveRoots
     bytes bytesOrigin allocatedWorld globals
 
+theorem bindStored_in_mutable_region (config : EvalConfig) (initialized : Nat) (before : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (liveRoots : Goose.Core.RootInst → Prop)
+    (root : Goose.Core.RootInst) (ty : Ty) (stored : StoredValue) (region : ReceivingRegion)
+    (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types liveRoots [region] pending)
+    (mutableRoot : region.mutableRoots root)
+    (compatible : RootTypeCompatible types root ty) (conforms : LayoutConforms config.layout ty)
+    (represented : ValueRepresentation ty (.stored stored)) (backed : StoredValueBacking config.layout before stored)
+    (fresh : before.objectOrdinals.lookup root = none)
+    (freshType : ∀ act scope id, root = .local act scope id → act < before.nextAct ∧ scope < before.nextScope)
+    (freshSynthetic : ∀ id, root = .global id → config.module.globals.size ≤ id →
+      id < config.module.globals.size + before.nextScope) :
+    ∃ after, bindRoot root (.stored stored) before = .ok () after ∧
+      RootTypesExtend types (registerRootType types root ty) ∧
+      AcceptedWorld config initialized after ambient (registerRootType types root ty)
+        (fun other => other = root ∨ liveRoots other) [region] pending := by
+  apply bindRoot_freshStored_world config initialized before ambient types liveRoots root ty stored world
+    compatible conforms represented backed fresh ?_ freshType freshSynthetic
+  intro actual member outside
+  simp only [List.mem_singleton] at member
+  subst actual
+  exact (outside mutableRoot).elim
+
 #print axioms freshScope_after_newDestination
 #print axioms staticBytes_after_newDestination
+#print axioms bindStored_in_mutable_region
 
 end Goose.Proofs.ConstructionAcceptedExecution

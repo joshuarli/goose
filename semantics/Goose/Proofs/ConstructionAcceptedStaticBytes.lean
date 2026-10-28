@@ -239,11 +239,8 @@ theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initiali
         · have old : state.objects.lookup other = some value := by
             rw [← typedObjects, bindRoot_lookup_other root other (.fixed values) scopeState typedAfter typedResult same] at present
             exact present
-          obtain ⟨storage, run, fuel, finish, found, sampled, measured, lower, upper⟩ :=
-            (valid.observations.observations other ⟨retained.1.resolve_left same, retained.2⟩ value old stored occurrence).observed
-          refine ⟨storage, run, fuel, finish, found, ?_, measured, lower, upper⟩
-          exact sampledStored_storage_transport stored state after storage storage run found found rfl
-            (by intro id named; rfl) sampled
+          exact (valid.observations.observations other ⟨retained.1.resolve_left same, retained.2⟩ value old stored occurrence).construction_frame
+            config.layout state after region.limit stored rfl
       · intro other retained outside value present stored occurrence id named
         by_cases same : other = root
         · subst other

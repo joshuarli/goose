@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedState
+import Goose.Proofs.ConstructionAcceptedFreshness
 import Goose.Proofs.ConstructionRootCorrespondenceWrites
 import Goose.Proofs.ConstructionReadTypingLayout
 
@@ -10,6 +10,7 @@ open Goose.Core (RootInst)
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionExecutionOwnership
+open Goose.Proofs.ExitExecution
 
 def RootTypesExtend (before after : RootTypes) : Prop :=
   ∀ root ty, before root = some ty → after root = some ty
@@ -162,17 +163,21 @@ theorem bindRoot_freshStored_registered (layout : LayoutEnv) (types : RootTypes)
 theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (liveRoots : RootInst → Prop) (root : RootInst) (ty : Ty) (stored : StoredValue)
-    (world : AcceptedWorld config initialized before ambient types liveRoots [] [])
+    {regions : List ReceivingRegion} {pending : List PendingCarrierFrame}
+    (world : AcceptedWorld config initialized before ambient types liveRoots regions pending)
     (compatible : RootTypeCompatible types root ty) (conforms : LayoutConforms config.layout ty)
     (represented : ValueRepresentation ty (.stored stored)) (backed : StoredValueBacking config.layout before stored)
     (fresh : before.objectOrdinals.lookup root = none)
+    (regionSafety : ∀ region ∈ regions, ¬ region.mutableRoots root →
+      StoredBackingObservation config.layout before region.limit stored ∧
+        ∀ id, stored.destination = some id → id ∉ region.mutableDestinations)
     (freshType : ∀ act scope id, root = .local act scope id → act < before.nextAct ∧ scope < before.nextScope)
     (freshSynthetic : ∀ id, root = .global id → config.module.globals.size ≤ id →
       id < config.module.globals.size + before.nextScope) :
     ∃ after, bindRoot root (.stored stored) before = .ok () after ∧
       RootTypesExtend types (registerRootType types root ty) ∧
       AcceptedWorld config initialized after ambient (registerRootType types root ty)
-        (fun other => other = root ∨ liveRoots other) [] [] := by
+        (fun other => other = root ∨ liveRoots other) regions pending := by
   let after := { before with
     objects := (root, .stored stored) :: before.objects.filter (fun entry => entry.1 != root)
     objectOrdinals := (root, stored.object.getD stored.storage) :: before.objectOrdinals.filter (fun entry => entry.1 != root) }
@@ -215,10 +220,48 @@ theorem bindRoot_freshStored_world (config : EvalConfig) (initialized : Nat)
     · rw [bindRoot_ordinals_other root other (.stored stored) before after actual same] at present
       obtain ⟨oldTy, declared⟩ := world.ordinalsRegistered other ordinal present
       exact ⟨oldTy, extended other oldTy declared⟩
-  · intro region present
-    cases present
-  · intro frame present
-    cases present
+  · intro region member
+    have valid := world.protections region member
+    refine ⟨by simpa only [construction] using valid.present, ⟨⟨?_, ?_⟩, ?_⟩, ?_, ?_, valid.authority, ?_⟩
+    · intro other retained value found
+      exact backing.values other retained.1 value found
+    · intro other retained value found
+      exact backing.identities other retained.1 value found
+    · intro other retained value found item occurrence
+      by_cases same : other = root
+      · subst other
+        have equal : Value.stored stored = value := by
+          simpa only [after, List.lookup, beq_self_eq_true, Option.some.injEq] using found
+        subst value
+        cases occurrence
+        exact ((regionSafety region member retained.2).1).construction_frame
+          config.layout before after region.limit stored construction
+      · have old : before.objects.lookup other = some value := by
+          rw [← bindRoot_lookup_other root other (.stored stored) before after actual same]
+          exact found
+        exact (valid.observations.observations other ⟨retained.1.resolve_left same, retained.2⟩ value old item occurrence).construction_frame
+          config.layout before after region.limit item construction
+    · intro row found
+      exact valid.cutoff row (by simpa only [construction] using found)
+    · intro row found
+      exact valid.landing row (by simpa only [construction] using found)
+    · intro other retained outside value found item occurrence id named
+      by_cases same : other = root
+      · subst other
+        have equal : Value.stored stored = value := by
+          simpa only [after, List.lookup, beq_self_eq_true, Option.some.injEq] using found
+        subst value
+        cases occurrence
+        exact (regionSafety region member outside).2 id named
+      · have old : before.objects.lookup other = some value := by
+          rw [← bindRoot_lookup_other root other (.stored stored) before after actual same]
+          exact found
+        exact valid.names other (retained.resolve_left same) outside value old item occurrence id named
+  · intro frame member
+    obtain ⟨ready, backed⟩ := world.carriers frame member
+    exact ⟨⟨ready.lengths, fun channel carrier pair =>
+      carrierReady_construction_frame before after construction channel carrier (ready.pairs channel carrier pair)⟩,
+      fun carrier present => carrierBacking_construction_frame config.layout before after construction carrier (backed carrier present)⟩
   · intro id available
     exact Or.inr (world.globalLive id available)
 
@@ -245,7 +288,8 @@ theorem bindRoot_freshGlobalStored_world (config : EvalConfig) (initialized : Na
     · simp only [registerRootType, same, ↓reduceIte]
   obtain ⟨after, evaluated, _, post⟩ := bindRoot_freshStored_world config initialized before ambient types liveRoots
     (.global initialized) descriptor.ty stored world compatible
-    (world.layouts _ _ registered) represented backed fresh (by intro act scope id impossible; cases impossible)
+    (world.layouts _ _ registered) represented backed fresh (by intro region member; cases member)
+    (by intro act scope id impossible; cases impossible)
     (by
       intro id same outside
       cases same

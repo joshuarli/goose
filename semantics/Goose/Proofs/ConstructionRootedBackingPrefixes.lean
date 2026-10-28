@@ -68,6 +68,17 @@ theorem StoredValueBacking.observation (layout : LayoutEnv) (state : ExecutionSt
   · exact measured
   · simpa only [present, Option.map_some, Option.getD_some] using upper
 
+theorem StoredBackingObservation.construction_frame (layout : LayoutEnv) (before after : ExecutionState)
+    (limit : Nat → Nat) (stored : StoredValue) (construction : after.construction = before.construction)
+    (observation : StoredBackingObservation layout before limit stored) :
+    StoredBackingObservation layout after limit stored := by
+  obtain ⟨storage, run, fuel, finish, found, sampled, measured, lower, upper⟩ := observation.observed
+  have current : after.construction.storage[stored.storage]? = some storage := by
+    simpa only [construction] using found
+  refine ⟨storage, run, fuel, finish, current, ?_, measured, lower, upper⟩
+  exact Goose.Proofs.ExitExecution.sampledStored_storage_transport stored before after storage storage run found current rfl
+    (by intro id named; simp only [construction]) sampled
+
 theorem ValueStorageBacked.occurrence_backing (layout : LayoutEnv) (state : ExecutionState)
     (value : Value) (backed : ValueStorageBacked layout state value)
     (stored : StoredValue) (occurrence : StoredOccurrence value stored) :
