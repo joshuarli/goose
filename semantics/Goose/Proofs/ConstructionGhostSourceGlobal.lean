@@ -129,6 +129,38 @@ theorem runModule_fixedGlobalsAndEntry (fuel : Nat) (config : EvalConfig) (befor
 
 #print axioms runModule_fixedGlobalsAndEntry
 
+theorem runModule_sourceForestsAndEntry (fuel : Nat) (config : EvalConfig) (before : ExecutionState)
+    (fixedSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global), config.module.globals[global]? = some descriptor →
+      descriptor.ty.nonfixed = false → ∀ environment, SupportedOperation config (.value environment descriptor.init))
+    (materializedSupported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global) count,
+      config.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+      ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = some count →
+      ∀ environment, SupportedOperation config (.value environment descriptor.init))
+    (entryContext : Context) (entryImplementation : Impl)
+    (contextFound : config.module.contexts[config.module.entry]? = some entryContext)
+    (implementationFound : config.module.impls[entryContext.impl]? = some entryImplementation)
+    (resultsEmpty : entryImplementation.results = #[])
+    (entrySupported : SupportedOperation config (.call ⟨0, 0, #[], [], []⟩ config.module.entry 0)) :
+    ∃ outcome visits,
+      OperandReplay (globalInitializer fuel config) 0 (List.range config.module.globals.size) [] before outcome visits ∧
+      FixedSourceForest fuel config visits ∧ MaterializedSourceForest fuel config visits ∧
+      visits.map Invocation.operand = (List.range config.module.globals.size).take visits.length ∧
+      (visits.map Invocation.ordinal).Nodup ∧
+      runModule fuel config before = moduleAfterGlobals fuel config (discardGlobalValues outcome) ∧
+      ∀ initialized, discardGlobalValues outcome = .ok () initialized →
+        SourceHistory config fuel [config.module.globals.size, 0]
+          (.call ⟨0, 0, #[], [], []⟩ config.module.entry 0) initialized
+          (invokeCall fuel config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 initialized) ∧
+        runModule fuel config before = entryCallResult
+          (invokeCall fuel config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 initialized) := by
+  obtain ⟨outcome, visits, replay, forest, ordered, once, execution, entry⟩ :=
+    runModule_fixedGlobalsAndEntry fuel config before fixedSupported entryContext entryImplementation
+      contextFound implementationFound resultsEmpty entrySupported
+  exact ⟨outcome, visits, replay, forest, globalReplay_materializedSourceForest replay materializedSupported,
+    ordered, once, execution, entry⟩
+
+#print axioms runModule_sourceForestsAndEntry
+
 private def witnessEntry : Impl := ⟨"entry", #[], #[], #[], .mk 0 [] none, .unknown⟩
 private def witnessCallee : Impl := ⟨"source", #[], #[], #[], .mk 1 [.print [.text "x"] 0] none, .unknown⟩
 private def witnessCalleeContext : Context := ⟨1, "source", [], [], []⟩
@@ -227,6 +259,32 @@ private theorem materialized_supported (fuel : Nat) : ∀ (global : Goose.Core.G
   have descriptorEq := materialized_descriptor global descriptor found
   subst descriptor
   exact .singleton environment _ (.value environment (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))
+
+private theorem materialized_entrySupported :
+    SupportedOperation materializedConfig (.call ⟨0, 0, #[], [], []⟩ 0 0) := by
+  apply SupportedOperation.call ⟨0, 0, #[], [], []⟩ 0 0 witnessEntryContext witnessEntry
+  · rfl
+  · rfl
+  · rfl
+  · rfl
+  · intro act
+    exact .activation _ 0 [] 0 (fun environment => .empty environment)
+
+theorem witness_materializedGlobalAndEntry (fuel : Nat) : ∃ outcome visits,
+    OperandReplay (globalInitializer fuel materializedConfig) 0 (List.range materializedConfig.module.globals.size) [] .initial outcome visits ∧
+    MaterializedSourceForest fuel materializedConfig visits ∧
+    ∀ initialized, discardGlobalValues outcome = .ok () initialized →
+      SourceHistory materializedConfig fuel [materializedConfig.module.globals.size, 0]
+        (.call ⟨0, 0, #[], [], []⟩ 0 0) initialized
+        (invokeCall fuel materializedConfig ⟨0, 0, #[], [], []⟩ 0 [] [] 0 initialized) ∧
+      runModule fuel materializedConfig .initial = entryCallResult
+        (invokeCall fuel materializedConfig ⟨0, 0, #[], [], []⟩ 0 [] [] 0 initialized) := by
+  obtain ⟨outcome, visits, replay, fixed, materialized, ordered, once, execution, entry⟩ :=
+    runModule_sourceForestsAndEntry fuel materializedConfig .initial materialized_fixedSupported (materialized_supported fuel)
+      witnessEntryContext witnessEntry rfl rfl rfl materialized_entrySupported
+  exact ⟨outcome, visits, replay, materialized, entry⟩
+
+#print axioms witness_materializedGlobalAndEntry
 
 theorem witness_materializedGlobal : ∃ outcome visits state,
     ordinaryProducerCount? 40 ⟨materializedConfig.module, #[]⟩ materializedGlobal.init = some 3 ∧
