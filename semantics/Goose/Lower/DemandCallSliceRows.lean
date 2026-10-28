@@ -5,8 +5,8 @@ open Goose.Core Goose.GIR Goose.Core.Sound
 open Goose.Lower.Validation.ReplacementContentFlowSource
 
 def OrdinaryCallArgument (access : AccessEnv) (argument : Arg) : Prop :=
-  ¬ ∃ borrow slot mutability element, argument = .byRef borrow (.var slot) ∧
-    access.placeType? (.var slot) = some (.slice mutability element)
+  ¬ ∃ borrow place mutability element, argument = .byRef borrow place ∧
+    access.placeType? place = some (.slice mutability element)
 
 inductive SplitCallArgumentRows (access : AccessEnv) (path : List Nat) :
     Nat → List Arg → List ValueId → List (ValueId × RetainedAlias) → List SliceSlotArgumentCell → Prop
