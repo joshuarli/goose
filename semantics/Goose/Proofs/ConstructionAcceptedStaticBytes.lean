@@ -1,6 +1,7 @@
 import Goose.Proofs.ConstructionAcceptedBindings
 import Goose.Proofs.ConstructionAcceptedFreshness
 import Goose.Proofs.ConstructionAcceptedValues
+import Goose.Proofs.ConstructionRootCorrespondenceReads
 
 set_option Elab.async false
 
@@ -11,6 +12,88 @@ open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ExitExecution
+
+theorem AcceptedFrame.freshSyntheticRoot {config : EvalConfig} {accepted : AcceptedModule config}
+    {frame : ConstructionSourceFrame} {before after : ExecutionState} {types nextTypes : RootTypes}
+    (source : AcceptedFrame config accepted frame before types)
+    (world : ∀ root ty value, types root = some ty → before.objects.lookup root = some value →
+      ValueRepresentation ty value ∧ PointerTypedValue types ty value)
+    (id : Nat) (outside : config.module.globals.size ≤ id) (fresh : types (.global id) = none)
+    (extended : RootTypesExtend types nextTypes) (acts : after.nextAct = before.nextAct)
+    (ordinals : after.objectOrdinals = before.objectOrdinals)
+    (objects : ∀ root, root ≠ .global id → after.objects.lookup root = before.objects.lookup root) :
+    AcceptedFrame config accepted frame after nextTypes := by
+  refine ⟨source.compatible, ?_, source.aliases, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa only [acts] using source.frontier
+  · intro var member
+    obtain ⟨descriptor, root, value, declared, resolved, found, represented⟩ := source.locals var member
+    have different : root ≠ .global id := by
+      obtain ⟨scope, same⟩ := rootOf_variable frame.interpretation var before root resolved
+      rw [same]
+      intro impossible
+      cases impossible
+    exact ⟨descriptor, root, value, declared, rootOf_transfer frame.interpretation var before after root resolved,
+      (objects root different).trans found, represented⟩
+  · intro var member descriptor root declared resolved
+    exact extended root descriptor.ty (source.localTypes var member descriptor root declared
+      (rootOf_transfer frame.interpretation var after before root resolved))
+  · intro var uninitialized root resolved
+    have prior := rootOf_transfer frame.interpretation var after before root resolved
+    have different : root ≠ .global id := by
+      obtain ⟨scope, same⟩ := rootOf_variable frame.interpretation var before root prior
+      rw [same]
+      intro impossible
+      cases impossible
+    obtain ⟨absent, ordinal⟩ := source.uninitializedLocals var uninitialized root prior
+    exact ⟨(objects root different).trans absent, by simpa only [ordinals] using ordinal⟩
+  · intro global future within
+    have different : RootInst.global global ≠ .global id := by
+      intro same
+      have equal : global = id := RootInst.global.inj same
+      subst global
+      omega
+    obtain ⟨absent, ordinal⟩ := source.futureGlobals global future within
+    exact ⟨(objects _ different).trans absent, by simpa only [ordinals] using ordinal⟩
+  · intro var member root value resolved found
+    have prior := rootOf_transfer frame.interpretation var after before root resolved
+    have different : root ≠ .global id := by
+      obtain ⟨scope, same⟩ := rootOf_variable frame.interpretation var before root prior
+      rw [same]
+      intro impossible
+      cases impossible
+    exact source.direct var member root value prior (by rw [← objects root different]; exact found)
+  · intro fuel var member roots annotated root location value resolved found read interior reference
+    have prior := rootOf_transfer frame.interpretation var after before root resolved
+    have different : root ≠ .global id := by
+      obtain ⟨scope, same⟩ := rootOf_variable frame.interpretation var before root prior
+      rw [same]
+      intro impossible
+      cases impossible
+    have oldFound : before.objects.lookup root = some (.ref location) := by
+      rw [← objects root different]
+      exact found
+    obtain ⟨descriptor, actual, oldValue, declared, oldResolved, oldPresent, represented⟩ := source.locals var member
+    have rootEqual : actual = root := by
+      have both := oldResolved.symm.trans prior
+      exact (ExecutionStep.ok.inj both).1
+    subst actual
+    have sameValue : oldValue = .ref location := Option.some.inj (oldPresent.symm.trans oldFound)
+    subst oldValue
+    have descriptorDeclared : frame.typing.variables[var]? = some descriptor := by
+      simpa only [source.compatible.variables] using declared
+    have pointer := (world root descriptor.ty (.ref location)
+      (source.localTypes var member descriptor root descriptorDeclared prior) oldFound).2
+    have targetDifferent : location.root ≠ .global id := by
+      intro equal
+      generalize descriptor.ty = actualTy at pointer
+      cases pointer with
+      | reference mutability ty target typed =>
+        obtain ⟨rootTy, registered, path⟩ := typed
+        rw [equal, fresh] at registered
+        cases registered
+    have priorRead := readLoc_directReference_transfer fuel config.layout location after before value interior
+      (objects location.root targetDifferent).symm read reference
+    exact source.contents fuel var member roots annotated root location value prior oldFound priorRead interior reference
 
 theorem evalValue_staticBytes_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (environment : RuntimeActivation) (interpretation : RootInterpretation)
@@ -198,6 +281,7 @@ theorem evalValue_checkedStaticBytes_world (fuel : Nat) (config : EvalConfig) (a
       RootTypesExtend types nextTypes ∧
       AcceptedWorld config frame.initialized after ambient nextTypes (fun other => other = root ∨ liveRoots other)
         regions pending ∧
+      AcceptedFrame config accepted frame after nextTypes ∧
       AcceptedValue config.layout nextTypes frame.interpretation after ty roots (.slice ⟨root, []⟩ 0 bytes.length) := by
   have typing := checked.typing
   have provenance := checked.provenance
@@ -211,10 +295,44 @@ theorem evalValue_checkedStaticBytes_world (fuel : Nat) (config : EvalConfig) (a
     simp only [rpExpr, pure, StateT.run] at provenance
     obtain ⟨rfl, _⟩ := provenance
     obtain ⟨⟨rfl, _⟩, _⟩ := typing
-    exact evalValue_staticBytes_world fuel config frame.initialized frame.interpretation.environment frame.interpretation
-      state ambient types liveRoots bytes origin world source.compatible.globalCount
+    obtain ⟨after, nextTypes, root, evaluated, extended, nextWorld, value⟩ :=
+      evalValue_staticBytes_world fuel config frame.initialized frame.interpretation.environment frame.interpretation
+        state ambient types liveRoots bytes origin world source.compatible.globalCount
+    let freshRoot := RootInst.global (config.module.globals.size + state.nextScope)
+    let values := (bytes.map (fun byte => Value.int .u8 byte.toNat)).toArray
+    let scopeState := { state with nextScope := state.nextScope + 1 }
+    let expected := { scopeState with objects := (freshRoot, .fixed values) :: scopeState.objects.filter (fun entry => entry.1 != freshRoot) }
+    have actual : evalValue (fuel + 1) config frame.interpretation.environment
+        (.bytes (.slice .readOnly (.int .u8)) bytes origin) state =
+        .ok (.slice ⟨freshRoot, []⟩ 0 bytes.length) expected := by
+      simp only [evalValue, freshScope, bindStaticRoot, EvalM.get, EvalM.set, bind, pure,
+        freshRoot, expected, scopeState, values]
+    have same := ExecutionStep.ok.inj (evaluated.symm.trans actual)
+    have rootEqual : root = freshRoot := by
+      have projection := congrArg (fun value : Value => match value with
+        | .slice location _ _ => some location.root
+        | _ => none) same.1
+      exact Option.some.inj projection
+    have stateEqual : after = expected := same.2
+    subst root after
+    have fresh : types freshRoot = none := by
+      cases present : types freshRoot with
+      | none => rfl
+      | some ty =>
+        have bounded := world.syntheticFrontier (config.module.globals.size + state.nextScope) ty present (by omega)
+        exact (Nat.lt_irrefl _ bounded).elim
+    obtain ⟨rebound, bound, reboundObjects⟩ := bindRoot_objects freshRoot (.fixed values) scopeState
+    have unchanged : ∀ other, other ≠ freshRoot → expected.objects.lookup other = state.objects.lookup other := by
+      intro other different
+      have sameObjects : expected.objects = rebound.objects := reboundObjects.symm
+      rw [sameObjects]
+      exact bindRoot_lookup_other freshRoot other (.fixed values) scopeState rebound bound different
+    refine ⟨expected, nextTypes, freshRoot, actual, extended, nextWorld, ?_, value⟩
+    exact source.freshSyntheticRoot world.heap (config.module.globals.size + state.nextScope) (by omega) fresh
+      extended rfl rfl unchanged
 
 #print axioms evalValue_staticBytes_world
+#print axioms AcceptedFrame.freshSyntheticRoot
 #print axioms evalValue_checkedStaticBytes_world
 
 end Goose.Proofs.ConstructionAcceptedExecution

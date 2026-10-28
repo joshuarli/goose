@@ -482,9 +482,9 @@
   "feature": "Fresh activation and scope in an accepted construction world",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.freshAct_acceptedWorld; Goose.Proofs.ConstructionAcceptedExecution.freshScope_acceptedWorld; Goose.Proofs.ConstructionAcceptedExecution.evalValue_checkedStaticBytes_world; Goose.Proofs.ConstructionAcceptedExecution.staticBytes_after_newDestination",
-  "statement": "Fresh activation and scope allocation and static byte-slice evaluation preserve accepted construction worlds with active receiving regions and pending carrier frames. An actual fresh destination followed by static byte-slice evaluation retains its receiving protection.",
+  "statement": "Fresh activation and scope allocation and checked static byte-slice evaluation preserve accepted construction worlds with active receiving regions and pending carrier frames. The checked literal preserves its source frame and its actual fresh synthetic root. An actual fresh destination followed by static byte-slice evaluation retains its receiving protection.",
   "assumptions": "An accepted world; the checked static-byte case also uses an accepted source frame and successful type and root checks. The composed case uses the stated successful fresh destination allocation.",
-  "limits": "The static-byte case does not yet preserve the source frame. This does not establish that arbitrary evaluator execution preserves the accepted world or discharges TH-CON-01.",
+  "limits": "This does not establish that arbitrary evaluator execution preserves the accepted world or discharges TH-CON-01.",
   "evidence": "ConstructionAcceptedFreshness.lean, ConstructionAcceptedStaticBytes.lean and ConstructionAcceptedFreshnessChecks.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
