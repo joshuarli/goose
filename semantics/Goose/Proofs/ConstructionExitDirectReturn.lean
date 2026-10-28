@@ -2,6 +2,7 @@ import Goose.Proofs.ConstructionExitDirectSourceRoles
 import Goose.Proofs.ConstructionExitSingleCleanup
 import Goose.Proofs.ConstructionExitByteProduce
 import Goose.Proofs.ConstructionExitByteAdaptation
+import Goose.Proofs.ConstructionExitByteFinishPrefix
 
 set_option Elab.async false
 
@@ -31,7 +32,9 @@ theorem direct_byte_return_cleanup (fuel : Nat) (config : EvalConfig)
         .escape ⟨target.act, .nonlocal targetId⟩ [.completed id] cleaned ∧
       landCarriersInto origin [.construct id] [.completed id] cleaned = .ok () cleaned ∧
       finishChannels config.layout [.construct id] [.varr (.int .u8)] [.completed id] origin cleaned = .ok () cleaned ∧
-      LandedResultChannels cleaned [.construct id] [.varr (.int .u8)] [.completed id] := by
+      LandedResultChannels cleaned [.construct id] [.varr (.int .u8)] [.completed id] ∧
+      ∀ limit, limit ready.destination.storage ≤ ready.destination.capability.start →
+        StoragePrefixesEqual limit initial.construction.storage after.construction.storage := by
   let token := initial.construction.exitReservations.size
   let reserved := { initial.construction with exitReservations := initial.construction.exitReservations.push (.active .fresh id id ready.destination) }
   let prepared := { initial with construction := reserved }
@@ -83,7 +86,7 @@ theorem direct_byte_return_cleanup (fuel : Nat) (config : EvalConfig)
       { after.construction with exitReservations := after.construction.exitReservations.set! token .released } rfl rfl id
     exact same.trans resolved
   dsimp only [token] at cleanCurrent
-  refine ⟨after, escaped.1, ?_, ?_, ?_⟩
+  refine ⟨after, escaped.1, ?_, ?_, ?_, ?_⟩
   · simp only [landCarriersInto, List.length_cons, List.length_nil, bne_self_eq_false,
       Bool.false_eq_true, ↓reduceIte, List.zip_cons_cons, List.zip_nil_left, List.forIn_cons,
       List.forIn_nil, receivingDestination, liftConstruction, cleanCurrent, bind, pure]
@@ -128,6 +131,9 @@ theorem direct_byte_return_cleanup (fuel : Nat) (config : EvalConfig)
         receiver_destination_writable cleaned.construction id destination found (use.trans receiver),
         finalAdaptation, by simp only [finalPhysical, Bool.not_true, Bool.and_false], finalLogical, rfl⟩
     exact .cons (.construct id id _ cleanCurrent normalized) .nil
+  · intro limit cutoff
+    exact build_packed_byte_storage_prefix fuel config source id 0 bytes origin prepared after limit
+      preparedSource preparedReady packed request cutoff preparedCurrent built
 
 #print axioms direct_byte_return_cleanup
 

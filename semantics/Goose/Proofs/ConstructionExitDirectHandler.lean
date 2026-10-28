@@ -51,13 +51,18 @@ theorem direct_nested_byte_handler (fuel : Nat) (config : EvalConfig)
         (.mk outerScope (.expr (.call contextId arguments origin) origin :: outerRest) outerTail) origin outerInitial =
         .ok [.completed id] final ∧
       final.construction.stdout = after.construction.stdout ∧
-      ∀ entry : RootInst × Value,
+      (∀ entry : RootInst × Value,
         (Goose.Proofs.Exit.runtimeScopeRoots inner innerScope innerEntered.nextScope).contains entry.1 = false →
         (Goose.Proofs.Exit.runtimeScopeRoots outer outerScope outerInitial.nextScope).contains entry.1 = false →
-        (entry ∈ final.objects ↔ entry ∈ after.objects) := by
+        (entry ∈ final.objects ↔ entry ∈ after.objects)) ∧
+      (∃ target discarded suffix, config.module.targets[targetId]? = some target ∧
+        innerBound.activations = discarded ++ outer :: suffix ∧ target.contains outer.implementation = true ∧
+        ∀ earlier ∈ discarded, target.contains earlier.implementation = false) ∧
+      ∀ limit, limit receiver.destination.storage ≤ receiver.destination.capability.start →
+        StoragePrefixesEqual limit innerBound.construction.storage final.construction.storage := by
   let innerEnv := { inner with scopes := (innerScope, innerEntered.nextScope) :: inner.scopes }
   let outerEnv := { outer with scopes := (outerScope, outerInitial.nextScope) :: outer.scopes }
-  obtain ⟨after, returned, _, _, landed⟩ := direct_byte_return_cleanup fuel config innerEnv outer targetId id bytes origin
+  obtain ⟨after, returned, _, _, landed, prefixes⟩ := direct_byte_return_cleanup fuel config innerEnv outer targetId id bytes origin
     innerBound receiver ownership selection outerChannels receiverUse packed adaptation physical request current fits
   let token := innerBound.construction.exitReservations.size
   let cleaned := { after with construction := { after.construction with
@@ -112,12 +117,15 @@ theorem direct_nested_byte_handler (fuel : Nat) (config : EvalConfig)
     simp only [enterActivation, outerLookup, finishActivation, bodyEscape, beq_self_eq_true, ↓reduceIte, outerChannels, results]
     change finishChannels config.layout [.construct id] [.varr (.int .u8)] [.completed id] origin final = .ok () final at finished
     rw [finished]
-  refine ⟨after, final, matched, rfl, ?_⟩
-  intro entry innerOutside outerOutside
-  change entry ∈ (releaseScopeState outer outerScope outerInitial.nextScope crossed).objects ↔ entry ∈ after.objects
-  rw [Goose.Proofs.Exit.runtime_release_scope_outside outer outerScope outerInitial.nextScope crossed entry outerOutside]
-  change entry ∈ (releaseScopeState inner innerScope innerEntered.nextScope cleaned).objects ↔ entry ∈ after.objects
-  rw [Goose.Proofs.Exit.runtime_release_scope_outside inner innerScope innerEntered.nextScope cleaned entry innerOutside]
+  refine ⟨after, final, matched, rfl, ?_, ?_, ?_⟩
+  · intro entry innerOutside outerOutside
+    change entry ∈ (releaseScopeState outer outerScope outerInitial.nextScope crossed).objects ↔ entry ∈ after.objects
+    rw [Goose.Proofs.Exit.runtime_release_scope_outside outer outerScope outerInitial.nextScope crossed entry outerOutside]
+    change entry ∈ (releaseScopeState inner innerScope innerEntered.nextScope cleaned).objects ↔ entry ∈ after.objects
+    rw [Goose.Proofs.Exit.runtime_release_scope_outside inner innerScope innerEntered.nextScope cleaned entry innerOutside]
+  · exact (targetActivation_selects_nearest config targetId innerBound innerBound outer selection).2
+  · intro limit cutoff
+    exact prefixes limit cutoff
 
 #print axioms direct_nested_byte_handler
 
