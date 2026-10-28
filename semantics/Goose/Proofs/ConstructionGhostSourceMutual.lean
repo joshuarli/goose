@@ -1,15 +1,17 @@
 import Goose.Proofs.ConstructionGhostSourceTransition
 import Goose.Proofs.ConstructionGhostBlock
+import Goose.Proofs.ConstructionGhostResultScopeCore
 
 namespace Goose.Proofs.ConstructionGhostSourceMutual
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition
-open Goose.Proofs.ConstructionGhostBlock
+open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultScope
 
 inductive SourceOperation : Type → Type
   | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
   | statement (environment : RuntimeActivation) (statement : Stmt) : SourceOperation Flow
   | statements (environment : RuntimeActivation) (statements : List Stmt) : SourceOperation Flow
   | block (environment : RuntimeActivation) (block : Block) : SourceOperation Flow
+  | activationBody (activation : RuntimeActivation) (block : Block) : SourceOperation (List Carrier)
   | producer (environment : RuntimeActivation) (expression : Expr) : SourceOperation (List Carrier)
 
 def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
@@ -17,6 +19,7 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .statement environment statement => execStmt fuel config environment statement
   | .statements environment statements => execStmts fuel config environment statements
   | .block environment block => execBlock fuel config environment [] [] block
+  | .activationBody activation block => execActivationBody fuel config activation [] block
   | .producer environment expression => evalProduce fuel config environment [] expression
 
 def conditionalResult (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
@@ -30,6 +33,41 @@ def conditionalResult (fuel : Nat) (config : EvalConfig) (environment : RuntimeA
   | .stop reason state => .stop reason state
   | .escape address carriers state => .escape address carriers state
   | .jump target kind state => .jump target kind state
+
+def activationBodyResult (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
+    (scope : Nat) (before : ExecutionState) (outcome : ExecutionStep Flow) : ExecutionStep (List Carrier) :=
+  match withScope activation scope before.nextScope (fun _ => resultScopeContinuation activation.channels none
+      (fun expression => withCompletionChannels activation.channels (expressionOrigin expression)
+        (fun channels => evalProduce fuel config
+          { activation with scopes := (scope, before.nextScope) :: activation.scopes } channels expression)) outcome)
+      (resultScopeStart activation scope before) with
+  | .ok (.normal _, carriers) state => .ok carriers state
+  | .ok _ state => .stop (.fault .flow) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+theorem activationBody_source (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
+    (scope : Nat) (statements : List Stmt) (before : ExecutionState) :
+    execActivationBody (fuel + 1) config activation [] (.mk scope statements none) before =
+      activationBodyResult fuel config activation scope before
+        (execStmts fuel config { activation with scopes := (scope, before.nextScope) :: activation.scopes }
+          statements (resultScopeStart activation scope before)) := by
+  obtain ⟨outcome, visits, replay, execution⟩ := execResultScope_statementReplay fuel config activation
+    activation.channels scope statements
+    (fun environment expression => withCompletionChannels activation.channels (expressionOrigin expression)
+      (fun channels => evalProduce fuel config environment channels expression)) before
+  simp only [execActivationBody, bind]
+  rw [execution, replay.sound]
+  simp only [activationBodyResult]
+  cases result : withScope activation scope before.nextScope (fun _ =>
+    resultScopeContinuation activation.channels none
+      (fun expression => withCompletionChannels activation.channels (expressionOrigin expression)
+        (fun channels => evalProduce fuel config
+          { activation with scopes := (scope, before.nextScope) :: activation.scopes } channels expression)) outcome)
+    (resultScopeStart activation scope before) with
+  | ok pair state => cases pair with | mk flow carriers => cases flow <;> simp [result, bind, pure, fault, EvalM.stop]
+  | stop | escape | jump => simp [result]
 
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
@@ -69,6 +107,13 @@ inductive SourceHistory (config : EvalConfig) :
         (withScope environment scope before.nextScope (fun _ => blockContinuation fuel config
           { environment with scopes := (scope, before.nextScope) :: environment.scopes } [] none outcome)
           { before with nextScope := before.nextScope + 1 })
+  | activationBody {fuel : Nat} {path : List Nat} {activation : RuntimeActivation} {scope : Nat}
+      {statements : List Stmt} {before : ExecutionState} {outcome : ExecutionStep Flow}
+      (body : SourceHistory config fuel (path ++ [0])
+        (.statements { activation with scopes := (scope, before.nextScope) :: activation.scopes } statements)
+        (resultScopeStart activation scope before) outcome) :
+      SourceHistory config (fuel + 1) path (.activationBody activation (.mk scope statements none)) before
+        (activationBodyResult fuel config activation scope before outcome)
   | expression {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -92,7 +137,7 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
@@ -119,6 +164,9 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
       obtain ⟨actual, visits, replay, execution⟩ := execBlock_statementReplay fuel config environment [] [] scope
         statements none before { before with nextScope := before.nextScope + 1 } bound
       rw [execution, ← replay.sound, ihBody]
+  | @activationBody fuel path activation scope statements before outcome body ihBody =>
+      simp only [execute] at ihBody ⊢
+      rw [activationBody_source, ihBody]
   | @expression fuel path environment operand origin before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [execStmt, bind, ih, expressionStatementResult]
@@ -194,6 +242,9 @@ inductive SupportedOperation : {α : Type} → SourceOperation α → Prop
   | block (environment : RuntimeActivation) (scope : Nat) (statements : List Stmt)
       (body : ∀ scopedEnvironment, SupportedOperation (.statements scopedEnvironment statements)) :
       SupportedOperation (.block environment (.mk scope statements none))
+  | activationBody (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt)
+      (body : ∀ environment, SupportedOperation (.statements environment statements)) :
+      SupportedOperation (.activationBody activation (.mk scope statements none))
   | producer (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
       SupportedOperation (.producer environment expression)
 
@@ -202,7 +253,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -271,6 +322,13 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
           simp only [execute]
           rw [execution, ← replay.sound]
           exact .block child
+      | activationBody activation scope statements bodySupported =>
+          let environment := { activation with scopes := (scope, before.nextScope) :: activation.scopes }
+          let ready := resultScopeStart activation scope before
+          have child := ih (.statements environment statements) (path ++ [0]) ready (bodySupported environment)
+          simp only [execute]
+          rw [activationBody_source]
+          exact .activationBody child
       | producer environment supported =>
           exact ProducerHistory.toSource (producerHistory_exists (fuel + 1) config environment path _ before supported)
 
@@ -307,8 +365,47 @@ theorem witness_nestedFill : ∃ after,
     rw [actual] at history
     exact history
 
+theorem witness_activationBody : ∃ after,
+    execActivationBody 40 witnessConfig witnessEnvironment [] (.mk 0 [.expr witnessExpression 0] none) .initial =
+      .ok [] after ∧
+    SourceHistory witnessConfig 40 [] (.activationBody witnessEnvironment (.mk 0 [.expr witnessExpression 0] none))
+      .initial (.ok [] after) := by
+  have bodySupported : ∀ environment, SupportedOperation (.statements environment [.expr witnessExpression 0]) := by
+    intro environment
+    apply SupportedOperation.sequence
+    · apply SupportedOperation.expression
+      unfold witnessExpression
+      apply SupportedOperation.conditional
+      · exact .value _ (.boolean true)
+      · apply SupportedOperation.block
+        intro inner
+        exact .sequence inner (.expression inner 0 (.value inner
+          (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty inner)
+      · exact .block _ _ _ (fun inner => .empty inner)
+    · exact .empty environment
+  have history := history_exists 40 witnessConfig
+    (.activationBody witnessEnvironment (.mk 0 [.expr witnessExpression 0] none)) [] .initial
+    (.activationBody witnessEnvironment 0 [.expr witnessExpression 0] bodySupported)
+  refine ⟨witnessState (execActivationBody 40 witnessConfig witnessEnvironment []
+    (.mk 0 [.expr witnessExpression 0] none) .initial), ?_, ?_⟩
+  · unfold witnessConfig witnessEnvironment witnessExpression witnessState
+    cbv
+  · have actual : execActivationBody 40 witnessConfig witnessEnvironment []
+        (.mk 0 [.expr witnessExpression 0] none) .initial =
+        .ok [] (witnessState (execActivationBody 40 witnessConfig witnessEnvironment []
+          (.mk 0 [.expr witnessExpression 0] none) .initial)) := by
+      unfold witnessConfig witnessEnvironment witnessExpression witnessState
+      cbv
+    change SourceHistory witnessConfig 40 [] (.activationBody witnessEnvironment (.mk 0 [.expr witnessExpression 0] none))
+      .initial (execActivationBody 40 witnessConfig witnessEnvironment [] (.mk 0 [.expr witnessExpression 0] none) .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_activationBody
+
 #print axioms witness_nestedFill
 
+#print axioms activationBody_source
 #print axioms history_exists
 
 #print axioms ValueHistory.toSource
