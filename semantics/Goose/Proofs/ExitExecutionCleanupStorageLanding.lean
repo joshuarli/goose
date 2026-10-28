@@ -220,7 +220,7 @@ elab "cleanup_patch_count_source" : term => do
     | _ => false) | throwError "expected the native count patch operation"
   return operation
 
-private abbrev sourcePatchCount : ByteArray → Nat → Nat → ByteArray := cleanup_patch_count_source
+abbrev sourcePatchCount : ByteArray → Nat → Nat → ByteArray := cleanup_patch_count_source
 
 open Lean Elab Tactic in
 elab "unfold_cleanup_patch" : tactic => do
@@ -255,7 +255,7 @@ private theorem sourcePatchCount_expansion (bytes : ByteArray) (start count : Na
   simp only [Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size]
   rfl
 
-private theorem sourcePatchCount_prefix (bytes : ByteArray) (finish start count : Nat)
+theorem sourcePatchCount_prefix (bytes : ByteArray) (finish start count : Nat)
     (bounded : finish ≤ bytes.size) (outside : finish ≤ start) :
     (sourcePatchCount bytes start count).extract 0 finish = bytes.extract 0 finish := by
   rw [sourcePatchCount_expansion]
