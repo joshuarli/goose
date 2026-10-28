@@ -26,7 +26,7 @@ theorem accepted_generated_parameterized_mixed_body {cfg : Cfg} {env : Env} {pre
         { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store }⟩ reached) :
     ∃ body : StmtsSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts
         { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store },
-      ∃ bodyOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      body.offset = 0 ∧ ∃ bodyOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
           root body.path (.block none bindings want block) before,
         ∃ bodyRows : GeneratedDemandRows cfg.mod body.rootsEnv.access bodyOccurrence required,
           GeneratedSequencePrefixDecomposition body selected bodyOccurrence bodyRows map
@@ -51,7 +51,7 @@ theorem accepted_generated_parameterized_mixed_body {cfg : Cfg} {env : Env} {pre
       (lowerStmts none (block.stmts.take body.offset) (lowerEnv cfg.mod env.vars results)
         (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2).2 cx.fn.blocks := by
     simpa [bodyOffset, lowerStmts, pure_run] using generated_block_statements_extended extended
-  exact ⟨body, bodyOccurrence, bodyRows,
+  exact ⟨body, bodyOffset, bodyOccurrence, bodyRows,
     family body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted bodyBounded'
       bodyRealized bodyInput statementsExtended steps, bodyReached⟩
 
