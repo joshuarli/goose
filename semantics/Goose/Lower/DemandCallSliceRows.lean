@@ -36,6 +36,70 @@ theorem SplitCallArgumentRows.length {access : AccessEnv} {path : List Nat} {ind
   | value ordinary query tail ih => simp [ih]
   | slot ordinal type query tail ih => simp [ih]
 
+theorem SplitCallArgumentRows.generatedRows {access : AccessEnv} {path : List Nat} {index : Nat}
+    {arguments : List Arg} {ids : List ValueId} {values : List (ValueId × RetainedAlias)}
+    {slots : List SliceSlotArgumentCell} (rows : SplitCallArgumentRows access path index arguments ids values slots) :
+    ∃ retained, GeneratedCallArgumentRows access path index arguments ids retained ∧
+      (∀ value ∈ values, value ∈ retained) ∧
+      (∀ cell ∈ slots, (cell.value, cell.alias) ∈ retained) ∧
+      (∀ value ∈ retained, value ∈ values ∨ ∃ cell ∈ slots, (cell.value, cell.alias) = value) := by
+  induction rows with
+  | nil index => exact ⟨[], .nil index, by simp, by simp, by simp⟩
+  | @value index argument arguments id ids aliases values slots ordinary query tail ih =>
+    obtain ⟨retained, tracked, valueSubset, slotSubset, exactRetained⟩ := ih
+    refine ⟨aliases.map (fun alias => (id, alias)) ++ retained, .cons query tracked, ?_, ?_, ?_⟩
+    · intro value member
+      rcases List.mem_append.mp member with current | previous
+      · exact List.mem_append_left _ current
+      · exact List.mem_append_right _ (valueSubset value previous)
+    · intro cell member
+      exact List.mem_append_right _ (slotSubset cell member)
+    · intro value member
+      rcases List.mem_append.mp member with current | previous
+      · exact Or.inl (List.mem_append_left _ current)
+      · rcases exactRetained value previous with inValues | inSlots
+        · exact Or.inl (List.mem_append_right _ inValues)
+        · exact Or.inr inSlots
+  | @slot index arguments ids values slots cell ordinal type query tail ih =>
+    obtain ⟨retained, tracked, valueSubset, slotSubset, exactRetained⟩ := ih
+    refine ⟨[(cell.value, cell.alias)] ++ retained, ?_, ?_, ?_, ?_⟩
+    · simpa using (GeneratedCallArgumentRows.cons query tracked)
+    · intro value member
+      exact List.mem_append_right _ (valueSubset value member)
+    · intro current member
+      rcases List.mem_cons.mp member with same | previous
+      · subst current
+        exact List.mem_append_left _ (by simp)
+      · exact List.mem_append_right _ (slotSubset current previous)
+    · intro value member
+      rcases List.mem_append.mp member with current | previous
+      · simp only [List.mem_singleton] at current
+        exact Or.inr ⟨cell, by simp, current.symm⟩
+      · rcases exactRetained value previous with inValues | ⟨other, inSlots, equal⟩
+        · exact Or.inl inValues
+        · exact Or.inr ⟨other, by simp [inSlots], equal⟩
+
+#print axioms SplitCallArgumentRows.generatedRows
+
+theorem GeneratedDemandRows.splitArgument {m : Core.Module} {access : AccessEnv} {function : Func} {le : LEnv}
+    {root : DemandNode} {path : List Nat} {before : LS} {context : ContextId} {arguments : List Arg}
+    {origin : OriginId} {index : Nat} {argument : Arg}
+    {occurrence : GeneratedDemandOccurrence m function le root path (.expression (.call context arguments origin)) before}
+    {argumentAt : arguments[index]? = some argument} {required : RetainedSsaMap}
+    (rows : GeneratedDemandRows m access occurrence required)
+    {values : List (ValueId × RetainedAlias)} {slots : List SliceSlotArgumentCell}
+    (split : SplitCallArgumentRows access path 0 (arguments.take index)
+      (lowerArgs (arguments.take index) le before).1 values slots) :
+    ∃ retained, GeneratedDemandRows m access (.argument occurrence argumentAt)
+        ⟨retained ++ required.values, required.runs⟩ ∧
+      (∀ value ∈ values, value ∈ retained) ∧
+      (∀ cell ∈ slots, (cell.value, cell.alias) ∈ retained) ∧
+      (∀ value ∈ retained, value ∈ values ∨ ∃ cell ∈ slots, (cell.value, cell.alias) = value) := by
+  obtain ⟨retained, tracked, valuesIncluded, slotsIncluded, exactRetained⟩ := split.generatedRows
+  exact ⟨retained, .argument (argumentAt := argumentAt) rows tracked, valuesIncluded, slotsIncluded, exactRetained⟩
+
+#print axioms GeneratedDemandRows.splitArgument
+
 theorem SplitCallArgumentRows.snocSlot {access : AccessEnv} {path : List Nat} {index : Nat}
     {arguments : List Arg} {ids : List ValueId} {values : List (ValueId × RetainedAlias)}
     {slots : List SliceSlotArgumentCell} (rows : SplitCallArgumentRows access path index arguments ids values slots)
