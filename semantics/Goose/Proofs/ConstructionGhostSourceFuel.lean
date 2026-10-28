@@ -56,6 +56,10 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (operand : Expr) (origin : Goose.Core.OriginId) (nonfixed : (Ty.arr element count).nonfixed = true)
       (child : ∀ destination, FuelSupport config fuel (.builder environment destination (.fill (.arr element count) operand origin))) :
       FuelSupport config (fuel + 1) (.value environment (.fill (.arr element count) operand origin))
+  | builderChannelCall (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
+      (child : ∀ destination, FuelSupport config fuel (.channelCall environment context arguments [.construct destination] origin)) :
+      FuelSupport config (fuel + 1) (.builder environment incoming (.call context arguments origin))
   | fillBuilder (fuel : Nat) (environment : RuntimeActivation) (destination : Goose.Core.DestinationId)
       (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId)
       (valueChild : FuelSupport config fuel (.value environment operand))
@@ -326,6 +330,10 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .valueNonfixedFill fuel path environment element count operand origin before nonfixed ?_
           intro destination ready allocated
           exact ih (.builder environment destination (.fill (.arr element count) operand origin)) (path ++ [0]) ready (childSupported destination)
+      | builderChannelCall _ environment incoming context arguments origin childSupported =>
+          refine .builderChannelCall fuel path environment incoming context arguments origin before ?_
+          intro destination ready renewed
+          exact ih (.channelCall environment context arguments [.construct destination] origin) (path ++ [0]) ready (childSupported destination)
       | fillBuilder _ environment destination element count operand origin valueSupported builderSupported =>
           refine .fillBuilder fuel path environment destination element count operand origin before ?_ ?_
           · intro current ready renewed fixed
