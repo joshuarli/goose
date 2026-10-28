@@ -13,6 +13,9 @@ theorem accepted_generated_field_scalar_address {cfg : Cfg} {env : Env} {state :
     (extended : ExtT (lowerPlace (.field place index) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks) :
     ∃ (location : Loc) (middle final : DemandRuntimePoint),
       evalPlace 2 cfg env (.field place index) state = .ok { location with path := location.path ++ [index] } state ∧
+      middle.state = state ∧ final.state = state ∧
+      Post cfg env cx before initial (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2
+        middle.frame middle.point [((lowerPlace place (lowerEnv cfg.mod env.vars results) before).1, .val (.ref location))] ∧
       (∀ fuel, DemandInstructionStep cx fuel ⟨start, initial, state⟩ middle) ∧
       (∀ fuel, DemandInstructionStep cx fuel middle final) ∧
       Post cfg env cx before initial (lowerPlace (.field place index) (lowerEnv cfg.mod env.vars results) before).2
@@ -39,7 +42,7 @@ theorem accepted_generated_field_scalar_address {cfg : Cfg} {env : Env} {state :
   let middle : DemandRuntimePoint := ⟨(start.1, start.2 + 1), initial.set owner.1 (.val (.ref location)), state⟩
   let final : DemandRuntimePoint := ⟨((start.1, start.2 + 1).1, (start.1, start.2 + 1).2 + 1),
     middle.frame.set built.1 (.val (.ref { location with path := location.path ++ [index] })), state⟩
-  refine ⟨location, middle, final, ?_, ownerStep, ?_, fieldPost⟩
+  refine ⟨location, middle, final, ?_, rfl, rfl, ownerPost, ownerStep, ?_, fieldPost⟩
   · simp only [evalPlace, bind_apply, placed, pure_apply]
   · intro fuel
     apply DemandInstructionStep.definition fieldInst
