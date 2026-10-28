@@ -1,4 +1,4 @@
-import Goose.Lower.DemandCallBoolBodyReturn
+import Goose.Lower.DemandCallBodyReturn
 import Goose.Lower.DemandParameterizedValueProgress
 
 namespace Goose.Lower
