@@ -44,5 +44,40 @@ theorem evalValue_checkedScalar_argumentOutcome {expression : Expr} (form : Acce
         | stored ty value nonfixed => simp [Ty.nonfixed] at nonfixed
     exact ⟨world, source, { valid with direct := direct }⟩
 
+theorem evalValue_checkedScalar_argumentOutcomeAtFrame {expression : Expr} (form : AcceptedBinaryExpression expression)
+    (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame checkedFrame : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient)
+    (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (sameInterpretation : checkedFrame.interpretation = frame.interpretation)
+    (sameInitialized : checkedFrame.initialized = frame.initialized)
+    (world : AcceptedWorld config frame.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame state types) (checkedSource : AcceptedFrame config accepted checkedFrame state types)
+    (ty : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue checkedFrame expression ty roots typingAfter rootsAfter)
+    (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool) :
+    FirstArgumentOutcome config accepted frame ambient types live regions pending ty []
+      (evalValue fuel config frame.interpretation.environment expression state) := by
+  have checkedWorld : AcceptedWorld config checkedFrame.initialized state ambient types live regions pending := sameInitialized.symm ▸ world
+  have outcome := evalValue_checkedScalar_argumentOutcome form fuel config accepted checkedFrame state ambient types live regions pending
+    checkedWorld checkedSource ty roots typingAfter rootsAfter checked scalar
+  have unchanged := (evalValue_checked_binary_recursive form fuel config accepted checkedFrame state ambient types live regions pending
+    checkedWorld checkedSource ty roots typingAfter rootsAfter checked).1
+  cases evaluated : evalValue fuel config checkedFrame.interpretation.environment expression state with
+  | escape address carriers after | jump target kind after => simp [evaluated, FirstArgumentOutcome] at outcome
+  | stop reason after =>
+    simp only [evaluated, Goose.Proofs.Exit.stepState] at unchanged
+    subst after
+    have evaluated' : evalValue fuel config frame.interpretation.environment expression state = .stop reason state := by
+      simpa only [sameInterpretation] using evaluated
+    simp [evaluated', FirstArgumentOutcome, Goose.Proofs.Exit.stepState, world, source]
+  | ok value after =>
+    simp only [evaluated, Goose.Proofs.Exit.stepState] at unchanged
+    subst after
+    simp only [evaluated, FirstArgumentOutcome, Goose.Proofs.Exit.stepState] at outcome
+    have evaluated' : evalValue fuel config frame.interpretation.environment expression state = .ok value state := by
+      simpa only [sameInterpretation] using evaluated
+    simpa [sameInterpretation, evaluated', FirstArgumentOutcome, Goose.Proofs.Exit.stepState] using And.intro world (And.intro source outcome.2.2)
+
+#print axioms evalValue_checkedScalar_argumentOutcomeAtFrame
 #print axioms evalValue_checkedScalar_argumentOutcome
 end Goose.Proofs.ConstructionAcceptedExecution
