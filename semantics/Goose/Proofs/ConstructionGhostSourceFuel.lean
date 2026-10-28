@@ -133,7 +133,7 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
 
 private def recursiveContext : Context := ⟨0, "recursive", [], [], []⟩
 private def recursiveImplementation : Impl := ⟨"recursive", #[], #[], #[],
-  .mk 0 [.expr (.call 0 [] 0) 0] none, .unknown⟩
+  .mk 0 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0, .expr (.call 0 [] 0) 0] none, .unknown⟩
 private def recursiveConfig : EvalConfig := ⟨.release,
   ⟨#[], #[], #[], #[recursiveImplementation], #[recursiveContext], 0, #[], #[], #[]⟩⟩
 
@@ -152,7 +152,7 @@ theorem recursiveCall_supported (fuel : Nat) : ∀ environment,
         intro act
         let activation : RuntimeActivation := ⟨0, act, #[], [], []⟩
         change FuelSupport recursiveConfig (fuel + 1)
-          (.activation activation (.mk 0 [.expr (.call 0 [] 0) 0] none) 0)
+          (.activation activation (.mk 0 [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0, .expr (.call 0 [] 0) 0] none) 0)
         cases fuel with
         | zero => exact .activation 0 activation 0 _ 0 (.timeout _)
         | succ fuel =>
@@ -163,16 +163,22 @@ theorem recursiveCall_supported (fuel : Nat) : ∀ environment,
           | zero => exact .timeout _
           | succ fuel =>
             apply FuelSupport.sequence fuel
+            · exact .legacy fuel (.expression scopedEnvironment 0 (.value scopedEnvironment
+                (.fill (.int .i64) 3 0 rfl (.integer .i64 7))))
             · cases fuel with
               | zero => exact .timeout _
               | succ fuel =>
-                apply FuelSupport.expression fuel
-                cases fuel with
-                | zero => exact .timeout _
-                | succ fuel =>
-                  apply FuelSupport.valueCall fuel scopedEnvironment 0 0 recursiveContext recursiveImplementation rfl rfl rfl
-                  exact ih fuel (by omega) scopedEnvironment
-            · exact .legacy fuel (.empty scopedEnvironment)
+                apply FuelSupport.sequence fuel
+                · cases fuel with
+                  | zero => exact .timeout _
+                  | succ fuel =>
+                    apply FuelSupport.expression fuel
+                    cases fuel with
+                    | zero => exact .timeout _
+                    | succ fuel =>
+                      apply FuelSupport.valueCall fuel scopedEnvironment 0 0 recursiveContext recursiveImplementation rfl rfl rfl
+                      exact ih fuel (by omega) scopedEnvironment
+                · exact .legacy fuel (.empty scopedEnvironment)
 
 private def recursiveEnvironment : RuntimeActivation := ⟨0, 0, #[], [], []⟩
 private def recursiveState : ExecutionStep α → ExecutionState
