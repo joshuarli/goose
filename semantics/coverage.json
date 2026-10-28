@@ -435,10 +435,10 @@
  },
  {
   "feature": "Byte exit replacement ancestry",
-  "statement": "Successful byte production into a replacement destination retains its backed carrier and parent ownership through scope release. A successful fresh exit reservation has a replacement path from its saved destination to its selected open byte destination; the active ticket and path persist through successful byte construction and scope release. For a current open receiver with a positive count, actual single-channel setup and byte return cleanup retain the exact exiting parent and backed carrier, the receiver still resolves to itself, and the replacement carrier actually lands after singleton cleanup and unwind. Captured receiving, reservation and runtime frames survive this path.",
+  "statement": "Successful byte production into a replacement destination retains its backed carrier and parent ownership through scope release. For a current open receiver with a positive count, the restricted nested byte-return path propagates through the inner call to the matching outer handler and completes the channel after singleton cleanup and unwind. The proof preserves output and object entries outside the released scopes relative to the post-build state.",
   "assumptions": "Accepted ownership worlds, successful production or reservation, open byte backing and destination shape. The reservation result assumes an accepted world at the reserved state; the live-parent case assumes the original receiver is current and open with positive count.",
-  "limits": "General parent authority may be abandoned or cancelled; handler completion and result normalization remain open. This component does not close TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionExitByteReplacement.lean; Goose/Proofs/ConstructionExitReservationPath.lean; Goose/Proofs/ConstructionExitByteReservation.lean; Goose/Proofs/ConstructionExitOpenReservation.lean; Goose/Proofs/ConstructionExitByteFinishParent.lean; Goose/Proofs/ConstructionExitSingleCleanup.lean; Goose/Proofs/ConstructionExitByteSetup.lean; Goose/Proofs/ConstructionExitReceiverCurrent.lean; Goose/Proofs/ConstructionExitReceiverParent.lean; Goose/Proofs/ConstructionExitReplacementOffset.lean; Goose/Proofs/ConstructionExitByteReady.lean; Goose/Proofs/ConstructionExitByteRuntime.lean; Goose/Proofs/ConstructionExitByteLand.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "The nested handler assumes the stated prepared call, target selection, successful reservation and byte build, accepted post-reservation world, receiver geometry, matching channel and result, and outside-scope exclusions. Outside storage observations, arbitrary results and general TH-EXIT-01 remain open.",
+  "evidence": "Goose/Proofs/ConstructionExitByteReplacement.lean; Goose/Proofs/ConstructionExitReservationPath.lean; Goose/Proofs/ConstructionExitByteReservation.lean; Goose/Proofs/ConstructionExitOpenReservation.lean; Goose/Proofs/ConstructionExitByteFinishParent.lean; Goose/Proofs/ConstructionExitSingleCleanup.lean; Goose/Proofs/ConstructionExitByteSetup.lean; Goose/Proofs/ConstructionExitByteReady.lean; Goose/Proofs/ConstructionExitByteLand.lean; Goose/Proofs/ConstructionExitByteHandler.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted construction value representation fragment",
@@ -653,6 +653,13 @@
   "assumptions": "Accepted initial world and future-global freshness, byte-owner global descriptors, and an actual stop. The initial-state and module results assume validation; the zero-fuel module result also assumes global zero is the stated byte owner.",
   "limits": "Other global types and general accepted-world preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionAcceptedByteGlobalTimeout.lean; Goose/Proofs/ConstructionByteGlobalLocal.lean; Goose/Proofs/ConstructionByteGlobalStopped.lean; Goose/Proofs/ConstructionByteGlobalInitialStopped.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
+  "feature": "Direct byte write trace",
+  "statement": "A writeElement operation appends only write events for its destination on every outcome, and finishDestination leaves events unchanged. The byte write loop from the canonical direct, open owner state succeeds and appends only writes for that owner.",
+  "assumptions": "The loop result starts from the canonical direct, open destination and storage zero; existing events and input bytes are arbitrary.",
+  "limits": "The loop result does not cover arbitrary runtime states, publication, terminal construction outcomes or general C-DIRECT. This component does not close TH-CON-01.",
+  "evidence": "Goose/Construct/Destination.lean; Goose/Proofs/ConstructionByteOwnerInitialization.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Byte-owner global initialization outcomes",
