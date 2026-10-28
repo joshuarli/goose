@@ -624,10 +624,10 @@
  },
  {
   "feature": "Conditional condition agreement",
-  "statement": "An accepted conditional without else has successful-prefix agreement and non-timeout stop reflection through condition, selected branch and join. Discarded mixed branch blocks agree through scope leave.",
+  "statement": "An accepted conditional without else has successful-prefix agreement and non-timeout stop reflection through condition, selected branch and join. Discarded mixed branch blocks agree through scope leave, and these conditionals compose at arbitrary positions in mixed statement sequences.",
   "assumptions": "Accepted source and generated occurrence, supported condition expression, no loop context or trailing branch value, mixed branch fragment and supplied expression prefix and stop families, related builder and retained demand.",
-  "limits": "Conditionals with else and composition into mixed statement and block families remain open. This component does not close TH-LOWER-03.",
-  "evidence": "Goose/Lower/DemandIfPrefixFamily.lean; Goose/Lower/DemandIfStoppedFamily.lean; Goose/Lower/DemandBranchBlockSuffix.lean; Goose/Lower/DemandBranchBlockStopped.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "Conditionals with else and composition into enclosing mixed block families remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandIfPrefixFamily.lean; Goose/Lower/DemandIfStoppedFamily.lean; Goose/Lower/DemandIfMixedStatements.lean; Goose/Lower/DemandBranchBlockSuffix.lean; Goose/Lower/DemandBranchBlockStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted byte-owner allocation timeout",
@@ -733,10 +733,10 @@
  },
  {
   "feature": "Mixed byte and scalar module world preservation",
-  "statement": "At every fuel, a validated module with byte-owner globals and a no-tail entry body interleaving unnamed byte-owner declarations, integer or Boolean local declarations, direct scalar local assignments, and recursive scalar expression statements preserves an accepted world at the actual module result. Escape and jump outcomes are impossible.",
-  "assumptions": "Accepted module, the specified byte-owner globals, mixed entry syntax, byte-owner local types and integer or Boolean scalar local and assignment target types.",
-  "limits": "The module theorem's scalar global-assignment branch is vacuous under its byte-only global premise; scalar globals, tail expressions, other statements and global forms, and general construction trace claims remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionAcceptedMixedEffects.lean; Goose/Proofs/ConstructionAcceptedMixedAssignExecution.lean; Goose/Proofs/ConstructionAcceptedMixedAssignModule.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "At every fuel, a validated module with byte-owner, integer and Boolean literal globals and a no-tail entry body interleaving unnamed byte-owner declarations, integer or Boolean local declarations, direct scalar local or global assignments, and recursive scalar expression statements preserves an accepted world at the actual module result. Escape and jump outcomes are impossible. A validated witness assigns an integer global and instantiates the result.",
+  "assumptions": "Accepted module, the specified literal globals, mixed entry syntax, byte-owner local types and integer or Boolean scalar local and assignment target types.",
+  "limits": "Nonliteral global initializers, tail expressions, other statements and global forms, and general construction trace claims remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionAcceptedMixedGlobal.lean; Goose/Proofs/ConstructionAcceptedMixedAssignExecution.lean; Goose/Proofs/ConstructionAcceptedMixedGlobalModule.lean; Goose/Proofs/ConstructionAcceptedMixedGlobalWitness.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Byte module with empty helper tail",
