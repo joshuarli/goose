@@ -740,10 +740,10 @@
  },
  {
   "feature": "Byte module with empty helper tail",
-  "statement": "At every fuel, a validated byte-owner module ending in a call to a zero-parameter, zero-result, variableless empty helper preserves an accepted world at its actual result. A checked byte-owner module with such a helper instantiates the theorem and returns successfully.",
-  "assumptions": "Accepted module, byte-owner globals and entry declarations, the stated helper context and empty implementation, and sufficient checker fuel.",
-  "limits": "Nonempty helpers, other call forms, other entry statements and general evaluator preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionEmptyHelperCall.lean; Goose/Proofs/ConstructionByteModuleHelperTail.lean; Goose/Proofs/ConstructionUnitTailWitness.lean; Goose/Proofs/ConstructionUnitTailWorldWitness.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "At every fuel, a validated byte-owner module ending in a call to a zero-parameter, zero-result helper with a no-tail byte-declaration body preserves an accepted world at its actual result. Checked modules with both empty and nonempty helper bodies instantiate the theorem and return successfully.",
+  "assumptions": "Accepted module, byte-owner globals and entry declarations, the specified helper context, byte declarations and local types, and sufficient checker fuel.",
+  "limits": "Other helper statements, argument or result channels, other call forms, other entry statements and general evaluator preservation remain open. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionByteHelperCall.lean; Goose/Proofs/ConstructionByteModuleByteHelperTail.lean; Goose/Proofs/ConstructionUnitTailWorldWitness.lean; Goose/Proofs/ConstructionByteHelperTailWorldWitness.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Stopped byte-owner local construction",
