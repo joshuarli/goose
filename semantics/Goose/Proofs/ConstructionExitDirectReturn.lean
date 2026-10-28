@@ -3,6 +3,8 @@ import Goose.Proofs.ConstructionExitSingleCleanup
 import Goose.Proofs.ConstructionExitByteProduce
 import Goose.Proofs.ConstructionExitByteAdaptation
 import Goose.Proofs.ConstructionExitByteFinishPrefix
+import Goose.Proofs.ConstructionExitByteFinishParent
+import Goose.Proofs.ConstructionExitByteRuntime
 
 set_option Elab.async false
 
@@ -33,8 +35,10 @@ theorem direct_byte_return_cleanup (fuel : Nat) (config : EvalConfig)
       landCarriersInto origin [.construct id] [.completed id] cleaned = .ok () cleaned ∧
       finishChannels config.layout [.construct id] [.varr (.int .u8)] [.completed id] origin cleaned = .ok () cleaned ∧
       LandedResultChannels cleaned [.construct id] [.varr (.int .u8)] [.completed id] ∧
-      ∀ limit, limit ready.destination.storage ≤ ready.destination.capability.start →
-        StoragePrefixesEqual limit initial.construction.storage after.construction.storage := by
+      (∀ limit, limit ready.destination.storage ≤ ready.destination.capability.start →
+        StoragePrefixesEqual limit initial.construction.storage after.construction.storage) ∧
+      after.objects = initial.objects ∧ after.objectOrdinals = initial.objectOrdinals ∧
+      ∀ other, other ≠ id → after.construction.destinations[other]? = initial.construction.destinations[other]? := by
   let token := initial.construction.exitReservations.size
   let reserved := { initial.construction with exitReservations := initial.construction.exitReservations.push (.active .fresh id id ready.destination) }
   let prepared := { initial with construction := reserved }
@@ -86,7 +90,9 @@ theorem direct_byte_return_cleanup (fuel : Nat) (config : EvalConfig)
       { after.construction with exitReservations := after.construction.exitReservations.set! token .released } rfl rfl id
     exact same.trans resolved
   dsimp only [token] at cleanCurrent
-  refine ⟨after, escaped.1, ?_, ?_, ?_, ?_⟩
+  have runtime := buildExpr_bytes_runtime fuel config source id (.varr (.int .u8)) bytes origin
+    prepared after ready.destination 0 preparedSource preparedCurrent ready.present ready.opened built
+  refine ⟨after, escaped.1, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simp only [landCarriersInto, List.length_cons, List.length_nil, bne_self_eq_false,
       Bool.false_eq_true, ↓reduceIte, List.zip_cons_cons, List.zip_nil_left, List.forIn_cons,
       List.forIn_nil, receivingDestination, liftConstruction, cleanCurrent, bind, pure]
@@ -134,6 +140,11 @@ theorem direct_byte_return_cleanup (fuel : Nat) (config : EvalConfig)
   · intro limit cutoff
     exact build_packed_byte_storage_prefix fuel config source id 0 bytes origin prepared after limit
       preparedSource preparedReady packed request cutoff preparedCurrent built
+  · simpa only [prepared] using congrArg ExecutionState.objects runtime
+  · simpa only [prepared] using congrArg ExecutionState.objectOrdinals runtime
+  · intro other different
+    exact build_packed_bytes_other_row fuel config source id 0 other bytes origin prepared after
+      preparedSource preparedReady packed request preparedCurrent different built
 
 #print axioms direct_byte_return_cleanup
 

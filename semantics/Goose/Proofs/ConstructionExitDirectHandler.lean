@@ -1,5 +1,7 @@
 import Goose.Proofs.ConstructionExitDirectReturn
 import Goose.Proofs.ConstructionExitByteHandler
+import Goose.Proofs.ConstructionExitProtectionCleanup
+import Goose.Proofs.ConstructionExitDirectRead
 
 set_option Elab.async false
 
@@ -58,11 +60,27 @@ theorem direct_nested_byte_handler (fuel : Nat) (config : EvalConfig)
       (∃ target discarded suffix, config.module.targets[targetId]? = some target ∧
         innerBound.activations = discarded ++ outer :: suffix ∧ target.contains outer.implementation = true ∧
         ∀ earlier ∈ discarded, target.contains earlier.implementation = false) ∧
-      ∀ limit, limit receiver.destination.storage ≤ receiver.destination.capability.start →
-        StoragePrefixesEqual limit innerBound.construction.storage final.construction.storage := by
+      (∀ limit, limit receiver.destination.storage ≤ receiver.destination.capability.start →
+        StoragePrefixesEqual limit innerBound.construction.storage final.construction.storage) ∧
+      (∀ other, other ≠ id → final.construction.destinations[other]? = innerBound.construction.destinations[other]?) ∧
+      (∀ root, (Goose.Proofs.Exit.runtimeScopeRoots inner innerScope innerEntered.nextScope).contains root = false →
+        (Goose.Proofs.Exit.runtimeScopeRoots outer outerScope outerInitial.nextScope).contains root = false →
+        final.objects.lookup root = innerBound.objects.lookup root ∧
+        final.objectOrdinals.lookup root = innerBound.objectOrdinals.lookup root) ∧
+      ∀ (retained : RootInst → Prop) (limit : Nat → Nat),
+        validate config.module = .ok () → RootedBackingObservations config.layout innerBound retained limit →
+        limit receiver.destination.storage ≤ receiver.destination.capability.start →
+        (∀ root, retained root →
+          (Goose.Proofs.Exit.runtimeScopeRoots inner innerScope innerEntered.nextScope).contains root = false ∧
+          (Goose.Proofs.Exit.runtimeScopeRoots outer outerScope outerInitial.nextScope).contains root = false) →
+        (∀ root, retained root → ∀ value, innerBound.objects.lookup root = some value →
+          ∀ stored, StoredOccurrence value stored → stored.destination ≠ some id) →
+        ∀ location, retained location.root → ∀ readFuel,
+          mapStepState (fun _ => ExecutionState.initial) (readLoc readFuel config.layout location final) =
+          mapStepState (fun _ => ExecutionState.initial) (readLoc readFuel config.layout location innerBound) := by
   let innerEnv := { inner with scopes := (innerScope, innerEntered.nextScope) :: inner.scopes }
   let outerEnv := { outer with scopes := (outerScope, outerInitial.nextScope) :: outer.scopes }
-  obtain ⟨after, returned, _, _, landed, prefixes⟩ := direct_byte_return_cleanup fuel config innerEnv outer targetId id bytes origin
+  obtain ⟨after, returned, _, _, landed, prefixes, objectFrame, ordinalFrame, rows⟩ := direct_byte_return_cleanup fuel config innerEnv outer targetId id bytes origin
     innerBound receiver ownership selection outerChannels receiverUse packed adaptation physical request current fits
   let token := innerBound.construction.exitReservations.size
   let cleaned := { after with construction := { after.construction with
@@ -117,7 +135,27 @@ theorem direct_nested_byte_handler (fuel : Nat) (config : EvalConfig)
     simp only [enterActivation, outerLookup, finishActivation, bodyEscape, beq_self_eq_true, ↓reduceIte, outerChannels, results]
     change finishChannels config.layout [.construct id] [.varr (.int .u8)] [.completed id] origin final = .ok () final at finished
     rw [finished]
-  refine ⟨after, final, matched, rfl, ?_, ?_, ?_⟩
+  have rootFrame : ∀ root, (Goose.Proofs.Exit.runtimeScopeRoots inner innerScope innerEntered.nextScope).contains root = false →
+      (Goose.Proofs.Exit.runtimeScopeRoots outer outerScope outerInitial.nextScope).contains root = false →
+      final.objects.lookup root = innerBound.objects.lookup root ∧
+      final.objectOrdinals.lookup root = innerBound.objectOrdinals.lookup root := by
+    intro root innerOutside outerOutside
+    constructor
+    · change (releaseScopeState outer outerScope outerInitial.nextScope crossed).objects.lookup root = _
+      rw [releaseScopeState_root_lookup outer outerScope outerInitial.nextScope crossed root outerOutside]
+      change (releaseScopeState inner innerScope innerEntered.nextScope cleaned).objects.lookup root = _
+      rw [releaseScopeState_root_lookup inner innerScope innerEntered.nextScope cleaned root innerOutside]
+      exact congrArg (fun objects => objects.lookup root) objectFrame
+    · change (releaseScopeState outer outerScope outerInitial.nextScope crossed).objectOrdinals.lookup root = _
+      have outerOrdinal := scope_filter_lookup_any (Goose.Proofs.Exit.runtimeScopeRoots outer outerScope outerInitial.nextScope) crossed.objectOrdinals root outerOutside
+      change (releaseScopeState outer outerScope outerInitial.nextScope crossed).objectOrdinals.lookup root = crossed.objectOrdinals.lookup root at outerOrdinal
+      rw [outerOrdinal]
+      change (releaseScopeState inner innerScope innerEntered.nextScope cleaned).objectOrdinals.lookup root = _
+      have innerOrdinal := scope_filter_lookup_any (Goose.Proofs.Exit.runtimeScopeRoots inner innerScope innerEntered.nextScope) cleaned.objectOrdinals root innerOutside
+      change (releaseScopeState inner innerScope innerEntered.nextScope cleaned).objectOrdinals.lookup root = cleaned.objectOrdinals.lookup root at innerOrdinal
+      rw [innerOrdinal]
+      exact congrArg (fun ordinals => ordinals.lookup root) ordinalFrame
+  refine ⟨after, final, matched, rfl, ?_, ?_, ?_, ?_, rootFrame, ?_⟩
   · intro entry innerOutside outerOutside
     change entry ∈ (releaseScopeState outer outerScope outerInitial.nextScope crossed).objects ↔ entry ∈ after.objects
     rw [Goose.Proofs.Exit.runtime_release_scope_outside outer outerScope outerInitial.nextScope crossed entry outerOutside]
@@ -126,6 +164,17 @@ theorem direct_nested_byte_handler (fuel : Nat) (config : EvalConfig)
   · exact (targetActivation_selects_nearest config targetId innerBound innerBound outer selection).2
   · intro limit cutoff
     exact prefixes limit cutoff
+  · intro other different
+    exact rows other different
+  · intro retained limit accepted valid cutoff outside names location kept readFuel
+    apply direct_exit_outside_read readFuel config accepted innerBound final retained limit id valid (prefixes limit cutoff)
+    · intro root member
+      exact (rootFrame root (outside root member).1 (outside root member).2).1
+    · intro root member
+      exact (rootFrame root (outside root member).1 (outside root member).2).2
+    · exact rows
+    · exact names
+    · exact kept
 
 #print axioms direct_nested_byte_handler
 
