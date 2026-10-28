@@ -753,6 +753,13 @@
   "evidence": "Goose/Lower/DemandScalarAssignmentStopped.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Mixed scalar assignment statement agreement",
+  "statement": "Successful prefixes and non-timeout stops agree with source execution for sequences mixing scalar literal assignments, global clears and supported scalar and short-circuit expression statements, with retained aliases realized at intermediate points.",
+  "assumptions": "Accepted source and generated sequence, related builder, admitted bounded realized retained map, generated rows and builder extension.",
+  "limits": "Assignments have integer literal values and local or global scalar destinations; expression statements use the supported control fragment. Timeout, other statements and whole-function traversal remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandAssignmentStatementAgreement.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",
