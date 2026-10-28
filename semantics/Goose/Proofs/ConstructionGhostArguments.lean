@@ -1,7 +1,7 @@
 import Goose.Proofs.ConstructionGhostMaterialization
 
 namespace Goose.Proofs.ConstructionGhostArguments
-open Goose.Construct Goose.Proofs.ConstructionGhostInvocation
+open Goose.Construct Goose.Proofs.ConstructionGhostInvocation Goose.Proofs.ConstructionGhostMaterialization
 
 def argumentValue (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (parameterVars : Array LocalVar) (parameter : Param) (argument : Arg) : EvalM Value := do
@@ -17,12 +17,42 @@ def argumentValue (fuel : Nat) (config : EvalConfig) (environment : RuntimeActiv
             let destination ← materializedDestination fuel config.layout environment.act localVar.ty
               (expressionOrigin operand) values.size (.fixed values)
             publishCarriers (expressionOrigin operand) [.completed destination]
-            pure (.completed destination)
+            pure (Carrier.completed destination)
         | none =>
             constructLocal ⟨config.module, environment.vars⟩ environment.act localVar.ty (expressionOrigin operand) operand
               (fun destination => buildExpr fuel config environment destination operand)
       carrierValue carrier
 
+def constructedArgumentContinuation (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (localVar : LocalVar) (operand : Expr) (result : ExecutionStep (Option (Array Value))) : ExecutionStep Value :=
+  match result with
+  | .ok materialized state => (do
+      let carrier ← match materialized with
+        | some values => do
+            let destination ← materializedDestination fuel config.layout environment.act localVar.ty
+              (expressionOrigin operand) values.size (.fixed values)
+            publishCarriers (expressionOrigin operand) [.completed destination]
+            pure (Carrier.completed destination)
+        | none =>
+            constructLocal ⟨config.module, environment.vars⟩ environment.act localVar.ty (expressionOrigin operand) operand
+              (fun destination => buildExpr fuel config environment destination operand)
+      carrierValue carrier) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+theorem constructedArgument_execution (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (parameterVars : Array LocalVar) (parameter : Param) (operand : Expr) (before : ExecutionState)
+    (localVar : LocalVar) (found : parameterVars[parameter.var]? = some localVar) :
+    argumentValue fuel config environment parameterVars parameter (.construct operand) before =
+      constructedArgumentContinuation fuel config environment localVar operand
+        (materializeProducer fuel ⟨config.module, environment.vars⟩ operand
+          (evalValue fuel config environment operand) before) := by
+  simp only [argumentValue, found, bind, constructedArgumentContinuation]
+  cases materializeProducer fuel ⟨config.module, environment.vars⟩ operand
+    (evalValue fuel config environment operand) before <;> rfl
+
+#print axioms constructedArgument_execution
 structure ArgumentInvocation where
   activation : Goose.Core.ActId
   ordinal : Nat
@@ -184,6 +214,23 @@ theorem ArgumentReplay.byValueSource
   rw [← actual]
   exact evaluationTree_exists visit.fuel config environment _ operand visit.before
 
+theorem ArgumentReplay.materializedSource
+    (replay : ArgumentReplay config environment parameterVars fuel offset parameters arguments before outcome visits)
+    (visit : ArgumentInvocation) (member : visit ∈ visits) (operand : Expr) (localVar : LocalVar) (count : Nat)
+    (constructed : visit.argument = .construct operand) (found : parameterVars[visit.parameter.var]? = some localVar)
+    (materialized : ordinaryProducerCount? visit.fuel ⟨config.module, environment.vars⟩ operand = some count) :
+    EvaluationTree config environment visit.fuel [environment.act, visit.ordinal, 0] operand visit.before
+      (evalValue visit.fuel config environment operand visit.before) ∧
+    visit.outcome = constructedArgumentContinuation visit.fuel config environment localVar operand
+      (materializationContinuation (evalValue visit.fuel config environment operand visit.before)) := by
+  obtain ⟨tree, materialization⟩ := materializeProducer_source_ghost visit.fuel config environment
+    [environment.act, visit.ordinal] operand visit.before count materialized
+  have actual := replay.visitExecutes visit member
+  rw [constructed, constructedArgument_execution visit.fuel config environment parameterVars visit.parameter operand visit.before localVar found,
+    materialization] at actual
+  exact ⟨tree, actual.symm⟩
+
+#print axioms ArgumentReplay.materializedSource
 private def witnessConfig : EvalConfig := ⟨.release, ⟨#[], #[], #[], #[], #[], 0, #[], #[], #[]⟩⟩
 private def witnessEnvironment : RuntimeActivation := ⟨0, 4, #[], [], []⟩
 private def witnessArguments : List Arg :=
@@ -202,6 +249,23 @@ theorem argumentWitness_sideEffect :
     [⟨0, .byValue⟩, ⟨1, .byValue⟩] witnessArguments .initial), ?_, ?_⟩ <;>
     unfold witnessConfig witnessEnvironment witnessArguments stepState <;> cbv
 
+private def constructedWitnessExpression : Expr := .blockE
+  (.mk 1 [.print [.text "once"] 0]
+    (some (.arrLit (.arr (.int .i64) 2) [.lit .i64 7, .lit .i64 8] 0))) 0
+private def constructedWitness : ExecutionStep (List Value) :=
+  evalArguments 40 witnessConfig witnessEnvironment #[⟨"x", .varr (.int .i64), .immutable, 0, 0⟩]
+    [⟨0, .byValue⟩] [.construct constructedWitnessExpression] .initial
+
+theorem constructedArgumentWitness :
+    ordinaryProducerCount? 39 ⟨witnessConfig.module, witnessEnvironment.vars⟩ constructedWitnessExpression = some 2 ∧
+    ∃ value state, constructedWitness = .ok [value] state ∧
+      state.construction.stdout.data.toList = [111, 110, 99, 101, 10] := by
+  constructor
+  · unfold witnessConfig witnessEnvironment constructedWitnessExpression; cbv
+  · refine ⟨(match constructedWitness with | .ok [value] _ => value | _ => .unit), stepState constructedWitness, ?_, ?_⟩ <;>
+      unfold constructedWitness witnessConfig witnessEnvironment constructedWitnessExpression stepState <;> cbv
+
+#print axioms constructedArgumentWitness
 #print axioms argumentWitness_sideEffect
 #print axioms ArgumentReplay.byValueSource
 #print axioms ArgumentReplay.once
