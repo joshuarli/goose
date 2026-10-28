@@ -88,6 +88,41 @@ theorem zeroGlobalEntry_initializerForests (fuel : Nat) (config : EvalConfig)
   exact ⟨outcome, visits, replay, forest, statementReplay_directArrayForest replay, execution⟩
 
 #print axioms zeroGlobalEntry_initializerForests
+theorem zeroGlobalEntry_freshInitializerForests (fuel : Nat) (config : EvalConfig)
+    (context : Context) (implementation : Impl) (scope : Nat) (statements : List Stmt)
+    (noGlobals : config.module.globals.size = 0)
+    (contextFound : config.module.contexts[config.module.entry]? = some context)
+    (implementationFound : config.module.impls[context.impl]? = some implementation)
+    (parametersEmpty : implementation.params = #[]) (resultsEmpty : implementation.results = #[])
+    (body : implementation.body = .mk scope statements none) :
+    let activation : RuntimeActivation := ⟨context.impl, 0, implementation.vars, [], []⟩
+    let activated := { ExecutionState.initial with nextAct := 1, activations := [activation] }
+    let ready := resultScopeStart activation scope activated
+    ∃ outcome visits,
+      StatementReplay config { activation with scopes := [(scope, activated.nextScope)] }
+        (fuel + 1) 0 statements ready outcome visits ∧
+      FixedOrMaterializedInitializerForest config
+        { activation with scopes := [(scope, activated.nextScope)] } visits ∧
+      DirectArrayInitializerForest config
+        { activation with scopes := [(scope, activated.nextScope)] } visits ∧
+      Goose.Proofs.ExitExecution.FreshActivations
+        (Goose.Proofs.Exit.stepState (runModule (fuel + 4) config .initial)) ∧
+      runModule (fuel + 4) config .initial =
+        (finishActivation config.layout activation [] 0 (fun _ =>
+          activationBodyContinuation (withScope activation scope activated.nextScope (fun _ =>
+            resultScopeContinuation [] none
+              (fun expression => withCompletionChannels [] (expressionOrigin expression)
+                (fun channels => evalProduce (fuel + 1) config
+                  { activation with scopes := [(scope, activated.nextScope)] } channels expression)) outcome) ready)) >>=
+          fun carriers => deliverCarriers (fuel + 3) config.layout [] carriers 0 >>= fun carriers =>
+            publishCarriers 0 carriers) activated := by
+  obtain ⟨outcome, visits, replay, fixedForest, directForest, execution⟩ :=
+    zeroGlobalEntry_initializerForests fuel config context implementation scope statements noGlobals
+      contextFound implementationFound parametersEmpty resultsEmpty body
+  exact ⟨outcome, visits, replay, fixedForest, directForest,
+    Goose.Proofs.ExitExecution.runModule_freshActivations (fuel + 4) config, execution⟩
+
+#print axioms zeroGlobalEntry_freshInitializerForests
 private def witnessModule : Module :=
   ⟨#[], #[], #[], #[⟨"entry", #[], #[], #[⟨"x", .varr (.int .i64), .immutable, 0, 0⟩],
     .mk 0 [.letS 0 (.arrLit (.varr (.int .i64))
