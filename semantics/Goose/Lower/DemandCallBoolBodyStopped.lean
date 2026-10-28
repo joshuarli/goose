@@ -4,11 +4,12 @@ import Goose.Lower.DemandCallBoolBodyReturn
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 
-theorem accepted_generated_parameterized_callee_bool_stopped {cfg : Cfg} {ctx : Context} {impl : Impl} {env : Env}
+theorem accepted_generated_parameterized_callee_literal_stopped {cfg : Cfg} {ctx : Context} {impl : Impl} {env : Env}
     {pre : List (VarId × Val)} {state : St} (source : BlockSource cfg env pre impl.body state)
     (envVars : env.vars = impl.vars)
     (fragment : WhileMixedStatements cfg { env with scopes := (impl.body.scope, state.nextScope) :: env.scopes } impl.body.stmts)
-    {boolean : Bool} (hasValue : impl.body.value = some (.bool boolean))
+    {expression : Expr} {value : Val} {operation : Op}
+    (literal : CallScalarLiteral expression value operation) (hasValue : impl.body.value = some expression)
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod (lowerContextAt cfg.mod ctx impl)
       (lowerEnv cfg.mod env.vars impl.results.toList) root owner)
@@ -94,27 +95,27 @@ theorem accepted_generated_parameterized_callee_bool_stopped {cfg : Cfg} {ctx : 
         simpa [bodyOffset, lowerStmts, pure_run] using sequencePost
       let le := lowerEnv cfg.mod env.vars impl.results.toList
       let valueStart := demandBlockValueBefore le (callEntry impl) none (callPre impl) impl.body
-      let valueId := (lowerExpr (.bool boolean) le valueStart).1
+      let valueId := (lowerExpr expression le valueStart).1
       obtain ⟨_, _, _, _, _, _, _, _, _, _, _, _, prologuePost, _⟩ :=
         accepted_generated_post_prologue source selected owned occurrence rows coverage admitted bounded cells realized input extended entry
       have wholeStatements : Post cfg { env with scopes := (impl.body.scope, state.nextScope) :: env.scopes } cx
           (callEntry impl) initial valueStart boundary.frame boundary.point [] := by
         simpa [valueStart, demandBlockValueBefore] using prologuePost.comp nextPost
-      have valueExtended : ExtT (lowerExpr (.bool boolean) le valueStart).2 cx.fn.blocks := by
+      have valueExtended : ExtT (lowerExpr expression le valueStart).2 cx.fn.blocks := by
         simpa [hasValue, lowerBlockValue, valueStart] using generated_block_value_extended extended
-      have emit : emitDef (.constBool boolean) le valueStart =
-          ((lowerExpr (.bool boolean) le valueStart).1, (lowerExpr (.bool boolean) le valueStart).2) := rfl
-      obtain ⟨valuePost, valueInstruction⟩ := Post.def_leaf wholeStatements emit valueExtended (.val (.bool boolean))
-      let valuePoint : DemandRuntimePoint := ⟨(boundary.point.1, boundary.point.2 + 1), boundary.frame.set valueId (.val (.bool boolean)), boundary.state⟩
+      have emit : emitDef operation le valueStart =
+          ((lowerExpr expression le valueStart).1, (lowerExpr expression le valueStart).2) := by cases literal <;> rfl
+      obtain ⟨valuePost, valueInstruction⟩ := Post.def_leaf wholeStatements emit valueExtended (.val value)
+      let valuePoint : DemandRuntimePoint := ⟨(boundary.point.1, boundary.point.2 + 1), boundary.frame.set valueId (.val value), boundary.state⟩
       have valueStep : RuntimeStep cx.cfg cx.fn boundary.point boundary.frame boundary.state valuePoint.point valuePoint.frame valuePoint.state := by
         dsimp [valuePoint, valueId]
         apply RuntimeStep.define (fuel := 0) valueInstruction
-        simp [execOp, execPure, pure_apply]
+        cases literal <;> simp [execOp, execPure, pure_apply]
       rcases residual.uncons with ⟨_, same⟩ | ⟨rest, actualValue, length, first, afterValue⟩
       · subst terminal
         have expected : DemandInstructionStep cx targetFuel boundary valuePoint := by
           apply DemandInstructionStep.definition valueInstruction
-          simp [execOp, execPure, pure_apply, valuePoint, valueId]
+          cases literal <;> simp [execOp, execPure, pure_apply, valuePoint, valueId]
         exact (stopped.excludes_step_nonTimeout nonTimeout expected).elim
       · obtain ⟨firstFuel, firstInstruction⟩ := runtimeStep_demandInstructionStep first
         obtain ⟨valueFuel, expectedInstruction⟩ := runtimeStep_demandInstructionStep valueStep
@@ -129,15 +130,15 @@ theorem accepted_generated_parameterized_callee_bool_stopped {cfg : Cfg} {ctx : 
           { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store }).1 _ _ statements
         have valueDone : valueFlow common cfg impl.body.value
             { env with scopes := (impl.body.scope, state.nextScope) :: env.scopes } (.normal .unit) boundary.state =
-            .ok (.normal (.bool boolean)) boundary.state := by
+            .ok (.normal value) boundary.state := by
           rw [hasValue]
           have positive : 0 < common := by dsimp [common]; omega
           obtain ⟨n, fuelEq⟩ := Nat.exists_eq_succ_of_ne_zero (Nat.ne_of_gt positive)
           rw [fuelEq]
-          simp [valueFlow, evalExpr, bind_apply, pure_apply]
+          cases literal <;> simp [valueFlow, evalExpr, bind_apply, pure_apply]
         have wholeValue : Post cfg { env with scopes := (impl.body.scope, state.nextScope) :: env.scopes } cx
             (callEntry impl) initial (lowerBlockValue false impl.body.value le valueStart).2 valuePoint.frame valuePoint.point
-            [((lowerBlockValue false impl.body.value le valueStart).1, .val (.bool boolean))] := by
+            [((lowerBlockValue false impl.body.value le valueStart).1, .val value)] := by
           simpa [hasValue, lowerBlockValue, valuePoint, valueId] using valuePost
         rcases afterValue.uncons with ⟨_, same⟩ | ⟨remaining, afterLeave, laterLength, leaveStep, tail⟩
         · subst terminal
@@ -153,14 +154,14 @@ theorem accepted_generated_parameterized_callee_bool_stopped {cfg : Cfg} {ctx : 
           have bodyValueId := generated_block_value_result le (callEntry impl) none (callPre impl) false impl.body
           have finalCells : Post cfg env cx (callEntry impl) initial
               (lowerBlock none (callPre impl) false impl.body le (callEntry impl)).2 afterLeave.frame afterLeave.point
-              [((lowerBlock none (callPre impl) false impl.body le (callEntry impl)).1, .val (.bool boolean))] := by
+              [((lowerBlock none (callPre impl) false impl.body le (callEntry impl)).1, .val value)] := by
             rw [bodyValueId]
             exact finalPost
           have calleePost : Post cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩
               (callEntry impl) initial
               (lowerBlock none (callPre impl) false impl.body (lowerEnv cfg.mod impl.vars impl.results.toList) (callEntry impl)).2
               afterLeave.frame afterLeave.point [((lowerBlock none (callPre impl) false impl.body
-                (lowerEnv cfg.mod impl.vars impl.results.toList) (callEntry impl)).1, .val (.bool boolean))] := by
+                (lowerEnv cfg.mod impl.vars impl.results.toList) (callEntry impl)).1, .val value)] := by
             simpa [le, cx, envVars] using finalCells
           have fallthrough := generated_callee_value_fallthrough hasValue calleePost
           rcases tail.uncons with ⟨_, rfl⟩ | ⟨_, _, _, nextStep, _⟩
@@ -170,5 +171,36 @@ theorem accepted_generated_parameterized_callee_bool_stopped {cfg : Cfg} {ctx : 
             | effect found execution => cases fallthrough.1.symm.trans found
           · exact (runtimeStep_excludes_return fallthrough.1 nextStep).elim
 
+theorem accepted_generated_parameterized_callee_bool_stopped {cfg : Cfg} {ctx : Context} {impl : Impl} {env : Env}
+    {pre : List (VarId × Val)} {state : St} (source : BlockSource cfg env pre impl.body state)
+    (envVars : env.vars = impl.vars)
+    (fragment : WhileMixedStatements cfg { env with scopes := (impl.body.scope, state.nextScope) :: env.scopes } impl.body.stmts)
+    {boolean : Bool} (hasValue : impl.body.value = some (.bool boolean))
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod (lowerContextAt cfg.mod ctx impl)
+      (lowerEnv cfg.mod env.vars impl.results.toList) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod (lowerContextAt cfg.mod ctx impl)
+      (lowerEnv cfg.mod env.vars impl.results.toList) root source.path (.block none (callPre impl) false impl.body) (callEntry impl))
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded (callEntry impl).vals.size) {initial : GIR.Frame}
+    (cells : PreRel initial (callPre impl) pre)
+    (realized : map.Realizes cfg.mod source.world env ⟨(0, 0), initial, state⟩)
+    (input : GeneratedPrefixInput cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩
+      impl.results.toList none source.typingEnv source.rootsEnv (callEntry impl) initial (0, 0))
+    (entry : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ (lowerContextAt cfg.mod ctx impl) (0, 0) initial state)
+    {taken : Nat} {terminal : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ taken
+      ⟨(0, 1 + (callPre impl).length), { initial with scopes := (impl.body.scope, state.nextScope) :: initial.scopes },
+        { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store }⟩ terminal)
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (stopped : DemandInstructionStop ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ targetFuel terminal stop after)
+    (nonTimeout : stop ≠ .timeout) :
+    ∃ sourceFuel, execBlock sourceFuel cfg env pre impl.body state = .stop stop after := by
+  exact accepted_generated_parameterized_callee_literal_stopped source envVars fragment (.boolean boolean) hasValue selected owned occurrence rows
+    coverage admitted bounded cells realized input entry steps stopped nonTimeout
+
+#print axioms accepted_generated_parameterized_callee_literal_stopped
 #print axioms accepted_generated_parameterized_callee_bool_stopped
 end Goose.Lower

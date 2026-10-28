@@ -57,7 +57,7 @@ theorem accepted_generated_actual_unit_call_instruction_stop {cfg : Cfg} {env : 
   exact ⟨max argumentFuel bodyFuel + 2,
     accepted_call_source_stop source argumentsDone contextAt implAt depth nonTimeout bodyStopped⟩
 
-theorem accepted_generated_actual_bool_call_instruction_stop {cfg : Cfg} {env : Env} {state middle : St}
+theorem accepted_generated_actual_literal_call_instruction_stop {cfg : Cfg} {env : Env} {state middle : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
     (source : ExprSource cfg env (.call context arguments origin) state)
     {argumentFuel : Nat} {values : List Val}
@@ -67,7 +67,8 @@ theorem accepted_generated_actual_bool_call_instruction_stop {cfg : Cfg} {env : 
     (depth : env.depth < maxCallDepth)
     (fragment : WhileMixedStatements cfg
       { vars := impl.vars, act := middle.nextAct, scopes := (impl.body.scope, middle.nextScope) :: [], depth := env.depth + 1 } impl.body.stmts)
-    {boolean : Bool} (hasValue : impl.body.value = some (.bool boolean))
+    {expression : Expr} {literalValue : Val} {operation : Op}
+    (literal : CallScalarLiteral expression literalValue operation) (hasValue : impl.body.value = some expression)
     {caller : Func} {before : LS} {results : List Ty} {initial frame : GIR.Frame} {point : Pt}
     (wholePost : Post cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ before initial
       (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2 frame point [])
@@ -106,10 +107,36 @@ theorem accepted_generated_actual_bool_call_instruction_stop {cfg : Cfg} {env : 
   obtain ⟨calleeFuel, calleeRun⟩ := actual_call_stopped_callee_run below read
     (lower_func_at contextAt implAt) callerEntry nonTimeout executed
   obtain ⟨bodyFuel, bodyStopped⟩ :=
-    accepted_generated_callee_bool_stopped_run source argumentsDone contextAt implAt fragment hasValue calleePoint calleeRun nonTimeout
+    accepted_generated_callee_literal_stopped_run source argumentsDone contextAt implAt fragment literal hasValue calleePoint calleeRun nonTimeout
   exact ⟨max argumentFuel bodyFuel + 2,
     accepted_call_source_stop source argumentsDone contextAt implAt depth nonTimeout bodyStopped⟩
 
+
+theorem accepted_generated_actual_bool_call_instruction_stop {cfg : Cfg} {env : Env} {state middle : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) state)
+    {argumentFuel : Nat} {values : List Val}
+    (argumentsDone : mapList (evalArg argumentFuel cfg env) arguments state = .ok values middle)
+    {ctx : Context} {impl : Impl}
+    (contextAt : cfg.mod.contexts[context]? = some ctx) (implAt : cfg.mod.impls[ctx.impl]? = some impl)
+    (depth : env.depth < maxCallDepth)
+    (fragment : WhileMixedStatements cfg
+      { vars := impl.vars, act := middle.nextAct, scopes := (impl.body.scope, middle.nextScope) :: [], depth := env.depth + 1 } impl.body.stmts)
+    {boolean : Bool} (hasValue : impl.body.value = some (.bool boolean))
+    {caller : Func} {before : LS} {results : List Ty} {initial frame : GIR.Frame} {point : Pt}
+    (wholePost : Post cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ before initial
+      (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2 frame point [])
+    (read : mapList (getVal frame) (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 middle = .ok values middle)
+    (callerPoint : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller point frame middle)
+    (extended : ExtT (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 caller.blocks)
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (executed : execOp targetFuel ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ frame
+      (.call context (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 (some origin)) middle = .stop stop after)
+    (nonTimeout : stop ≠ .timeout) :
+    ∃ sourceFuel, evalExpr sourceFuel cfg env (.call context arguments origin) state = .stop stop after := by
+  exact accepted_generated_actual_literal_call_instruction_stop source argumentsDone contextAt implAt depth fragment (.boolean boolean) hasValue wholePost read callerPoint extended executed nonTimeout
+
+#print axioms accepted_generated_actual_literal_call_instruction_stop
 #print axioms accepted_generated_actual_bool_call_instruction_stop
 
 #print axioms accepted_generated_actual_unit_call_instruction_stop

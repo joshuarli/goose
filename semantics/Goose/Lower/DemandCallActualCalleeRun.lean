@@ -110,7 +110,7 @@ theorem accepted_generated_callee_unit_success {cfg : Cfg} {env : Env} {state mi
     subst after
     exact ⟨rfl, bodyFuel, bodyDone⟩
 
-theorem accepted_generated_callee_bool_success {cfg : Cfg} {env : Env} {state middle : St}
+theorem accepted_generated_callee_literal_success {cfg : Cfg} {env : Env} {state middle : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
     (source : ExprSource cfg env (.call context arguments origin) state)
     {argumentFuel : Nat} {values : List Val} (done : mapList (evalArg argumentFuel cfg env) arguments state = .ok values middle)
@@ -118,15 +118,16 @@ theorem accepted_generated_callee_bool_success {cfg : Cfg} {env : Env} {state mi
     (implAt : cfg.mod.impls[ctx.impl]? = some impl)
     (fragment : WhileMixedStatements cfg
       { vars := impl.vars, act := middle.nextAct, scopes := (impl.body.scope, middle.nextScope) :: [], depth := env.depth + 1 } impl.body.stmts)
-    {boolean : Bool} (hasValue : impl.body.value = some (.bool boolean))
+    {expression : Expr} {literalValue : Val} {operation : Op}
+    (literal : CallScalarLiteral expression literalValue operation) (hasValue : impl.body.value = some expression)
     (entry : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ (lowerContextAt cfg.mod ctx impl) (0, 0)
       (callFrame impl middle.nextAct (env.depth + 1) values) { middle with nextAct := middle.nextAct + 1 })
     {targetFuel : Nat} {value : Val} {after : St}
     (run : runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ (0, 0)
       (callFrame impl middle.nextAct (env.depth + 1) values) targetFuel { middle with nextAct := middle.nextAct + 1 } = .ok value after) :
-    value = .bool boolean ∧ ∃ bodyFuel, execBlock bodyFuel cfg ⟨impl.vars, middle.nextAct, [], env.depth + 1⟩
+    value = literalValue ∧ ∃ bodyFuel, execBlock bodyFuel cfg ⟨impl.vars, middle.nextAct, [], env.depth + 1⟩
       ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) impl.body
-      { middle with nextAct := middle.nextAct + 1 } = .ok (.normal (.bool boolean)) after := by
+      { middle with nextAct := middle.nextAct + 1 } = .ok (.normal (literalValue)) after := by
   obtain ⟨ready⟩ := accepted_generated_callee_ready source done contextAt implAt
   obtain ⟨taken, remaining, terminal, count, steps, terminalRun, maximal, classification⟩ := runAt_success_maximal_prefix
     (initial := ⟨(0, 0), callFrame impl middle.nextAct (env.depth + 1) values,
@@ -154,7 +155,7 @@ theorem accepted_generated_callee_bool_success {cfg : Cfg} {env : Env} {state mi
   have frameScopes : (callFrame impl middle.nextAct (env.depth + 1) values).scopes = [] := by
     simpa only [callFrame] using scopes
   obtain ⟨bodyFuel, bodyDone, _, _, post, _⟩ :=
-    accepted_generated_parameterized_callee_bool_terminal ready.source rfl (by simpa using fragment) hasValue
+    accepted_generated_parameterized_callee_literal_terminal ready.source rfl (by simpa using fragment) literal hasValue
       (.context contextAt implAt) ready.owned ready.occurrence ready.rows coverage admitted bounded ready.cells realized ready.input entry
       (by simpa [frameScopes] using bodySteps) instructionAt maximal
   obtain ⟨returned, returnCell⟩ := generated_callee_value_fallthrough hasValue post
@@ -164,13 +165,33 @@ theorem accepted_generated_callee_bool_success {cfg : Cfg} {env : Env} {state mi
     simp [timeout, M.stop] at terminalRun
   | succ remaining =>
     have finalRun : runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ terminal.point terminal.frame
-        (remaining + 1) terminal.state = .ok (.bool boolean) terminal.state := by
+        (remaining + 1) terminal.state = .ok (literalValue) terminal.state := by
       rw [runAt_ret1 returned returnCell remaining]
       rfl
     obtain ⟨valueEq, stateEq⟩ := Res.ok.inj (terminalRun.symm.trans finalRun)
     subst value
     subst after
     exact ⟨rfl, bodyFuel, bodyDone⟩
+
+
+theorem accepted_generated_callee_bool_success {cfg : Cfg} {env : Env} {state middle : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) state)
+    {argumentFuel : Nat} {values : List Val} (done : mapList (evalArg argumentFuel cfg env) arguments state = .ok values middle)
+    {ctx : Context} {impl : Impl} (contextAt : cfg.mod.contexts[context]? = some ctx)
+    (implAt : cfg.mod.impls[ctx.impl]? = some impl)
+    (fragment : WhileMixedStatements cfg
+      { vars := impl.vars, act := middle.nextAct, scopes := (impl.body.scope, middle.nextScope) :: [], depth := env.depth + 1 } impl.body.stmts)
+    {boolean : Bool} (hasValue : impl.body.value = some (.bool boolean))
+    (entry : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ (lowerContextAt cfg.mod ctx impl) (0, 0)
+      (callFrame impl middle.nextAct (env.depth + 1) values) { middle with nextAct := middle.nextAct + 1 })
+    {targetFuel : Nat} {value : Val} {after : St}
+    (run : runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ (0, 0)
+      (callFrame impl middle.nextAct (env.depth + 1) values) targetFuel { middle with nextAct := middle.nextAct + 1 } = .ok value after) :
+    value = .bool boolean ∧ ∃ bodyFuel, execBlock bodyFuel cfg ⟨impl.vars, middle.nextAct, [], env.depth + 1⟩
+      ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) impl.body
+      { middle with nextAct := middle.nextAct + 1 } = .ok (.normal (.bool boolean)) after := by
+  exact accepted_generated_callee_literal_success source done contextAt implAt fragment (.boolean boolean) hasValue entry run
 
 theorem accepted_generated_callee_unit_stopped_run {cfg : Cfg} {env : Env} {state middle : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
@@ -236,7 +257,7 @@ theorem accepted_generated_callee_unit_stopped_run {cfg : Cfg} {env : Env} {stat
   · rw [missing] at instructionAt
     cases instructionAt
 
-theorem accepted_generated_callee_bool_stopped_run {cfg : Cfg} {env : Env} {state middle : St}
+theorem accepted_generated_callee_literal_stopped_run {cfg : Cfg} {env : Env} {state middle : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
     (source : ExprSource cfg env (.call context arguments origin) state)
     {argumentFuel : Nat} {values : List Val} (done : mapList (evalArg argumentFuel cfg env) arguments state = .ok values middle)
@@ -244,7 +265,8 @@ theorem accepted_generated_callee_bool_stopped_run {cfg : Cfg} {env : Env} {stat
     (implAt : cfg.mod.impls[ctx.impl]? = some impl)
     (fragment : WhileMixedStatements cfg
       { vars := impl.vars, act := middle.nextAct, scopes := (impl.body.scope, middle.nextScope) :: [], depth := env.depth + 1 } impl.body.stmts)
-    {boolean : Bool} (hasValue : impl.body.value = some (.bool boolean))
+    {expression : Expr} {literalValue : Val} {operation : Op}
+    (literal : CallScalarLiteral expression literalValue operation) (hasValue : impl.body.value = some expression)
     (entry : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ (lowerContextAt cfg.mod ctx impl) (0, 0)
       (callFrame impl middle.nextAct (env.depth + 1) values) { middle with nextAct := middle.nextAct + 1 })
     {targetFuel : Nat} {stop : Stop} {after : St}
@@ -269,7 +291,7 @@ theorem accepted_generated_callee_bool_stopped_run {cfg : Cfg} {env : Env} {stat
   obtain ⟨instruction, instructionAt⟩ := steps.has_instruction terminated initial
   obtain ⟨residual, bodySteps⟩ := accepted_generated_callee_after_prologue source done contextAt implAt steps maximal
   rcases classification with stopped | ⟨term, terminalAt⟩ | missing
-  · exact accepted_generated_callee_actual_bool_stop source done contextAt implAt fragment hasValue entry bodySteps stopped nonTimeout
+  · exact accepted_generated_callee_actual_literal_stop source done contextAt implAt fragment literal hasValue entry bodySteps stopped nonTimeout
   · have coverage : (⟨[], []⟩ : RetainedSsaMap).Covers ⟨[], []⟩ := by simp [RetainedSsaMap.Covers]
     have admitted : (⟨[], []⟩ : RetainedSsaMap).Admitted cfg.mod.profile ready.source.context.retained := by simp [RetainedSsaMap.Admitted]
     have bounded : (⟨[], []⟩ : RetainedSsaMap).Bounded (callEntry impl).vals.size := by simp [RetainedSsaMap.Bounded]
@@ -282,7 +304,7 @@ theorem accepted_generated_callee_bool_stopped_run {cfg : Cfg} {env : Env} {stat
     have frameScopes : (callFrame impl middle.nextAct (env.depth + 1) values).scopes = [] := by
       simpa only [callFrame] using scopes
     obtain ⟨bodyFuel, bodyDone, _, _, post, _⟩ :=
-      accepted_generated_parameterized_callee_bool_terminal ready.source rfl (by simpa using fragment) hasValue
+      accepted_generated_parameterized_callee_literal_terminal ready.source rfl (by simpa using fragment) literal hasValue
         (.context contextAt implAt) ready.owned ready.occurrence ready.rows coverage admitted bounded ready.cells realized ready.input entry
         (by simpa [frameScopes] using bodySteps) terminalAt maximal
     obtain ⟨returned, returnCell⟩ := generated_callee_value_fallthrough hasValue post
@@ -293,12 +315,33 @@ theorem accepted_generated_callee_bool_stopped_run {cfg : Cfg} {env : Env} {stat
       exact (nonTimeout terminalRun.1.symm).elim
     | succ remaining =>
       have normal : runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ terminal.point terminal.frame
-          (remaining + 1) terminal.state = .ok (.bool boolean) terminal.state := by
+          (remaining + 1) terminal.state = .ok (literalValue) terminal.state := by
         rw [runAt_ret1 returned returnCell remaining]
         rfl
       cases normal.symm.trans terminalRun
   · rw [missing] at instructionAt
     cases instructionAt
+
+
+theorem accepted_generated_callee_bool_stopped_run {cfg : Cfg} {env : Env} {state middle : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) state)
+    {argumentFuel : Nat} {values : List Val} (done : mapList (evalArg argumentFuel cfg env) arguments state = .ok values middle)
+    {ctx : Context} {impl : Impl} (contextAt : cfg.mod.contexts[context]? = some ctx)
+    (implAt : cfg.mod.impls[ctx.impl]? = some impl)
+    (fragment : WhileMixedStatements cfg
+      { vars := impl.vars, act := middle.nextAct, scopes := (impl.body.scope, middle.nextScope) :: [], depth := env.depth + 1 } impl.body.stmts)
+    {boolean : Bool} (hasValue : impl.body.value = some (.bool boolean))
+    (entry : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ (lowerContextAt cfg.mod ctx impl) (0, 0)
+      (callFrame impl middle.nextAct (env.depth + 1) values) { middle with nextAct := middle.nextAct + 1 })
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (run : runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ (0, 0)
+      (callFrame impl middle.nextAct (env.depth + 1) values) targetFuel { middle with nextAct := middle.nextAct + 1 } = .stop stop after)
+    (nonTimeout : stop ≠ .timeout) :
+    ∃ bodyFuel, execBlock bodyFuel cfg ⟨impl.vars, middle.nextAct, [], env.depth + 1⟩
+      ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) impl.body
+      { middle with nextAct := middle.nextAct + 1 } = .stop stop after := by
+  exact accepted_generated_callee_literal_stopped_run source done contextAt implAt fragment (.boolean boolean) hasValue entry run nonTimeout
 
 #print axioms accepted_generated_callee_bool_stopped_run
 
