@@ -89,6 +89,10 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.value environment (.fill (.arr element count) operand origin))
+  | assignment (fuel : Nat) (environment : RuntimeActivation) (place : Place) (expression : Expr) (origin : Goose.Core.OriginId)
+      (placeChild : FuelSupport config fuel (.place environment place))
+      (valueChild : FuelSupport config fuel (.value environment expression)) :
+      FuelSupport config (fuel + 1) (.statement environment (.assign place expression origin))
   | declaration (fuel : Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId)
       (expression : Expr) (origin : Goose.Core.OriginId)
       (value : FuelSupport config fuel (.value environment expression))
@@ -403,6 +407,11 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           simp only [execute] at child ⊢
           rw [actual]
           exact .fill fixed child
+      | assignment _ environment place expression origin placeSupported valueSupported =>
+          refine .assignment fuel path environment place expression origin before
+            (ih (.place environment place) (path ++ [0]) before placeSupported) ?_
+          intro location ready placed
+          exact ih (.value environment expression) (path ++ [1]) ready valueSupported
       | declaration _ environment localVar expression origin valueSupported builderSupported =>
           refine .declaration fuel path environment localVar expression origin before ?_ ?_ ?_ ?_
           · intro descriptor root ready found fixed rootResult

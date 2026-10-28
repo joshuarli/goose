@@ -117,6 +117,9 @@ inductive PrintArgumentSyntax (config : EvalConfig) : PrintArg → Prop
   | view (view : View) (child : ViewSyntax config view) : PrintArgumentSyntax config (.view view)
 
 inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
+  | assignment (place : Place) (expression : Expr) (origin : Goose.Core.OriginId)
+      (placeChild : PlaceSyntax config place) (valueChild : ValueSyntax config expression) :
+      StatementSyntax config (.assign place expression origin)
   | declaration (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId)
       (value : ValueSyntax config expression) (builder : DeclarationBuilderSyntax config expression) :
       StatementSyntax config (.letS localVar expression origin)
@@ -408,6 +411,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
               (previous.arguments environment vars parameters arguments tail)
       · intro environment statement derivation
         cases derivation with
+        | assignment place expression origin placeChild valueChild =>
+            exact .assignment fuel environment place expression origin (previous.place environment place placeChild)
+              (previous.value environment expression valueChild)
         | declaration localVar expression origin value builder =>
             exact .declaration fuel environment localVar expression origin (previous.value environment expression value)
               (fun destination => previous.builder environment destination expression builder)
