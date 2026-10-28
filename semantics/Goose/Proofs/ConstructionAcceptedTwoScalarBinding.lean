@@ -1,9 +1,11 @@
 import Goose.Proofs.ConstructionAcceptedScalarParameter
+import Goose.Proofs.ConstructionRootCorrespondenceScopes
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
+open Goose.Proofs.ConstructionRootCorrespondence
 
 theorem bindAll_two_of_single (act scope first second : Nat) (firstValue secondValue : Value)
     (before middle after : ExecutionState)
@@ -37,9 +39,8 @@ theorem bindAll_two_freshScalars_accepted {config : EvalConfig} {accepted : Acce
     (secondRootOrder : second = (advanceLocalFrame frame first).rootCursor.nextVar)
     (secondTypingOrder : second = (advanceLocalFrame frame first).typingCounter)
     (secondDeclared : (advanceLocalFrame frame first).typing.variables[second]? = some secondDescriptor)
-    (secondResolved : ∀ middle, bindAll frame.interpretation.environment.act scope [(first, firstValue)] before = .ok () middle →
-      rootOf (advanceLocalFrame frame first).interpretation.environment second middle =
-        .ok (.local (advanceLocalFrame frame first).interpretation.environment.act scope second) middle)
+    (secondResolved : rootOf frame.interpretation.environment second before =
+      .ok (.local frame.interpretation.environment.act scope second) before)
     (secondScalar : (∃ intTy, secondDescriptor.ty = .int intTy) ∨ secondDescriptor.ty = .bool)
     (secondRepresented : ValueRepresentation secondDescriptor.ty secondValue)
     (secondPointers : PointerTypedValue types secondDescriptor.ty secondValue) :
@@ -57,9 +58,11 @@ theorem bindAll_two_freshScalars_accepted {config : EvalConfig} {accepted : Acce
     first firstDescriptor scope firstValue firstRootOrder firstTypingOrder firstDeclared firstResolved
     firstScalar firstRepresented firstPointers
   have nextPointers := secondPointers.types_extend types _ extended secondDescriptor.ty secondValue
+  have secondAtMiddle := rootOf_transfer frame.interpretation second before middle
+    (.local frame.interpretation.environment.act scope second) secondResolved
   obtain ⟨after, secondBound, _, afterWorld, afterSource⟩ := bindAll_freshScalar_accepted (frame := advanceLocalFrame frame first) middleWorld middleSource
     second secondDescriptor scope secondValue secondRootOrder secondTypingOrder secondDeclared
-    (secondResolved middle firstBound) secondScalar secondRepresented nextPointers
+    (by simpa [advanceLocalFrame] using secondAtMiddle) secondScalar secondRepresented nextPointers
   refine ⟨after, ?_, ?_, ?_⟩
   · apply bindAll_two_of_single _ _ _ _ _ _ _ middle _ firstBound
     simpa [advanceLocalFrame] using secondBound
