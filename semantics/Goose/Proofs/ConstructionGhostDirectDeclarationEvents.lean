@@ -37,6 +37,20 @@ theorem directDeclarationAfterBuild_sourcePrefix (descriptor : LocalVar) (root :
       exact preserved state List.prefix_rfl
   | stop | escape | jump => exact eventPrefix_refl _
 
+theorem directDeclaration_after_allocation (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (descriptor : LocalVar) (root : Goose.Core.RootInst) (expression : Expr) (origin : Goose.Core.OriginId)
+    (ready buildReady : ExecutionState) (destination : Goose.Core.DestinationId)
+    (allocated : newDestination config.layout environment.act descriptor.ty .value origin none
+      (producerCount? ⟨config.module, environment.vars⟩ expression) ready = .ok destination buildReady) :
+    declarationContinuation fuel config environment descriptor root expression origin none ready =
+      directDeclarationAfterBuild descriptor root origin destination (buildExpr fuel config environment destination expression buildReady) := by
+  have allocated' : newDestination config.layout environment.act descriptor.ty .value origin none
+      ((none : Option (Array Value)).map Array.size <|> producerCount? ⟨config.module, environment.vars⟩ expression) ready =
+        .ok destination buildReady := by simpa using allocated
+  simp only [declarationContinuation, bind, pure, allocated']
+  cases built : buildExpr fuel config environment destination expression buildReady <;>
+    simp [directDeclarationAfterBuild, built, bind, pure]
+
 theorem directDeclaration_visit_sourceEvents
     (replay : StatementReplay config environment fuel offset statements before outcome visits)
     (visit : StatementInvocation) (member : visit ∈ visits)
@@ -60,14 +74,8 @@ theorem directDeclaration_visit_sourceEvents
     descriptor root implementation found nonfixed rootResult implementationFound notNamed direct
   have actual := statementVisit_executes replay visit member
   rw [visitFuel, visitStatement, execution] at actual
-  have afterBuild : declarationContinuation sourceFuel config environment descriptor root expression origin none ready =
-      directDeclarationAfterBuild descriptor root origin destination (buildExpr sourceFuel config environment destination expression buildReady) := by
-    have allocated' : newDestination config.layout environment.act descriptor.ty .value origin none
-        ((none : Option (Array Value)).map Array.size <|> producerCount? ⟨config.module, environment.vars⟩ expression) ready =
-          .ok destination buildReady := by simpa using allocated
-    simp only [declarationContinuation, bind, pure, allocated']
-    cases built : buildExpr sourceFuel config environment destination expression buildReady <;>
-      simp [directDeclarationAfterBuild, built, bind, pure]
+  have afterBuild := directDeclaration_after_allocation sourceFuel config environment descriptor root expression origin
+    ready buildReady destination allocated
   rw [afterBuild] at actual
   refine ⟨fuelHistory_exists sourceFuel config _ _ buildReady supported, ?_⟩
   rw [← actual]
