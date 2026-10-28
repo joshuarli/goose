@@ -1,4 +1,5 @@
 import Goose.Lower.DemandIndexOwnerAddress
+import Goose.Lower.DemandScalarAssignmentPrefix
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -227,6 +228,86 @@ theorem accepted_generated_index_assignment_value_stopped {cfg : Cfg} {env : Env
     (generated_assignment_value_extended extended) steps stopped nonTimeout
   exact ⟨location, child, valueAliases, placed, canonical, valueQuery, post, progress⟩
 
+
+theorem accepted_generated_index_assignment_store_prefix {cfg : Cfg} {env : Env} {owner : Place} {index value : Expr}
+    {origin indexOrigin : OriginId} {state viewedState indexedState after : St}
+    (source : StmtSource cfg env (.assign (.elem (.of owner) index indexOrigin) value origin) state)
+    (form : ScalarReadPlace owner) {cx : FnCtx} {results : List Ty} {root : DemandNode} {before : LS} {loop : Option LoopCtx}
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root source.path
+      (.statement loop (.assign (.elem (.of owner) index indexOrigin) value origin)) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    {aliases : List RetainedAlias}
+    (query : source.rootsEnv.access.aliasView (source.path ++ [0, 0]) (.of owner) = .ok aliases)
+    {fuel : Nat} {sample : ViewVal} {indexValue : Val}
+    (viewed : evalView fuel cfg env (.of owner) state = .ok sample viewedState)
+    (indexed : evalExpr fuel cfg env index viewedState = .ok indexValue indexedState)
+    {initial viewFrame frame : GIR.Frame} {start viewPoint point : Pt}
+    (viewPost : Post cfg env cx before initial (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2 viewFrame viewPoint
+      [((lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).1, .view sample)])
+    (indexPost : Post cfg env cx (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2 viewFrame
+      (lowerExpr index (lowerEnv cfg.mod env.vars results) (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2).2 frame point
+      [((lowerExpr index (lowerEnv cfg.mod env.vars results) (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2).1, .val indexValue)])
+    (bounded : (map.addRuns (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).1 aliases).Bounded
+      (lowerExpr index (lowerEnv cfg.mod env.vars results) (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).2).2.vals.size)
+    (realized : (map.addRuns (lowerView (.of owner) (lowerEnv cfg.mod env.vars results) before).1 aliases).Realizes
+      cfg.mod source.world env ⟨point, frame, indexedState⟩)
+    (startBounded : map.Bounded before.vals.size)
+    (startRealized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerStmt loop (.assign (.elem (.of owner) index indexOrigin) value origin)
+      (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (target : ∀ {middle : St} (child : ExprSource cfg env value middle),
+      source.AssignmentValueAt child → child.ty.refTarget = true)
+    {rootOwner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root rootOwner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (family : GeneratedExpressionPrefixFamily cx results selected loop value (@CanonicalExpressionPrefixCursor cfg env cx))
+    {next : Pt} {nextFrame : GIR.Frame}
+    (step : Goose.Evidence.RuntimeStep cx.cfg cx.fn point frame indexedState next nextFrame after)
+    {taken : Nat} {reached : DemandRuntimePoint} (steps : DemandRuntimePrefix cx taken ⟨next, nextFrame, after⟩ reached) :
+    DemandPrefixDecomposition cx (fun fuel _ => (execStmt fuel cfg env (.assign (.elem (.of owner) index indexOrigin) value origin) >>= prepareLoopFlow env loop) state)
+      (ScalarAssignmentPrefixCursor cx results source before
+        (lowerStmt loop (.assign (.elem (.of owner) index indexOrigin) value origin) (lowerEnv cfg.mod env.vars results) before).2
+        initial start map required)
+      (GeneratedStatementPrefixEnd source map cx before initial
+        (lowerStmt loop (.assign (.elem (.of owner) index indexOrigin) value origin) (lowerEnv cfg.mod env.vars results) before).2 loop)
+      (taken + 1) ⟨point, frame, indexedState⟩ reached := by
+  obtain ⟨location, child, valueAliases, placed, canonical, valueQuery, placePost, progress⟩ :=
+    accepted_generated_index_assignment_value_prefix source form occurrence rows coverage admitted query viewed indexed viewPost indexPost
+      bounded realized input extended target selected owned family step steps
+  cases progress with
+  | interior demanded => exact .interior (.value child canonical valueAliases demanded)
+  | @complete rightFuel rightCount left boundary result count rightTrace residual rightDone rightBoundary =>
+    let place := Place.elem (.of owner) index indexOrigin
+    let le := lowerEnv cfg.mod env.vars results
+    let addressed := lowerPlace place le before
+    have post := placePost.comp rightBoundary.post
+    have combinedPost : Post cfg env cx before initial (lowerExpr value le addressed.2).2 boundary.frame boundary.point
+        [(addressed.1, .val (.ref location)), ((lowerExpr value le addressed.2).1, .val result)] := by
+      simpa only [List.singleton_append] using post
+    have site : GeneratedAssignmentStoreSite cfg.mod source.rootsEnv.access cx.fn le root source.path before loop place
+        value origin required boundary.point := ⟨occurrence, rows, ⟨valueAliases, valueQuery⟩, combinedPost.pp, extended⟩
+    rcases residual.uncons with ⟨rfl, rfl⟩ | ⟨rest, final, rfl, store, afterStore⟩
+    · exact .interior (.store child canonical valueAliases site rightBoundary.demanded)
+    · let common := max (fuel + 1) rightFuel
+      have placed' : evalPlace common cfg env place state = .ok location after :=
+        ((Goose.Proofs.Fuel.monoAll (fuel + 1) common (by dsimp [common]; exact Nat.le_max_left _ _)).place cfg env place state).1 _ _ placed
+      have rightDone' : evalExpr common cfg env value after = .ok result boundary.state :=
+        ((Goose.Proofs.Fuel.monoAll rightFuel common (by dsimp [common]; exact Nat.le_max_right _ _)).expr cfg env value after).1 _ _ rightDone
+      obtain ⟨_, _, done, finalPost, finalResult, finalBounded, finalDemand⟩ :=
+        accepted_generated_assignment_store_step source site admitted startBounded startRealized placed' rightDone' combinedPost store
+      change execStmt (common + 1) cfg env (.assign place value origin) state = .ok (.normal .unit) final.state at done
+      have prepared : (execStmt (common + 1) cfg env (.assign place value origin) >>= prepareLoopFlow env loop) state =
+          .ok (.normal .unit) final.state := by
+        simp only [bind_apply, done]
+        cases loop <;> rfl
+      exact .complete (consumed := rightCount + 2) (by omega)
+        (by simpa [Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using
+          (DemandRuntimePrefix.next step (rightTrace.append (.next store (.zero _))))) afterStore prepared
+        (.normal finalPost finalResult finalBounded finalDemand.operands)
+
+#print axioms accepted_generated_index_assignment_store_prefix
 
 #print axioms accepted_generated_index_assignment_value_stopped
 #print axioms accepted_generated_index_assignment_value_prefix
