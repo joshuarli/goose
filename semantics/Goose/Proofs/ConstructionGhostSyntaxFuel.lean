@@ -67,7 +67,19 @@ inductive PlaceSyntax (config : EvalConfig) : Place → Prop
 
 end
 
+inductive DeclarationBuilderSyntax (config : EvalConfig) : Expr → Prop
+  | bytes (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
+      DeclarationBuilderSyntax config (.bytes ty bytes origin)
+  | scalar (expression : Expr) (shape : ScalarExpression expression) (source : ValueSyntax config expression) :
+      DeclarationBuilderSyntax config expression
+  | supported (expression : Expr) (source : SupportedValue expression) : DeclarationBuilderSyntax config expression
+  | static (expression : Expr) (source : ∀ environment destination, SupportedOperation config (.builder environment destination expression)) :
+      DeclarationBuilderSyntax config expression
+
 inductive StatementSyntax (config : EvalConfig) : Stmt → Prop
+  | declaration (localVar : Goose.Core.VarId) (expression : Expr) (origin : Goose.Core.OriginId)
+      (value : ValueSyntax config expression) (builder : DeclarationBuilderSyntax config expression) :
+      StatementSyntax config (.letS localVar expression origin)
   | expression (operand : Expr) (origin : Goose.Core.OriginId) (child : ValueSyntax config operand) :
       StatementSyntax config (.expr operand origin)
   | printText (text : String) (origin : Goose.Core.OriginId) : StatementSyntax config (.print [.text text] origin)
@@ -263,6 +275,14 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
               (previous.arguments environment vars parameters arguments tail)
       · intro environment statement derivation
         cases derivation with
+        | declaration localVar expression origin value builder =>
+            apply FuelSupport.declaration fuel environment localVar expression origin (previous.value environment expression value)
+            intro destination
+            cases builder with
+            | bytes ty bytes byteOrigin => exact .legacy fuel (.builderBytes environment destination ty bytes byteOrigin)
+            | scalar expression shape source => exact previous.scalarBuilder environment destination expression shape source
+            | supported expression source => exact previous.supportedBuilder environment destination expression source
+            | static expression source => exact .legacy fuel (source environment destination)
         | expression operand origin child =>
             exact .expression fuel environment operand origin (previous.value environment operand child)
         | printText text origin => exact .legacy (fuel + 1) (.printText environment text origin)

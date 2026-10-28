@@ -358,6 +358,27 @@ def loopStart (environment : RuntimeActivation) (before : ExecutionState) : Exec
   let target : BreakTarget := ⟨before.nextScope, environment.act, .loop, []⟩
   { before with nextScope := before.nextScope + 1, breaks := target :: before.breaks }
 
+inductive DeclarationFallback (environment : RuntimeActivation) (implementation : Impl)
+    (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) : ExecutionState → ExecutionState → Prop
+  | absent (state : ExecutionState)
+      (notNamed : (implementation.results.toList.zipIdx.find? fun (result, _) =>
+        result.namedLocal == some localVar) = none) : DeclarationFallback environment implementation localVar origin state state
+  | selected (before selectedReady ready : ExecutionState) (result : ResultDescriptor) (index : Nat)
+      (incoming selected : Goose.Core.DestinationId) (pending : PendingDestination)
+      (named : (implementation.results.toList.zipIdx.find? fun (result, _) =>
+        result.namedLocal == some localVar) = some (result, index))
+      (channel : environment.channels[index]? = some (.construct incoming))
+      (renewed : liftConstruction origin (renewReceivingDestination incoming) before = .ok selected selectedReady)
+      (queried : getDestination selected selectedReady = .ok pending ready)
+      (nonvalue : pending.capability.request ≠ .value) :
+      DeclarationFallback environment implementation localVar origin before ready
+
+theorem DeclarationFallback.unique {environment : RuntimeActivation} {implementation : Impl}
+    {localVar : Goose.Core.VarId} {origin : Goose.Core.OriginId} {before first second : ExecutionState}
+    (left : DeclarationFallback environment implementation localVar origin before first)
+    (right : DeclarationFallback environment implementation localVar origin before second) : first = second := by
+  cases left <;> cases right <;> simp_all
+
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
   | timeout (path : List Nat) (operation : SourceOperation α) (before : ExecutionState) :
@@ -933,6 +954,42 @@ inductive SourceHistory (config : EvalConfig) :
           (execBlock fuel config environment [] [] block ready)) :
       SourceHistory config (fuel + 1) path (.statement environment (.ifS condition yes no origin)) before
         (execStmt (fuel + 1) config environment (.ifS condition yes no origin) before)
+  | declaration (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId)
+      (expression : Expr) (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (fixed : ∀ descriptor root ready, environment.vars[localVar]? = some descriptor → descriptor.ty.nonfixed = false →
+        rootOf environment localVar before = .ok root ready →
+        SourceHistory config fuel (path ++ [0]) (.value environment expression) ready (evalValue fuel config environment expression ready))
+      (materialized : ∀ descriptor root rootReady implementation ready count,
+        environment.vars[localVar]? = some descriptor → descriptor.ty.nonfixed = true →
+        rootOf environment localVar before = .ok root rootReady →
+        config.module.impls[environment.implementation]? = some implementation →
+        DeclarationFallback environment implementation localVar origin rootReady ready →
+        ordinaryProducerCount? fuel ⟨config.module, environment.vars⟩ expression = some count →
+        SourceHistory config fuel (path ++ [0]) (.value environment expression) ready (evalValue fuel config environment expression ready))
+      (direct : ∀ descriptor root rootReady implementation ready destination buildReady,
+        environment.vars[localVar]? = some descriptor → descriptor.ty.nonfixed = true →
+        rootOf environment localVar before = .ok root rootReady →
+        config.module.impls[environment.implementation]? = some implementation →
+        DeclarationFallback environment implementation localVar origin rootReady ready →
+        ordinaryProducerCount? fuel ⟨config.module, environment.vars⟩ expression = none →
+        newDestination config.layout environment.act descriptor.ty .value origin none
+          (producerCount? ⟨config.module, environment.vars⟩ expression) ready = .ok destination buildReady →
+        SourceHistory config fuel (path ++ [0]) (.builder environment destination expression) buildReady
+          (buildExpr fuel config environment destination expression buildReady))
+      (named : ∀ descriptor root rootReady implementation result index incoming selected selectedReady pending ready destination renewedReady buildReady,
+        environment.vars[localVar]? = some descriptor → descriptor.ty.nonfixed = true →
+        rootOf environment localVar before = .ok root rootReady →
+        config.module.impls[environment.implementation]? = some implementation →
+        (implementation.results.toList.zipIdx.find? fun (result, _) => result.namedLocal == some localVar) = some (result, index) →
+        environment.channels[index]? = some (.construct incoming) →
+        liftConstruction origin (renewReceivingDestination incoming) rootReady = .ok selected selectedReady →
+        getDestination selected selectedReady = .ok pending ready → pending.capability.request = .value →
+        liftConstruction origin (renewReceivingDestination incoming) ready = .ok destination renewedReady →
+        liftConstruction origin (prepareNamedBinding destination descriptor.ty) renewedReady = .ok () buildReady →
+        SourceHistory config fuel (path ++ [0]) (.builder environment destination expression) buildReady
+          (buildExpr fuel config environment destination expression buildReady)) :
+      SourceHistory config (fuel + 1) path (.statement environment (.letS localVar expression origin)) before
+        (execStmt (fuel + 1) config environment (.letS localVar expression origin) before)
   | expression {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -958,7 +1015,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
+  | declaration | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]

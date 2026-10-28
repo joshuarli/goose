@@ -44,6 +44,11 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
       (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.value environment (.fill (.arr element count) operand origin))
+  | declaration (fuel : Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId)
+      (expression : Expr) (origin : Goose.Core.OriginId)
+      (value : FuelSupport config fuel (.value environment expression))
+      (builder : ∀ destination, FuelSupport config fuel (.builder environment destination expression)) :
+      FuelSupport config (fuel + 1) (.statement environment (.letS localVar expression origin))
   | expression (fuel : Nat) (environment : RuntimeActivation) (operand : Expr) (origin : Goose.Core.OriginId)
       (child : FuelSupport config fuel (.value environment operand)) :
       FuelSupport config (fuel + 1) (.statement environment (.expr operand origin))
@@ -270,6 +275,17 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           simp only [execute] at child ⊢
           rw [actual]
           exact .fill fixed child
+      | declaration _ environment localVar expression origin valueSupported builderSupported =>
+          refine .declaration fuel path environment localVar expression origin before ?_ ?_ ?_ ?_
+          · intro descriptor root ready found fixed rootResult
+            exact ih (.value environment expression) (path ++ [0]) ready valueSupported
+          · intro descriptor root rootReady implementation ready count found nonfixed rootResult implementationFound fallback materialized
+            exact ih (.value environment expression) (path ++ [0]) ready valueSupported
+          · intro descriptor root rootReady implementation ready destination buildReady found nonfixed rootResult implementationFound fallback direct allocated
+            exact ih (.builder environment destination expression) (path ++ [0]) buildReady (builderSupported destination)
+          · intro descriptor root rootReady implementation result index incoming selected selectedReady pending ready destination renewedReady buildReady
+                found nonfixed rootResult implementationFound named channel renewed queried valueRequest renewedAgain prepared
+            exact ih (.builder environment destination expression) (path ++ [0]) buildReady (builderSupported destination)
       | expression _ environment operand origin childSupported =>
           have child := ih (.value environment operand) (path ++ [0]) before childSupported
           have actual : execStmt (fuel + 1) config environment (.expr operand origin) before =
