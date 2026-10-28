@@ -1,5 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedParameterizedBoundTail
-import Goose.Proofs.ConstructionAcceptedParameterizedBodyFrameEffects
+import Goose.Proofs.ConstructionAcceptedParameterizedCallTailEffects
 import Goose.Proofs.ConstructionAcceptedParameterCallAccess
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -44,42 +43,16 @@ theorem acceptedSingleByValueBoundLocalCallTail (config : EvalConfig) (accepted 
         (registerRootType types root descriptor.ty) (fun other => other = root ∨ live other) regions pending ∧
       AcceptedFrame config accepted (entryStatementsFrame config frame state.nextScope) after (registerRootType types root descriptor.ty) ∧
       CheckedValue (entryStatementsFrame config frame state.nextScope) (.call tailTarget [.byVal (.read (.var 0))] tailOrigin) ty roots typingAfter rootsAfter := by
-  obtain ⟨frame, activation, after, sameImpl, initialized, phase, environment, act, scopes, channels, freshActStep,
-    freshScopeStep, bound, extended, afterWorld, afterSource, activationImpl, activationVars, compatible, bodyPosition, position⟩ :=
-    acceptedRegisterParameterCallBody_partial_withSource config accepted caller state ambient types live regions pending target context
-      implementation parameter descriptor value ty contextAt implementationAt parameters declared scalar represented pointers world source
-  let normalized := implementationBodyFrame config frame
-  have normalizedIdem : implementationBodyFrame config normalized = normalized := by simp [normalized, implementationBodyFrame]
-  have normalizedImpl : normalized.source.impl = implementation := by simpa [normalized, implementationBodyFrame] using sameImpl
-  have normalizedBody : normalized.source.impl.body = ⟨implementation.body.scope, [], some (.call tailTarget [.byVal (.read (.var 0))] tailOrigin)⟩ := by
-    simpa [normalizedImpl] using body
-  have tailPosition : SourcePosition accepted normalized (.block ⟨implementation.body.scope, [], some (.call tailTarget [.byVal (.read (.var 0))] tailOrigin)⟩) := by
-    rw [body] at bodyPosition
-    exact bodyPosition
-  have typingContext : normalized.typing.module.contexts[tailTarget]? = some tailContext := by
-    simpa [normalized, implementationBodyFrame] using tailContextAt
-  have typingCallee : normalized.typing.module.impls[tailContext.impl]? = some tailCallee := by
-    simpa [normalized, implementationBodyFrame] using tailCalleeAt
-  have requests : normalized.typing.resultRequests = [.register] := by
-    simp [normalized, implementationBodyFrame, sameImpl, results]
-  have available := checked.singleByValue_normalizedBody_effects_noParameterBody accepted caller frame target context implementation parameter argument
-    activation origin outerTy outerRoots outerTypingAfter outerRootsAfter source.compatible compatible contextAt implementationAt parameters
-    summary known (by
-      intro bodyContext actualEscapes bodyValue bodyState closed targets rooted id
-      rw [body] at rooted
-      have clear : NoParameterAccess ({} : Eff) := by simp [NoParameterAccess, Eff.accessTargets]
-      exact scalarLocalCallTail_noParameter _ implementation.body.scope tailTarget tailOrigin 0 tailContext tailCallee
-        tailParameter descriptor tailSummary _ bodyState bodyValue tailContextAt tailCalleeAt tailParameters tailKnown declared scalar clear rooted id)
-    phase sameImpl initialized
-  obtain ⟨roots, typingAfter, rootsAfter, tailChecked⟩ :=
-    tailPosition.callee_registerCall_withArguments_tail_checked accepted normalized state implementation.body.scope tailTarget tailOrigin
-      tailContext tailCallee ty [.byVal (.read (.var 0))] normalizedIdem normalizedBody typingContext typingCallee tailResults scalarTy requests
-      (by rw [body] at available; exact available)
-  have actualChecked : CheckedValue (entryStatementsFrame config frame state.nextScope)
-      (.call tailTarget [.byVal (.read (.var 0))] tailOrigin) ty roots typingAfter rootsAfter := by
-    simpa [entryStatementsFrame, blockStatementsFrame, normalized, implementationBodyFrame] using tailChecked
-  exact ⟨frame, activation, after, roots, typingAfter, rootsAfter, sameImpl, initialized, environment, act, scopes, channels, activationImpl, activationVars,
-    bound, extended, afterWorld, afterSource, actualChecked⟩
+  refine acceptedSingleByValueBoundCallTail_noParameterBody config accepted caller state ambient types live regions pending
+    target origin context implementation parameter descriptor argument value ty summary contextAt implementationAt parameters declared
+    scalar represented pointers known ?_ results tailTarget tailOrigin tailContext tailCallee [.byVal (.read (.var 0))]
+    body tailContextAt tailCalleeAt tailResults scalarTy world source outerTy outerRoots outerTypingAfter outerRootsAfter checked
+  intro bodySource before after result sourceModule sourceImpl clear rooted
+  rw [body] at rooted
+  exact
+    scalarLocalCallTail_noParameter bodySource implementation.body.scope tailTarget tailOrigin 0 tailContext tailCallee
+      tailParameter descriptor tailSummary before after result (by simpa [sourceModule] using tailContextAt)
+      (by simpa [sourceModule] using tailCalleeAt) tailParameters tailKnown (by simpa [sourceImpl] using declared) scalar clear rooted
 
 #print axioms acceptedSingleByValueBoundLocalCallTail
 end Goose.Proofs.ConstructionAcceptedExecution
