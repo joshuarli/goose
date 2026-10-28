@@ -515,6 +515,15 @@
   "evidence": "ConstructionAcceptedByteSource.lean, ConstructionAcceptedByteFrame.lean, ConstructionAcceptedByteEvaluation.lean, ConstructionAcceptedByteChecked.lean, ConstructionAcceptedByteBinding.lean, ConstructionAcceptedByteStatement.lean, ConstructionAcceptedLocalFreshness.lean, ConstructionAcceptedTypingDeclaration.lean, ConstructionAcceptedByteContinuation.lean, ConstructionAcceptedByteSequence.lean, ConstructionAcceptedByteExecutionSequence.lean, ConstructionAcceptedByteAbnormalSequence.lean, ConstructionAcceptedByteBatch.lean and ConstructionAcceptedBytePrefix.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Accepted entry statement frame",
+  "label": "model-proved",
+  "theorem": "Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryStatementsFrame; Goose.Proofs.ConstructionAcceptedExecution.acceptedEntryFreshStatements",
+  "statement": "Fresh entry activation and body-scope allocation preserve the accepted world and produce an accepted frame with a checked source position for the implementation's statement list.",
+  "assumptions": "The module is accepted and global initialization has reached an accepted world with the complete global prefix. The scoped-frame lemma uses the canonical entry frame with no parameters or active scopes.",
+  "limits": "The proof does not derive that world from global initialization or connect the frame to the complete entry call and subsequent evaluation. It does not discharge TH-CON-01.",
+  "evidence": "ConstructionRootCorrespondenceAcceptedEntryState.lean and ConstructionAcceptedEntryScope.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Uninitialized local types at fresh scope entry",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.AcceptedWorld.enterScope_localType; Goose.Proofs.ConstructionAcceptedExecution.AcceptedFrame.enterScope_uninitializedTypes; Goose.Proofs.ConstructionAcceptedExecution.AcceptedFrame.registerLocal_advance_uninitializedTypes; Goose.Proofs.ConstructionAcceptedExecution.AcceptedFrame.enterInitializer_order",
