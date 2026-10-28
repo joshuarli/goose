@@ -1,4 +1,4 @@
-import Goose.Lower.DemandSliceGlobalAddressDemand
+import Goose.Lower.DemandSliceAssignmentSnapshotPrefix
 import Goose.Lower.DemandSliceGlobalLiteral
 import Goose.Lower.DemandSliceAssignmentCursor
 
@@ -84,40 +84,10 @@ theorem accepted_generated_slice_assignment_literal_stage {cfg : Cfg} {env : Env
         (lowerEnv cfg.mod env.vars results) before).2.vals.size ∧
       DemandFrameAt cfg env cx source.world source.typingAfter source.rootsEnv source.context.outputFuture
         map.values map.runs ⟨finalPoint, finalFrame, after⟩ := by
-  obtain ⟨location, destinationPoint, destinationFrame, alias, destination, canonical, placed, destinationSteps,
-    traversal, destinationPost, query, child, childTyping, childRoots, childAt, childOwner, valueOccurrence, valueRows, valueCoverage,
-    valueBounded, valueAdmitted, valueRealized, valueInput⟩ :=
-    accepted_generated_slice_assignment_entry source slice selected owned occurrence rows coverage admitted bounded realized input extended
-  obtain ⟨view, viewAt, viewOccurrence, viewRows, globalPlace, globalPost, addressStep⟩ :=
-    accepted_generated_slice_global_address child valueOccurrence valueRows destinationPost.pp destinationPost.rel
-      (generated_assignment_value_extended extended)
-  have throughAddress := destinationSteps.append (.next ((addressStep 0).runtime) (.zero _))
-  obtain ⟨remaining, count, residual⟩ := throughAddress.split_at (by omega) steps
-  rcases residual.uncons with ⟨empty, _⟩ | ⟨rest, next, countNext, snapshot, tail⟩
-  · omega
-  · cases next with
-    | mk snapshotPoint snapshotFrame sampledState =>
-      obtain ⟨sample, view, canonical, firstStep, viewed, viewPost, viewDemand, viewRetained⟩ :=
-        accepted_generated_slice_global_snapshot child valueOccurrence valueRows valueCoverage valueBounded
-          destinationPost.pp destinationPost.rel valueRealized (generated_assignment_value_extended extended) snapshot
-      obtain ⟨aliases, upper, viewQuery, literalStep, operands, upperRows, upperCoverage, upperAt, upperAdmitted, upperBounded, upperPost, upperDemand⟩ :=
-        accepted_generated_slice_global_literal_bound child valueOccurrence valueRows valueCoverage valueAdmitted valueBounded
-          valueRealized viewed viewPost (generated_assignment_value_extended extended)
-      have literalPrefix : DemandRuntimePrefix cx 1 _ _ := .next ((literalStep 0).runtime) (.zero _)
-      obtain ⟨suffix, suffixCount, suffixSteps⟩ := literalPrefix.split_at (by omega) tail
-      refine ⟨snapshotPoint, snapshotFrame, sampledState, alias, aliases, child, upper, childAt, upperAt,
-        suffix, by omega, suffixSteps, upperDemand, ?_⟩
-      intro slicePoint sliceFrame sliceState sliceStep
-      obtain ⟨runAliases, value, rhsSteps, evaluated, site, boundary⟩ :=
-        accepted_generated_slice_assignment_store_cursor source child occurrence rows destinationPost query valueRows valueCoverage
-          valueAdmitted valueBounded valueRealized extended snapshot sliceStep
-      refine ⟨destinationFrame, runAliases, value, evaluated, site, boundary, ?_⟩
-      intro finalPoint finalFrame after store
-      obtain ⟨suffixSteps, done, post, result, demanded⟩ :=
-        accepted_generated_slice_assignment_store source child childAt occurrence rows admitted bounded realized placed destinationPost
-          query childTyping childRoots valueRows valueCoverage valueAdmitted valueBounded valueRealized extended snapshot sliceStep store
-      exact ⟨destinationSteps.append suffixSteps, done, post, result, bounded.mono post.mono, demanded⟩
-
+  obtain ⟨snapshotPoint, snapshotFrame, sampledState, alias, child, view, childAt, viewAt,
+    rest, count, tail, demanded, next, longer⟩ :=
+    accepted_generated_slice_assignment_snapshot_stage source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
+  exact longer enough
 
 #print axioms accepted_generated_slice_assignment_literal_stage
 
