@@ -12,13 +12,13 @@ def entryStatementsFrame (config : EvalConfig) (frame : ConstructionSourceFrame)
   { blockStatementsFrame (implementationBodyFrame config frame) frame.source.impl.body.scope 4095 with
     interpretation := frame.interpretation.enterScope frame.source.impl.body.scope scopeInst }
 
-theorem acceptedEntryStatementsFrame (config : EvalConfig) (accepted : AcceptedModule config)
-    (frame : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+theorem acceptedCalleeStatementsFrame (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (context : Nat) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config frame.initialized state ambient types live regions pending)
-    (source : AcceptedFrame config accepted frame state types) (phase : frame.phase = .implementation config.module.entry)
+    (source : AcceptedFrame config accepted frame state types) (phase : frame.phase = .implementation context)
     (parametersEmpty : frame.source.impl.params = #[])
-    (scopes : frame.interpretation.environment.scopes = []) (initialized : frame.initialized = config.module.globals.size)
+    (scopes : frame.interpretation.environment.scopes = [])
     (cursor : frame.rootCursor = ⟨0, {}, []⟩) :
     let next := entryStatementsFrame config frame state.nextScope
     let after := { state with nextScope := state.nextScope + 1 }
@@ -66,7 +66,7 @@ theorem acceptedEntryStatementsFrame (config : EvalConfig) (accepted : AcceptedM
       unfold SourceOrigin at origin ⊢
       rw [phase] at origin
       simp only [next, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, RootInterpretation.enterScope, phase,
-        initialized]
+        ]
       obtain ⟨original, calls, found, implementation, environment, typing, remaining⟩ := origin
       exact ⟨original, calls, found, implementation, environment, True.intro, remaining⟩
   have framed : AcceptedFrame config accepted next after types := by
@@ -103,8 +103,7 @@ theorem acceptedEntryStatementsFrame (config : EvalConfig) (accepted : AcceptedM
       exact emptyTypes id root resolved
     · intro id future bound
       change frame.initialized ≤ id at future
-      rw [initialized] at future
-      exact (Nat.not_lt_of_ge future bound).elim
+      exact source.futureGlobals id future bound
     · intro id member
       simp only [next, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, parametersEmpty,
         Array.size_empty, List.range_zero, List.not_mem_nil] at member
@@ -112,7 +111,7 @@ theorem acceptedEntryStatementsFrame (config : EvalConfig) (accepted : AcceptedM
       simp only [next, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, parametersEmpty,
         Array.size_empty, List.range_zero, List.not_mem_nil] at member
   have bodyPosition : SourcePosition accepted (implementationBodyFrame config frame) (.block frame.source.impl.body) :=
-    .implementationBody frame config.module.entry phase source.compatible
+    .implementationBody frame context phase source.compatible
   have statementsPosition : SourcePosition accepted
       (blockStatementsFrame (implementationBodyFrame config frame) scope 4095) (.statements frame.source.impl.body.stmts) := by
     cases body : frame.source.impl.body with
@@ -123,6 +122,24 @@ theorem acceptedEntryStatementsFrame (config : EvalConfig) (accepted : AcceptedM
   have position : SourcePosition accepted next (.statements frame.source.impl.body.stmts) := by
     exact .instantiate statementsPosition interpretation frame.initialized
   exact ⟨rfl, scopeWorld, framed, position⟩
+
+
+theorem acceptedEntryStatementsFrame (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config frame.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame state types) (phase : frame.phase = .implementation config.module.entry)
+    (parametersEmpty : frame.source.impl.params = #[])
+    (scopes : frame.interpretation.environment.scopes = []) (_initialized : frame.initialized = config.module.globals.size)
+    (cursor : frame.rootCursor = ⟨0, {}, []⟩) :
+    let next := entryStatementsFrame config frame state.nextScope
+    let after := { state with nextScope := state.nextScope + 1 }
+    freshScope state = .ok state.nextScope after ∧
+    AcceptedWorld config next.initialized after ambient types live regions pending ∧
+    AcceptedFrame config accepted next after types ∧
+    SourcePosition accepted next (.statements frame.source.impl.body.stmts) :=
+  acceptedCalleeStatementsFrame config accepted frame config.module.entry state ambient types live regions pending
+    world source phase parametersEmpty scopes cursor
 
 theorem acceptedEntryFreshStatements (config : EvalConfig) (accepted : AcceptedModule config)
     (state : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
@@ -147,6 +164,7 @@ theorem acceptedEntryFreshStatements (config : EvalConfig) (accepted : AcceptedM
     scopes initialized cursor
   exact ⟨frame, allocated, fresh, scopeWorld, scopeSource, position, phase, resultsEmpty⟩
 
+#print axioms acceptedCalleeStatementsFrame
 #print axioms acceptedEntryStatementsFrame
 #print axioms acceptedEntryFreshStatements
 
