@@ -1,5 +1,6 @@
 import Goose.Lower.DemandSliceGlobalSnapshot
 import Goose.Lower.DemandSliceAssignmentEntry
+import Goose.Lower.DemandRuntimePrefixSplit
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
@@ -79,4 +80,53 @@ theorem accepted_generated_slice_assignment_snapshot_cursor {cfg : Cfg} {env : E
     destinationSteps.append (.next ((step 0).runtime) (.zero _)), demanded⟩
 
 #print axioms accepted_generated_slice_assignment_snapshot_cursor
+theorem accepted_generated_slice_assignment_snapshot_split {cfg : Cfg} {env : Env} {state : St}
+    {reference : Expr} {mutability : Mutability} {global : GlobalId} {sliceOrigin origin : OriginId}
+    {intType : IntTy} {number : Int}
+    (source : StmtSource cfg env (.assign (.deref reference)
+      (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin) state)
+    {ty : Ty} (slice : sliceRefTy source.typingEnv reference = some ty)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.statement loop (.assign (.deref reference)
+        (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin)) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerStmt loop (.assign (.deref reference)
+      (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin)
+      (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    {taken : Nat} {reached : DemandRuntimePoint} (boundedSteps : 3 ≤ taken)
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
+    ∃ (destinationPoint : Pt) (destinationFrame : GIR.Frame) (alias : RetainedAlias)
+      (child : ExprSource cfg env (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) state)
+      (view : ViewSource cfg env (.of (.global global)) state),
+      source.AssignmentValueAt child ∧ child.ViewChildAt view 0 rfl ∧
+      DemandRuntimePrefix cx 3 ⟨start, initial, state⟩
+        ⟨(destinationPoint.1, destinationPoint.2 + 1),
+          destinationFrame.set (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results)
+            (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
+              (.val (.ref ⟨.global global, []⟩)), state⟩ ∧
+      (∃ remaining, taken = 3 + remaining ∧ DemandRuntimePrefix cx remaining
+        ⟨(destinationPoint.1, destinationPoint.2 + 1),
+          destinationFrame.set (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results)
+            (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
+              (.val (.ref ⟨.global global, []⟩)), state⟩ reached) ∧
+      DemandFrameAt cfg env cx view.world view.typingEnv view.rootsEnv view.context.inputFuture
+        (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).values
+        (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).runs
+        ⟨(destinationPoint.1, destinationPoint.2 + 1),
+          destinationFrame.set (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results)
+            (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
+              (.val (.ref ⟨.global global, []⟩)), state⟩ := by
+  obtain ⟨destinationPoint, destinationFrame, alias, child, view, childAt, viewAt, executed, demanded⟩ :=
+    accepted_generated_slice_assignment_snapshot_cursor source slice selected owned occurrence rows coverage admitted bounded realized input extended
+  obtain ⟨remaining, count, residual⟩ := executed.split_at boundedSteps steps
+  exact ⟨destinationPoint, destinationFrame, alias, child, view, childAt, viewAt, executed, ⟨remaining, count, residual⟩, demanded⟩
+
+#print axioms accepted_generated_slice_assignment_snapshot_split
 end Goose.Lower
