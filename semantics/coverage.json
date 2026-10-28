@@ -435,10 +435,10 @@
  },
  {
   "feature": "Byte exit replacement ancestry",
-  "statement": "Successful byte production into a replacement destination retains its backed carrier and parent ownership through scope release. A successful fresh exit reservation has a replacement path from its saved destination to its selected open byte destination; that path persists through immediate scope release.",
+  "statement": "Successful byte production into a replacement destination retains its backed carrier and parent ownership through scope release. A successful fresh exit reservation has a replacement path from its saved destination to its selected open byte destination; the active ticket and path persist through successful byte construction and scope release.",
   "assumptions": "Accepted ownership worlds, successful production or reservation, open byte backing and destination shape. The reservation result assumes an accepted world at the reserved state.",
-  "limits": "Parent authority may be abandoned or cancelled; a live receiving anchor, reservation preservation through construction and exit cleanup, and handler landing remain open. This component does not close TH-EXIT-01.",
-  "evidence": "Goose/Proofs/ConstructionExitByteReplacement.lean; Goose/Proofs/ConstructionExitReservationPath.lean; scoped Lean 4.35 closure and axiom checks."
+  "limits": "Parent authority may be abandoned or cancelled; a live receiving anchor, exit cleanup and handler landing remain open. This component does not close TH-EXIT-01.",
+  "evidence": "Goose/Proofs/ConstructionExitByteReplacement.lean; Goose/Proofs/ConstructionExitReservationPath.lean; Goose/Proofs/ConstructionExitByteReservation.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted construction value representation fragment",
@@ -616,6 +616,13 @@
   "evidence": "Goose/Lower/DemandControlStatementPrefix.lean; Goose/Lower/DemandControlStatementAgreement.lean and their expression and sequence dependencies; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Generated scalar field addressing",
+  "statement": "A field projection of an accepted local-slot or global place evaluates at the source and follows the two generated GIR address steps to the corresponding field address. The field child exposes its canonical source path and world.",
+  "assumptions": "Accepted field place, scalar local-slot or global owner, generated builder state and the address-step inputs.",
+  "limits": "Field-place retained-alias transport and assignment prefix and stop reflection are not established. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandFieldAddress.lean; Goose/Lower/DemandFieldScalarAddress.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted byte-owner allocation timeout",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.evalValue_byteOwner_timeout_complete; Goose.Proofs.ConstructionAcceptedExecution.execStmt_acceptedByteOwner_timeout_complete; Goose.Proofs.ConstructionAcceptedExecution.execStmts_acceptedByteOwner_timeout_split",
@@ -670,9 +677,9 @@
  },
  {
   "feature": "Accepted scalar value evaluation",
-  "statement": "At every fuel, checked integer literals, Boolean literals, initialized global reads, recursively nested Boolean negations, integer unary operations and conversions preserve the accepted world and source frame; every successful value satisfies its checked value invariant. Binary operations and comparisons over that scalar and unary fragment also preserve these invariants. Numeric aborts and operand stops are included.",
+  "statement": "At every fuel, checked integer literals, Boolean literals, initialized global reads, recursively nested Boolean negations, integer unary operations and conversions preserve the accepted world and source frame; every successful value satisfies its checked value invariant. Recursively nested binary operations and comparisons over that scalar and unary fragment also preserve these invariants. Numeric aborts and operand stops are included.",
   "assumptions": "Accepted world and source frame, and a checked value expression.",
-  "limits": "Recursively nested binary operations, other places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
+  "limits": "Unary operations wrapping binary expressions, other places and construction forms require separate evaluator cases. This component does not close TH-CON-01 or TH-EXIT-01.",
   "evidence": "Goose/Proofs/ConstructionAcceptedScalarComplete.lean; Goose/Proofs/ConstructionAcceptedNotComplete.lean; Goose/Proofs/ConstructionAcceptedNumericComplete.lean; Goose/Proofs/ConstructionAcceptedBinaryComplete.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
@@ -902,10 +909,10 @@
   "feature": "Byte-owner global initialization",
   "label": "model-proved",
   "theorem": "Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwner_head; Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwners; Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwners_initial; Goose.Proofs.ConstructionAcceptedExecution.initGlobals_byteOwners_prefix; Goose.Proofs.ConstructionAcceptedExecution.acceptedByteGlobals_runPrefix; Goose.Proofs.ConstructionAcceptedExecution.acceptedByteGlobalsReturnedEntry; Goose.Proofs.ConstructionAcceptedExecution.acceptedByteGlobalEntryBytePrefix",
-  "statement": "Successful initialization of a contiguous range of byte-owner globals preserves the accepted world and the absence of later global objects and ordinals. For any initializer outcome, an induction carries these facts through completed globals and identifies the remaining action or an initializer with the same outcome. From the initial state, the actual run either completes all byte-owner globals in an accepted world or has the same result as a global initializer reached with an accepted world. A normally returning module with such globals reaches its validated entry call with an accepted statement frame and world, and an entry prefix of byte-owner declarations retains those facts up to the remaining statements or a declaration matching the body's outcome.",
-  "assumptions": "Every global in the range has a byte-owner type and a byte literal initializer. The full-prefix world result assumes the initializer execution completes successfully; the arbitrary-outcome result establishes the world before the initializer matching the outcome. The initial-state result assumes an accepted module. The entry-prefix result assumes a normally returning module, byte-owner types for its listed entry declarations, and sufficient fuel.",
-  "limits": "Other global initializer forms and preservation through an abnormal initializer outcome remain open. This result does not discharge TH-CON-01.",
-  "evidence": "ConstructionAcceptedGlobalPrefix.lean, ConstructionAcceptedByteGlobal.lean, ConstructionAcceptedByteGlobalOutcome.lean, ConstructionAcceptedByteGlobalRun.lean, ConstructionAcceptedByteGlobalEntry.lean and ConstructionAcceptedByteGlobalEntryPrefix.lean; scoped Lean 4.35 closure and axiom checks."
+  "statement": "Successful initialization of a contiguous range of byte-owner globals preserves the accepted world and the absence of later global objects and ordinals. For any initializer outcome, an induction carries these facts through completed globals and identifies the remaining action or an initializer with the same outcome. From the initial state, the actual run either completes all byte-owner globals in an accepted world or has the same result as a global initializer reached with an accepted world. Successful global initialization reaches the validated entry call with an accepted statement frame and world without assuming the module returns; an entry prefix of byte-owner declarations retains those facts up to the remaining statements or a declaration matching the body's outcome.",
+  "assumptions": "Every global in the range has a byte-owner type and a byte literal initializer. The full-prefix world result assumes the initializer execution completes successfully; the arbitrary-outcome prefix result establishes the world before the initializer matching the outcome. The initial-state result assumes an accepted module. The entry-prefix result assumes a normally returning module, byte-owner types for its listed entry declarations, and sufficient fuel.",
+  "limits": "Other global initializer forms and the general execution induction remain open. This result does not discharge TH-CON-01.",
+  "evidence": "ConstructionAcceptedGlobalPrefix.lean, ConstructionAcceptedByteGlobal.lean, ConstructionAcceptedByteGlobalOutcome.lean, ConstructionAcceptedByteGlobalRun.lean, ConstructionByteGlobalEntryComplete.lean, ConstructionAcceptedByteGlobalEntry.lean and ConstructionAcceptedByteGlobalEntryPrefix.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
   "feature": "Accepted entry statement frame",

@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedByteGlobal
+import Goose.Proofs.ConstructionByteGlobalEntryComplete
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -35,24 +35,8 @@ theorem acceptedByteGlobalsReturnedEntry (fuel : Nat) (config : EvalConfig) (acc
     cases returned
   | ok result state =>
     cases result
-    have globalRun : initGlobals ((fuel + 2) + 1) config (List.range config.module.globals.size) .initial = .ok () state := by
-      simpa only [Nat.add_assoc] using initialized
-    obtain ⟨live, globalWorld, clear⟩ := initGlobals_byteOwners_initial (fuel + 2) config accepted state declarations globalRun
-    have depth : state.activations.length < Goose.Core.maxCallDepth := by
-      have runtime := globalWorld.ownership.runtime.activations
-      cases active : state.activations with
-      | nil => simp [Goose.Core.maxCallDepth]
-      | cons head tail => simp [active, OwnershipAmbient.activations] at runtime
-    obtain ⟨frame, activation, environmentEq, call, finalWorld, finalSource, position, phase, results⟩ :=
-      acceptedEntryCallSetup fuel config accepted ⟨0, 0, #[], [], []⟩ state [] (declaredRootTypes config.module)
-        live [] [] globalWorld depth
-    obtain ⟨original, implementation, originalAt, implementationAt, parametersEmpty, resultsEmpty⟩ :=
-      validated_entry config.module accepted.accepted
-    have moduleStep : runModule (fuel + 3) config .initial =
-        (invokeCall (fuel + 3) config ⟨0, 0, #[], [], []⟩ config.module.entry [] [] 0 >>= fun carriers =>
-          publishCarriers 0 carriers) state := by
-      simp only [runModule, initialized, bind, getImplementation, originalAt, implementationAt, resultsEmpty,
-        Array.toList_empty, channelsFor, List.mapM_nil, pure]
+    obtain ⟨frame, activation, live, moduleStep, call, environmentEq, finalWorld, finalSource, position, phase, results⟩ :=
+      acceptedByteGlobalsEntry fuel config accepted state declarations initialized
     exact ⟨state, frame, activation, live, rfl, moduleStep, call, environmentEq, finalWorld, finalSource,
       position, phase, results⟩
 
