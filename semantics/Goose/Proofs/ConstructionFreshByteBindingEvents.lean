@@ -28,6 +28,15 @@ theorem rootOf_unchanged (environment : RuntimeActivation) (id : Nat) (state : E
     | none => simp [rootOf, declared, scope, Goose.Construct.fault, EvalM.stop, Goose.Proofs.Exit.stepState]
     | some found => cases found; simp [rootOf, declared, scope, pure, Goose.Proofs.Exit.stepState]
 
+theorem eval_bind_assoc (action : EvalM α) (next : α → EvalM β) (last : β → EvalM γ) :
+    (action >>= next) >>= last = action >>= fun value => next value >>= last := by
+  funext state
+  simp only [bind]
+  cases action state <;> rfl
+
+theorem eval_pure_bind (value : α) (next : α → EvalM β) :
+    pure value >>= next = next value := rfl
+
 theorem bind_events_frame (action : EvalM α) (next : α → EvalM β) (state : ExecutionState)
     (preserves : ∀ value current,
       (Goose.Proofs.Exit.stepState (next value current)).construction.events = current.construction.events) :

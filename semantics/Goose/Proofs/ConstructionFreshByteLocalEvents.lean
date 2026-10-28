@@ -6,15 +6,6 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionRootCorrespondence
 
-private theorem eval_bind_assoc (action : EvalM α) (next : α → EvalM β) (last : β → EvalM γ) :
-    (action >>= next) >>= last = action >>= fun value => next value >>= last := by
-  funext state
-  simp only [bind]
-  cases action state <;> rfl
-
-private theorem eval_pure_bind (value : α) (next : α → EvalM β) :
-    pure value >>= next = next value := rfl
-
 private def bindByteLocal (root : Goose.Core.RootInst) : Carrier → EvalM Flow
   | .completed destination => do
       let stored ← storedDestination destination
