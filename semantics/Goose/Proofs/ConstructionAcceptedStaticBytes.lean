@@ -20,11 +20,14 @@ theorem AcceptedFrame.freshSyntheticRoot {config : EvalConfig} {accepted : Accep
       ValueRepresentation ty value ∧ PointerTypedValue types ty value)
     (id : Nat) (outside : config.module.globals.size ≤ id) (fresh : types (.global id) = none)
     (extended : RootTypesExtend types nextTypes) (acts : after.nextAct = before.nextAct)
+    (scopes : before.nextScope ≤ after.nextScope)
     (ordinals : after.objectOrdinals = before.objectOrdinals)
     (objects : ∀ root, root ≠ .global id → after.objects.lookup root = before.objects.lookup root) :
     AcceptedFrame config accepted frame after nextTypes := by
-  refine ⟨source.compatible, ?_, source.aliases, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨source.compatible, ?_, ?_, source.aliases, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simpa only [acts] using source.frontier
+  · intro entry member
+    exact Nat.lt_of_lt_of_le (source.scopeFrontier entry member) scopes
   · intro var member
     obtain ⟨descriptor, root, value, declared, resolved, found, represented⟩ := source.locals var member
     have different : root ≠ .global id := by
@@ -326,7 +329,7 @@ theorem evalValue_checkedStaticBytes_world (fuel : Nat) (config : EvalConfig) (a
       exact bindRoot_lookup_other freshRoot other (.fixed values) scopeState rebound bound different
     refine ⟨expected, nextTypes, freshRoot, actual, extended, nextWorld, ?_, value⟩
     exact source.freshSyntheticRoot world.heap (config.module.globals.size + state.nextScope) (by omega) fresh
-      extended rfl rfl unchanged
+      extended rfl (by simp [expected, scopeState]) rfl unchanged
 
 #print axioms evalValue_staticBytes_world
 #print axioms AcceptedFrame.freshSyntheticRoot

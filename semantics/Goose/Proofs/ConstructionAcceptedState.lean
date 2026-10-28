@@ -107,6 +107,7 @@ structure AcceptedFrame (config : EvalConfig) (accepted : AcceptedModule config)
     (frame : ConstructionSourceFrame) (state : ExecutionState) (types : RootTypes) : Prop where
   compatible : SourceFrameCompatible accepted frame
   frontier : RootFrontier frame.interpretation state.nextAct
+  scopeFrontier : ∀ entry ∈ frame.interpretation.environment.scopes, entry.2 < state.nextScope
   aliases : AliasComplete frame.interpretation frame.source.aliases
   locals : LocalRepresentations state frame.interpretation.environment frame.typing.visible
   localTypes : ∀ id ∈ frame.typing.visible, ∀ descriptor root,

@@ -33,6 +33,10 @@ theorem acceptedEntryWorldFrame (config : EvalConfig) (accepted : AcceptedModule
   have framed : AcceptedFrame config accepted frame { state with nextAct := state.nextAct + 1 } types := {
     compatible := compatible
     frontier := frontier
+    scopeFrontier := by
+      intro entry member
+      rw [scopes] at member
+      cases member
     aliases := aliases
     locals := by
       intro id member

@@ -14,8 +14,10 @@ theorem FreshDestinationFrame.acceptedFrame {config : EvalConfig} {accepted : Ac
   have objects := congrArg ExecutionState.objects frame.outer
   have ordinals := congrArg ExecutionState.objectOrdinals frame.outer
   have acts := congrArg ExecutionState.nextAct frame.outer
-  refine ⟨valid.compatible, ?_, valid.aliases, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  have scopes := congrArg ExecutionState.nextScope frame.outer
+  refine ⟨valid.compatible, ?_, ?_, valid.aliases, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · simpa only [acts] using valid.frontier
+  · simpa only [scopes] using valid.scopeFrontier
   · intro var member
     obtain ⟨descriptor, root, value, declared, resolved, found, represented⟩ := valid.locals var member
     exact ⟨descriptor, root, value, declared, rootOf_transfer source.interpretation var before after root resolved,
