@@ -36,7 +36,7 @@ theorem acceptedByteModule_emptyHelperTail_fromEntry (fuel : Nat) (config : Eval
   · obtain ⟨reason, after, initialized, live, regions, moduleStop, bound, world⟩ := stopped
     exact Or.inl ⟨reason, after, initialized, [], declaredRootTypes config.module, live, regions, moduleStop, world⟩
   · obtain ⟨initialized, frame, next, activation, types, live, regions, initializedRun, moduleStep, callStep,
-      channels, implementationEq, environmentEq, initializedEq, extended, world, source, flow⟩ := entry
+      channels, frameInitialized, implementationEq, environmentEq, initializedEq, extended, world, source, flow⟩ := entry
     let activated := { initialized with nextAct := initialized.nextAct + 1, activations := activation :: initialized.activations }
     let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
     let entryFrame := entryStatementsFrame config frame activated.nextScope

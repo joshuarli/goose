@@ -15,7 +15,7 @@ theorem acceptedEntryCallSetupWithChannels (fuel : Nat) (config : EvalConfig) (a
       let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
       let after := ownershipResultScopeState activation frame.source.impl.body.scope activated
       let next := entryStatementsFrame config frame activated.nextScope
-      activation.channels = [] ∧ frame.interpretation.environment = activation ∧
+      activation.channels = [] ∧ frame.initialized = config.module.globals.size ∧ frame.interpretation.environment = activation ∧
       invokeCall (fuel + 3) config environment config.module.entry [] [] 0 state =
         (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
           deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
@@ -23,9 +23,9 @@ theorem acceptedEntryCallSetupWithChannels (fuel : Nat) (config : EvalConfig) (a
       AcceptedFrame config accepted next after types ∧
       SourcePosition accepted next (.statements frame.source.impl.body.stmts) ∧
       frame.phase = .implementation config.module.entry ∧ frame.source.impl.results = #[] := by
-  obtain ⟨frame, activation, environmentEq, act, scopes, channels, freshActed, freshScope, finalWorld, finalSource,
+  obtain ⟨frame, activation, initializedEq, environmentEq, act, scopes, channels, freshActed, freshScope, finalWorld, finalSource,
     position, phase, parameters, results, original, originalAt, implementationAt, implementationId, variables⟩ :=
-    acceptedEntryPushedStatements config accepted state ambient types live regions pending world
+    acceptedEntryPushedStatements_withInitialized config accepted state ambient types live regions pending world
   have canonical : activation = ⟨original.impl, state.nextAct, frame.source.impl.vars, [], []⟩ := by
     cases activation with
     | mk impl act' vars scopes' channels' =>
@@ -48,7 +48,7 @@ theorem acceptedEntryCallSetupWithChannels (fuel : Nat) (config : EvalConfig) (a
     funext current
     simp only [enterActivation, lookup, results, Array.toList_empty, List.map_nil]
   rw [entry] at step
-  exact ⟨frame, activation, channels, environmentEq, step, finalWorld, finalSource, position, phase, results⟩
+  exact ⟨frame, activation, channels, initializedEq, environmentEq, step, finalWorld, finalSource, position, phase, results⟩
 
 theorem acceptedByteGlobalsEntryWithChannels (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (initialized : ExecutionState)
@@ -66,7 +66,7 @@ theorem acceptedByteGlobalsEntryWithChannels (fuel : Nat) (config : EvalConfig) 
       invokeCall (fuel + 3) config environment config.module.entry [] [] 0 initialized =
         (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
           deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
-      activation.channels = [] ∧ frame.interpretation.environment = activation ∧
+      activation.channels = [] ∧ frame.initialized = config.module.globals.size ∧ frame.interpretation.environment = activation ∧
       AcceptedWorld config next.initialized after [.callChannels activation []] (declaredRootTypes config.module) live [] [] ∧
       AcceptedFrame config accepted next after (declaredRootTypes config.module) ∧
       SourcePosition accepted next (.statements frame.source.impl.body.stmts) ∧
@@ -79,7 +79,7 @@ theorem acceptedByteGlobalsEntryWithChannels (fuel : Nat) (config : EvalConfig) 
     cases active : initialized.activations with
     | nil => simp [Goose.Core.maxCallDepth]
     | cons head tail => simp [active, OwnershipAmbient.activations] at runtime
-  obtain ⟨frame, activation, channels, environmentEq, call, finalWorld, finalSource, position, phase, results⟩ :=
+  obtain ⟨frame, activation, channels, initializedEq, environmentEq, call, finalWorld, finalSource, position, phase, results⟩ :=
     acceptedEntryCallSetupWithChannels fuel config accepted ⟨0, 0, #[], [], []⟩ initialized [] (declaredRootTypes config.module)
       live [] [] globalWorld depth
   obtain ⟨original, implementation, originalAt, implementationAt, parametersEmpty, resultsEmpty⟩ :=
@@ -89,7 +89,7 @@ theorem acceptedByteGlobalsEntryWithChannels (fuel : Nat) (config : EvalConfig) 
         publishCarriers 0 carriers) initialized := by
     simp only [runModule, globals, bind, getImplementation, originalAt, implementationAt, resultsEmpty,
       Array.toList_empty, channelsFor, List.mapM_nil, pure]
-  exact ⟨frame, activation, live, moduleStep, call, channels, environmentEq, finalWorld, finalSource, position, phase, results⟩
+  exact ⟨frame, activation, live, moduleStep, call, channels, initializedEq, environmentEq, finalWorld, finalSource, position, phase, results⟩
 
 theorem acceptedByteGlobalsEntryBodyWithChannels (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
     (initialized : ExecutionState) (declarations : List ByteOwnerDeclaration) (original : Context) (implementation : Impl)
@@ -116,12 +116,12 @@ theorem acceptedByteGlobalsEntryBodyWithChannels (fuel : Nat) (config : EvalConf
       invokeCall (fuel + 3) config environment config.module.entry [] [] 0 initialized =
         (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
           deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
-      activation.channels = [] ∧ frame.source.impl = implementation ∧ frame.interpretation.environment = activation ∧ next.initialized = entryFrame.initialized ∧
+      activation.channels = [] ∧ frame.initialized = config.module.globals.size ∧ frame.source.impl = implementation ∧ frame.interpretation.environment = activation ∧ next.initialized = entryFrame.initialized ∧
       RootTypesExtend (declaredRootTypes config.module) types ∧
       AcceptedWorld config next.initialized after [.callChannels activation []] types live regions [] ∧
       AcceptedFrame config accepted next after types ∧
       (match outcome with | .ok flow _ => flow = .normal .unit | .stop _ _ => True | .escape .. | .jump .. => False) := by
-  obtain ⟨frame, activation, entryLive, moduleStep, callStep, channels, environmentEq, world, source, position, phase, results⟩ :=
+  obtain ⟨frame, activation, entryLive, moduleStep, callStep, channels, frameInitialized, environmentEq, world, source, position, phase, results⟩ :=
     acceptedByteGlobalsEntryWithChannels fuel config accepted initialized globals initializedRun
   let activated := { initialized with nextAct := initialized.nextAct + 1, activations := activation :: initialized.activations }
   let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
@@ -137,7 +137,7 @@ theorem acceptedByteGlobalsEntryBodyWithChannels (fuel : Nat) (config : EvalConf
     entryByteStatements_accepted_world fuel config accepted frame activation activated before declarations entryLive
       world source position phase results (by simpa only [implementationEq] using body)
       (by simpa only [implementationEq] using owners) checkFuel
-  exact ⟨frame, next, activation, types, live, regions, moduleStep, callStep, channels, implementationEq, environmentEq, initializedEq, extended,
+  exact ⟨frame, next, activation, types, live, regions, moduleStep, callStep, channels, frameInitialized, implementationEq, environmentEq, initializedEq, extended,
     finalWorld, finalSource, finalFlow⟩
 
 theorem acceptedByteGlobalsEntryBodyOrStopWithChannels (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
@@ -168,7 +168,7 @@ theorem acceptedByteGlobalsEntryBodyOrStopWithChannels (fuel : Nat) (config : Ev
       invokeCall (fuel + 3) config environment config.module.entry [] [] 0 initialized =
         (finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) >>= fun carriers =>
           deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
-      activation.channels = [] ∧ frame.source.impl = implementation ∧ frame.interpretation.environment = activation ∧ next.initialized = entryFrame.initialized ∧
+      activation.channels = [] ∧ frame.initialized = config.module.globals.size ∧ frame.source.impl = implementation ∧ frame.interpretation.environment = activation ∧ next.initialized = entryFrame.initialized ∧
       RootTypesExtend (declaredRootTypes config.module) types ∧
       AcceptedWorld config next.initialized after [.callChannels activation []] types live regions [] ∧
       AcceptedFrame config accepted next after types ∧
@@ -176,12 +176,12 @@ theorem acceptedByteGlobalsEntryBodyOrStopWithChannels (fuel : Nat) (config : Ev
   rcases acceptedByteGlobalsEntryOrStop fuel config accepted globals with stopped | entry
   · exact Or.inl stopped
   · obtain ⟨initialized, frame, activation, live, initializedRun, rest⟩ := entry
-    obtain ⟨bodyFrame, next, bodyActivation, types, bodyLive, regions, moduleStep, callStep, channels, implementationEq, environmentEq,
+    obtain ⟨bodyFrame, next, bodyActivation, types, bodyLive, regions, moduleStep, callStep, channels, frameInitialized, implementationEq, environmentEq,
       initializedEq, extended, finalWorld, finalSource, finalFlow⟩ :=
       acceptedByteGlobalsEntryBodyWithChannels fuel config accepted initialized declarations original implementation globals initializedRun
         originalAt implementationAt body owners checkFuel
     exact Or.inr ⟨initialized, bodyFrame, next, bodyActivation, types, bodyLive, regions, initializedRun, moduleStep,
-      callStep, channels, implementationEq, environmentEq, initializedEq, extended, finalWorld, finalSource, finalFlow⟩
+      callStep, channels, frameInitialized, implementationEq, environmentEq, initializedEq, extended, finalWorld, finalSource, finalFlow⟩
 
 
 #print axioms acceptedByteGlobalsEntryBodyOrStopWithChannels
