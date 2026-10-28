@@ -2804,6 +2804,65 @@ private theorem metadata_call (env : PEnv) (callee : Impl) (context : Context)
          namedRoots := (effects.namedRoots ++ mapNamedRoots callee context arguments (env.calleeNames[called]?.getD [])).eraseDups }) :=
   metadata_recorded _ _ _ _ (metadata_callEffects callee context arguments before after included)
 
+private def RecordsAccessTargets (effects : Eff) (action : P α) : Prop :=
+  ∀ before result after, action before = .ok (result, after) → EffectTargetsIncluded effects after.eff
+
+private theorem recordsAccess_bind_right (effects : Eff) (action : P α) (next : α → P β)
+    (recorded : ∀ value, RecordsAccessTargets effects (next value)) : RecordsAccessTargets effects (action >>= next) := by
+  intro before result after checked
+  cases initial : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, initial] at checked
+  | ok pair =>
+    apply recorded pair.1 pair.2 result after
+    simpa [bind, StateT.bind, Except.bind, initial] using checked
+
+private theorem recordsAccess_bind_left (effects : Eff) (action : P α) (next : α → P β)
+    (recorded : RecordsAccessTargets effects action) (retained : ∀ value, RetainsEffects (next value)) :
+    RecordsAccessTargets effects (action >>= next) := by
+  intro before result after checked
+  cases initial : action before with
+  | error error => simp [bind, StateT.bind, Except.bind, initial] at checked
+  | ok pair =>
+    have remaining : next pair.1 pair.2 = .ok (result, after) := by
+      simpa [bind, StateT.bind, Except.bind, initial] using checked
+    exact (recorded before pair.1 pair.2 initial).trans (retained pair.1 pair.2 result after remaining).1
+
+private theorem recordsAccess_modify (effects : Eff) (update : RState → RState)
+    (recorded : ∀ before, EffectTargetsIncluded effects (update before).eff) : RecordsAccessTargets effects (modify update) := by
+  intro before result after checked
+  change Except.ok (PUnit.unit, update before) = Except.ok (result, after) at checked
+  cases checked
+  exact recorded _
+
+private theorem recordsAccess_reject (effects : Eff) (rule : Rule) (message : String) :
+    RecordsAccessTargets effects (rejP (α := α) rule message) := by
+  intro before result after checked
+  cases checked
+
+local macro "record_access_targets" "[" extra:tacticSeq "]" : tactic => `(tactic|
+  repeat' first
+  | $extra
+  | exact recordsAccess_reject _ _ _
+  | refine recordsAccess_bind_left _ _ _ (recordsAccess_modify _ _ (by
+      intro before
+      exact (metadata_call _ _ _ _ _ {} before.eff (metadata_empty before.eff)).accessTargets)) (fun _ => ?_)
+  | refine recordsAccess_bind_right _ _ _ (fun _ => ?_)
+  | split)
+
+theorem rpCall_zeroArgument_access {env : PEnv} {target : ContextId} {context : Context} {callee : Impl}
+    {before after : RState} {roots : List RootRef}
+    (contextAt : env.mod.contexts[target]? = some context) (calleeAt : env.mod.impls[context.impl]? = some callee)
+    (checked : rpCall env target [] before = .ok (roots, after)) :
+    EffectTargetsIncluded (callEffects callee context [] {}) after.eff := by
+  have recorded : RecordsAccessTargets (callEffects callee context [] {}) (rpCall env target []) := by
+    unfold rpCall
+    simp only [contextAt, calleeAt]
+    record_access_targets [fail]
+    all_goals try dsimp only
+    all_goals record_access_targets [fail]
+    all_goals retain_effect_targets [exact retains_escapeRoots _ _ _]
+  exact recorded before roots after checked
+
 private def SameRootCursor (left right : RState) : Prop :=
   left.nextVar = right.nextVar ∧ left.valueBreakRoots = right.valueBreakRoots
 
