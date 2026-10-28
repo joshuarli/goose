@@ -103,7 +103,7 @@ theorem accepted_generated_call_mixed_stopped_suffix {cfg : Cfg} {env : Env} {in
             source.world source.typingEnv source.rootsEnv (callArgContext source.context index (.byRef mutability place) found) :=
           ⟨plans, path, world, typing, roots, childContext⟩
         obtain ⟨location, consumed, remaining, point, frame, aliases, count, executed, residual,
-          done, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
+          done, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
           accepted_generated_call_reference_stopped_stage source found child target childCanonical headForm occurrence rows tracked
             bounded realized input extended steps stopped nonTimeout
         let nextSources := ArgsSource.afterHead sources done

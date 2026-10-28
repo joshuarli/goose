@@ -37,6 +37,8 @@ theorem accepted_generated_call_reference_stopped_stage {cfg : Cfg} {env : Env} 
       DemandRuntimePrefix cx consumed ⟨start, initial, state⟩ ⟨point, frame, state⟩ ∧
       DemandRuntimePrefix cx remaining ⟨point, frame, state⟩ reached ∧
       evalArg 2 cfg env (.byRef mutability place) state = .ok (.ref location) state ∧
+      Post cfg env cx stage initial (lowerArg (.byRef mutability place) (lowerEnv cfg.mod env.vars results) stage).2
+        frame point [(id, .val (.ref location))] ∧
       GeneratedCallArgumentRows source.rootsEnv.access source.path 0 (arguments.take (index + 1))
         (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).1 nextPrior ∧
       (⟨nextPrior ++ map.values, map.runs⟩ : RetainedSsaMap).Realizes cfg.mod source.world env ⟨point, frame, state⟩ ∧
@@ -44,12 +46,12 @@ theorem accepted_generated_call_reference_stopped_stage {cfg : Cfg} {env : Env} 
         (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).2.vals.size ∧
       GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
         (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).2 frame point := by
-  obtain ⟨location, length, point, frame, aliases, evaluated, first, tail, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
+  obtain ⟨location, length, point, frame, aliases, evaluated, first, tail, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
     accepted_generated_call_reference_complete source found child target canonical form occurrence rows tracked bounded realized input extended
   have executed := DemandRuntimePrefix.next ((first 0).runtime) tail
   obtain ⟨remaining, count, residual⟩ := executed.compare_stopped steps stopped nonTimeout
   exact ⟨location, length + 1, remaining, point, frame, aliases, count, executed, residual,
-    evaluated, nextTracked, nextRealized, nextBounded, nextInput⟩
+    evaluated, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩
 
 #print axioms accepted_generated_call_reference_stopped_stage
 end Goose.Lower

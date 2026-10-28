@@ -2,6 +2,7 @@ import Goose.Lower.DemandCallReferenceComplete
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
+open Goose.Lower.Validation.ReplacementContentFlowSource
 
 structure CallArgumentCells (ids : List ValueId) (values : List Val) (limit : Nat) (frame : GIR.Frame) : Prop where
   length : ids.length = values.length
@@ -33,6 +34,25 @@ theorem CallArgumentCells.appendPost {cfg : Cfg} {env : Env} {cx : FnCtx} {befor
     · subst pair
       exact post.has (id, .val value) (by simp)
 
+theorem CallArgumentCells.next {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty} {before : LS}
+    {arguments : List Arg} {index : Nat} {argument : Arg} (found : arguments[index]? = some argument)
+    {values : List Val} {value : Val} {initial frame : GIR.Frame} {point : Pt}
+    (previous : CallArgumentCells
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).1 values
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2.vals.size initial)
+    (post : Post cfg env cx (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2 initial
+      (lowerArg argument (lowerEnv cfg.mod env.vars results)
+        (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).2 frame point
+      [((lowerArg argument (lowerEnv cfg.mod env.vars results)
+        (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).1, .val value)]) :
+    CallArgumentCells (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).1
+      (values ++ [value]) (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).2.vals.size frame := by
+  have takeEq : arguments.take (index + 1) = arguments.take index ++ [argument] := by
+    rw [List.take_add_one, found]
+    simp
+  rw [takeEq, lowerArgs_append_run]
+  simpa [lowerArgs, bind_run, pure_run] using previous.appendPost post
+
 theorem CallArgumentCells.read {ids : List ValueId} {values : List Val} {limit : Nat} {frame : GIR.Frame}
     (cells : CallArgumentCells ids values limit frame) (state : St) :
     mapList (getVal frame) ids state = .ok values state := by
@@ -55,6 +75,7 @@ theorem CallArgumentCells.read {ids : List ValueId} {values : List Val} {limit :
       have tailRead := ih tail
       simp only [mapList, bind_apply, getVal_of head, pure_apply, tailRead]
 
+#print axioms CallArgumentCells.next
 #print axioms CallArgumentCells.appendPost
 #print axioms CallArgumentCells.read
 end Goose.Lower

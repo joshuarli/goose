@@ -35,6 +35,8 @@ theorem accepted_generated_call_reference_complete {cfg : Cfg} {env : Env} {init
       evalArg 2 cfg env (.byRef mutability place) state = .ok (.ref location) state ∧
       (∀ fuel, DemandInstructionStep cx fuel ⟨start, initial, state⟩ middle) ∧
       DemandRuntimePrefix cx length middle ⟨point, frame, state⟩ ∧
+      Post cfg env cx stage initial (lowerArg (.byRef mutability place) (lowerEnv cfg.mod env.vars results) stage).2
+        frame point [(id, .val (.ref location))] ∧
       GeneratedCallArgumentRows source.rootsEnv.access source.path 0 (arguments.take (index + 1))
         (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).1 nextPrior ∧
       (⟨nextPrior ++ map.values, map.runs⟩ : RetainedSsaMap).Realizes cfg.mod source.world env ⟨point, frame, state⟩ ∧
@@ -62,7 +64,7 @@ theorem accepted_generated_call_reference_complete {cfg : Cfg} {env : Env} {init
     exact borrowPost
   obtain ⟨aliases, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
     accepted_call_reference_finish source found child target canonical form placed tracked bounded realized input finalPost
-  refine ⟨location, borrowLength, finalPoint, finalFrame, aliases, ?_, firstStep, borrowSteps, nextTracked, nextRealized, nextBounded, nextInput⟩
+  refine ⟨location, borrowLength, finalPoint, finalFrame, aliases, ?_, firstStep, borrowSteps, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩
   simpa [evalArg, bind_apply, placed, pure_apply]
 
 #print axioms accepted_generated_call_reference_complete

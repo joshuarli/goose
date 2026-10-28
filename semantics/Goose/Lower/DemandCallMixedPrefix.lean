@@ -133,7 +133,7 @@ theorem accepted_generated_call_mixed_prefix_suffix {cfg : Cfg} {env : Env} {ini
         have childCanonical : (ArgSource.byRef mutability child (Or.inl target)).MatchesContext
             source.world source.typingEnv source.rootsEnv (callArgContext source.context index (.byRef mutability place) found) :=
           ⟨plans, path, world, typing, roots, childContext⟩
-        obtain ⟨location, length, point, frame, aliases, done, first, tail, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
+        obtain ⟨location, length, point, frame, aliases, done, first, tail, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
           accepted_generated_call_reference_complete source found child target childCanonical headForm occurrence rows tracked
             bounded realized input extended
         have executed := DemandRuntimePrefix.next ((first 0).runtime) tail

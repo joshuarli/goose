@@ -1,0 +1,235 @@
+import Goose.Lower.DemandCallMixedStopped
+import Goose.Lower.DemandCallArgumentCells
+
+namespace Goose.Lower
+open Goose.Core Goose.GIR Goose.Core.Sound
+
+inductive CallMixedStoppedCells {cfg : Cfg} {env : Env} {initialState : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) initialState)
+    (cx : FnCtx) (results : List Ty) (before : LS) (loop : Option LoopCtx) (map : RetainedSsaMap)
+    (previousValues : List Val) (index : Nat) (rest : List Arg) (start : DemandRuntimePoint) (taken : Nat)
+    (reached : DemandRuntimePoint) (stop : Stop) (after : St) : Prop
+  | aborted (trace : CallArgumentsStopped cfg env rest start.state stop after) :
+      CallMixedStoppedCells source cx results before loop map previousValues index rest start taken reached stop after
+  | complete {consumed remaining : Nat} {boundary : DemandRuntimePoint} {values : List Val}
+      {prior : List (ValueId × RetainedAlias)}
+      (count : consumed + remaining = taken)
+      (executed : DemandRuntimePrefix cx consumed start boundary)
+      (residual : DemandRuntimePrefix cx remaining boundary reached)
+      (trace : CallArgumentsDone cfg env rest start.state values boundary.state)
+      (tracked : GeneratedCallArgumentRows source.rootsEnv.access source.path 0
+        (arguments.take (index + rest.length))
+        (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).1 prior)
+      (bounded : (⟨prior ++ map.values, map.runs⟩ : RetainedSsaMap).Bounded
+        (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).2.vals.size)
+      (realized : (⟨prior ++ map.values, map.runs⟩ : RetainedSsaMap).Realizes cfg.mod source.world env boundary)
+      (cells : CallArgumentCells
+        (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).1
+        (previousValues ++ values)
+        (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).2.vals.size boundary.frame)
+      (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
+        (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).2 boundary.frame boundary.point) :
+      CallMixedStoppedCells source cx results before loop map previousValues index rest start taken reached stop after
+
+theorem accepted_generated_call_mixed_stopped_cells_suffix {cfg : Cfg} {env : Env} {initialState : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) initialState)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.expression (.call context arguments origin)) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (extended : ExtT (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (shrink : cfg.mod.profile = .shrink) {rest : List Arg} (form : CallMixedStoppedArguments source.rootsEnv.access rest)
+    {index : Nat} {state : St} (sources : ∀ fuel, ArgsSource fuel cfg env rest state)
+    (canonical : ∀ fuel, (sources fuel).CallChildren source index)
+    {previousValues : List Val} {prior : List (ValueId × RetainedAlias)}
+    (tracked : GeneratedCallArgumentRows source.rootsEnv.access source.path 0 (arguments.take index)
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).1 prior)
+    {initial : GIR.Frame} {start : Pt}
+    (cells : CallArgumentCells (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).1
+      previousValues (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2.vals.size initial)
+    (bounded : (⟨prior ++ map.values, map.runs⟩ : RetainedSsaMap).Bounded
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2.vals.size)
+    (realized : (⟨prior ++ map.values, map.runs⟩ : RetainedSsaMap).Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
+      (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2 initial start)
+    {taken : Nat} {reached : DemandRuntimePoint} (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
+    {fuel : Nat} {stop : Stop} {after : St} (stopped : DemandInstructionStop cx fuel reached stop after)
+    (nonTimeout : stop ≠ .timeout) :
+    CallMixedStoppedCells source cx results before loop map previousValues index rest ⟨start, initial, state⟩ taken reached stop after := by
+  induction form generalizing index state initial start prior previousValues taken reached with
+  | nil =>
+    apply CallMixedStoppedCells.complete (consumed := 0) (remaining := taken) (boundary := ⟨start, initial, state⟩)
+      (values := []) (prior := prior) (by omega) (.zero _) steps (.nil state)
+    · simpa using tracked
+    · simpa using bounded
+    · exact realized
+    · simpa using cells
+    · simpa using input
+  | @value expression rest headForm tailForm ih =>
+    cases sourceEq : sources 0 with
+    | cons head tail =>
+      cases head with
+      | byVal child =>
+        have evidence := canonical 0
+        rw [sourceEq] at evidence
+        obtain ⟨found, childCanonical, _⟩ := evidence
+        have stage := accepted_generated_call_value_stage_stopped source found child childCanonical selected owned occurrence rows tracked
+          coverage admitted bounded realized input extended headForm steps stopped nonTimeout
+        cases stage with
+        | aborted sourceFuel evaluated =>
+          apply CallMixedStoppedCells.aborted
+          exact .head (fuel := sourceFuel + 1) (by simpa [evalArg] using evaluated) nonTimeout
+        | @complete sourceFuel consumed remaining boundary value count executed residual evaluated post =>
+          have done : evalArg (sourceFuel + 1) cfg env (.byVal expression) state = .ok value boundary.state := by
+            simpa [evalArg] using evaluated
+          obtain ⟨aliases, query⟩ := source.callArgumentAlias found shrink
+          obtain ⟨nextTracked, nextRealized, nextBounded⟩ :=
+            accepted_generated_call_value_finish source found child childCanonical tracked query post
+          have nextInput := accepted_generated_call_value_next_input source found child input post
+          have valuePost : Post cfg env cx (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2 initial
+              (lowerArg (.byVal expression) (lowerEnv cfg.mod env.vars results)
+                (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).2 boundary.frame boundary.point
+              [((lowerArg (.byVal expression) (lowerEnv cfg.mod env.vars results)
+                (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).2).1, .val value)] := by
+            simpa only [lowerArg] using post.post
+          have nextCells := cells.next found valuePost
+          let nextSources := ArgsSource.afterHead sources done
+          have nextCanonical : ∀ fuel, (nextSources fuel).CallChildren source (index + 1) := by
+            intro fuel
+            exact ArgsSource.afterHead_callChildren source sources canonical done fuel
+          have next := ih nextSources nextCanonical nextTracked nextCells nextBounded nextRealized nextInput residual stopped
+          cases next with
+          | aborted trace => exact .aborted (.tail done trace)
+          | @complete consumedTail remainingTail final values finalPrior tailCount tailExecuted tailResidual trace finalTracked finalBounded finalRealized finalCells finalInput =>
+            apply CallMixedStoppedCells.complete (consumed := consumed + consumedTail) (remaining := remainingTail)
+              (boundary := final) (values := value :: values) (prior := finalPrior) (by omega)
+              (executed.append tailExecuted) tailResidual (.cons done trace)
+            · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalTracked
+            · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalBounded
+            · exact finalRealized
+            · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalCells
+            · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalInput
+  | @reference mutability place rest headForm typeFact tailForm ih =>
+    cases sourceEq : sources 0 with
+    | cons head tail =>
+      cases head with
+      | byRef _ child allowed =>
+        have evidence := canonical 0
+        rw [sourceEq] at evidence
+        obtain ⟨found, childCanonical, _⟩ := evidence
+        obtain ⟨plans, path, world, typing, roots, childContext⟩ := childCanonical
+        have accessType := tyPlace_accessType (child.frame.mod_t.trans child.frame.mod_p.symm)
+          (child.frame.vars_t.trans child.frame.vars_p.symm) child.typed
+        rw [roots] at accessType
+        obtain ⟨type, typeAt, target⟩ := typeFact
+        rw [typeAt] at accessType
+        have sameType : child.ty = type := Option.some.inj accessType.symm
+        have target : child.ty.refTarget = true := by simpa [sameType] using target
+        have childCanonical : (ArgSource.byRef mutability child (Or.inl target)).MatchesContext
+            source.world source.typingEnv source.rootsEnv (callArgContext source.context index (.byRef mutability place) found) :=
+          ⟨plans, path, world, typing, roots, childContext⟩
+        obtain ⟨location, consumed, remaining, point, frame, aliases, count, executed, residual,
+          done, finalPost, nextTracked, nextRealized, nextBounded, nextInput⟩ :=
+          accepted_generated_call_reference_stopped_stage source found child target childCanonical headForm occurrence rows tracked
+            bounded realized input extended steps stopped nonTimeout
+        have nextCells := cells.next found finalPost
+        let nextSources := ArgsSource.afterHead sources done
+        have nextCanonical : ∀ fuel, (nextSources fuel).CallChildren source (index + 1) := by
+          intro fuel
+          exact ArgsSource.afterHead_callChildren source sources canonical done fuel
+        have next := ih nextSources nextCanonical nextTracked nextCells nextBounded nextRealized nextInput residual stopped
+        cases next with
+        | aborted trace => exact .aborted (.tail done trace)
+        | @complete consumedTail remainingTail final values finalPrior tailCount tailExecuted tailResidual trace finalTracked finalBounded finalRealized finalCells finalInput =>
+          apply CallMixedStoppedCells.complete (consumed := consumed + consumedTail) (remaining := remainingTail)
+            (boundary := final) (values := .ref location :: values) (prior := finalPrior) (by omega)
+            (executed.append tailExecuted) tailResidual (.cons done trace)
+          · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalTracked
+          · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalBounded
+          · exact finalRealized
+          · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalCells
+          · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalInput
+
+theorem accepted_generated_call_mixed_stopped_cells {cfg : Cfg} {env : Env} {state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) state)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.expression (.call context arguments origin)) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (shrink : cfg.mod.profile = .shrink) (form : CallMixedStoppedArguments source.rootsEnv.access arguments)
+    {taken : Nat} {reached : DemandRuntimePoint} (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
+    {fuel : Nat} {stop : Stop} {after : St} (stopped : DemandInstructionStop cx fuel reached stop after)
+    (nonTimeout : stop ≠ .timeout) :
+    CallMixedStoppedCells source cx results before loop map [] 0 arguments ⟨start, initial, state⟩ taken reached stop after := by
+  let sources := fun fuel => Classical.choose (source.callArgsCanonical fuel results input.metadata)
+  have canonical : ∀ fuel, (sources fuel).CallChildren source 0 := by
+    intro fuel
+    exact (Classical.choose_spec (source.callArgsCanonical fuel results input.metadata)).2
+  have tracked : GeneratedCallArgumentRows source.rootsEnv.access source.path 0 (arguments.take 0)
+      (lowerArgs (arguments.take 0) (lowerEnv cfg.mod env.vars results) before).1 [] := by
+    simpa [lowerArgs, pure_run] using (GeneratedCallArgumentRows.nil (access := source.rootsEnv.access) (path := source.path) 0)
+  apply accepted_generated_call_mixed_stopped_cells_suffix source selected owned occurrence rows coverage admitted extended shrink form sources canonical tracked
+  · simpa [lowerArgs, pure_run] using CallArgumentCells.empty before.vals.size initial
+  · simpa [lowerArgs, pure_run] using bounded
+  · simpa using realized
+  · simpa [lowerArgs, pure_run] using input
+  · exact steps
+  · exact stopped
+  · exact nonTimeout
+
+theorem CallMixedStoppedCells.frontier {cfg : Cfg} {env : Env} {state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    {source : ExprSource cfg env (.call context arguments origin) state}
+    {cx : FnCtx} {results : List Ty} {before : LS} {loop : Option LoopCtx} {map : RetainedSsaMap}
+    {initial : GIR.Frame} {start : Pt} {taken : Nat} {reached : DemandRuntimePoint} {stop : Stop} {after : St}
+    (outcome : CallMixedStoppedCells source cx results before loop map [] 0 arguments ⟨start, initial, state⟩ taken reached stop after)
+    (extended : ExtT (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks) :
+    (∃ fuel, mapList (evalArg fuel cfg env) arguments state = .stop stop after) ∨
+    ∃ (sourceFuel consumed remaining : Nat) (boundary : DemandRuntimePoint) (values : List Val),
+      consumed + remaining = taken ∧
+      DemandRuntimePrefix cx consumed ⟨start, initial, state⟩ boundary ∧
+      DemandRuntimePrefix cx remaining boundary reached ∧
+      mapList (evalArg sourceFuel cfg env) arguments state = .ok values boundary.state ∧
+      mapList (getVal boundary.frame) (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 boundary.state =
+        .ok values boundary.state ∧
+      instAt cx.fn boundary.point = some (.def (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).1
+        (.call context (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 (some origin))) := by
+  cases outcome with
+  | aborted trace => exact Or.inl trace.fuel.2
+  | @complete consumed remaining boundary values prior count executed residual trace tracked bounded realized cells input =>
+    obtain ⟨sourceFuel, evaluated⟩ := trace.fuel
+    have read := cells.read boundary.state
+    have point : (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2.pp = some boundary.point := by
+      simpa using input.atPoint
+    let le := lowerEnv cfg.mod env.vars results
+    obtain ⟨ids, middle, afterCall, argsRun, definition, tail⟩ := lowerExpr_call_split
+      (show lowerExpr (.call context arguments origin) le before =
+        ((lowerExpr (.call context arguments origin) le before).1, (lowerExpr (.call context arguments origin) le before).2) from rfl)
+    have afterExtended : ExtT afterCall cx.fn.blocks := by
+      rcases tail with ⟨_, term⟩ | ⟨_, rfl⟩
+      · exact extended.of_adv (adv_emitTerm term)
+      · exact extended
+    have sameIds : ids = (lowerArgs arguments le before).1 := by rw [argsRun]
+    have sameMiddle : middle = (lowerArgs arguments le before).2 := by rw [argsRun]
+    subst ids
+    subst middle
+    have instruction := (emitDef_facts definition point afterExtended).2.2.2.2
+    exact Or.inr ⟨sourceFuel, consumed, remaining, boundary, values, count, executed, residual, evaluated,
+      by simpa using read, instruction⟩
+
+#print axioms CallMixedStoppedCells.frontier
+#print axioms accepted_generated_call_mixed_stopped_cells
+end Goose.Lower
