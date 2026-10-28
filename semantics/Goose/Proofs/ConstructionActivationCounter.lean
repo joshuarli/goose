@@ -164,6 +164,175 @@ theorem counter_fault (reason : Goose.Core.FaultKind) : PreservesActivationCount
 theorem counter_abortAt (reason : Goose.Core.AbortKind) (origin : Goose.Core.OriginId) :
     PreservesActivationCounter (abortAt (α := α) reason origin) := counter_stop _
 
+theorem counter_fixedWrites (fuel : Nat) (layout : LayoutEnv) (destination : Goose.Core.DestinationId)
+    (element : Ty) (origin : Goose.Core.OriginId) (values : Array Value) :
+    PreservesActivationCounter (forIn values PUnit.unit fun value _ => do
+      let bytes ← liftExcept (fixedBytes fuel layout element value)
+      liftConstruction origin (writeElement destination bytes)
+      pure (.yield PUnit.unit)) := by
+  apply counter_arrayForIn
+  intro value _
+  apply counter_bind
+  · exact counter_stateQuery _ (stateQuery_liftExcept _)
+  · intro bytes
+    apply counter_bind
+    · exact counter_lift _ _
+    · intro _; exact counter_pure _
+
+theorem counter_packedWrites (fuel : Nat) (layout : LayoutEnv) (destination : Goose.Core.DestinationId)
+    (bytes : ByteArray) (run : SampledRun) (start count : Nat) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (forIn ([0:count] : Std.Legacy.Range) PUnit.unit fun index _ => do
+      let (low, high) ← liftLayout (elementInterval fuel layout bytes run (start + index))
+      liftConstruction origin (writeElement destination (bytes.extract low high))
+      pure (.yield PUnit.unit)) := by
+  apply counter_rangeForIn
+  intro index _
+  apply counter_bind
+  · exact counter_stateQuery _ (stateQuery_liftLayout _)
+  · intro interval
+    rcases interval with ⟨low, high⟩
+    simp only
+    apply counter_bind
+    · exact counter_lift _ _
+    · intro _; exact counter_pure _
+
+theorem counter_copyValue (fuel : Nat) (layout : LayoutEnv) (destination : Goose.Core.DestinationId)
+    (value : Value) (origin : Goose.Core.OriginId) (source : Option Goose.Core.CopySource) :
+    PreservesActivationCounter (copyValue fuel layout destination value origin source) := by
+  cases fuel with
+  | zero => exact counter_stop _
+  | succ fuel =>
+      unfold copyValue
+      apply counter_bind
+      · exact counter_lift _ _
+      · intro current
+        apply counter_bind
+        · exact counter_stateQuery _ (stateQuery_getDestination current)
+        · intro pending
+          cases elementFound : elementType pending.capability.logicalType with
+          | none => exact counter_stop _
+          | some element =>
+              cases value with
+              | int _ _ | bool _ | unit | record _ _ | ref _ => exact counter_stop _
+              | stored stored =>
+                  apply counter_bind
+                  · exact counter_stateQuery _ (stateQuery_sampledStored stored)
+                  · intro sampled
+                    rcases sampled with ⟨bytes, run⟩
+                    simp only
+                    split
+                    · exact counter_stop _
+                    · apply counter_bind
+                      · exact counter_lift _ _
+                      · intro _
+                        apply counter_bind
+                        · simpa only [Nat.zero_add] using counter_packedWrites fuel layout current bytes run 0 run.count origin
+                        · intro _; exact counter_lift _ _
+              | fixed values =>
+                  cases source with
+                  | none =>
+                      apply counter_bind
+                      · exact counter_fixedWrites fuel layout current element origin values
+                      · intro _; exact counter_lift _ _
+                  | some source =>
+                      apply counter_bind
+                      · exact counter_lift _ _
+                      · intro _
+                        apply counter_bind
+                        · exact counter_fixedWrites fuel layout current element origin values
+                        · intro _; exact counter_lift _ _
+              | slice location start count =>
+                  apply counter_bind
+                  · exact counter_stateQuery _ (stateQuery_readLoc fuel layout location)
+                  · intro backing
+                    cases source with
+                    | none => exact counter_stop _
+                    | some source =>
+                        cases backing with
+                        | int _ _ | bool _ | unit | record _ _ | ref _ | slice _ _ _ => exact counter_stop _
+                        | stored stored =>
+                            apply counter_bind
+                            · exact counter_stateQuery _ (stateQuery_storedPathRun stored)
+                            · intro sampled
+                              rcases sampled with ⟨bytes, run⟩
+                              simp only
+                              split
+                              · exact counter_stop _
+                              · split
+                                · exact counter_stop _
+                                · apply counter_bind
+                                  · exact counter_lift _ _
+                                  · intro _
+                                    apply counter_bind
+                                    · exact counter_packedWrites fuel layout current bytes run start count origin
+                                    · intro _; exact counter_lift _ _
+                        | fixed values =>
+                            simp only
+                            split
+                            · exact counter_stop _
+                            · apply counter_bind
+                              · exact counter_lift _ _
+                              · intro _
+                                apply counter_bind
+                                · exact counter_fixedWrites fuel layout current element origin (values.extract start (start + count))
+                                · intro _; exact counter_lift _ _
+
+theorem counter_newDestination (layout : LayoutEnv) (owner : Goose.Core.ActId)
+    (ty : Ty) (request : Goose.Core.ConstructionRequest) (origin : Goose.Core.OriginId)
+    (storage : Option Goose.Core.StorageId) (knownCount : Option Nat) :
+    PreservesActivationCounter (newDestination layout owner ty request origin storage knownCount) := by
+  unfold newDestination
+  cases storage with
+  | none =>
+      apply counter_bind
+      · exact counter_lift _ _
+      · intro storage
+        apply counter_bind
+        · exact counter_stateQuery _ (stateQuery_receivingLayout layout ty)
+        · intro receiving; exact counter_lift _ _
+  | some storage =>
+      apply counter_bind
+      · exact counter_pure _
+      · intro storage
+        apply counter_bind
+        · exact counter_stateQuery _ (stateQuery_receivingLayout layout ty)
+        · intro receiving; exact counter_lift _ _
+
+theorem counter_channelsFor (layout : LayoutEnv) (owner : Goose.Core.ActId)
+    (results : List ResultDescriptor) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (channelsFor layout owner results origin) := by
+  unfold channelsFor
+  apply counter_listMapM
+  intro descriptor
+  cases descriptor.request with
+  | register => exact counter_pure _
+  | value | elementRun =>
+      apply counter_bind
+      · exact counter_newDestination _ _ _ _ _ _ _
+      · intro destination; exact counter_pure _
+
+theorem counter_completedReceivingDestination (id : Goose.Core.DestinationId) :
+    PreservesActivationCounter (completedReceivingDestination id) := by
+  unfold completedReceivingDestination
+  apply counter_bind
+  · exact counter_lift _ _
+  · intro current
+    exact counter_stateQuery _ (stateQuery_completedDestination current)
+
+theorem counter_publishCarriers (origin : Goose.Core.OriginId) (carriers : List Carrier) :
+    PreservesActivationCounter (publishCarriers origin carriers) := by
+  unfold publishCarriers
+  apply counter_bind
+  · apply counter_stateQuery
+    apply stateQuery_listMapM
+    intro carrier
+    cases carrier with
+    | register value => exact stateQuery_pure _
+    | completed id => exact stateQuery_pure _
+    | pendingNamed token => exact stateQuery_stop _
+  · intro ids
+    exact counter_lift _ _
+
 theorem counter_receivingDestination (id : Goose.Core.DestinationId) :
     PreservesActivationCounter (receivingDestination id) := by
   exact counter_lift _ _
@@ -376,6 +545,48 @@ theorem counter_protectDestination (origin : Goose.Core.OriginId) (destination :
         simpa [protectDestination, result, cleaned, Goose.Proofs.Exit.stepState] using Nat.le_trans prior after
 
 #print axioms counter_protectDestination
+theorem counter_materializeProducer (fuel : Nat) (declarations : DeclarationEnv)
+    (expression : Expr) (evaluate : EvalM Value) (preserved : PreservesActivationCounter evaluate) :
+    PreservesActivationCounter (materializeProducer fuel declarations expression evaluate) := by
+  unfold materializeProducer
+  split
+  · exact counter_pure _
+  · apply counter_bind
+    · exact preserved
+    · intro value
+      cases value <;> first | exact counter_pure _ | exact counter_stop _
+
+theorem counter_materializedDestination (fuel : Nat) (layout : LayoutEnv)
+    (owner : Goose.Core.ActId) (ty : Ty) (origin : Goose.Core.OriginId)
+    (count : Nat) (value : Value) :
+    PreservesActivationCounter (materializedDestination fuel layout owner ty origin count value) := by
+  unfold materializedDestination
+  apply counter_bind
+  · exact counter_newDestination _ _ _ _ _ _ _
+  · intro destination
+    apply counter_bind
+    · exact counter_copyValue _ _ _ _ _ _
+    · intro ignored
+      exact counter_completedReceivingDestination _
+
+theorem counter_constructLocal (declarations : DeclarationEnv) (owner : Goose.Core.ActId) (ty : Ty)
+    (origin : Goose.Core.OriginId) (expression : Expr) (construct : Goose.Core.DestinationId → EvalM Unit)
+    (preserved : ∀ destination, PreservesActivationCounter (construct destination)) :
+    PreservesActivationCounter (constructLocal declarations owner ty origin expression construct) := by
+  unfold constructLocal
+  apply counter_bind
+  · exact counter_newDestination _ _ _ _ _ _ _
+  · intro destination
+    apply counter_bind
+    · exact preserved destination
+    · intro _
+      apply counter_bind
+      · exact counter_completedReceivingDestination destination
+      · intro completed
+        apply counter_bind
+        · exact counter_publishCarriers _ _
+        · intro _; exact counter_pure _
+
 structure EvaluationPreservesActivationCounter (fuel : Nat) (config : EvalConfig) : Prop where
   value : ∀ environment expression, PreservesActivationCounter (evalValue fuel config environment expression)
   bound : ∀ environment count defaultValue operand, PreservesActivationCounter (evalBound fuel config environment count defaultValue operand)
