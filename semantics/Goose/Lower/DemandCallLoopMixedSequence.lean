@@ -99,6 +99,26 @@ theorem ReachableScalarCallStatements.normal {cfg : Cfg} {env : Env} {statements
     (done : execStmts fuel cfg env statements state = .ok flow after) : flow = .normal .unit :=
   form.toMixed.normal done
 
+theorem ReachableScalarCallStatements.single {cfg : Cfg} {env : Env}
+    {context : ContextId} {arguments : List Arg} {origin statementOrigin : OriginId}
+    {ctx : Context} {impl : Impl} (contextAt : cfg.mod.contexts[context]? = some ctx)
+    (implAt : cfg.mod.impls[ctx.impl]? = some impl) (depth : env.depth < maxCallDepth)
+    (fragment : ∀ middle : St, WhileMixedStatements cfg
+      { vars := impl.vars, act := middle.nextAct, scopes := (impl.body.scope, middle.nextScope) :: [], depth := env.depth + 1 } impl.body.stmts)
+    {expression : Expr} (form : ControlPrefixExpression expression) (hasValue : impl.body.value = some expression)
+    (shrink : cfg.mod.profile = .shrink)
+    (argumentsForm : ∀ {state : St} (source : StmtSource cfg env (.expr (.call context arguments origin) statementOrigin) state),
+      CallMixedArguments source.rootsEnv.access arguments)
+    (stoppedArgumentsForm : ∀ {state : St} (source : StmtSource cfg env (.expr (.call context arguments origin) statementOrigin) state),
+      CallMixedStoppedArguments source.rootsEnv.access arguments) :
+    ReachableScalarCallStatements cfg env [.expr (.call context arguments origin) statementOrigin] := by
+  simpa using ReachableScalarCallStatements.call (cfg := cfg) (env := env) (earlier := []) (later := [])
+    ScalarAssignmentStatements.nil context arguments origin statementOrigin ctx impl contextAt implAt depth
+    fragment expression form hasValue shrink argumentsForm stoppedArgumentsForm
+    (ReachableScalarCallStatements.mixed ScalarAssignmentStatements.nil)
+
+#print axioms ReachableScalarCallStatements.single
+
 #print axioms ReachableScalarCallStatements.normal
 
 #print axioms accepted_generated_reachable_scalar_call_statements

@@ -187,10 +187,8 @@ theorem accepted_generated_while_call_header_prefix_complete {cfg : Cfg} {env : 
       { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts := by
     intro middle
     rw [bodyStatements]
-    simpa using ReachableScalarCallStatements.call (cfg := cfg) (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes }) (earlier := []) (later := [])
-      ScalarAssignmentStatements.nil callContext arguments callOrigin statementOrigin calleeContext callee contextAt implAt depth
-      fragment expression form hasValue shrink (argumentsForm middle) (stoppedArgumentsForm middle)
-      (ReachableScalarCallStatements.mixed ScalarAssignmentStatements.nil)
+    exact ReachableScalarCallStatements.single contextAt implAt depth fragment form hasValue shrink
+      (argumentsForm middle) (stoppedArgumentsForm middle)
   exact accepted_generated_while_scalar_call_header_prefix_complete iterations source original world mixed noValue targetConfig
     selected owned headerInput headerTarget headerId headerEq occurrence rows coverage admitted bounded realized family lowered extended headerReach steps
 
