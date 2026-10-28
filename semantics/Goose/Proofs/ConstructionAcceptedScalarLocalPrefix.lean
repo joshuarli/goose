@@ -51,7 +51,7 @@ theorem execStmt_acceptedScalarLocal_prefix (fuel checkFuel : Nat) (config : Eva
       (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool) :
     match execStmt fuel config frame.interpretation.environment (.letS id expression origin) before with
     | .stop _ after => AcceptedWorld config frame.initialized after ambient types live regions pending ∧
-        AcceptedFrame config accepted frame after types
+        AcceptedFrame config accepted frame after types ∧ after.nextAct = before.nextAct ∧ after.nextScope = before.nextScope
     | .ok flow after => flow = .normal .unit ∧ ∃ (scopeInst : Nat) (descriptor : LocalVar) (rootsAfter : RState),
         let root := Goose.Core.RootInst.local frame.interpretation.environment.act scopeInst id
         let next := { advanceLocalFrame { frame with typingFuel := checkFuel + 1 } id with rootCursor := rootsAfter }
@@ -60,6 +60,7 @@ theorem execStmt_acceptedScalarLocal_prefix (fuel checkFuel : Nat) (config : Eva
           (fun other => other = root ∨ live other) regions pending ∧
         AcceptedFrame config accepted next after (registerRootType types root descriptor.ty) ∧
         SourcePosition accepted next (.statements rest) ∧
+        after.nextAct = before.nextAct ∧ after.nextScope = before.nextScope ∧
         typeStatement (checkFuel + 1) frame.typing (.letS id expression origin) frame.typingCounter =
           .ok (next.typing, next.typingCounter) ∧
         rpStmt frame.source (.letS id expression origin) frame.rootCursor = .ok ((), rootsAfter) ∧
@@ -163,6 +164,10 @@ theorem execStmt_acceptedScalarLocal_prefix (fuel checkFuel : Nat) (config : Eva
         obtain ⟨after, bound, extended, afterWorld⟩ := bindRoot_freshScalar_world config frame.initialized before ambient types live
           (.local frame.interpretation.environment.act scopeInst id) descriptor.ty value regions pending world scalarValue fresh
           compatible conform valid.represented valid.pointers frontier synthetic
+        have exactBinding := bindRoot_freshScalar before (.local frame.interpretation.environment.act scopeInst id) value scalarValue fresh
+        have sameAfter := (ExecutionStep.ok.inj (bound.symm.trans exactBinding)).2
+        have actClock : after.nextAct = before.nextAct := by rw [sameAfter]; rfl
+        have scopeClock : after.nextScope = before.nextScope := by rw [sameAfter]; rfl
         have afterSource := source.bindFreshScalar_advance world id descriptor _ value scalarValue rootOrder typingOrder declared valid.represented resolved bound
         let nextFrame := { advanceLocalFrame { frame with typingFuel := checkFuel + 1 } id with rootCursor := rootsAfter }
         have nextSource : AcceptedFrame config accepted nextFrame after (registerRootType types (.local frame.interpretation.environment.act scopeInst id) descriptor.ty) := by
@@ -174,7 +179,7 @@ theorem execStmt_acceptedScalarLocal_prefix (fuel checkFuel : Nat) (config : Eva
         have headTyped : typeStatement (checkFuel + 1) frame.typing (.letS id expression origin) frame.typingCounter =
             .ok (nextFrame.typing, nextFrame.typingCounter) := by
           simpa [nextFrame, advanceLocalFrame, nextTyping, nextCounter] using typed
-        exact ⟨trivial, scopeInst, descriptor, rootsAfter, extended, afterWorld, nextSource, tailPosition, headTyped, rooted, effects⟩
+        exact ⟨trivial, scopeInst, descriptor, rootsAfter, extended, afterWorld, nextSource, tailPosition, actClock, scopeClock, headTyped, rooted, effects⟩
 
 
 def ScalarLocalReplay (frame next : ConstructionSourceFrame) (statements : List Stmt) : Prop :=
@@ -205,6 +210,7 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
         let outcome := execStmts fuel config frame.interpretation.environment statements before
         let after := Goose.Proofs.Exit.stepState outcome
         next.initialized = frame.initialized ∧ RootTypesExtend types nextTypes ∧
+        after.nextAct = before.nextAct ∧ after.nextScope = before.nextScope ∧
         AcceptedWorld config next.initialized after ambient nextTypes nextLive regions pending ∧
         AcceptedFrame config accepted next after nextTypes ∧
         (match outcome with | .ok flow _ => flow = .normal .unit ∧ SourcePosition accepted next (.statements []) ∧ ScalarLocalReplay frame next statements | .stop _ _ => True | .escape .. | .jump .. => False) := by
@@ -214,7 +220,7 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, rfl, (fun _ _ found => found), world, source, trivial⟩
+      exact ⟨frame, types, live, rfl, (fun _ _ found => found), trivial, trivial, world, source, trivial⟩
     | succ fuel =>
       simp only [execStmts, pure, Goose.Proofs.Exit.stepState]
       obtain ⟨_, _, _, typed, _⟩ := position.checked accepted frame _
@@ -222,13 +228,13 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
       | zero => rw [depth] at typed; change Except.error _ = Except.ok _ at typed; cases typed
       | succ n =>
         have replay : ScalarLocalReplay frame frame [] := by simp [ScalarLocalReplay, depth, typeStatements, rpStmts, pure, StateT.pure, Except.pure]
-        exact ⟨frame, types, live, rfl, (fun _ _ found => found), world, source, trivial, position, replay⟩
+        exact ⟨frame, types, live, rfl, (fun _ _ found => found), trivial, trivial, world, source, trivial, position, replay⟩
   | cons id expression origin rest expressionForm tail ih =>
     intro fuel config accepted frame context before ambient types live regions pending world source phase position available scalar
     cases fuel with
     | zero =>
       simp only [execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
-      exact ⟨frame, types, live, rfl, (fun _ _ found => found), world, source, trivial⟩
+      exact ⟨frame, types, live, rfl, (fun _ _ found => found), trivial, trivial, world, source, trivial⟩
     | succ fuel =>
       obtain ⟨_, _, allRoots, typedAll, rootedAll⟩ := position.checked accepted frame _
       obtain ⟨middleRoots, headRooted, tailRooted⟩ := rpStmts_cons rootedAll
@@ -256,13 +262,13 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
           cases head : execStmt fuel config frame.interpretation.environment (.letS id expression origin) before with
           | stop reason after =>
             simp only [head] at headOutcome
-            obtain ⟨finalWorld, finalSource⟩ := headOutcome
+            obtain ⟨finalWorld, finalSource, actClock, scopeClock⟩ := headOutcome
             simp only [execStmts, bind, head, Goose.Proofs.Exit.stepState]
-            exact ⟨frame, types, live, rfl, (fun _ _ found => found), finalWorld, finalSource, trivial⟩
+            exact ⟨frame, types, live, rfl, (fun _ _ found => found), actClock, scopeClock, finalWorld, finalSource, trivial⟩
           | escape address carriers after | jump target kind after => simp only [head] at headOutcome
           | ok flow middle =>
             simp only [head] at headOutcome
-            obtain ⟨normal, scopeInst, descriptor, rootsAfter, extended, middleWorld, middleSource, middlePosition, middleTyped, middleRooted, middleAvailable⟩ := headOutcome
+            obtain ⟨normal, scopeInst, descriptor, rootsAfter, extended, middleWorld, middleSource, middlePosition, actClock, scopeClock, middleTyped, middleRooted, middleAvailable⟩ := headOutcome
             subst flow
             have sameRoots : rootsAfter = middleRoots :=
               (Prod.mk.inj (Except.ok.inj (middleRooted.symm.trans headRooted))).2
@@ -284,26 +290,27 @@ theorem execStmts_scalarLocal_prefix {statements : List Stmt} (form : ScalarLoca
                   (∃ ty, descriptor.ty = .int ty) ∨ descriptor.ty = .bool := by
               intro id expression origin member descriptor found
               exact scalar id expression origin (List.mem_cons_of_mem _ member) descriptor found
-            obtain ⟨finalFrame, finalTypes, finalLive, initializedEq, finalExtended, finalWorld, finalSource, finalFlow⟩ :=
+            obtain ⟨finalFrame, finalTypes, finalLive, initializedEq, finalExtended, finalActClock, finalScopeClock, finalWorld, finalSource, finalFlow⟩ :=
               ih fuel config accepted nextFrame context middle ambient nextTypes nextLive regions pending middleWorld middleSource
                 (by simpa [nextFrame, advanceLocalFrame] using phase) middlePosition remainingAvailable remainingScalar
-            simp only [execStmts, bind, head] at finalFlow finalWorld finalSource ⊢
+            simp only [execStmts, bind, head] at finalFlow finalActClock finalScopeClock finalWorld finalSource ⊢
             cases tailRun : execStmts fuel config nextFrame.interpretation.environment rest middle with
             | stop reason after =>
               have tailRun' : execStmts fuel config frame.interpretation.environment rest middle = .stop reason after := by
                 simpa [nextFrame, advanceLocalFrame] using tailRun
-              simp only [tailRun, tailRun'] at finalFlow finalWorld finalSource ⊢
+              simp only [tailRun, tailRun'] at finalFlow finalActClock finalScopeClock finalWorld finalSource ⊢
               exact ⟨finalFrame, finalTypes, finalLive, initializedEq,
-                (fun oldRoot ty found => finalExtended oldRoot ty (extended oldRoot ty found)), finalWorld, finalSource, trivial⟩
+                (fun oldRoot ty found => finalExtended oldRoot ty (extended oldRoot ty found)),
+                finalActClock.trans actClock, finalScopeClock.trans scopeClock, finalWorld, finalSource, trivial⟩
             | escape address carriers after | jump target kind after => simp [tailRun] at finalFlow
             | ok result after =>
               have tailRun' : execStmts fuel config frame.interpretation.environment rest middle = .ok result after := by
                 simpa [nextFrame, advanceLocalFrame] using tailRun
-              simp only [tailRun, tailRun'] at finalFlow finalWorld finalSource ⊢
+              simp only [tailRun, tailRun'] at finalFlow finalActClock finalScopeClock finalWorld finalSource ⊢
               obtain ⟨normal, finalPosition, replay⟩ := finalFlow
               refine ⟨finalFrame, finalTypes, finalLive, initializedEq,
-                (fun oldRoot ty found => finalExtended oldRoot ty (extended oldRoot ty found)), finalWorld, finalSource,
-                normal, finalPosition, ?_⟩
+                (fun oldRoot ty found => finalExtended oldRoot ty (extended oldRoot ty found)),
+                finalActClock.trans actClock, finalScopeClock.trans scopeClock, finalWorld, finalSource, normal, finalPosition, ?_⟩
               obtain ⟨typedRest, rootedRest, sourceSame, interpretationSame⟩ := replay
               refine ⟨?_, ?_, ?_, ?_⟩
               · rw [nesting]

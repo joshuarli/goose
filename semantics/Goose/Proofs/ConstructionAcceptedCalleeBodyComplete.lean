@@ -94,7 +94,7 @@ theorem execActivationBody_scalarLocal_prefix (fuel : Nat) (config : EvalConfig)
         List.forIn_nil, execStmts, timeout, EvalM.stop, Goose.Proofs.Exit.stepState]
       exact ⟨types, live, (fun _ _ found => found), scopeWorld, clear, trivial⟩
     | succ fuel =>
-      obtain ⟨final, finalTypes, finalLive, sameInitialized, extend, finalWorld, finalSource, finalFlow⟩ :=
+      obtain ⟨final, finalTypes, finalLive, sameInitialized, extend, finalActClock, finalScopeClock, finalWorld, finalSource, finalFlow⟩ :=
         execStmts_scalarLocal_prefix form (fuel + 1) config accepted child context (ownershipResultScopeState activation scope state)
           ambient types live regions pending scopeWorld scopeSource childPhase scopePosition seqAvailable childScalar
       cases execution : execStmts (fuel + 1) config child.interpretation.environment statements
