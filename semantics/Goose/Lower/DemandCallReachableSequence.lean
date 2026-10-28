@@ -149,6 +149,37 @@ theorem accepted_generated_reachable_control_call_sequence_cons {cfg : Cfg} {env
   · exact accepted_generated_reachable_stopped_sequence_cons selected before loop bindings want block
       (accepted_generated_reachable_control_call_statement_stopped_family contextAt implAt depth fragment form hasValue shrink stoppedArgumentsForm selected loop) tailStopped
 
+theorem accepted_generated_reachable_control_call_single {cfg : Cfg} {env : Env}
+    {context : ContextId} {arguments : List Arg} {origin statementOrigin : OriginId}
+    {ctx : Context} {impl : Impl} (contextAt : cfg.mod.contexts[context]? = some ctx)
+    (implAt : cfg.mod.impls[ctx.impl]? = some impl) (depth : env.depth < maxCallDepth)
+    (fragment : ∀ middle : St, WhileMixedStatements cfg
+      { vars := impl.vars, act := middle.nextAct, scopes := (impl.body.scope, middle.nextScope) :: [], depth := env.depth + 1 } impl.body.stmts)
+    {expression : Expr} (form : ControlPrefixExpression expression) (hasValue : impl.body.value = some expression)
+    (shrink : cfg.mod.profile = .shrink)
+    (argumentsForm : ∀ {state : St} (source : StmtSource cfg env (.expr (.call context arguments origin) statementOrigin) state),
+      CallMixedArguments source.rootsEnv.access arguments)
+    (stoppedArgumentsForm : ∀ {state : St} (source : StmtSource cfg env (.expr (.call context arguments origin) statementOrigin) state),
+      CallMixedStoppedArguments source.rootsEnv.access arguments)
+    {caller : Func} {results : List Ty} {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
+    (before : LS) (loop : Option LoopCtx) (bindings : List (SlotId × ValueId × OriginId)) (want : Bool) (block : Core.Block) :
+    ReachableSequencePrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before loop bindings want block
+      [.expr (.call context arguments origin) statementOrigin] (@ReachableCallStatementFamilyCursor cfg env caller results loop) ∧
+    ReachableStoppedSequencePrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before loop bindings want block
+      [.expr (.call context arguments origin) statementOrigin] := by
+  apply accepted_generated_reachable_control_call_sequence_cons contextAt implAt depth fragment form hasValue shrink
+    argumentsForm stoppedArgumentsForm selected before loop bindings want block
+  · exact GeneratedSequencePrefixFamily.reachable (cx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩)
+      (selected := selected) (before := before) (loop := loop) (bindings := bindings) (want := want) (block := block) (statements := [])
+      (cursor := @ReachableCallStatementFamilyCursor cfg env caller results loop)
+      (fun {state} => accepted_generated_sequence_prefix_nil selected before loop bindings want block _ (state := state))
+  · exact GeneratedStoppedSequencePrefixFamily.reachable (cx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩)
+      (selected := selected) (before := before) (loop := loop) (bindings := bindings) (want := want) (block := block) (statements := [])
+      (fun {state} => accepted_generated_stopped_sequence_nil selected before loop bindings want block (state := state))
+
+#print axioms accepted_generated_reachable_control_call_single
+
 #print axioms accepted_generated_reachable_control_call_sequence_cons
 
 #print axioms accepted_generated_reachable_control_call_statement_family

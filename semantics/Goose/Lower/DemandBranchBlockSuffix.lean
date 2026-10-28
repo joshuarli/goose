@@ -147,7 +147,7 @@ structure GeneratedGenericBranchBlockDecomposition {cfg : Cfg} {env : Env} {bloc
       (GeneratedBranchBlockEffectDemand source map required cx results before loop initial))
     (GeneratedBranchBlockEnd source map required cx results before loop initial) taken ⟨start, initial, state⟩ reached
 
-theorem accepted_generated_generic_branch_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+theorem accepted_generated_invariant_branch_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state)
     {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
     {before : LS} {loop : Option LoopCtx}
@@ -164,8 +164,11 @@ theorem accepted_generated_generic_branch_block_prefix {cfg : Cfg} {env : Env} {
     (cursor : ∀ {statement : Stmt} {innerState : St}, StmtSource cfg
       { env with scopes := (block.scope, state.nextScope) :: env.scopes } statement innerState →
       LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
-    (bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
-      cx results selected before loop [] false block block.stmts cursor)
+    (invariant : DemandRuntimePoint → Prop)
+    (advance : ∀ {length : Nat} {first last : DemandRuntimePoint}, invariant first → DemandRuntimePrefix cx length first last → invariant last)
+    (atStart : invariant ⟨start, initial, state⟩)
+    (bodyFamily : InvariantSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before loop [] false block block.stmts cursor invariant)
     (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
       execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts innerState = .ok flow after →
       flow = .normal .unit)
@@ -174,8 +177,8 @@ theorem accepted_generated_generic_branch_block_prefix {cfg : Cfg} {env : Env} {
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
     GeneratedGenericBranchBlockDecomposition source selected map required before loop initial start cursor taken reached := by
   refine ⟨owned, coverage, ?_⟩
-  have progress := accepted_generated_block_statements_prefix source selected owned occurrence rows coverage admitted bounded
-    realized input extended _ bodyFamily steps
+  have progress := accepted_generated_invariant_block_statements_prefix source selected owned occurrence rows coverage admitted bounded
+    realized input extended _ invariant advance atStart bodyFamily steps
   rcases progress with ⟨_, rfl, entry⟩ | progressed
   · have site := GeneratedDemandInstruction.blockEnter_auto occurrence rows input.atPoint extended
     exact .interior (.emitted entry ⟨_, site.instruction⟩)
@@ -225,6 +228,40 @@ theorem accepted_generated_generic_branch_block_prefix {cfg : Cfg} {env : Env} {
           | interior demanded => exact .interior (.suffix demanded)
           | complete suffixCount prefixSteps residual evaluated post =>
             exact .complete (by omega) prefixSteps residual evaluated post
+
+
+theorem accepted_generated_generic_branch_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat}
+    {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block loop [] false block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock loop [] false block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (cursor : ∀ {statement : Stmt} {innerState : St}, StmtSource cfg
+      { env with scopes := (block.scope, state.nextScope) :: env.scopes } statement innerState →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    (bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before loop [] false block block.stmts cursor)
+    (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
+      execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts innerState = .ok flow after →
+      flow = .normal .unit)
+    (noValue : block.value = none)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
+    GeneratedGenericBranchBlockDecomposition source selected map required before loop initial start cursor taken reached := by
+  have family : InvariantSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before loop [] false block block.stmts cursor (fun _ => True) := by
+    intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended _ taken reached steps
+    exact bodyFamily source owned occurrence all scope value rows coverage admitted bounded realized input extended steps
+  exact accepted_generated_invariant_branch_block_prefix source selected owned occurrence rows coverage admitted bounded realized input extended
+    cursor (fun _ => True) (fun _ _ => trivial) trivial family normal noValue steps
 
 theorem accepted_generated_scalar_branch_block_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) (fragment : ScalarAssignmentStatements cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts)

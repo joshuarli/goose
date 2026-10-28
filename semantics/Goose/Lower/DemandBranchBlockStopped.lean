@@ -29,7 +29,7 @@ inductive StoppedLoopBranchBlockPrefix {cfg : Cfg} {env : Env} {block : Core.Blo
       (post : GeneratedBranchBlockEnd source map required cx results before loop initial flow boundary) :
       StoppedLoopBranchBlockPrefix source map required cx results before loop initial start taken reached stop after
 
-theorem accepted_generated_loop_branch_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+theorem accepted_generated_invariant_loop_branch_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
     {owner : Nat} {before : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
@@ -42,8 +42,11 @@ theorem accepted_generated_loop_branch_block_stopped {cfg : Cfg} {env : Env} {bl
     (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
     (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
     (extended : ExtT (lowerBlock loop [] false block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
-    (bodyFamily : GeneratedStoppedSequencePrefixFamily
-      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] false block block.stmts)
+    (invariant : DemandRuntimePoint → Prop)
+    (advance : ∀ {length : Nat} {first last : DemandRuntimePoint}, invariant first → DemandRuntimePrefix cx length first last → invariant last)
+    (atStart : invariant ⟨start, initial, state⟩)
+    (bodyFamily : InvariantStoppedSequencePrefixFamily
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] false block block.stmts invariant)
     (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
       execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts innerState = .ok flow after →
       flow = .normal .unit) (noValue : block.value = none)
@@ -114,7 +117,8 @@ theorem accepted_generated_loop_branch_block_stopped {cfg : Cfg} {env : Env} {bl
       · cases loop <;> exact input.targets
     have bodyProgress := bodyFamily body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted
       (by rw [currentEq, enteredValues]; exact bounded) bodyDemand.operands bodyInput
-      (by rw [currentEq]; exact generated_block_statements_extended extended) residual stopped nonTimeout
+      (by rw [currentEq]; exact generated_block_statements_extended extended)
+      (advance atStart (.next enterStep (.zero _))) residual stopped nonTimeout
     cases bodyProgress with
     | aborted fuel done =>
       have raw : execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts enteredState =
@@ -168,6 +172,37 @@ theorem accepted_generated_loop_branch_block_stopped {cfg : Cfg} {env : Env} {bl
             (DemandRuntimePrefix.next enterStep bodySteps) afterBody stopped nonTimeout
         exact .complete (by omega) finalSteps finalResidual sourceDone finalBoundary
 
+
+
+theorem accepted_generated_loop_branch_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
+    {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block loop [] false block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock loop [] false block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (bodyFamily : GeneratedStoppedSequencePrefixFamily
+      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] false block block.stmts)
+    (normal : ∀ {fuel : Nat} {innerState after : St} {flow : Flow},
+      execStmts fuel cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts innerState = .ok flow after →
+      flow = .normal .unit) (noValue : block.value = none)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (stopped : DemandInstructionStop cx targetFuel reached stop after) (nonTimeout : stop ≠ .timeout) :
+    StoppedLoopBranchBlockPrefix source map required cx results before loop initial start taken reached stop after := by
+  have family : InvariantStoppedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before loop [] false block block.stmts (fun _ => True) := by
+    intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended _ taken reached steps fuel stop after stopped nonTimeout
+    exact bodyFamily source owned occurrence all scope value rows coverage admitted bounded realized input extended steps stopped nonTimeout
+  exact accepted_generated_invariant_loop_branch_block_stopped source selected owned occurrence rows coverage admitted bounded realized input extended
+    (fun _ => True) (fun _ _ => trivial) trivial family normal noValue steps stopped nonTimeout
 
 theorem accepted_generated_generic_branch_block_stopped {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}

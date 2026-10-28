@@ -35,7 +35,7 @@ inductive GeneratedBlockStatementsPrefix {cfg : Cfg} {env : Env} {block : Core.B
         (@cursor) remaining reached) :
       GeneratedBlockStatementsPrefix (before := before) (loop := loop) (want := want) source selected map required initial start (@cursor) taken reached
 
-theorem accepted_generated_block_statements_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+theorem accepted_generated_invariant_block_statements_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
     (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
     {owner : Nat} {before : LS} {loop : Option LoopCtx} {want : Bool}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
@@ -51,7 +51,10 @@ theorem accepted_generated_block_statements_prefix {cfg : Cfg} {env : Env} {bloc
     (cursor : ∀ {statement : Stmt} {innerState : St},
       StmtSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } statement innerState →
       LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
-    (bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] want block block.stmts (@cursor))
+    (invariant : DemandRuntimePoint → Prop)
+    (advance : ∀ {length : Nat} {first last : DemandRuntimePoint}, invariant first → DemandRuntimePrefix cx length first last → invariant last)
+    (atStart : invariant ⟨start, initial, state⟩)
+    (bodyFamily : InvariantSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] want block block.stmts (@cursor) invariant)
     {taken : Nat} {reached : DemandRuntimePoint}
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
     (taken = 0 ∧ reached = ⟨start, initial, state⟩ ∧
@@ -118,7 +121,37 @@ theorem accepted_generated_block_statements_prefix {cfg : Cfg} {env : Env} {bloc
         rw [bodyTyping]; exact source.same.loops
     have bodyProgress := bodyFamily body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted
       (by rw [currentEq, enteredValues]; exact bounded) bodyDemand.operands bodyInput
-      (by rw [currentEq]; exact generated_block_statements_extended extended) residual
+      (by rw [currentEq]; exact generated_block_statements_extended extended)
+      (advance atStart (.next enterStep (.zero _))) residual
     exact Or.inr ⟨body, canonical, bodyOccurrence, bodyRows, remaining, count.symm, enterStep, bodyInput, bodyProgress⟩
+
+theorem accepted_generated_block_statements_prefix {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}
+    (source : BlockSource cfg env [] block state) {cx : FnCtx} {results : List Ty} {root : DemandNode}
+    {owner : Nat} {before : LS} {loop : Option LoopCtx} {want : Bool}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.block loop [] want block) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerBlock loop [] want block (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    (cursor : ∀ {statement : Stmt} {innerState : St},
+      StmtSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } statement innerState →
+      LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop)
+    (bodyFamily : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before loop [] want block block.stmts (@cursor))
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
+    (taken = 0 ∧ reached = ⟨start, initial, state⟩ ∧
+      GeneratedClearBlockDemand source map required cx results before loop initial reached) ∨
+      GeneratedBlockStatementsPrefix (before := before) (loop := loop) (want := want) source selected map required initial start (@cursor) taken reached := by
+  have family : InvariantSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
+      cx results selected before loop [] want block block.stmts (@cursor) (fun _ => True) := by
+    intro state source owned occurrence all scope value required map rows coverage admitted bounded initial start realized input extended _ taken reached steps
+    exact bodyFamily source owned occurrence all scope value rows coverage admitted bounded realized input extended steps
+  exact accepted_generated_invariant_block_statements_prefix source selected owned occurrence rows coverage admitted bounded realized input extended
+    cursor (fun _ => True) (fun _ _ => trivial) trivial family steps
 
 end Goose.Lower
