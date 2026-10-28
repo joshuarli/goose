@@ -166,12 +166,56 @@ inductive CompletedCallHistory (config : EvalConfig) : ExecutionState → Execut
       (remaining : CompletedCallHistory config middle after ids) :
       CompletedCallHistory config before after (activationId :: ids)
 
-theorem CompletedCallHistory.bounds
-    (history : CompletedCallHistory config before after ids) :
-    before.nextAct ≤ after.nextAct ∧
-      ∀ id ∈ ids, before.nextAct ≤ id ∧ id < after.nextAct := by
+def CallAllocation (config : EvalConfig) (before : ExecutionState) (result : ExecutionStep (List Carrier))
+    (activationId : Goose.Core.ActId) : Prop :=
+  ∃ fuel environment context arguments channels origin lookupReady argumentsReady valuesReady activationReady
+      id implementation callableChannels refreshed values,
+    getImplementation config context before = .ok (id, implementation) lookupReady ∧
+    channels.length = implementation.results.size ∧
+    prepareCallableChannels environment channels implementation origin lookupReady = .ok callableChannels argumentsReady ∧
+    evalArguments fuel config environment implementation.vars implementation.params.toList arguments argumentsReady = .ok values valuesReady ∧
+    refreshCallableChannels callableChannels origin valuesReady = .ok refreshed activationReady ∧
+    activationReady.activations.length < Goose.Core.maxCallDepth ∧
+    activationId = activationReady.nextAct ∧
+    invokeCall (fuel + 1) config environment context arguments channels origin before = result
+
+theorem callAllocation_bounds {config : EvalConfig} {before : ExecutionState} {result : ExecutionStep (List Carrier)}
+    {activationId : Goose.Core.ActId} (call : CallAllocation config before result activationId) :
+    before.nextAct ≤ activationId ∧ activationId < (Goose.Proofs.Exit.stepState result).nextAct := by
+  obtain ⟨fuel, environment, context, arguments, channels, origin, lookupReady, argumentsReady, valuesReady,
+    activationReady, id, implementation, callableChannels, refreshed, values, lookup, arity, prepared,
+    argumentsResult, refresh, depth, identity, execution⟩ := call
+  have bounds := invokeCall_activation_bounds fuel config environment context arguments channels origin before lookupReady
+    argumentsReady valuesReady activationReady id implementation callableChannels refreshed values
+    lookup arity prepared argumentsResult refresh depth
+  simpa only [identity, execution] using bounds
+
+inductive TerminalCallResult : ExecutionStep (List Carrier) → Prop
+  | stopped (reason : Goose.Core.Stop) (state : ExecutionState) : TerminalCallResult (.stop reason state)
+  | escaped (address : ExitAddress) (carriers : List Carrier) (state : ExecutionState) :
+      TerminalCallResult (.escape address carriers state)
+  | jumped (target : Nat) (kind : JumpKind) (state : ExecutionState) : TerminalCallResult (.jump target kind state)
+
+inductive CallHistory (config : EvalConfig) : ExecutionState → ExecutionState → List Goose.Core.ActId → Prop
+  | done (state : ExecutionState) : CallHistory config state state []
+  | next {before middle after : ExecutionState} {activationId : Goose.Core.ActId} {ids : List Goose.Core.ActId}
+      (call : CompletedCallAllocation config before middle activationId) (remaining : CallHistory config middle after ids) :
+      CallHistory config before after (activationId :: ids)
+  | terminal {before : ExecutionState} {result : ExecutionStep (List Carrier)} {activationId : Goose.Core.ActId}
+      (call : CallAllocation config before result activationId) (terminal : TerminalCallResult result) :
+      CallHistory config before (Goose.Proofs.Exit.stepState result) [activationId]
+
+theorem CallHistory.bounds (history : CallHistory config before after ids) :
+    before.nextAct ≤ after.nextAct ∧ ∀ id ∈ ids, before.nextAct ≤ id ∧ id < after.nextAct := by
   induction history with
   | done state => simp
+  | terminal call terminal =>
+    obtain ⟨lower, upper⟩ := callAllocation_bounds call
+    refine ⟨Nat.le_trans lower (Nat.le_of_lt upper), ?_⟩
+    intro id member
+    simp only [List.mem_singleton] at member
+    subst id
+    exact ⟨lower, upper⟩
   | next call remaining ih =>
     obtain ⟨firstLower, firstUpper⟩ := completedCallAllocation_bounds call
     have beforeMiddle := Nat.le_trans firstLower (Nat.le_of_lt firstUpper)
@@ -179,24 +223,38 @@ theorem CompletedCallHistory.bounds
     intro id member
     simp only [List.mem_cons] at member
     rcases member with same | later
-    · subst id
-      exact ⟨firstLower, Nat.lt_of_lt_of_le firstUpper ih.1⟩
+    · subst id; exact ⟨firstLower, Nat.lt_of_lt_of_le firstUpper ih.1⟩
     · obtain ⟨lower, upper⟩ := ih.2 id later
       exact ⟨Nat.le_trans beforeMiddle lower, upper⟩
 
-theorem CompletedCallHistory.unique (history : CompletedCallHistory config before after ids) : ids.Nodup := by
+theorem CallHistory.unique (history : CallHistory config before after ids) : ids.Nodup := by
   induction history with
   | done => exact List.nodup_nil
+  | terminal => simp
   | next call remaining ih =>
     simp only [List.nodup_cons]
     constructor
     · intro member
-      have lower := (remaining.bounds).2 _ member
-      have lowerBound := lower.1
+      have lower := ((remaining.bounds).2 _ member).1
       have upper := (completedCallAllocation_bounds call).2
-      exact (Nat.not_le_of_gt upper) lowerBound
+      exact (Nat.not_le_of_gt upper) lower
     · exact ih
 
+theorem CompletedCallHistory.toCallHistory (history : CompletedCallHistory config before after ids) :
+    CallHistory config before after ids := by
+  induction history with
+  | done state => exact .done state
+  | next call remaining ih => exact .next call ih
+
+theorem CompletedCallHistory.bounds (history : CompletedCallHistory config before after ids) :
+    before.nextAct ≤ after.nextAct ∧ ∀ id ∈ ids, before.nextAct ≤ id ∧ id < after.nextAct :=
+  history.toCallHistory.bounds
+
+theorem CompletedCallHistory.unique (history : CompletedCallHistory config before after ids) : ids.Nodup :=
+  history.toCallHistory.unique
+
+#print axioms callAllocation_bounds
+#print axioms CallHistory.unique
 private def witnessImplementation : Impl :=
   ⟨"callee", #[], #[], #[], .mk 0 [.print [.text "called"] 0] none, .unknown⟩
 private def witnessConfig : EvalConfig := ⟨.release,
@@ -217,6 +275,24 @@ theorem completedCallAllocation_witness :
   · unfold after witnessConfig witnessImplementation witnessEnvironment witnessState
     cbv
 
+private def terminalImplementation : Impl :=
+  ⟨"callee", #[], #[], #[], .mk 0 [.print [.text "before"] 0, .abort "stop" 0] none, .unknown⟩
+private def terminalConfig : EvalConfig := ⟨.release,
+  ⟨#[], #[], #[], #[terminalImplementation], #[⟨0, "callee", [], [], []⟩], 0, #[], #[], #[]⟩⟩
+
+theorem terminalCallAllocation_witness :
+    ∃ after, CallAllocation terminalConfig .initial (.stop (.abort .userAbort 0) after) 0 ∧
+      after.construction.stdout.data.toList = [98, 101, 102, 111, 114, 101, 10] := by
+  let after := witnessState (invokeCall 21 terminalConfig witnessEnvironment 0 [] [] 0 .initial)
+  refine ⟨after, ?_, ?_⟩
+  · refine ⟨20, witnessEnvironment, 0, [], [], 0, .initial, .initial, .initial, .initial,
+      0, terminalImplementation, [], [], [], ?_⟩
+    unfold after terminalConfig terminalImplementation witnessEnvironment witnessState
+    cbv
+  · unfold after terminalConfig terminalImplementation witnessEnvironment witnessState
+    cbv
+
+#print axioms terminalCallAllocation_witness
 #print axioms completedCallAllocation_witness
 #print axioms completedCallAllocation_bounds
 #print axioms CompletedCallHistory.unique
