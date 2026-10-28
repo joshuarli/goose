@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionGhostElementOccurrence
+import Goose.Proofs.ConstructionGhostArrayElementClassification
 import Goose.Proofs.ConstructionGhostReplayDeterminism
 
 namespace Goose.Proofs.ConstructionGhostNonfixedArrayWitness
@@ -6,6 +6,7 @@ open Goose.Construct Goose.Proofs.ConstructionExecution Goose.Proofs.Constructio
 open Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Proofs.ConstructionGhostDeclarationOnce Goose.Proofs.ConstructionGhostArrayElementEvents
 open Goose.Proofs.ConstructionGhostReplayDeterminism Goose.Proofs.ConstructionGhostElementOccurrence
+open Goose.Proofs.ConstructionGhostArrayElementClassification
 
 private def element : Ty := .varr (.int .u8)
 private def descriptor : LocalVar := ⟨"nested", .varr element, .immutable, 0, 0⟩
@@ -59,8 +60,8 @@ theorem nonfixedArray_childEvents :
     exact .legacy 39 (.nonfixedElement environment 0 element operand rfl
       (fun destination => .builderBytes environment destination element [65, 66] 0))
   obtain ⟨outcome, visits, replay, ordered, once, children⟩ :=
-    array_nonfixedOperandEvents 38 config environment [4, 0] 0 0 0 (.varr element) operands 0 0
-      .initial initial prepared ready pending element occurrence renewed found elementFound rfl supported
+    array_elementClassifications 38 config environment [4, 0] 0 0 0 (.varr element) operands 0 0
+      .initial initial prepared ready pending element occurrence renewed found elementFound supported
   have elementResult : buildElement 39 config environment 0 element operand ready = .ok () elementAfter := by
     simp only [elementAfter, stepState, ready, pending, prepared, initial, config, implementation, environment, descriptor, element, expression, operands, operand]
     cbv
@@ -76,12 +77,19 @@ theorem nonfixedArray_childEvents :
   have opened : receivingAction (expressionOrigin operand) 0 (fun parent => openChild parent element layout) layoutReady = .ok 1 childReady := by
     simp only [childReady, layout, layoutReady, ready, pending, prepared, initial, stepState, config, implementation, environment, descriptor, element, expression, operands, operand]
     cbv
-  obtain ⟨history, retained⟩ := children visit member layout layoutReady childReady 1 layoutResult opened
-  have events : (Goose.Proofs.Exit.stepState (buildExpr 38 config environment 1 operand childReady)).construction.events =
-      childReady.construction.events ++ [.write 1 0, .write 1 1] := by
-    simp only [childReady, layout, layoutReady, ready, pending, prepared, initial, stepState, config, implementation, environment, descriptor, element, expression, operands, operand]
-    cbv
-  exact ⟨history, events, retained⟩
+  have knownOccurrence : ElementOccurrence config environment 0 element operand ready (some 1) childReady :=
+    .nonfixed layout layoutReady 1 childReady rfl layoutResult opened
+  have classification := children visit member
+  rcases classification with ⟨destination, sourceReady, occurrence, unique, child⟩ | early
+  · have same := unique (some 1) childReady knownOccurrence
+    obtain ⟨rfl, rfl⟩ := same
+    obtain ⟨history, retained⟩ := child
+    have events : (Goose.Proofs.Exit.stepState (buildExpr 38 config environment 1 operand childReady)).construction.events =
+        childReady.construction.events ++ [.write 1 0, .write 1 1] := by
+      simp only [childReady, layout, layoutReady, ready, pending, prepared, initial, stepState, config, implementation, environment, descriptor, element, expression, operands, operand]
+      cbv
+    exact ⟨history, events, retained⟩
+  · exact False.elim (early.2 ⟨some 1, childReady, knownOccurrence⟩)
 
 theorem nonfixedArray_succeeds :
     execStmt 41 config environment (.letS 0 expression 0) .initial =
