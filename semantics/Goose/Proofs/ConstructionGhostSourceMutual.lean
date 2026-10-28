@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionGhostProducerChannel
 import Goose.Proofs.ConstructionGhostChannelTransition
 import Goose.Proofs.ConstructionGhostCallActivation
 import Goose.Proofs.ConstructionGhostSourceTransition
@@ -15,6 +16,7 @@ open Goose.Proofs.ConstructionGhostBlock Goose.Proofs.ConstructionGhostResultSco
 open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInvocation Goose.Proofs.ConstructionInitializerLoopReplay
 open Goose.Proofs.ConstructionGhostArguments Goose.Proofs.ConstructionGhostEachCore
 open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
+open Goose.Proofs.ConstructionGhostProducerChannel
 
 inductive SourceOperation : Type → Type
   | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
@@ -47,6 +49,7 @@ inductive SourceOperation : Type → Type
   | element (environment : RuntimeActivation) (parent : Goose.Core.DestinationId) (element : Ty) (operand : Expr) : SourceOperation Unit
   | arguments (environment : RuntimeActivation) (vars : Array LocalVar) (parameters : List Param)
       (arguments : List Arg) : SourceOperation (List Value)
+  | producerWith (environment : RuntimeActivation) (channels : List Channel) (expression : Expr) : SourceOperation (List Carrier)
   | producer (environment : RuntimeActivation) (expression : Expr) : SourceOperation (List Carrier)
 
 def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
@@ -74,6 +77,7 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .printArgument environment argument => evalPrintArg fuel config environment argument
   | .element environment parent element operand => buildElement fuel config environment parent element operand
   | .arguments environment vars parameters arguments => evalArguments fuel config environment vars parameters arguments
+  | .producerWith environment channels expression => evalProduce fuel config environment channels expression
   | .producer environment expression => evalProduce fuel config environment [] expression
 
 def conditionalResult (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
@@ -821,6 +825,14 @@ inductive SourceHistory (config : EvalConfig) :
       SourceHistory config (fuel + 1) path
         (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments)) before
         (evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.byRef mutability place :: arguments) before)
+  | producerChannelCall (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (channels : List Channel)
+      (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (callee : ∀ selected ready,
+        prepareProducerCallChannels environment (.call context arguments origin) channels before = .ok selected ready →
+        SourceHistory config fuel (path ++ [0]) (.channelCall environment context arguments selected origin) ready
+          (invokeCall fuel config environment context arguments selected origin ready)) :
+      SourceHistory config (fuel + 1) path (.producerWith environment channels (.call context arguments origin)) before
+        (evalProduce (fuel + 1) config environment channels (.call context arguments origin) before)
   | valueChannelCall (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
       (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId) (before : ExecutionState)
       (callee : ∀ id implementation lookupReady channels ready,
@@ -892,7 +904,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall => rfl
+  | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]

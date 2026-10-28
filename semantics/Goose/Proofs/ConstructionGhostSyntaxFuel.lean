@@ -112,6 +112,11 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements none))
   activation : ∀ activation pre scope statements origin, (∀ statement ∈ statements, StatementSyntax config statement) →
     FuelSupport config fuel (.boundActivation activation pre (.mk scope statements none) origin)
+  producerCall : ∀ environment channels contextId arguments origin,
+    (∀ id implementation start lookupReady,
+      getImplementation config contextId start = .ok (id, implementation) lookupReady →
+      ArgumentSyntax config implementation.params.toList arguments) →
+    FuelSupport config fuel (.producerWith environment channels (.call contextId arguments origin))
   channelCall : ∀ environment contextId arguments channels origin,
     (∀ id implementation start lookupReady,
       getImplementation config contextId start = .ok (id, implementation) lookupReady →
@@ -206,6 +211,9 @@ theorem syntaxFuel_exists (fuel : Nat) (config : EvalConfig) (closed : ClosedMod
         exact .boundActivationBody fuel activation pre scope statements (fun environment => previous.statements environment statements derivation)
       · intro activation pre scope statements origin derivation
         exact .boundActivation fuel activation pre scope statements origin (previous.activationBody activation pre scope statements derivation)
+      · intro environment channels contextId arguments origin argumentSyntax
+        exact .producerChannelCall fuel environment channels contextId arguments origin
+          (fun selected => previous.channelCall environment contextId arguments selected origin argumentSyntax)
       · intro environment contextId arguments channels origin argumentSyntax
         apply FuelSupport.channelCall fuel environment contextId arguments channels origin
         · intro id implementation start lookupReady lookup

@@ -153,6 +153,27 @@ theorem witness_valueChannelCall : ∃ after,
     rw [actual] at history
     exact history
 
+theorem witness_producerChannelCall : ∃ after,
+    evalProduce 30 witnessConfig witnessEnvironment [.register .unit] (.call 0 [] 0) .initial = .ok [.register .unit] after ∧
+    after.construction.stdout.data.toList = [120, 10] ∧
+    SourceHistory witnessConfig 30 [] (.producerWith witnessEnvironment [.register .unit] (.call 0 [] 0))
+      .initial (.ok [.register .unit] after) := by
+  have history := fuelHistory_exists 30 witnessConfig (.producerWith witnessEnvironment [.register .unit] (.call 0 [] 0)) [] .initial
+    ((syntaxFuel_exists 30 witnessConfig witnessClosed).producerCall witnessEnvironment [.register .unit] 0 [] 0 witnessArguments)
+  refine ⟨witnessState (evalProduce 30 witnessConfig witnessEnvironment [.register .unit] (.call 0 [] 0) .initial), ?_, ?_, ?_⟩
+  · unfold witnessState witnessConfig witnessContext witnessImplementation witnessEnvironment
+    cbv
+  · unfold witnessState witnessConfig witnessContext witnessImplementation witnessEnvironment
+    cbv
+  · have actual : evalProduce 30 witnessConfig witnessEnvironment [.register .unit] (.call 0 [] 0) .initial =
+        .ok [.register .unit] (witnessState (evalProduce 30 witnessConfig witnessEnvironment [.register .unit] (.call 0 [] 0) .initial)) := by
+      unfold witnessState witnessConfig witnessContext witnessImplementation witnessEnvironment
+      cbv
+    simp only [execute] at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_producerChannelCall
 #print axioms witness_valueChannelCall
 #print axioms witness_registerChannel
 #print axioms channelCall_history

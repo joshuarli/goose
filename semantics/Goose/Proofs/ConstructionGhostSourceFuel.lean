@@ -3,6 +3,7 @@ import Goose.Proofs.ConstructionGhostSourceMutual
 namespace Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostArguments
 open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
+open Goose.Proofs.ConstructionGhostProducerChannel
 
 inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOperation α → Prop
   | timeout (operation : SourceOperation α) : FuelSupport config 0 operation
@@ -101,6 +102,10 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (body : ∀ act pre, FuelSupport config fuel
         (.boundActivation ⟨context.impl, act, implementation.vars, [], []⟩ pre implementation.body origin)) :
       FuelSupport config (fuel + 1) (.callWith environment contextId arguments origin)
+  | producerChannelCall (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel)
+      (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
+      (callee : ∀ selected, FuelSupport config fuel (.channelCall environment context arguments selected origin)) :
+      FuelSupport config (fuel + 1) (.producerWith environment channels (.call context arguments origin))
   | valueChannelCall (fuel : Nat) (environment : RuntimeActivation) (context : Goose.Core.ContextId)
       (arguments : List Arg) (origin : Goose.Core.OriginId)
       (callee : ∀ channels, FuelSupport config fuel (.channelCall environment context arguments channels origin)) :
@@ -310,6 +315,10 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           rw [callWith_source fuel config environment contextId arguments origin context implementation before
             contextFound implementationFound resultsEmpty]
           exact .callWith contextFound implementationFound resultsEmpty argumentsHistory activationHistory
+      | producerChannelCall _ environment channels context arguments origin calleeSupported =>
+          refine .producerChannelCall fuel path environment channels context arguments origin before ?_
+          intro selected ready prepared
+          exact ih (.channelCall environment context arguments selected origin) (path ++ [0]) ready (calleeSupported selected)
       | valueChannelCall _ environment context arguments origin calleeSupported =>
           refine .valueChannelCall fuel path environment context arguments origin before ?_
           intro id implementation lookupReady channels ready lookup prepared
