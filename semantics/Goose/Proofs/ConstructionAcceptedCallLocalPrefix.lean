@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedRecursiveCallInitializer
+import Goose.Proofs.ConstructionAcceptedCallLocalInitializer
 import Goose.Proofs.ConstructionAcceptedCallLocalCursor
 
 namespace Goose.Proofs.ConstructionAcceptedExecution

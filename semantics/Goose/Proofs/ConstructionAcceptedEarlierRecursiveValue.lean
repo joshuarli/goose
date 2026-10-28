@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedInvocationValue
+import Goose.Proofs.ConstructionAcceptedEarlierRecursiveCall
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct

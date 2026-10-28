@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedEarlierRecursiveCall
+import Goose.Proofs.ConstructionAcceptedEarlierCallerObservations
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
