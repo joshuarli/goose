@@ -60,6 +60,44 @@ theorem PlaceSource.sliceSlotAlias {cfg : Cfg} {env : Env} {state after : St} {s
   · obtain ⟨x, lv, mu0, mu, ty, ann, impossible, _⟩ := impossible
     cases impossible
 
+theorem SliceSlotAliasAt.ofFrame {m : Core.Module} {world : World} {env : Env} {state : St}
+    {tenv : TEnv} {penv : PEnv} {future : List VarId} {frame : GIR.Frame} {id : ValueId}
+    {alias : RetainedAlias} {mutability : Mutability} {element : Ty} {slot : VarId} {si : ScopeInst} {lv : LocalVar}
+    (source : Core.Sound.Frame m world tenv penv env state future)
+    (visible : slot ∈ tenv.visible) (needed : slot ∈ future)
+    (variableAt : env.vars[slot]? = some lv) (scope : env.scopes.lookup lv.scope = some si)
+    (variableType : lv.ty = .slice mutability element) (annotation : penv.ann slot = some alias.roots)
+    (aliasType : alias.ty = .slice mutability element)
+    (cell : frame.vals[id]? = some (.val (.ref ⟨.local env.act si slot, []⟩))) :
+    SliceSlotAliasAt m world env state.store frame id alias mutability element := by
+  obtain ⟨actual, actualScope, value, actualAt, actualScopeAt, _, stored, typed⟩ := source.vis slot visible needed
+  rw [variableAt] at actualAt
+  cases actualAt
+  rw [scope] at actualScopeAt
+  cases actualScopeAt
+  rw [variableType] at typed
+  obtain ⟨backing, start, length, valueEq, flat, sliceTyped⟩ := typed
+  subst value
+  have rooted := source.rooted slot lv si (.slice backing start length) variableAt scope stored backing.root (by simp [Targets])
+  obtain ⟨roots, rootsAt, rooted⟩ := rooted
+  rw [annotation] at rootsAt
+  cases rootsAt
+  have aliasAt : AliasAt m world env state.store alias (.slice backing start length) := by
+    constructor
+    · rw [aliasType]
+      exact ⟨backing, start, length, rfl, flat, sliceTyped⟩
+    · intro root target
+      have eq : root = backing.root := by simpa [Targets] using target.symm
+      subst root
+      exact rooted
+  have referenceTyped : HasTy m world.G state.store (.ref ⟨.local env.act si slot, []⟩) (.ref mutability alias.ty) := by
+    refine ⟨_, rfl, Or.inr ⟨?_, rfl, ?_⟩⟩
+    · rw [aliasType]; simp [Ty.isSlice, flat]
+    · rw [stored]; simp
+  exact ⟨_, backing, start, length, cell, rfl, stored, referenceTyped, aliasType, aliasAt⟩
+
+#print axioms SliceSlotAliasAt.ofFrame
+
 theorem SliceSlotAliasAt.transport {m : Core.Module} {world : World} {env : Env} {before after : Store}
     {initial frame : GIR.Frame} {id : ValueId} {alias : RetainedAlias} {mutability : Mutability} {element : Ty}
     (source : SliceSlotAliasAt m world env before initial id alias mutability element)
