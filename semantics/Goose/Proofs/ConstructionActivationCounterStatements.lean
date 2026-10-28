@@ -47,7 +47,7 @@ theorem counter_landCarriers (origin : Goose.Core.OriginId) (carriers : List Car
     · intro ignored; exact counter_pure _
   · intro ignored; exact counter_pure _
 
-local macro "counter_stmt" previous:ident : tactic => `(tactic|
+macro "counter_stmt" previous:ident : tactic => `(tactic|
   repeat' first
     | with_reducible assumption
     | counter_conditional_step
