@@ -12,6 +12,15 @@ inductive NestedCallLoopStatements (cfg : Cfg) : Env → List Stmt → Prop
         { env with scopes := (yes.scope, middle.nextScope) :: env.scopes } yes.stmts)
       (noValue : yes.value = none) {later : List Stmt} (tail : NestedCallLoopStatements cfg env later) :
       NestedCallLoopStatements cfg env (.ifS condition yes none origin :: later)
+  | conditionalElse {env : Env} (condition : Expr) (yes no : Core.Block) (origin : OriginId)
+      (conditionForm : ControlPrefixExpression condition)
+      (yesForm : ∀ middle : St, NestedCallLoopStatements cfg
+        { env with scopes := (yes.scope, middle.nextScope) :: env.scopes } yes.stmts)
+      (noForm : ∀ middle : St, NestedCallLoopStatements cfg
+        { env with scopes := (no.scope, middle.nextScope) :: env.scopes } no.stmts)
+      (yesNoValue : yes.value = none) (noNoValue : no.value = none)
+      {later : List Stmt} (tail : NestedCallLoopStatements cfg env later) :
+      NestedCallLoopStatements cfg env (.ifS condition yes (some no) origin :: later)
   | loop {env : Env} (condition : Expr) (body : Core.Block) (origin : OriginId)
       (conditionForm : ControlPrefixExpression condition)
       (bodyForm : ∀ middle : St, NestedCallLoopStatements cfg
@@ -28,6 +37,15 @@ inductive BoundedNestedCallLoopStatements (cfg : Cfg) : Nat → Env → List Stm
         { env with scopes := (yes.scope, middle.nextScope) :: env.scopes } yes.stmts)
       (noValue : yes.value = none) {later : List Stmt} (tail : BoundedNestedCallLoopStatements cfg (depth + 1) env later) :
       BoundedNestedCallLoopStatements cfg (depth + 1) env (.ifS condition yes none origin :: later)
+  | conditionalElse {depth : Nat} {env : Env} (condition : Expr) (yes no : Core.Block) (origin : OriginId)
+      (conditionForm : ControlPrefixExpression condition)
+      (yesForm : ∀ middle : St, BoundedNestedCallLoopStatements cfg depth
+        { env with scopes := (yes.scope, middle.nextScope) :: env.scopes } yes.stmts)
+      (noForm : ∀ middle : St, BoundedNestedCallLoopStatements cfg depth
+        { env with scopes := (no.scope, middle.nextScope) :: env.scopes } no.stmts)
+      (yesNoValue : yes.value = none) (noNoValue : no.value = none)
+      {later : List Stmt} (tail : BoundedNestedCallLoopStatements cfg (depth + 1) env later) :
+      BoundedNestedCallLoopStatements cfg (depth + 1) env (.ifS condition yes (some no) origin :: later)
   | loop {depth : Nat} {env : Env} (condition : Expr) (body : Core.Block) (origin : OriginId)
       (conditionForm : ControlPrefixExpression condition)
       (bodyForm : ∀ middle : St, BoundedNestedCallLoopStatements cfg depth
@@ -44,6 +62,16 @@ theorem BoundedNestedCallLoopStatements.mono {cfg : Cfg} {depth larger : Nat} {e
     cases larger with
     | zero => omega
     | succ larger => exact .conditional condition yes origin conditionForm (fun middle => yesIH middle (by omega)) noValue (tailIH bound)
+  | @conditionalElse depth env condition yes no origin conditionForm yesForm noForm yesNoValue noNoValue later tail yesIH noIH tailIH =>
+    cases larger with
+    | zero => omega
+    | succ larger =>
+      apply BoundedNestedCallLoopStatements.conditionalElse condition yes no origin conditionForm
+      · intro middle; exact yesIH middle (by omega)
+      · intro middle; exact noIH middle (by omega)
+      · exact yesNoValue
+      · exact noNoValue
+      · exact tailIH bound
   | @loop depth env condition body origin conditionForm bodyForm noValue later tail bodyIH tailIH =>
     cases larger with
     | zero => omega
@@ -65,6 +93,22 @@ theorem NestedCallLoopStatements.bounded {cfg : Cfg} {env : Env} {statements : L
       apply BoundedNestedCallLoopStatements.conditional condition yes origin conditionForm
       · intro middle; apply (yesIH middle).mono; omega
       · exact noValue
+      · apply tailIH.mono; omega
+  | @conditionalElse env condition yes no origin conditionForm yesForm noForm yesNoValue noNoValue later tail yesIH noIH tailIH =>
+    have yesBound : Place._sizeOf_11 yes.stmts < Place._sizeOf_11 (.ifS condition yes (some no) origin :: later : List Stmt) := by
+      cases yes <;> simp [Core.Block.stmts, Place._sizeOf_11, sizeOf] <;> omega
+    have noBound : Place._sizeOf_11 no.stmts < Place._sizeOf_11 (.ifS condition yes (some no) origin :: later : List Stmt) := by
+      cases no <;> simp [Core.Block.stmts, Place._sizeOf_11, sizeOf] <;> omega
+    have tailBound : Place._sizeOf_11 later < Place._sizeOf_11 (.ifS condition yes (some no) origin :: later : List Stmt) := by
+      simp [Place._sizeOf_11, sizeOf] <;> omega
+    cases totalEq : Place._sizeOf_11 (.ifS condition yes (some no) origin :: later : List Stmt) with
+    | zero => omega
+    | succ total =>
+      apply BoundedNestedCallLoopStatements.conditionalElse condition yes no origin conditionForm
+      · intro middle; apply (yesIH middle).mono; omega
+      · intro middle; apply (noIH middle).mono; omega
+      · exact yesNoValue
+      · exact noNoValue
       · apply tailIH.mono; omega
   | @loop env condition body origin conditionForm bodyForm noValue later tail bodyIH tailIH =>
     have bodyBound : Place._sizeOf_11 body.stmts < Place._sizeOf_11 (.while condition body origin :: later : List Stmt) := by
@@ -118,6 +162,44 @@ theorem NestedCallLoopStatements.normal_any_env {cfg : Cfg} {env other : Env} {s
         subst first
         simp only [head] at done
         exact tailIH done
+  | @conditionalElse env condition yes no origin conditionForm yesForm noForm yesNoValue noNoValue later tail yesIH noIH tailIH =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, bind_apply] at done
+      cases head : execStmt fuel cfg other (.ifS condition yes (some no) origin) state with
+      | stop reason final => simp only [head] at done; cases done
+      | ok first middle =>
+        have normal : first = .normal .unit := by
+          cases fuel with
+          | zero => simp [execStmt, timeout, M.stop] at head
+          | succ fuel =>
+            simp only [execStmt] at head
+            obtain ⟨value, afterExpr, _, rest⟩ := call_loop_bind_ok head
+            obtain ⟨choice, afterTest, _, rest⟩ := call_loop_bind_ok rest
+            cases choice with
+            | false =>
+              simp only [Bool.false_eq_true, ↓reduceIte] at rest
+              obtain ⟨branchFlow, afterBranch, branchDone, rest⟩ := call_loop_bind_ok rest
+              have bodyNormal : ∀ {innerEnv : Env} {fuel : Nat} {state after : St} {flow : Flow},
+                  execStmts fuel cfg innerEnv no.stmts state = .ok flow after → flow = .normal .unit := by
+                intro innerEnv fuel state after flow result
+                exact noIH St.initial result
+              have branchNormal := call_block_normal_of_stmts bodyNormal noNoValue branchDone
+              subst branchFlow
+              simpa [pure_apply] using (Res.ok.inj rest).1.symm
+            | true =>
+              obtain ⟨branchFlow, afterBranch, branchDone, rest⟩ := call_loop_bind_ok rest
+              have bodyNormal : ∀ {innerEnv : Env} {fuel : Nat} {state after : St} {flow : Flow},
+                  execStmts fuel cfg innerEnv yes.stmts state = .ok flow after → flow = .normal .unit := by
+                intro innerEnv fuel state after flow result
+                exact yesIH St.initial result
+              have branchNormal := call_block_normal_of_stmts bodyNormal yesNoValue branchDone
+              subst branchFlow
+              simpa [pure_apply] using (Res.ok.inj rest).1.symm
+        subst first
+        simp only [head] at done
+        exact tailIH done
   | @loop env condition body origin conditionForm bodyForm noValue later tail bodyIH tailIH =>
     cases fuel with
     | zero => simp [execStmts, timeout, M.stop] at done
@@ -144,6 +226,8 @@ theorem BoundedNestedCallLoopStatements.recursive {cfg : Cfg} {depth : Nat} {env
   | mixed fragment => exact .mixed fragment
   | conditional condition yes origin conditionForm yesForm noValue tail yesIH tailIH =>
     exact .conditional condition yes origin conditionForm yesIH noValue tailIH
+  | conditionalElse condition yes no origin conditionForm yesForm noForm yesNoValue noNoValue tail yesIH noIH tailIH =>
+    exact .conditionalElse condition yes no origin conditionForm yesIH noIH yesNoValue noNoValue tailIH
   | loop condition body origin conditionForm bodyForm noValue tail bodyIH tailIH =>
     exact .loop condition body origin conditionForm bodyIH noValue tailIH
 

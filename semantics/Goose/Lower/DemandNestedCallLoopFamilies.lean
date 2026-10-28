@@ -55,6 +55,34 @@ theorem accepted_generated_bounded_nested_call_loop_statements {cfg : Cfg} {env 
     have suffix := tailIH selected before loop bindings want block
     exact ⟨accepted_generated_reachable_sequence_prefix_cons selected before loop bindings want block _ head suffix.1,
       accepted_generated_reachable_stopped_sequence_cons selected before loop bindings want block stopped suffix.2⟩
+  | @conditionalElse depth env condition yes no origin conditionForm yesForm noForm yesNoValue noNoValue later tail yesIH noIH tailIH =>
+    intro caller results root owner selected before loop bindings want block
+    have yesFamily : ∀ (middle : St) (before : LS),
+        ReachableSequencePrefixFamily (env := { env with scopes := (yes.scope, middle.nextScope) :: env.scopes })
+          ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before loop [] false yes yes.stmts
+          (@NestedCallLoopCursor cfg caller results root owner depth { env with scopes := (yes.scope, middle.nextScope) :: env.scopes } loop selected) ∧
+        ReachableStoppedSequencePrefixFamily (env := { env with scopes := (yes.scope, middle.nextScope) :: env.scopes })
+          ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before loop [] false yes yes.stmts := by
+      intro middle before
+      exact yesIH middle selected before loop [] false yes
+    have noFamily : ∀ (middle : St) (before : LS),
+        ReachableSequencePrefixFamily (env := { env with scopes := (no.scope, middle.nextScope) :: env.scopes })
+          ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before loop [] false no no.stmts
+          (@NestedCallLoopCursor cfg caller results root owner depth { env with scopes := (no.scope, middle.nextScope) :: env.scopes } loop selected) ∧
+        ReachableStoppedSequencePrefixFamily (env := { env with scopes := (no.scope, middle.nextScope) :: env.scopes })
+          ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected before loop [] false no no.stmts := by
+      intro middle before
+      exact noIH middle selected before loop [] false no
+    have head : ReachableStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop (.ifS condition yes (some no) origin)
+        (@NestedCallLoopCursor cfg caller results root owner (depth + 1) env loop selected) :=
+      accepted_generated_nested_call_if_some_prefix_family loop selected depth condition yes no origin yesForm noForm yesFamily noFamily
+        yesNoValue noNoValue (accepted_generated_control_progress_prefix_family selected loop conditionForm)
+    have stopped : ReachableStoppedStatementPrefixFamily ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results selected loop (.ifS condition yes (some no) origin) :=
+      accepted_generated_nested_call_if_some_stopped_family loop selected depth condition yes no origin yesForm noForm yesFamily noFamily
+        yesNoValue noNoValue (accepted_generated_read_stopped_expressions selected loop conditionForm.stopped)
+    have suffix := tailIH selected before loop bindings want block
+    exact ⟨accepted_generated_reachable_sequence_prefix_cons selected before loop bindings want block _ head suffix.1,
+      accepted_generated_reachable_stopped_sequence_cons selected before loop bindings want block stopped suffix.2⟩
   | @loop depth env condition body origin conditionForm bodyForm noValue later tail bodyIH tailIH =>
     intro caller results root owner selected before loop bindings want block
     have families : ∀ (middle : St) (before : LS) (innerLoop : Option LoopCtx),
