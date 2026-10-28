@@ -157,6 +157,72 @@ theorem counter_get_bind (next : ExecutionState → EvalM α)
     (preserved : ∀ state, state.nextAct ≤ (Goose.Proofs.Exit.stepState (next state state)).nextAct) :
     PreservesActivationCounter (EvalM.get >>= next) := preserved
 
+theorem counter_writeValuePath (fuel : Nat) (layout : LayoutEnv)
+    (value : Value) (path : List Nat) (replacement : Value) :
+    PreservesActivationCounter (writeValuePath fuel layout value path replacement) := by
+  induction fuel generalizing value path replacement with
+  | zero => exact counter_stop _
+  | succ fuel ih =>
+      cases path with
+      | nil => exact counter_pure _
+      | cons index rest =>
+          cases value with
+          | fixed elements | record id elements =>
+              simp only [writeValuePath]
+              cases present : elements[index]? with
+              | none => exact counter_stop _
+              | some child =>
+                  apply counter_bind
+                  · exact ih child rest replacement
+                  · intro written; exact counter_pure _
+          | int _ _ | bool _ | unit | ref _ | slice _ _ _ => exact counter_stop _
+          | stored stored =>
+              unfold writeValuePath
+              apply counter_bind
+              · exact counter_stateQuery _ (stateQuery_storedPathRun stored)
+              · intro sampled
+                rcases sampled with ⟨bytes, run⟩
+                simp only
+                apply counter_bind
+                · exact counter_stateQuery _ (stateQuery_liftLayout _)
+                · intro interval
+                  rcases interval with ⟨start, finish⟩
+                  simp only
+                  apply counter_bind
+                  · exact counter_stateQuery _ (stateQuery_readStoredElement fuel layout stored index)
+                  · intro child
+                    split
+                    · split
+                      · exact counter_stop _
+                      · apply counter_bind
+                        · exact ih child rest replacement
+                        · intro _; exact counter_pure _
+                    · apply counter_bind
+                      · exact ih child rest replacement
+                      · intro written
+                        apply counter_bind
+                        · exact counter_stateQuery _ (stateQuery_liftExcept _)
+                        · intro part
+                          split
+                          · exact counter_stop _
+                          · apply counter_get_bind
+                            intro state
+                            cases present : state.construction.storage[stored.storage]? <;>
+                              simp [present, EvalM.set, bind, pure, fault, EvalM.stop, Goose.Proofs.Exit.stepState]
+
+theorem counter_writeLoc (fuel : Nat) (layout : LayoutEnv) (location : Goose.Core.Loc)
+    (replacement : Value) : PreservesActivationCounter (writeLoc fuel layout location replacement) := by
+  unfold writeLoc
+  apply counter_bind
+  · exact counter_get
+  · intro state
+    cases present : state.objects.lookup location.root with
+    | none => exact counter_stop _
+    | some value =>
+        apply counter_bind
+        · exact counter_writeValuePath fuel layout value location.path replacement
+        · intro written; exact counter_bindRoot location.root written
+
 theorem counter_mapActivations (change : RuntimeActivation → RuntimeActivation) (action : EvalM α)
     (preserved : PreservesActivationCounter action) :
     PreservesActivationCounter (do
@@ -376,6 +442,12 @@ theorem counter_deliverCarriers (fuel : Nat) (layout : LayoutEnv) (channels : Li
            apply counter_bind
            · exact counter_completedReceivingDestination _
            · intro _; exact counter_pure _)
+
+theorem counter_receivingAction (origin : Goose.Core.OriginId)
+    (incoming : Goose.Core.DestinationId) (action : Goose.Core.DestinationId → ConstructionM α) :
+    PreservesActivationCounter (receivingAction origin incoming action) := by
+  unfold receivingAction
+  exact counter_lift _ _
 
 theorem counter_receivingDestination (id : Goose.Core.DestinationId) :
     PreservesActivationCounter (receivingDestination id) := by
@@ -808,6 +880,48 @@ theorem counter_withBreakTarget (act : Goose.Core.ActId) (scope : BreakScope) (c
     · simpa [withBreakTarget, pushed, id, result, caught, mapStepState, Goose.Proofs.Exit.stepState] using prior
 
 #print axioms counter_withBreakTarget
+theorem counter_truncateOwner (fuel : Nat) (layout : LayoutEnv) (location : Goose.Core.Loc)
+    (count : Nat) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (truncateOwner fuel layout location count origin) := by
+  cases fuel with
+  | zero => exact counter_stop _
+  | succ fuel =>
+      unfold truncateOwner
+      apply counter_bind
+      · exact counter_stateQuery _ (stateQuery_readLoc fuel layout location)
+      · intro value
+        cases value with
+        | int _ _ | bool _ | unit | record _ _ | ref _ | slice _ _ _ | fixed _ => exact counter_stop _
+        | stored stored =>
+            apply counter_bind
+            · exact counter_stateQuery _ (stateQuery_sampledStored stored)
+            · intro sampled
+              rcases sampled with ⟨bytes, run⟩
+              simp only
+              split
+              · exact counter_stop _
+              · apply counter_bind
+                · exact counter_stateQuery _ (stateQuery_liftLayout _)
+                · intro finish
+                  cases stored.destination with
+                  | none =>
+                      apply counter_bind
+                      · exact counter_pure _
+                      · intro owner
+                        apply counter_bind
+                        · exact counter_lift _ _
+                        · intro _; exact counter_writeLoc _ _ _ _
+                  | some id =>
+                      apply counter_bind
+                      · exact counter_stateQuery _ (stateQuery_getDestination id)
+                      · intro pending
+                        apply counter_bind
+                        · exact counter_pure _
+                        · intro owner
+                          apply counter_bind
+                          · exact counter_lift _ _
+                          · intro _; exact counter_writeLoc _ _ _ _
+
 structure EvaluationPreservesActivationCounter (fuel : Nat) (config : EvalConfig) : Prop where
   value : ∀ environment expression, PreservesActivationCounter (evalValue fuel config environment expression)
   bound : ∀ environment count defaultValue operand, PreservesActivationCounter (evalBound fuel config environment count defaultValue operand)
@@ -1203,19 +1317,87 @@ macro_rules
       | with_reducible exact counter_pure _
       | with_reducible exact counter_stop _
       | with_reducible exact counter_lift _ _
+      | with_reducible exact counter_fault _
+      | with_reducible exact counter_abortAt _ _
+      | with_reducible exact counter_freshScope
+      | with_reducible exact counter_bindRoot _ _
+      | with_reducible exact counter_bindStaticRoot _ _
+      | with_reducible exact counter_publishCarriers _ _
+      | with_reducible exact counter_channelsFor _ _ _ _
+      | with_reducible exact counter_truncateOwner _ _ _ _ _
+      | with_reducible exact counter_stateQuery _ (stateQuery_getImplementation _ _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_sampledStored _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_readStoredElement _ _ _ _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_expectInt _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_expectRef _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_sameIntType _ _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_comparable _ _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_rootOf _ _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_singleCarrier _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_carrierValue _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_getStorage _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_getDestination _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_storedDestination _)
+      | with_reducible exact counter_receivingAction _ _ _
+      | with_reducible exact counter_completedReceivingDestination _
+      | with_reducible exact counter_stateQuery _ (stateQuery_receivingLayout _ _)
+      | with_reducible exact counter_stateQuery _ (stateQuery_liftExcept _)
       | with_reducible exact counter_stateQuery _ (stateQuery_expectBool _)
       | with_reducible exact counter_stateQuery _ (stateQuery_readLoc _ _ _)
       | with_reducible exact counter_stateQuery _ (stateQuery_arrayLength _)
       | with_reducible exact ($previous).value _ _
+      | with_reducible exact ($previous).bound _ _ _ _
+      | with_reducible exact ($previous).place _ _
+      | with_reducible exact ($previous).view _ _
+      | with_reducible exact ($previous).produce _ _ _
+      | with_reducible exact ($previous).call _ _ _ _ _
+      | with_reducible exact ($previous).block _ _ _ _
+      | with_reducible exact ($previous).push _ _ _ _
+      | with_reducible exact ($previous).build _ _ _
       | with_reducible exact ($previous).loop _ _ _
       | with_reducible exact ($previous).whileLoop _ _ _
       | with_reducible exact ($previous).rangeLoop _ _ _ _ _ _
       | with_reducible exact ($previous).eachLoop _ _ _ _ _ _ _
+      | with_reducible apply counter_constructLocal
+      | with_reducible apply counter_listMapM
       | with_reducible apply counter_bind
       | with_reducible split
       | with_reducible rfl
       | with_reducible intro)
 
+theorem buildElement_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (destination : Goose.Core.DestinationId) (element : Ty) (expression : Expr) :
+    PreservesActivationCounter (buildElement (fuel + 1) config environment destination element expression) := by
+  simp only [buildElement]
+  counter_eval_simple previous
+
+#print axioms buildElement_counter_succ
+theorem evalValue_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (expression : Expr) :
+    PreservesActivationCounter (evalValue (fuel + 1) config environment expression) := by
+  cases expression
+  all_goals try simp only [evalValue]
+  all_goals counter_eval_simple previous
+  case fill ty expression origin =>
+    cases ty <;> simp only [evalValue] <;> counter_eval_simple previous
+  case structLit ty operands =>
+    cases ty <;> simp only [evalValue] <;> counter_eval_simple previous
+  case bytes ty bytes origin =>
+    cases ty <;> try simp only [evalValue]
+    all_goals counter_eval_simple previous
+    case slice mutability element =>
+      cases element <;> try simp only [evalValue]
+      all_goals counter_eval_simple previous
+      case int ty =>
+        cases ty <;> simp only [evalValue] <;> counter_eval_simple previous
+  case values operands =>
+    cases operands with
+    | nil => simpa only [evalValue] using counter_pure Value.unit
+    | cons expression operands =>
+      cases operands <;> simp only [evalValue] <;> counter_eval_simple previous
+
+#print axioms evalValue_counter_succ
 theorem execWhile_counter_succ (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
     (condition : Expr) (body : Block) :
@@ -1284,142 +1466,45 @@ theorem loopBody_counter_succ (fuel : Nat) (config : EvalConfig)
 #print axioms loopBody_counter_succ
 theorem evalValue_not_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (expression : Expr) :
-    PreservesActivationCounter (evalValue (fuel + 1) config environment (.not expression)) := by
-  simp only [evalValue]
-  apply counter_bind
-  · exact previous.value environment expression
-  · intro value
-    apply counter_bind
-    · exact counter_stateQuery _ (stateQuery_expectBool value)
-    · intro result
-      exact counter_pure _
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.not expression)) :=
+  evalValue_counter_succ fuel config previous environment (.not expression)
 
 theorem evalValue_cmp_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
     (operation : Goose.Core.CmpOp) (first second : Expr) :
-    PreservesActivationCounter (evalValue (fuel + 1) config environment (.cmp operation first second)) := by
-  simp only [evalValue]
-  apply counter_bind
-  · exact previous.value environment first
-  · intro firstValue
-    apply counter_bind
-    · exact previous.value environment second
-    · intro secondValue
-      apply counter_bind
-      · exact counter_stateQuery _ (stateQuery_comparable firstValue secondValue)
-      · intro result
-        exact counter_pure _
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.cmp operation first second)) :=
+  evalValue_counter_succ fuel config previous environment (.cmp operation first second)
 
 #print axioms evalValue_not_counter
 #print axioms evalValue_cmp_counter
 theorem evalValue_un_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
     (operation : Goose.Core.UnOp) (expression : Expr) (origin : Goose.Core.OriginId) :
-    PreservesActivationCounter (evalValue (fuel + 1) config environment (.un operation expression origin)) := by
-  simp only [evalValue]
-  apply counter_bind
-  · exact previous.value environment expression
-  · intro value
-    apply counter_bind
-    · exact counter_stateQuery _ (stateQuery_expectInt value)
-    · intro result
-      cases result with
-      | mk ty number =>
-        cases Goose.Core.evalUn config.profile operation ty number with
-        | ok value => exact counter_pure _
-        | error reason => exact counter_abortAt (Goose.Core.AbortKind.ofNum reason) origin
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.un operation expression origin)) :=
+  evalValue_counter_succ fuel config previous environment (.un operation expression origin)
 
 theorem evalValue_bin_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
     (operation : Goose.Core.BinOp) (first second : Expr) (origin : Goose.Core.OriginId) :
-    PreservesActivationCounter (evalValue (fuel + 1) config environment (.bin operation first second origin)) := by
-  simp only [evalValue]
-  apply counter_bind
-  · exact previous.value environment first
-  · intro firstValue
-    apply counter_bind
-    · exact counter_stateQuery _ (stateQuery_expectInt firstValue)
-    · intro firstResult
-      cases firstResult with
-      | mk ty firstNumber =>
-        apply counter_bind
-        · exact previous.value environment second
-        · intro secondValue
-          apply counter_bind
-          · exact counter_stateQuery _ (stateQuery_expectInt secondValue)
-          · intro secondResult
-            cases secondResult with
-            | mk otherTy secondNumber =>
-              apply counter_bind
-              · exact counter_stateQuery _ (stateQuery_sameIntType ty otherTy)
-              · intro ignored
-                cases Goose.Core.evalBin config.profile operation ty firstNumber secondNumber with
-                | ok value => exact counter_pure _
-                | error reason => exact counter_abortAt (Goose.Core.AbortKind.ofNum reason) origin
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.bin operation first second origin)) :=
+  evalValue_counter_succ fuel config previous environment (.bin operation first second origin)
 
 theorem evalValue_conv_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
     (kind : Goose.Core.ConvKind) (target : Ty) (expression : Expr) (origin : Goose.Core.OriginId) :
-    PreservesActivationCounter (evalValue (fuel + 1) config environment (.conv kind target expression origin)) := by
-  simp only [evalValue]
-  apply counter_bind
-  · exact previous.value environment expression
-  · intro value
-    apply counter_bind
-    · exact counter_stateQuery _ (stateQuery_expectInt value)
-    · intro result
-      cases result with
-      | mk source number =>
-        cases target with
-        | int target =>
-          simp only
-          cases Goose.Core.evalConv config.profile kind source target number with
-          | ok value => exact counter_pure _
-          | error reason => exact counter_abortAt (Goose.Core.AbortKind.ofNum reason) origin
-        | _ => exact counter_fault _
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.conv kind target expression origin)) :=
+  evalValue_counter_succ fuel config previous environment (.conv kind target expression origin)
 
 #print axioms evalValue_conv_counter
 theorem evalValue_and_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (first second : Expr) :
-    PreservesActivationCounter (evalValue (fuel + 1) config environment (.and first second)) := by
-  simp only [evalValue]
-  apply counter_bind
-  · exact previous.value environment first
-  · intro value
-    apply counter_bind
-    · exact counter_stateQuery _ (stateQuery_expectBool value)
-    · intro condition
-      cases condition with
-      | false => exact counter_pure _
-      | true =>
-        apply counter_bind
-        · exact previous.value environment second
-        · intro value
-          apply counter_bind
-          · exact counter_stateQuery _ (stateQuery_expectBool value)
-          · intro value
-            exact counter_pure _
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.and first second)) :=
+  evalValue_counter_succ fuel config previous environment (.and first second)
 
 theorem evalValue_or_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (first second : Expr) :
-    PreservesActivationCounter (evalValue (fuel + 1) config environment (.or first second)) := by
-  simp only [evalValue]
-  apply counter_bind
-  · exact previous.value environment first
-  · intro value
-    apply counter_bind
-    · exact counter_stateQuery _ (stateQuery_expectBool value)
-    · intro condition
-      cases condition with
-      | true => exact counter_pure _
-      | false =>
-        apply counter_bind
-        · exact previous.value environment second
-        · intro value
-          apply counter_bind
-          · exact counter_stateQuery _ (stateQuery_expectBool value)
-          · intro value
-            exact counter_pure _
+    PreservesActivationCounter (evalValue (fuel + 1) config environment (.or first second)) :=
+  evalValue_counter_succ fuel config previous environment (.or first second)
 
 #print axioms evalValue_bin_counter
 #print axioms evalValue_and_counter
