@@ -14,6 +14,8 @@ inductive SourceOperation : Type → Type
   | activationBody (activation : RuntimeActivation) (block : Block) : SourceOperation (List Carrier)
   | activation (activation : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
   | call (environment : RuntimeActivation) (context : Goose.Core.ContextId) (origin : Goose.Core.OriginId) : SourceOperation (List Carrier)
+  | arguments (environment : RuntimeActivation) (vars : Array LocalVar) (parameters : List Param)
+      (arguments : List Arg) : SourceOperation (List Value)
   | producer (environment : RuntimeActivation) (expression : Expr) : SourceOperation (List Carrier)
 
 def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
@@ -24,6 +26,7 @@ def execute (fuel : Nat) (config : EvalConfig) : SourceOperation α → EvalM α
   | .activationBody activation block => execActivationBody fuel config activation [] block
   | .activation activation block origin => enterActivation fuel config activation [] block origin
   | .call environment context origin => invokeCall fuel config environment context [] [] origin
+  | .arguments environment vars parameters arguments => evalArguments fuel config environment vars parameters arguments
   | .producer environment expression => evalProduce fuel config environment [] expression
 
 def conditionalResult (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
@@ -151,6 +154,21 @@ theorem valueCall_source (fuel : Nat) (config : EvalConfig) (environment : Runti
     Array.toList_empty, channelsFor, List.mapM_nil, bind, pure, callValueResult]
   cases invokeCall fuel config environment contextId [] [] origin before <;> rfl
 
+def argumentResult (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation) (vars : Array LocalVar)
+    (parameters : List Param) (arguments : List Arg) : ExecutionStep Value → ExecutionStep (List Value)
+  | .ok value state => (do pure (value :: (← evalArguments fuel config environment vars parameters arguments))) state
+  | .stop reason state => .stop reason state
+  | .escape address carriers state => .escape address carriers state
+  | .jump target kind state => .jump target kind state
+
+theorem valueArgument_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (vars : Array LocalVar) (parameter : Param) (parameters : List Param) (operand : Expr) (arguments : List Arg)
+    (before : ExecutionState) :
+    evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.byVal operand :: arguments) before =
+      argumentResult fuel config environment vars parameters arguments (evalValue fuel config environment operand before) := by
+  simp only [evalArguments, bind, argumentResult]
+  cases evalValue fuel config environment operand before <;> rfl
+
 inductive SourceHistory (config : EvalConfig) :
     {α : Type} → Nat → List Nat → SourceOperation α → ExecutionState → ExecutionStep α → Prop
   | timeout (path : List Nat) (operation : SourceOperation α) (before : ExecutionState) :
@@ -237,6 +255,18 @@ inductive SourceHistory (config : EvalConfig) :
         { before with nextAct := before.nextAct + 1, activations := (⟨context.impl, before.nextAct, implementation.vars, [], []⟩ : RuntimeActivation) :: before.activations } outcome) :
       SourceHistory config (fuel + 2) path (.call environment contextId origin) before
         (callDeliveryResult (fuel + 1) config origin outcome)
+  | argumentsDone (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (vars : Array LocalVar)
+      (before : ExecutionState) :
+      SourceHistory config (fuel + 1) path (.arguments environment vars [] []) before (.ok [] before)
+  | argumentValue {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {vars : Array LocalVar}
+      {parameter : Param} {parameters : List Param} {operand : Expr} {arguments : List Arg}
+      {before : ExecutionState} {outcome : ExecutionStep Value}
+      (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome)
+      (tail : ∀ value middle, outcome = .ok value middle →
+        SourceHistory config fuel (path ++ [1]) (.arguments environment vars parameters arguments) middle
+          (evalArguments fuel config environment vars parameters arguments middle)) :
+      SourceHistory config (fuel + 1) path (.arguments environment vars (parameter :: parameters) (.byVal operand :: arguments))
+        before (argumentResult fuel config environment vars parameters arguments outcome)
   | expression {fuel : Nat} {path : List Nat} {environment : RuntimeActivation} {operand : Expr}
       {origin : Goose.Core.OriginId} {before : ExecutionState} {outcome : ExecutionStep Value}
       (child : SourceHistory config fuel (path ++ [0]) (.value environment operand) before outcome) :
@@ -260,7 +290,7 @@ inductive SourceHistory (config : EvalConfig) :
 theorem SourceHistory.sound (history : SourceHistory config fuel path operation before outcome) :
     execute fuel config operation before = outcome := by
   induction history with
-  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalProduce, Goose.Construct.timeout, EvalM.stop]
+  | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalProduce, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
@@ -309,6 +339,10 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
         contextFound implementationFound parametersEmpty resultsEmpty depth]
       simp only [bind, ih, callDeliveryResult]
       cases outcome <;> rfl
+  | argumentsDone => simp [execute, evalArguments, pure]
+  | @argumentValue fuel path environment vars parameter parameters operand arguments before outcome child tail ihChild ihTail =>
+      simp only [execute] at ihChild ⊢
+      rw [valueArgument_source fuel config environment vars parameter parameters operand arguments before, ihChild]
   | @expression fuel path environment operand origin before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [execStmt, bind, ih, expressionStatementResult]
@@ -406,6 +440,13 @@ inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOpera
       (body : ∀ act, SupportedOperation config
         (.activation ⟨context.impl, act, implementation.vars, [], []⟩ implementation.body origin)) :
       SupportedOperation config (.call environment contextId origin)
+  | argumentsDone (environment : RuntimeActivation) (vars : Array LocalVar) :
+      SupportedOperation config (.arguments environment vars [] [])
+  | argumentValue (environment : RuntimeActivation) (vars : Array LocalVar) (parameter : Param)
+      (parameters : List Param) (operand : Expr) (arguments : List Arg)
+      (child : SupportedOperation config (.value environment operand))
+      (tail : SupportedOperation config (.arguments environment vars parameters arguments)) :
+      SupportedOperation config (.arguments environment vars (parameter :: parameters) (.byVal operand :: arguments))
   | producer (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
       SupportedOperation config (.producer environment expression)
 
@@ -414,7 +455,7 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
     SourceHistory config fuel path operation before (execute fuel config operation before) := by
   induction fuel generalizing α operation path before with
   | zero =>
-      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalProduce,
+      cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execActivationBody, enterActivation, invokeCall, evalArguments, evalProduce,
         Goose.Construct.timeout, EvalM.stop] using (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -535,6 +576,19 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
                   contextFound implementationFound parametersEmpty resultsEmpty full] using
                   (SourceHistory.callDepth contextFound implementationFound parametersEmpty resultsEmpty full :
                     SourceHistory config (fuel + 2) path (.call environment contextId origin) before _)
+      | argumentsDone environment vars => simpa [execute, evalArguments, pure] using
+          (SourceHistory.argumentsDone fuel path environment vars before :
+            SourceHistory config (fuel + 1) path (.arguments environment vars [] []) before _)
+      | argumentValue environment vars parameter parameters operand arguments childSupported tailSupported =>
+          have child := ih (.value environment operand) (path ++ [0]) before childSupported
+          have tail : ∀ value middle, evalValue fuel config environment operand before = .ok value middle →
+              SourceHistory config fuel (path ++ [1]) (.arguments environment vars parameters arguments) middle
+                (evalArguments fuel config environment vars parameters arguments middle) := by
+            intro value middle _
+            exact ih (.arguments environment vars parameters arguments) (path ++ [1]) middle tailSupported
+          simp only [execute]
+          rw [valueArgument_source]
+          exact .argumentValue child tail
       | producer environment supported =>
           exact ProducerHistory.toSource (producerHistory_exists (fuel + 1) config environment path _ before supported)
 
@@ -707,6 +761,51 @@ theorem witness_valueCall : ∃ after,
     rw [actual] at history
     exact history
 
+private def argumentWitnessParameters : List Param := [⟨0, .byValue⟩, ⟨1, .byValue⟩]
+private def argumentWitnessArguments : List Arg := [.byVal (.call 0 [] 0), .byVal (.lit .i64 9)]
+
+theorem witness_nestedCallArgument : ∃ after,
+    evalArguments 40 callWitnessConfig witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments .initial =
+      .ok [.unit, .int .i64 9] after ∧
+    SourceHistory callWitnessConfig 40 []
+      (.arguments witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments) .initial
+      (.ok [.unit, .int .i64 9] after) := by
+  have bodySupported : ∀ environment, SupportedOperation callWitnessConfig
+      (.statements environment [.expr (.fill (.arr (.int .i64) 3) (.lit .i64 7) 0) 0]) := by
+    intro environment
+    exact .sequence environment (.expression environment 0 (.value environment
+      (.fill (.int .i64) 3 0 rfl (.integer .i64 7)))) (.empty environment)
+  have callee : SupportedOperation callWitnessConfig (.call witnessEnvironment 0 0) := by
+    apply SupportedOperation.call witnessEnvironment 0 0 callWitnessContext callWitnessImplementation
+    · rfl
+    · rfl
+    · rfl
+    · rfl
+    · intro act
+      exact .activation _ 0 _ 0 bodySupported
+  have supported : SupportedOperation callWitnessConfig
+      (.arguments witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments) := by
+    unfold argumentWitnessParameters argumentWitnessArguments
+    exact .argumentValue _ _ _ _ _ _
+      (.valueCall witnessEnvironment 0 0 callWitnessContext callWitnessImplementation rfl rfl rfl callee)
+      (.argumentValue _ _ _ _ _ _ (.value _ (.integer .i64 9)) (.argumentsDone _ _))
+  have history := history_exists 40 callWitnessConfig
+    (.arguments witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments) [] .initial supported
+  refine ⟨witnessState (evalArguments 40 callWitnessConfig witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments .initial), ?_, ?_⟩
+  · unfold callWitnessConfig witnessEnvironment argumentWitnessParameters argumentWitnessArguments witnessState
+    cbv
+  · have actual : evalArguments 40 callWitnessConfig witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments .initial =
+        .ok [.unit, .int .i64 9] (witnessState (evalArguments 40 callWitnessConfig witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments .initial)) := by
+      unfold callWitnessConfig witnessEnvironment argumentWitnessParameters argumentWitnessArguments witnessState
+      cbv
+    change SourceHistory callWitnessConfig 40 []
+      (.arguments witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments) .initial
+      (evalArguments 40 callWitnessConfig witnessEnvironment #[] argumentWitnessParameters argumentWitnessArguments .initial) at history
+    rw [actual] at history
+    exact history
+
+#print axioms witness_nestedCallArgument
+
 #print axioms witness_valueCall
 
 #print axioms witness_call
@@ -717,6 +816,7 @@ theorem witness_valueCall : ∃ after,
 
 #print axioms witness_nestedFill
 
+#print axioms valueArgument_source
 #print axioms valueCall_source
 #print axioms emptyCall_enter
 #print axioms emptyCall_depth
