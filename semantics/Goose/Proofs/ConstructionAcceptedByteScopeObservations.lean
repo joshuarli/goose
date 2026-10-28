@@ -43,6 +43,19 @@ theorem AcceptedFrame.after_monotone_unchanged_objects
   · intro root outside
     rfl
 
+theorem acceptedWorld_freshStorage_unreferenced_after (config : EvalConfig) (initialized : Nat)
+    (before after : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (objects : after.objects = before.objects) :
+    ∀ root, live root → ∀ value, after.objects.lookup root = some value → ∀ stored,
+      StoredOccurrence value stored → stored.storage ≠ before.construction.storage.size := by
+  intro root active value found stored occurrence
+  have old : before.objects.lookup root = some value := by simpa only [objects] using found
+  exact Nat.ne_of_lt (acceptedWorld_freshStorage_unreferenced config initialized before ambient types live regions pending
+    world root active value old stored occurrence)
+
+#print axioms acceptedWorld_freshStorage_unreferenced_after
 #print axioms AcceptedFrame.after_monotone_unchanged_objects
 #print axioms acceptedWorld_freshStorage_unreferenced
 #print axioms releaseScope_withoutDeclarations_objects
