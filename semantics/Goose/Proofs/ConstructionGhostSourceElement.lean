@@ -1,16 +1,8 @@
 import Goose.Proofs.ConstructionGhostSourceTransition
+import Goose.Proofs.ConstructionGhostElements
 
 namespace Goose.Proofs.ConstructionGhostSourceElement
-open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition
-
-def fixedElementResult (fuel : Nat) (config : EvalConfig) (parent : Goose.Core.DestinationId) (element : Ty)
-    (operand : Expr) : ExecutionStep Value → ExecutionStep Unit
-  | .ok value state => (do
-      let bytes ← liftExcept (fixedBytes fuel config.layout element value)
-      receivingAction (expressionOrigin operand) parent (fun destination => writeElement destination bytes)) state
-  | .stop reason state => .stop reason state
-  | .escape address carriers state => .escape address carriers state
-  | .jump target kind state => .jump target kind state
+open Goose.Construct Goose.Proofs.ConstructionGhostSourceTransition Goose.Proofs.ConstructionGhostElements
 
 inductive ElementHistory (config : EvalConfig) (environment : RuntimeActivation) :
     Nat → List Nat → Goose.Core.DestinationId → Ty → Expr → ExecutionState → ExecutionStep Unit → Prop
@@ -20,15 +12,14 @@ inductive ElementHistory (config : EvalConfig) (environment : RuntimeActivation)
       {before : ExecutionState} {outcome : ExecutionStep Value} (fixed : element.nonfixed = false)
       (child : ValueHistory config environment fuel (path ++ [0]) operand before outcome) :
       ElementHistory config environment (fuel + 1) path parent element operand before
-        (fixedElementResult fuel config parent element operand outcome)
+        (fixedElementContinuation fuel config parent element operand outcome)
 
 theorem fixedElement_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
     (parent : Goose.Core.DestinationId) (element : Ty) (operand : Expr) (before : ExecutionState)
     (fixed : element.nonfixed = false) :
     buildElement (fuel + 1) config environment parent element operand before =
-      fixedElementResult fuel config parent element operand (evalValue fuel config environment operand before) := by
-  simp only [buildElement, fixed, Bool.false_eq_true, ↓reduceIte, bind, fixedElementResult]
-  cases evalValue fuel config environment operand before <;> rfl
+      fixedElementContinuation fuel config parent element operand (evalValue fuel config environment operand before) :=
+  fixedElement_execution fuel config environment parent element operand before fixed
 
 theorem ElementHistory.sound
     (history : ElementHistory config environment fuel path parent element operand before outcome) :
