@@ -54,23 +54,23 @@ theorem generated_while_condition_extended {le : LEnv} {header : BlockId} {befor
 
 theorem accepted_generated_while_initial_condition {cfg : Cfg} {env : Env} {condition : Expr} {body : Core.Block}
     {origin : OriginId} {state : St} (source : StmtSource cfg env (.while condition body origin) state)
-    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before after : LS}
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before after : LS} {loop : Option LoopCtx}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (owned : GeneratedSourceOwner selected source.context)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
-      root source.path (.statement none (.while condition body origin)) before)
+      root source.path (.statement loop (.while condition body origin)) before)
     {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
     (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
     (bounded : map.Bounded before.vals.size) {frame : GIR.Frame} {point : Pt}
     (realized : map.Realizes cfg.mod source.world env ⟨point, frame, state⟩)
-    (input : GeneratedPrefixInput cfg env cx results none source.typingEnv source.rootsEnv before frame point)
-    (lowered : lowerStmt none (.while condition body origin) (lowerEnv cfg.mod env.vars results) before = ((), after))
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before frame point)
+    (lowered : lowerStmt loop (.while condition body origin) (lowerEnv cfg.mod env.vars results) before = ((), after))
     (extended : ExtT after cx.fn.blocks) :
     ∃ (child : ExprSource cfg env condition state) (header : BlockId) (headerState : LS),
       child.ty = .bool ∧ source.ExpressionChildAt child (by simp [DemandNode.child?, DemandNode.children]) ∧
       GeneratedSourceOwner selected child.context ∧ map.Covers required ∧ map.Admitted cfg.mod.profile child.context.retained ∧
       map.Bounded headerState.vals.size ∧ map.Realizes cfg.mod child.world env ⟨(header, 0), frame, state⟩ ∧
-      GeneratedPrefixInput cfg env cx results none child.typingEnv child.rootsEnv headerState frame (header, 0) ∧
+      GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv headerState frame (header, 0) ∧
       ExtT (lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2 cx.fn.blocks ∧
       (∀ fuel, DemandInstructionStep cx fuel ⟨point, frame, state⟩ ⟨(header, 0), frame, state⟩) ∧
       ∃ childOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
@@ -82,10 +82,20 @@ theorem accepted_generated_while_initial_condition {cfg : Cfg} {env : Env} {cond
     generated_while_header_entry lowered input.atPoint extended input.related input.generated
   have childRealized : map.Realizes cfg.mod child.world env ⟨(header, 0), frame, state⟩ := by
     simpa only [RetainedSsaMap.Realizes, canonical.world] using realized
-  have childInput : GeneratedPrefixInput cfg env cx results none child.typingEnv child.rootsEnv headerState frame (header, 0) := by
-    refine ⟨?_, ?_, post.pp, post.rel, input.moduleEq, input.resultsEq, input.depth, trivial, trivial, generated, trivial⟩
-    · simpa only [typing, roots] using input.metadata
-    · simpa only [typing] using input.loops
+  have headerExtension : before.Ext headerState := by
+    rw [headerEq]
+    unfold demandWhileHeaderBefore
+    exact (advB_newBlock0 (lowerEnv cfg.mod env.vars results) before _ _ rfl).ext.trans (advB_emitTerm _ (lowerEnv cfg.mod env.vars results) _ _ _ rfl).ext
+  have childInput : GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv headerState frame (header, 0) := by
+    have childMetadata : SourceResults child.typingEnv child.rootsEnv results := by
+      simpa only [typing, roots] using input.metadata
+    have childLoops : LoopSourceMatches child.typingEnv loop := by
+      simpa only [typing] using input.loops
+    cases loop with
+    | none => exact ⟨childMetadata, childLoops, post.pp, post.rel, input.moduleEq, input.resultsEq,
+        input.depth, trivial, trivial, generated, trivial⟩
+    | some context => exact ⟨childMetadata, childLoops, post.pp, post.rel, input.moduleEq, input.resultsEq,
+        input.depth, input.targets, input.counter.afterPost post, generated, input.frames.mono headerExtension⟩
   refine ⟨child, header, headerState, ty, canonical, childOwner, coverage, childAdmitted,
     bounded.mono post.mono, childRealized, childInput, generated_while_condition_extended loopRun extended, step, ?_⟩
   rw [headerEq]
