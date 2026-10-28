@@ -56,35 +56,6 @@ private theorem byteOwner_runtimeWrite (raw : ByteArray) (byte : UInt8) (total :
         (events ++ [.write 0 raw.size]))) := by
   simp only [receivingAction, liftConstruction, byteOwnerRuntime, byteOwner_renew, bind, byteOwner_write]
 
-private theorem byteOwner_writeLoop (data : List UInt8) (raw : ByteArray) (total : Nat)
-    (events : List Goose.Core.ConstructionEvent) :
-    ∃ following,
-      ((forIn data PUnit.unit fun byte _ => do
-          receivingAction 0 0 (fun destination => writeElement destination ⟨#[byte]⟩)
-          pure (.yield PUnit.unit)) : EvalM PUnit)
-        (byteOwnerRuntime (byteOwnerState raw (.open raw.size) 0 total events)) =
-      .ok PUnit.unit (byteOwnerRuntime (byteOwnerState (raw ++ ⟨data.toArray⟩) (.open (raw ++ ⟨data.toArray⟩).size)
-        0 total following)) := by
-  induction data generalizing raw events with
-  | nil =>
-      refine ⟨events, ?_⟩
-      have empty : (⟨(#[] : Array UInt8)⟩ : ByteArray) = ByteArray.empty := rfl
-      simp only [List.forIn_nil, pure, bind, empty, ByteArray.append_empty]
-  | cons byte rest ih =>
-      obtain ⟨following, tail⟩ := ih (raw ++ ⟨#[byte]⟩) (events ++ [.write 0 raw.size])
-      refine ⟨following, ?_⟩
-      have combined : (raw ++ ⟨#[byte]⟩) ++ ⟨rest.toArray⟩ = raw ++ ⟨(byte :: rest).toArray⟩ := by
-        rw [ByteArray.ext_iff]
-        simp only [ByteArray.data_append]
-        change (raw.data ++ #[byte]) ++ rest.toArray = raw.data ++ (byte :: rest).toArray
-        rw [List.toArray_cons byte rest]
-        exact Array.append_assoc
-      have currentSize : (raw ++ ⟨#[byte]⟩).size = raw.size + 1 := by
-        rw [ByteArray.size_append]
-        rfl
-      simp only [List.forIn_cons, bind, byteOwner_runtimeWrite, pure]
-      simpa only [bind, pure, currentSize, combined] using tail
-
 theorem byteOwner_writeLoop_direct (data : List UInt8) (raw : ByteArray) (total : Nat)
     (events : List Goose.Core.ConstructionEvent) :
     ∃ following,
@@ -151,7 +122,7 @@ private theorem byteOwner_build (fuel : Nat) (config : EvalConfig)
         (byteOwnerRuntime (byteOwnerState ByteArray.empty (.open 0) 0 data.length [.begin 0])) =
       .ok () (byteOwnerRuntime (byteOwnerState ⟨data.toArray⟩ (.built (⟨data.toArray⟩ : ByteArray).size)
         0 data.length events)) := by
-  obtain ⟨events, loop⟩ := byteOwner_writeLoop data ByteArray.empty data.length [.begin 0]
+  obtain ⟨events, loop, _⟩ := byteOwner_writeLoop_direct data ByteArray.empty data.length [.begin 0]
   simp only [ByteArray.empty_append, ByteArray.size_empty, bind, pure] at loop
   refine ⟨events, ?_⟩
   simp only [buildExpr, liftConstruction, byteOwnerRuntime, byteOwner_renew, bind]
