@@ -9,7 +9,7 @@ inductive GlobalClearStatements : List Stmt → Prop
   | cons (global : GlobalId) (origin : OriginId) {rest : List Stmt}
       (remaining : GlobalClearStatements rest) : GlobalClearStatements (.clear (.global global) origin :: rest)
 
-private theorem global_clear_source {cfg : Cfg} {env : Env} {fuel : Nat} {global : GlobalId}
+theorem global_clear_source {cfg : Cfg} {env : Env} {fuel : Nat} {global : GlobalId}
     {origin : OriginId} {state after : St} {flow : Flow}
     (done : execStmt fuel cfg env (.clear (.global global) origin) state = .ok flow after) :
     flow = .normal .unit ∧ truncateLoc ⟨.global global, []⟩ 0 state = .ok () after := by
