@@ -19,12 +19,15 @@ private def sibling : PendingDestination :=
   ⟨capability 2, .direct 0, .elements, .child 0, .open 0, 0, 0, none, none⟩
 
 private def before : ConstructionState :=
-  { ConstructionState.initial with storage := #[⟨ByteArray.empty, 0⟩], destinations := #[parent, chosen, sibling] }
+  { ConstructionState.initial with
+    storage := #[⟨ByteArray.empty, 0⟩]
+    destinations := #[parent, chosen, sibling]
+    events := [.begin 0, .begin 1, .begin 2] }
 
 private def after : ConstructionState :=
   { before with
     destinations := #[{ parent with progress := .open 1 }, { chosen with progress := .attached 0 }, sibling]
-    events := [.write 0 0] }
+    events := [.begin 0, .begin 1, .begin 2, .write 0 0] }
 
 private theorem before_blocked : ActiveChildParentBlocked before := by
   intro id row owner found used active
@@ -60,6 +63,62 @@ private theorem before_ordered : DestinationOwnersOrdered before := by
       | zero => simp [before, sibling] at found; subst row; simp [sibling]
       | succ id => simp [before] at found
 
+private theorem before_lifecycle : DestinationLifecycleInvariant before := by
+  refine ⟨?_, ?_, ?_, before_ordered⟩
+  · intro id
+    cases id with
+    | zero => simp [before, parent, chosen, sibling, capability, destinationObservations, observeDestination,
+        runDestinationTrace, runDestinationObservations, destinationTraceStep,
+        DestinationTracePhase.matchesDestination, DestinationTracePhase.matchesProgress]
+    | succ id =>
+      cases id with
+      | zero => simp [before, parent, chosen, sibling, capability, destinationObservations, observeDestination,
+          runDestinationTrace, runDestinationObservations, destinationTraceStep,
+          DestinationTracePhase.matchesDestination, DestinationTracePhase.matchesProgress]
+      | succ id =>
+        cases id with
+        | zero => simp [before, parent, chosen, sibling, capability, destinationObservations, observeDestination,
+            runDestinationTrace, runDestinationObservations, destinationTraceStep,
+            DestinationTracePhase.matchesDestination, DestinationTracePhase.matchesProgress]
+        | succ id => simp [before, parent, chosen, sibling, capability, destinationObservations, observeDestination,
+            runDestinationTrace, runDestinationObservations]
+  · intro id row found
+    cases id with
+    | zero => simp [before, parent] at found; subst row; rfl
+    | succ id =>
+      cases id with
+      | zero => simp [before, chosen] at found; subst row; rfl
+      | succ id =>
+        cases id with
+        | zero => simp [before, sibling] at found; subst row; rfl
+        | succ id => simp [before] at found
+  · intro id row found
+    cases id with
+    | zero => simp [before, parent] at found; subst row; simp [parent, PendingDestination.storage, DestinationBacking.writeStorage, DestinationBacking.receiverStorage, before]
+    | succ id =>
+      cases id with
+      | zero => simp [before, chosen] at found; subst row; simp [chosen, PendingDestination.storage, DestinationBacking.writeStorage, DestinationBacking.receiverStorage, before]
+      | succ id =>
+        cases id with
+        | zero => simp [before, sibling] at found; subst row; simp [sibling, PendingDestination.storage, DestinationBacking.writeStorage, DestinationBacking.receiverStorage, before]
+        | succ id => simp [before] at found
+
+private theorem before_forward_links : DestinationForwardLinks before := by
+  intro id row found
+  cases id with
+  | zero =>
+    simp [before, parent] at found
+    subst row
+    refine ⟨chosen, by rfl, by rfl, ?_⟩
+    rfl
+  | succ id =>
+    cases id with
+    | zero => simp [before, chosen] at found; subst row; exact trivial
+    | succ id =>
+      cases id with
+      | zero => simp [before, sibling] at found; subst row; exact trivial
+      | succ id => simp [before] at found
+
 private theorem attach_result : attachChild 0 1 before = .ok () after := by
   have writableParent : destinationCanWrite before 0 = true := by simp [destinationCanWrite, before, parent, chosen, sibling, capability, Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size, List.range', List.forIn_cons, List.forIn_nil]
   have writableChild : destinationCanWrite before 1 = true := by simp [destinationCanWrite, before, parent, chosen, sibling, capability, Std.Legacy.Range.forIn_eq_forIn_range', Std.Legacy.Range.size, List.range', List.forIn_cons, List.forIn_nil]
@@ -81,9 +140,9 @@ private theorem after_not_blocked : ¬ ActiveChildParentBlocked after := by
   rcases phase with ⟨count, child, phase⟩ | ⟨count, replacement, phase⟩ <;> cases phase
 
 theorem attachChild_blocked_parent_not_inductive :
-    ∃ before after, ActiveChildParentBlocked before ∧ DestinationOwnersOrdered before ∧ attachChild 0 1 before = .ok () after ∧
+    ∃ before after, ActiveChildParentBlocked before ∧ DestinationLifecycleInvariant before ∧ DestinationForwardLinks before ∧ attachChild 0 1 before = .ok () after ∧
       ¬ ActiveChildParentBlocked after :=
-  ⟨before, after, before_blocked, before_ordered, attach_result, after_not_blocked⟩
+  ⟨before, after, before_blocked, before_lifecycle, before_forward_links, attach_result, after_not_blocked⟩
 
 #print axioms attachChild_blocked_parent_not_inductive
 
