@@ -15,6 +15,10 @@ theorem ReachableScalarCallCursor.excludes_maximal_terminal {cfg : Cfg} {env : E
   cases cursor with
   | scalar cursor => exact ScalarAssignmentStatementPrefixCursor.excludes_maximal_terminal cursor terminal maximal
   | call cursor => exact cursor.excludes_maximal_terminal terminal maximal
+  | conditional selected cursor =>
+    cases cursor with
+    | scalar cursor => exact ScalarAssignmentStatementPrefixCursor.excludes_maximal_terminal cursor terminal maximal
+    | recursive depth cursor => exact RecursiveLoopIfCursor.excludes_maximal_terminal depth cursor terminal maximal
 
 theorem GeneratedGenericBlockPrefixDemand.scalarCall_excludes_maximal_terminal
     {cfg : Cfg} {env : Env} {block : Core.Block} {state : St}

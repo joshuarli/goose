@@ -1,5 +1,6 @@
 import Goose.Lower.DemandCallReachableMixed
 import Goose.Lower.DemandCallMixedNormal
+import Goose.Lower.DemandIfRecursiveLoopPrepend
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
@@ -7,6 +8,9 @@ open Goose.Core Goose.GIR Goose.Core.Sound Goose.Evidence
 inductive ReachableScalarCallStatements (cfg : Cfg) (env : Env) : List Stmt → Prop
   | mixed {statements : List Stmt} (fragment : ScalarAssignmentStatements cfg env statements) :
       ReachableScalarCallStatements cfg env statements
+  | conditional {earlier later : List Stmt} (earlierForm : RecursiveIfStatements cfg env earlier)
+      (tail : ReachableScalarCallStatements cfg env later) :
+      ReachableScalarCallStatements cfg env (earlier ++ later)
   | call {earlier later : List Stmt} (earlierForm : ScalarAssignmentStatements cfg env earlier)
       (context : ContextId) (arguments : List Arg) (origin statementOrigin : OriginId)
       (ctx : Context) (impl : Impl) (contextAt : cfg.mod.contexts[context]? = some ctx)
@@ -28,6 +32,12 @@ inductive ReachableScalarCallCursor {cfg : Cfg} {env : Env} (caller : Func) (res
   | scalar {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
       (cursor : ScalarAssignmentStatementPrefixCursor ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results source before built initial start map required runtime) :
+      ReachableScalarCallCursor caller results loop source before built initial start map required runtime
+  | conditional {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
+      {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
+      {root : DemandNode} {owner : Nat}
+      (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
+      (cursor : LoopRecursiveSegmentCursor ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results loop selected source before built initial start map required runtime) :
       ReachableScalarCallCursor caller results loop source before built initial start map required runtime
   | call {statement : Stmt} {state : St} {source : StmtSource cfg env statement state}
       {before built : LS} {initial : GIR.Frame} {start : Pt} {map required : RetainedSsaMap} {runtime : DemandRuntimePoint}
@@ -56,6 +66,13 @@ theorem accepted_generated_reachable_scalar_call_statements {cfg : Cfg} {env : E
       (by intro statement state source before built initial start map required runtime cursor; exact .scalar cursor)
       (fun point => RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller point.point point.frame point.state)
       (fun valid steps => steps.reachable valid) empty
+  | @conditional earlier later earlierForm tail ih =>
+    intro caller results root owner selected before loop bindings want block
+    exact accepted_generated_invariant_recursive_loop_if_prepend earlierForm selected before loop bindings want block
+      (@ReachableScalarCallCursor cfg env caller results loop)
+      (by intro statement state source before built initial start map required runtime cursor; exact .conditional selected cursor)
+      (fun point => RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller point.point point.frame point.state)
+      (fun valid steps => steps.reachable valid) (ih selected before loop bindings want block)
   | @call earlier later earlierForm context arguments origin statementOrigin ctx impl contextAt implAt depth callee expression form hasValue shrink argumentsForm stoppedArgumentsForm tail ih =>
     intro caller results root owner selected before loop bindings want block
     have suffix := ih selected before loop bindings want block
@@ -89,6 +106,13 @@ theorem ReachableScalarCallStatements.toMixed {cfg : Cfg} {env : Env} {statement
   induction form with
   | mixed fragment =>
     exact .mixed (by simpa using WhileMixedStatements.scalar fragment WhileMixedStatements.nil)
+  | conditional earlierForm tail ih =>
+    induction ih with
+    | mixed fragment => exact .mixed (WhileMixedStatements.recursive earlierForm fragment)
+    | call previous context arguments origin statementOrigin ctx impl contextAt implAt depth fragment expression form hasValue shrink argumentsForm stoppedArgumentsForm mixedTail next =>
+      simpa [List.append_assoc] using ReachableMixedCallStatements.call
+        (WhileMixedStatements.recursive earlierForm previous) context arguments origin statementOrigin ctx impl contextAt implAt depth
+        fragment expression form hasValue shrink argumentsForm stoppedArgumentsForm mixedTail
   | call earlierForm context arguments origin statementOrigin ctx impl contextAt implAt depth fragment expression exprForm hasValue shrink argumentsForm stoppedArgumentsForm tail ih =>
     exact .call (by simpa using WhileMixedStatements.scalar earlierForm WhileMixedStatements.nil)
       context arguments origin statementOrigin ctx impl contextAt implAt depth fragment expression exprForm hasValue shrink
