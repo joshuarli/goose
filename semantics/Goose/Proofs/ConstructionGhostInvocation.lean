@@ -1,8 +1,10 @@
 import Goose.Proofs.ConstructionInvocationReplay
 import Goose.Proofs.ConstructionExecutionSourceOrder
+import Goose.Proofs.ConstructionGhostBlock
 
 namespace Goose.Proofs.ConstructionGhostInvocation
 open Goose.Construct Goose.Proofs.ConstructionInvocationReplay
+open Goose.Proofs.ConstructionGhostStatements Goose.Proofs.ConstructionGhostBlock
 
 theorem visit_executes {action : α → EvalM β} {offset : Nat} {operands : List α}
     {accumulator : List β} {before : ExecutionState} {outcome : ExecutionStep (List β)}
@@ -99,7 +101,7 @@ def trackedInitializer : Expr → Bool
   | .arrLit ty _ _ => !ty.nonfixed
   | .fill (.arr element count) _ _ => !(Ty.arr element count).nonfixed
   | .structLit (.structT _ _) _ => true
-  | .cmp _ _ _ | .not _ | .and _ _ | .or _ _ | .bin _ _ _ _ | .un _ _ _ | .conv _ _ _ _ => true
+  | .cmp _ _ _ | .not _ | .and _ _ | .or _ _ | .bin _ _ _ _ | .un _ _ _ | .conv _ _ _ _ | .ifE _ _ _ _ => true
   | _ => false
 
 theorem structLiteral_replay (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
@@ -116,6 +118,35 @@ theorem structLiteral_replay (fuel : Nat) (config : EvalConfig) (environment : R
   refine ⟨_, visits, replay, ?_⟩
   simp only [evalValue, bind, pure]
   cases (operands.mapM (evalValue fuel config environment)) before <;> rfl
+
+inductive BranchExecution (config : EvalConfig) (environment : RuntimeActivation) :
+    Nat → List Nat → Block → ExecutionState → ExecutionStep Flow → Prop
+  | timeout (path : List Nat) (block : Block) (before : ExecutionState) :
+      BranchExecution config environment 0 path block before (execBlock 0 config environment [] [] block before)
+  | scoped (fuel : Nat) (path : List Nat) (scope : Nat) (statements : List Stmt) (value : Option Expr)
+      (before : ExecutionState) (outcome : ExecutionStep Flow) (visits : List StatementInvocation)
+      (replay : StatementReplay config { environment with scopes := (scope, before.nextScope) :: environment.scopes }
+        fuel 0 statements { before with nextScope := before.nextScope + 1 } outcome visits) :
+      BranchExecution config environment (fuel + 1) path (.mk scope statements value) before
+        (withScope environment scope before.nextScope (fun _ => blockContinuation fuel config
+          { environment with scopes := (scope, before.nextScope) :: environment.scopes }
+          [] value outcome) { before with nextScope := before.nextScope + 1 })
+
+theorem branchExecution_exists (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (path : List Nat) (block : Block) (before : ExecutionState) :
+    BranchExecution config environment fuel path block before (execBlock fuel config environment [] [] block before) := by
+  cases fuel with
+  | zero => exact .timeout path block before
+  | succ fuel =>
+    cases block with
+    | mk scope statements value =>
+      have bound : bindAll environment.act before.nextScope [] { before with nextScope := before.nextScope + 1 } =
+          .ok () { before with nextScope := before.nextScope + 1 } := by simp [bindAll, bind, pure]
+      obtain ⟨outcome, visits, replay, execution⟩ :=
+        execBlock_statementReplay fuel config environment [] [] scope statements value before
+          { before with nextScope := before.nextScope + 1 } bound
+      rw [execution]
+      exact .scoped fuel path scope statements value before outcome visits replay
 
 inductive EvaluationTree (config : EvalConfig) (environment : RuntimeActivation) :
     Nat → List Nat → Expr → ExecutionState → ExecutionStep Value → Prop
@@ -139,6 +170,16 @@ inductive EvaluationTree (config : EvalConfig) (environment : RuntimeActivation)
         | .stop reason after => .stop reason after
         | .escape address carriers after => .escape address carriers after
         | .jump target kind after => .jump target kind after)
+  | conditional (fuel : Nat) (path : List Nat) (condition : Expr) (yes no : Block)
+      (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (child : EvaluationTree config environment fuel (path ++ [0]) condition before
+        (evalValue fuel config environment condition before))
+      (branch : ∀ value middle selected ready, evalValue fuel config environment condition before = .ok value middle →
+        expectBool value middle = .ok selected ready →
+        BranchExecution config environment fuel (path ++ [if selected then 1 else 2]) (if selected then yes else no) ready
+          (execBlock fuel config environment [] [] (if selected then yes else no) ready)) :
+      EvaluationTree config environment (fuel + 1) path (.ifE condition yes no origin) before
+        (evalValue (fuel + 1) config environment (.ifE condition yes no origin) before)
   | unary (fuel : Nat) (path : List Nat) (operation : Goose.Core.UnOp) (operand : Expr)
       (origin : Goose.Core.OriginId) (before : ExecutionState)
       (child : EvaluationTree config environment fuel (path ++ [0]) operand before
@@ -230,6 +271,10 @@ theorem evaluationTree_exists (fuel : Nat) (config : EvalConfig) (environment : 
           rw [← visit_executes replay visit member]
           exact ih _ _ _)
       | true => exact .opaque fuel path _ before (by simp [trackedInitializer, fixed])
+    | ifE condition yes no origin =>
+      exact .conditional fuel path condition yes no origin before (ih _ _ _) (fun _ _ selected ready _ _ =>
+        branchExecution_exists fuel config environment (path ++ [if selected then 1 else 2])
+          (if selected then yes else no) ready)
     | un operation operand origin =>
       have execution : evalValue (fuel + 1) config environment (.un operation operand origin) before =
           unaryContinuation config operation origin (evalValue fuel config environment operand before) := by
@@ -322,6 +367,7 @@ theorem evaluationTree_sound {fuel : Nat} {config : EvalConfig} {environment : R
     change (operands.mapM (evalValue fuel config environment)) before = mapped at actual
     rw [actual]
     cases mapped <;> rfl
+  | conditional => rfl
   | unary fuel path operation operand origin before child =>
     simp only [evalValue, bind, unaryContinuation]
     cases evalValue fuel config environment operand before <;> rfl
@@ -351,6 +397,7 @@ theorem evaluationTree_sound {fuel : Nat} {config : EvalConfig} {environment : R
   | fill fuel path element count operand origin before fixed child =>
     exact Goose.Proofs.ConstructionExecution.evalValue_fixedFill_result fuel config environment element count operand origin before fixed
 
+#print axioms branchExecution_exists
 #print axioms evaluationTree_sound
 #print axioms evaluationTree_exists
 
