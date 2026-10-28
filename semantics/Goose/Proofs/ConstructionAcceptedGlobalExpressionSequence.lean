@@ -162,6 +162,43 @@ theorem execStmts_checkedScalar_initializer {frame : ConstructionSourceFrame} {s
         simp only [execStmts, bind, executed]
         exact ⟨final.1, final.2.1, by simpa only [final.1] using world, by simpa only [final.1] using source⟩
 
+theorem checkedScalarStatements_finalFrame {frame : ConstructionSourceFrame} {statements : List Stmt}
+    (checkedStatements : CheckedScalarStatements frame statements) :
+    ∀ (config : EvalConfig) (accepted : AcceptedModule config) (state : ExecutionState) (types : RootTypes)
+      (next : TypingEnv) (typingAfter : Nat) (rootsAfter : RState),
+      AcceptedFrame config accepted frame state types →
+      typeStatements frame.typingFuel frame.typing statements frame.typingCounter = .ok (next, typingAfter) →
+      rpStmts frame.source statements frame.rootCursor = .ok ((), rootsAfter) →
+      AcceptedFrame config accepted { frame with
+        typingFuel := 0
+        typing := next
+        typingCounter := typingAfter
+        rootCursor := rootsAfter } state types := by
+  induction checkedStatements with
+  | nil frame =>
+    intro config accepted state types next typingAfter rootsAfter source typed rooted
+    cases nesting : frame.typingFuel with
+    | zero => rw [nesting] at typed; change Except.error _ = Except.ok _ at typed; cases typed
+    | succ fuel =>
+      rw [nesting] at typed
+      change Except.ok (frame.typing, frame.typingCounter) = Except.ok (next, typingAfter) at typed
+      change Except.ok ((), frame.rootCursor) = Except.ok ((), rootsAfter) at rooted
+      cases typed
+      cases rooted
+      exact source.withTypingFuel 0
+  | cons frame expression origin rest checkFuel ty roots typingAfter rootsAfter next statementAfter statementRootsAfter nesting form checked typed rooted tail ih =>
+    intro config accepted state types finalTyping finalCounter finalRoots source allTyped allRooted
+    obtain ⟨sameTyping, sameCounter, nextSource⟩ := checkedScalarExpression_statementAdvance config accepted frame state types source
+      expression origin form checkFuel ty roots typingAfter rootsAfter checked next statementAfter statementRootsAfter typed rooted
+    rw [nesting] at allTyped
+    simp only [typeStatements, bind, StateT.bind, typed, Except.bind] at allTyped
+    obtain ⟨middle, headRooted, tailRooted⟩ := rpStmts_cons allRooted
+    have middleEq : middle = statementRootsAfter := (Prod.mk.inj (Except.ok.inj (headRooted.symm.trans rooted))).2
+    subst middle
+    have result := ih config accepted state types finalTyping finalCounter finalRoots nextSource allTyped tailRooted
+    exact result
+
+#print axioms checkedScalarStatements_finalFrame
 #print axioms execStmts_checkedScalar_initializer
 #print axioms scalarExpressionStatements_checked
 #print axioms scalarExpressionStatements_effects_bounded
