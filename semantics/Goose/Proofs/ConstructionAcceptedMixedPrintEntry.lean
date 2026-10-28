@@ -1,4 +1,4 @@
-import Goose.Proofs.ConstructionAcceptedMixedRegisterPrint
+import Goose.Proofs.ConstructionAcceptedMixedReadsEntry
 import Goose.Proofs.ConstructionMixedLocalEntryReplay
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -45,74 +45,9 @@ theorem acceptedEntry_mixedRegisterPrint (fuel : Nat) (config : EvalConfig) (acc
           deliverCarriers (fuel + 2) config.layout [] carriers 0) activated ∧
       StatementWorldOutcome config accepted entryFrame.initialized [.callChannels activation []] []
         (execStmts fuel config entryFrame.interpretation.environment frame.source.impl.body.stmts before) := by
-  obtain ⟨frame, activation, initialEq, environmentEq, act, scopes, channels, freshActed, freshScope, frameWorld, source,
-    position, phase, parameters, results, entry, entryAt, implAt, implId, vars⟩ :=
-    acceptedEntryPushedStatements_withInitialized config accepted state [] (declaredRootTypes config.module) live [] [] world
-  have entryEq : entry = original := Option.some.inj (entryAt.symm.trans originalAt)
-  subst entry
-  have implementationEq : frame.source.impl = implementation := Option.some.inj (implAt.symm.trans implementationAt)
-  have depth : state.activations.length < Goose.Core.maxCallDepth := by
-    have runtime := world.ownership.runtime.activations
-    cases active : state.activations with
-    | nil => simp [Goose.Core.maxCallDepth]
-    | cons head tail => simp [active, OwnershipAmbient.activations] at runtime
-  have canonical : activation = ⟨original.impl, state.nextAct, frame.source.impl.vars, [], []⟩ := by
-    cases activation with
-    | mk impl act' vars' scopes' channels' =>
-      simp only at implId act vars scopes channels
-      cases implId
-      cases act
-      cases vars
-      cases scopes
-      cases channels
-      rfl
-  have step := entryCallStep (fuel + 1) config ⟨0, 0, #[], [], []⟩ state original frame.source.impl originalAt implAt
-    parameters results depth
-  simp only [Nat.add_assoc] at step
-  rw [← canonical] at step
-  have lookup : config.module.impls[activation.implementation]? = some frame.source.impl := by
-    rw [implId]
-    exact implAt
-  have entryAction : enterActivation (fuel + 2) config activation [] frame.source.impl.body 0 =
-      finishActivation config.layout activation [] 0 (execActivationBody (fuel + 1) config activation [] frame.source.impl.body) := by
-    funext current
-    simp only [enterActivation, lookup, results, Array.toList_empty, List.map_nil]
-  rw [entryAction] at step
-  let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
-  let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
-  let entryFrame := entryStatementsFrame config frame activated.nextScope
-  let full := entryFrame
-  let types := declaredRootTypes config.module
-  have fullSource : AcceptedFrame config accepted full before types := source
-  have fullWorld : AcceptedWorld config full.initialized before [.callChannels activation []] types live [] [] := frameWorld
-  have initialized : full.initialized = config.module.globals.size := by
-    simpa only [full, entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using initialEq
-  have limit : full.typing.globalLimit ≤ config.module.globals.size := by
-    simp [full, entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame]
-  have initialBound : GlobalEffectTargetsBounded full.rootCursor.eff config.module.globals.size := by
-    simp [GlobalEffectTargetsBounded, Eff.accessTargets, full, entryFrame, entryStatementsFrame,
-      blockStatementsFrame, implementationBodyFrame, parameters]
-  have fullPosition : SourcePosition accepted full (.statements
-      (statements ++ [.letS localId (.call contextId [.byVal argument] origin) statementOrigin, .print [.expr (.read (.var localId))] printOrigin])) := by
-    simpa [full, implementationEq, body] using position
-  have sourceImpl : full.source.impl = implementation := by
-    simpa [full, entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using implementationEq
-  have frameScopes : full.interpretation.environment.scopes =
-      (frame.source.impl.body.scope, activated.nextScope) :: activation.scopes := by
-    simp [full, entryFrame, entryStatementsFrame, blockStatementsFrame, RootInterpretation.enterScope, environmentEq]
-  have unnamed : ∀ declaration : ByteOwnerDeclaration, declaration.statement ∈ statements →
-      (full.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none := by
-    intro declaration member
-    simp only [full, entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, results,
-      Array.toList_empty, List.zipIdx_nil, List.find?_nil]
-  have outcome := execStmts_entryMixed_registerPrint_world prefixForm argumentForm fuel config accepted full before activation types live [] []
-    contextId origin localId statementOrigin printOrigin helperContext helper parameter descriptor resultTy resultExpression
-    frame.source.impl.body.scope activated.nextScope activation.scopes contextAt helperAt helperParameters helperResults mode resultScalar declared scalar
-    initialized fullWorld fullSource phase initialBound limit fullPosition frameScopes
-    (by simpa [sourceImpl] using localScalar) (by simpa [sourceImpl] using prefixOwners) (by simpa [sourceImpl] using prefixScalar) unnamed
-    helperForm helperTail resultForm helperOwners helperScalar
-  refine ⟨frame, activation, channels, implementationEq, environmentEq, initialized, step, ?_⟩
-  simpa [full, entryFrame, activated, before, implementationEq, body] using outcome
+  exact acceptedEntry_mixedRegisterReadsPrint fuel config accepted state live original implementation statements contextId origin localId statementOrigin printOrigin [] argument helperContext helper parameter descriptor resultTy resultExpression
+    world originalAt implementationAt (by simpa [localReadStatements] using body) prefixForm prefixOwners prefixScalar localScalar
+    contextAt helperAt helperParameters helperResults mode declared scalar resultScalar argumentForm helperForm helperTail resultForm helperOwners helperScalar
 
 #print axioms acceptedEntry_mixedRegisterPrint
 end Goose.Proofs.ConstructionAcceptedExecution
