@@ -4,7 +4,7 @@ namespace Goose.Lower
 
 open Goose.Core Goose.GIR Goose.Core.Sound Goose.Proofs.Fuel
 
-private theorem comparison_operand_types {cfg : Cfg} {env : Env} {a b : Expr} {state after : St} (op : CmpOp)
+theorem comparison_operand_types {cfg : Cfg} {env : Env} {a b : Expr} {state after : St} (op : CmpOp)
     (source : ExprSource cfg env (.cmp op a b) state) (left : ExprSource cfg env a state)
     (right : ExprSource cfg env b after)
     (leftRoots : left.rootsEnv = source.rootsEnv)

@@ -559,6 +559,15 @@
   "evidence": "Goose/Lower/DemandBinaryStoppedFamily.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Recursive comparison and Boolean stop reflection",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_not_stopped_family; Goose.Lower.accepted_generated_compare_stopped_family; Goose.Lower.accepted_generated_comparison_stopped_expressions",
+  "statement": "Non-timeout target stops reflect through recursively nested numeric and Boolean expressions, including Boolean negation and compatible integer or Boolean comparisons. Stops after expression completion retain their actual residual target prefix.",
+  "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and an actual successful target prefix followed by a non-timeout stopped instruction.",
+  "limits": "Reads, short-circuit control, other expressions and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandCompareStoppedFamily.lean and its stopped-family dependencies; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",

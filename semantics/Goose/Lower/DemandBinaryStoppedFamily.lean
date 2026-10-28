@@ -116,8 +116,77 @@ theorem accepted_generated_binary_stopped_family {cfg : Cfg} {env : Env} {cx : F
             site coverage combinedPost rightBoundary.bounded currentRealized actual
         exact .complete (by omega) ((leftTrace.append rightTrace).append (.next actual (.zero _))) tail done finalBoundary
 
+theorem accepted_generated_not_stopped_family {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
+    {root : DemandNode} {owner : Nat}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (loop : Option LoopCtx) (expression : Expr)
+    (childFamily : GeneratedStoppedExpressionPrefixFamily cx results selected loop expression)
+    {state : St} (source : ExprSource cfg env (.not expression) state) {before : LS}
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.expression (.not expression)) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerExpr (.not expression) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    {taken : Nat} {reached : DemandRuntimePoint} (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached)
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (stopped : DemandInstructionStop cx targetFuel reached stop after) (nonTimeout : stop ≠ .timeout) :
+    StoppedExpressionPrefix source map cx results before initial start taken reached stop after := by
+  let le := lowerEnv cfg.mod env.vars results
+  obtain ⟨child, typing, roots, type, metadata⟩ := source.notChild
+  have childOwned : GeneratedSourceOwner selected child.context :=
+    (owned.child rfl 0 (.expression expression) .expression rfl (by trivial)).transport
+      metadata.plans.symm metadata.path.symm rfl metadata.context.symm
+  have childOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn le root child.path (.expression expression) before := by
+    rw [metadata.path]
+    exact .first occurrence (.expression rfl)
+  have childRows : GeneratedDemandRows cfg.mod child.rootsEnv.access childOccurrence required := by
+    have inherited : GeneratedDemandRows cfg.mod source.rootsEnv.access
+        (.first occurrence (.expression rfl)) required := .first (first := .expression rfl) rows
+    simpa only [roots, metadata.path] using inherited
+  have childAdmitted : map.Admitted cfg.mod.profile child.context.retained := by
+    intro profile alias member
+    exact metadata.retained alias (admitted profile alias member)
+  have childRealized : map.Realizes cfg.mod child.world env ⟨start, initial, state⟩ := by
+    simpa only [metadata.world] using realized
+  have childInput : GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv before initial start := by
+    simpa only [typing, roots] using input
+  have childExtended : ExtT (lowerExpr expression le before).2 cx.fn.blocks := by
+    have emitted : ExtT (emitDef ((ScalarExpression.negate expression).operation le before) le
+        ((ScalarExpression.negate expression).prefix le before)).2 cx.fn.blocks := by
+      simpa only [(ScalarExpression.negate expression).lower] using extended
+    exact emitted.of_adv (adv_emitDef rfl)
+  have decomposition := childFamily child childOwned childOccurrence childRows coverage childAdmitted bounded
+    childRealized childInput childExtended steps stopped nonTimeout
+  cases decomposition with
+  | aborted childFuel childStopped =>
+    apply StoppedExpressionPrefix.aborted (childFuel + 1)
+    simp [evalExpr, bind_apply, childStopped]
+  | @complete fuel consumed remaining boundary value count childTrace residual evaluated completed =>
+    have typed := (child.result fuel value evaluated).typed
+    rw [type] at typed
+    obtain ⟨boolean, rfl⟩ := hasTy_bool typed
+    have site : GeneratedScalarSite (.negate expression) cfg.mod source.rootsEnv.access cx.fn le
+        root source.path before required boundary.point :=
+      ⟨occurrence, .first (first := .expression rfl) rows, completed.post.pp, extended⟩
+    have currentRealized : map.Realizes cfg.mod source.world env boundary := by
+      simpa only [RetainedSsaMap.Realizes, metadata.world] using completed.demanded.operands
+    rcases residual.uncons with ⟨rfl, rfl⟩ | ⟨rest, current, rfl, actual, tail⟩
+    · obtain ⟨_, _, _, _, done, _, _⟩ := accepted_generated_scalar_runtime_stop
+        (.negate expression) boolean source evaluated site coverage completed.post
+        currentRealized stopped nonTimeout
+      exact .aborted (fuel + 1) done
+    · obtain ⟨_, _, _, _, _, _, result, _, _, _, _, done, final⟩ :=
+        accepted_generated_scalar_runtime_step (.negate expression) boolean source evaluated site coverage
+          completed.post completed.bounded currentRealized actual
+      exact .complete (by omega) (childTrace.append (.next actual (.zero _))) tail done final
+
 inductive NumericStoppedExpression : Expr → Prop
   | unary {expression : Expr} (form : UnaryStoppedExpression expression) : NumericStoppedExpression expression
+  | not {expression : Expr} (child : NumericStoppedExpression expression) : NumericStoppedExpression (.not expression)
   | unaryOperation (operation : UnOp) {expression : Expr} (origin : OriginId) (child : NumericStoppedExpression expression) :
       NumericStoppedExpression (.un operation expression origin)
   | convert (kind : ConvKind) (target : IntTy) {expression : Expr} (origin : OriginId) (child : NumericStoppedExpression expression) :
@@ -133,11 +202,13 @@ theorem accepted_generated_numeric_stopped_expressions {cfg : Cfg} {env : Env} {
     GeneratedStoppedExpressionPrefixFamily cx results selected loop expression := by
   induction form with
   | unary form => exact accepted_generated_unary_stopped_expressions selected loop form
+  | not child ih => exact accepted_generated_not_stopped_family selected loop _ ih
   | unaryOperation operation origin child ih => exact accepted_generated_unary_stopped_family selected loop operation _ origin ih
   | convert kind target origin child ih => exact accepted_generated_convert_stopped_family selected loop kind target _ origin ih
   | binary operation origin first second firstIH secondIH =>
     exact accepted_generated_binary_stopped_family selected loop operation _ _ origin firstIH secondIH
 
+#print axioms accepted_generated_not_stopped_family
 #print axioms accepted_generated_numeric_stopped_expressions
 #print axioms accepted_generated_binary_stopped_family
 
