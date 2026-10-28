@@ -141,6 +141,31 @@ theorem counter_rangeForIn (action : Nat → β → EvalM (ForInStep β))
   rw [Std.Legacy.Range.forIn_eq_forIn_range']
   exact counter_listForIn action _ initial preserved
 
+theorem counter_bindAll (act : Goose.Core.ActId) (scopeInst : Goose.Core.ScopeInst)
+    (values : List (Goose.Core.VarId × Value)) : PreservesActivationCounter (bindAll act scopeInst values) := by
+  unfold bindAll
+  apply counter_bind
+  · apply counter_listForIn
+    intro item _
+    rcases item with ⟨localVar, value⟩
+    apply counter_bind
+    · exact counter_bindRoot _ value
+    · intro ignored; exact counter_pure _
+  · intro ignored; exact counter_pure _
+
+theorem counter_get_bind (next : ExecutionState → EvalM α)
+    (preserved : ∀ state, state.nextAct ≤ (Goose.Proofs.Exit.stepState (next state state)).nextAct) :
+    PreservesActivationCounter (EvalM.get >>= next) := preserved
+
+theorem counter_mapActivations (change : RuntimeActivation → RuntimeActivation) (action : EvalM α)
+    (preserved : PreservesActivationCounter action) :
+    PreservesActivationCounter (do
+      let state ← EvalM.get
+      EvalM.set { state with activations := state.activations.map change }
+      action) := by
+  intro state
+  simpa [EvalM.get, EvalM.set, bind, pure] using preserved { state with activations := state.activations.map change }
+
 theorem counter_withScope (environment : RuntimeActivation) (scope scopeInst : Nat) (action : EvalM α)
     (preserved : PreservesActivationCounter action) : PreservesActivationCounter (withScope environment scope scopeInst action) := by
   intro state
@@ -332,6 +357,25 @@ theorem counter_publishCarriers (origin : Goose.Core.OriginId) (carriers : List 
     | pendingNamed token => exact stateQuery_stop _
   · intro ids
     exact counter_lift _ _
+
+theorem counter_deliverCarriers (fuel : Nat) (layout : LayoutEnv) (channels : List Channel)
+    (carriers : List Carrier) (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (deliverCarriers fuel layout channels carriers origin) := by
+  unfold deliverCarriers
+  split
+  · exact counter_stop _
+  · apply counter_listMapM
+    intro item
+    rcases item with ⟨channel, carrier⟩
+    cases channel <;> cases carrier <;> first
+      | exact counter_pure _
+      | exact counter_stop _
+      | (apply counter_bind
+         · exact counter_copyValue _ _ _ _ _ _
+         · intro _
+           apply counter_bind
+           · exact counter_completedReceivingDestination _
+           · intro _; exact counter_pure _)
 
 theorem counter_receivingDestination (id : Goose.Core.DestinationId) :
     PreservesActivationCounter (receivingDestination id) := by
@@ -587,6 +631,161 @@ theorem counter_constructLocal (declarations : DeclarationEnv) (owner : Goose.Co
         · exact counter_publishCarriers _ _
         · intro _; exact counter_pure _
 
+theorem counter_execResultScope (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (block : Block)
+    (statementsAction : RuntimeActivation → List Stmt → EvalM Flow)
+    (tailAction : RuntimeActivation → Expr → EvalM (List Carrier))
+    (statementsPreserved : ∀ runtime statements, PreservesActivationCounter (statementsAction runtime statements))
+    (tailPreserved : ∀ runtime expression, PreservesActivationCounter (tailAction runtime expression)) :
+    PreservesActivationCounter (execResultScope environment pre channels block statementsAction tailAction) := by
+  cases block with
+  | mk scope statements value =>
+    unfold execResultScope
+    apply counter_bind
+    · exact counter_freshScope
+    · intro scopeInst
+      apply counter_mapActivations
+      apply counter_withScope
+      apply counter_bind
+      · exact counter_bindAll _ _ _
+      · intro ignored
+        apply counter_bind
+        · exact statementsPreserved _ _
+        · intro flow
+          cases flow with
+          | normal result =>
+            cases value with
+            | some expression =>
+              dsimp only
+              apply counter_bind
+              · exact tailPreserved _ _
+              · intro ignored; exact counter_pure _
+            | none =>
+              dsimp only
+              split
+              · exact counter_pure _
+              · split
+                · exact counter_pure _
+                · exact counter_stop _
+          | breaking result | continuing => dsimp only; exact counter_pure _
+
+#print axioms counter_execResultScope
+theorem counter_materializeOwnedCarriers (origin : Goose.Core.OriginId)
+    (tokens : List ExitReservationId) (carriers : List Carrier) :
+    PreservesActivationCounter (materializeOwnedCarriers origin tokens carriers) := by
+  unfold materializeOwnedCarriers
+  apply counter_listMapM
+  intro carrier
+  cases carrier with
+  | register value => exact counter_pure _
+  | completed id => exact counter_pure _
+  | pendingNamed token =>
+      by_cases owns : tokens.contains token = true
+      · simp only [owns]
+        apply counter_bind
+        · exact counter_lift _ _
+        · intro id; exact counter_pure _
+      · simp only [owns]
+        exact counter_pure _
+
+private theorem counter_cleanupResult (cleanup : EvalM Unit) (resume : ExecutionState → ExecutionStep α)
+    (frame : ∀ state, Goose.Proofs.Exit.stepState (resume state) = state)
+    (preserved : PreservesActivationCounter cleanup) (state : ExecutionState) :
+    state.nextAct ≤ (Goose.Proofs.Exit.stepState (match cleanup state with
+      | .ok () after => resume after
+      | .stop reason after => .stop reason after
+      | .escape target carriers after => .escape target carriers after
+      | .jump target kind after => .jump target kind after)).nextAct := by
+  have checked := preserved state
+  cases evaluated : cleanup state with
+  | ok ignored final =>
+    cases ignored
+    simp only [evaluated, Goose.Proofs.Exit.stepState] at checked
+    change state.nextAct ≤ (Goose.Proofs.Exit.stepState (resume final)).nextAct
+    rw [frame]
+    exact checked
+  | stop reason final | escape target carriers final | jump target kind final =>
+    simpa only [evaluated, Goose.Proofs.Exit.stepState] using checked
+
+theorem counter_withCompletionChannels (channels : List Channel)
+    (origin : Goose.Core.OriginId) (action : List Channel → EvalM (List Carrier))
+    (preserved : ∀ planned, PreservesActivationCounter (action planned)) :
+    PreservesActivationCounter (withCompletionChannels channels origin action) := by
+  let setup : EvalM (List Channel × List ExitReservationId) := do
+    let planned ← channels.mapM fun channel => match channel with
+      | .construct incoming => do
+          let token ← liftConstruction origin (waitExitDestination incoming)
+          pure (Channel.completion token, some token)
+      | .register ty => pure (Channel.register ty, none)
+      | .completion _ => fault .flow
+    pure (planned.map Prod.fst, planned.filterMap Prod.snd)
+  have setupPreserved : PreservesActivationCounter setup := by
+    apply counter_bind
+    · apply counter_listMapM
+      intro channel
+      cases channel <;> repeat' first
+        | exact counter_pure _
+        | exact counter_stop _
+        | exact counter_lift _ _
+        | apply counter_bind
+        | intro
+    · intro ignored
+      exact counter_pure _
+  intro state
+  change state.nextAct ≤ (Goose.Proofs.Exit.stepState (match setup state with
+    | .ok (planned, tokens) prepared => _
+    | .stop reason after => .stop reason after
+    | .escape target carriers after => .escape target carriers after
+    | .jump target kind after => .jump target kind after)).nextAct
+  have preparedCounter := setupPreserved state
+  cases prepared : setup state with
+  | stop reason after | escape target carriers after | jump target kind after =>
+    simpa only [prepared, Goose.Proofs.Exit.stepState] using preparedCounter
+  | ok pair after =>
+    rcases pair with ⟨planned, tokens⟩
+    simp only [prepared, Goose.Proofs.Exit.stepState] at preparedCounter
+    let evaluatedAction := do materializeOwnedCarriers origin tokens (← action planned)
+    have actionPreserved : PreservesActivationCounter evaluatedAction := by
+      apply counter_bind
+      · exact preserved planned
+      · exact counter_materializeOwnedCarriers origin tokens
+    have evaluatedCounter := actionPreserved after
+    cases evaluated : evaluatedAction after
+    all_goals simp only [evaluated, Goose.Proofs.Exit.stepState] at evaluatedCounter
+    all_goals have evaluatedResult := evaluated
+    all_goals dsimp only [evaluatedAction] at evaluatedResult
+    all_goals simp only [evaluatedResult]
+    all_goals
+      apply Nat.le_trans (Nat.le_trans preparedCounter evaluatedCounter)
+      apply counter_cleanupResult
+      · exact fun _ => rfl
+      · simp only [Bool.false_eq_true, ↓reduceIte]
+        apply counter_bind
+        · apply counter_listForIn
+          intro token accumulator
+          repeat' first
+            | exact counter_pure _
+            | exact counter_lift _ _
+            | apply counter_bind
+            | intro
+        · intro ignored
+          exact counter_pure _
+
+#print axioms counter_withCompletionChannels
+theorem counter_allocateActivation (make : Goose.Core.ActId → RuntimeActivation)
+    (action : RuntimeActivation → EvalM α) (preserved : ∀ activation, PreservesActivationCounter (action activation)) :
+    PreservesActivationCounter (do
+      let act ← freshAct
+      let activation := make act
+      let state ← EvalM.get
+      EvalM.set { state with activations := activation :: state.activations }
+      action activation) := by
+  intro state
+  have after := preserved (make state.nextAct)
+    { state with nextAct := state.nextAct + 1, activations := make state.nextAct :: state.activations }
+  simp only [freshAct, EvalM.get, EvalM.set, bind, pure, Goose.Proofs.Exit.stepState]
+  exact Nat.le_trans (Nat.le_succ _) after
+
 structure EvaluationPreservesActivationCounter (fuel : Nat) (config : EvalConfig) : Prop where
   value : ∀ environment expression, PreservesActivationCounter (evalValue fuel config environment expression)
   bound : ∀ environment count defaultValue operand, PreservesActivationCounter (evalBound fuel config environment count defaultValue operand)
@@ -837,6 +1036,129 @@ theorem enterActivation_counter_succ (fuel : Nat) (config : EvalConfig)
     exact previous.activationBody _ _ _
   · exact counter_stop _
 
+theorem execBlock_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (body : Block) :
+    PreservesActivationCounter (execBlock (fuel + 1) config environment pre channels body) := by
+  cases body with
+  | mk scope statements value =>
+    simp only [execBlock]
+    apply counter_bind
+    · exact counter_freshScope
+    · intro scopeInst
+      apply counter_withScope
+      apply counter_bind
+      · exact counter_bindAll _ _ _
+      · intro ignored
+        apply counter_bind
+        · exact previous.statements _ _
+        · intro flow
+          cases flow with
+          | normal result =>
+            cases value with
+            | none => exact counter_pure _
+            | some expression =>
+              dsimp only
+              split
+              · apply counter_bind
+                · exact previous.value _ _
+                · intro value; exact counter_pure _
+              · apply counter_bind
+                · exact previous.produce _ _ _
+                · intro carriers
+                  apply counter_bind
+                  · exact counter_stateQuery _ (stateQuery_singleCarrier carriers)
+                  · intro carrier
+                    apply counter_bind
+                    · exact counter_stateQuery _ (stateQuery_carrierValue carrier)
+                    · intro value; exact counter_pure _
+          | breaking result | continuing => exact counter_pure _
+
+theorem execResultBlockWith_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (channels : List Channel) (body : Block) :
+    PreservesActivationCounter (execResultBlockWith (fuel + 1) config environment pre channels body) := by
+  simp only [execResultBlockWith]
+  apply counter_execResultScope
+  · exact previous.statements
+  · exact fun environment expression => previous.produce environment channels expression
+
+#print axioms execBlock_counter_succ
+#print axioms execResultBlockWith_counter_succ
+theorem execActivationBody_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (pre : List (Goose.Core.VarId × Value)) (body : Block) :
+    PreservesActivationCounter (execActivationBody (fuel + 1) config environment pre body) := by
+  simp only [execActivationBody]
+  apply counter_bind
+  · apply counter_execResultScope
+    · exact previous.statements
+    · intro runtime expression
+      apply counter_withCompletionChannels
+      intro channels
+      exact previous.produce runtime channels expression
+  · intro result
+    rcases result with ⟨flow, carriers⟩
+    cases flow with
+    | normal value => exact counter_pure _
+    | breaking value | continuing => exact counter_fault _
+
+#print axioms execActivationBody_counter_succ
+theorem invokeCall_counter_succ (fuel : Nat) (config : EvalConfig)
+    (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation)
+    (context : Goose.Core.ContextId) (arguments : List Arg) (channels : List Channel)
+    (origin : Goose.Core.OriginId) :
+    PreservesActivationCounter (invokeCall (fuel + 1) config environment context arguments channels origin) := by
+  simp only [invokeCall]
+  apply counter_bind
+  · exact counter_stateQuery _ (stateQuery_getImplementation config context)
+  · intro implementation
+    rcases implementation with ⟨id, implementation⟩
+    split
+    · exact counter_stop _
+    · apply counter_bind
+      · apply counter_listMapM
+        intro item
+        rcases item with ⟨channel, result⟩
+        cases channel <;> cases result.request <;> repeat' first
+          | exact counter_pure _
+          | exact counter_stop _
+          | exact counter_lift _ _
+          | apply counter_bind
+          | intro
+      · intro callableChannels
+        apply counter_bind
+        · exact previous.arguments _ _ _ _
+        · intro values
+          apply counter_bind
+          · apply counter_listMapM
+            intro channel
+            cases channel <;> repeat' first
+              | exact counter_pure _
+              | exact counter_stop _
+              | exact counter_lift _ _
+              | apply counter_bind
+              | intro
+          · intro renewed
+            apply counter_bind
+            · exact counter_get
+            · intro state
+              split
+              · exact counter_stop _
+              · apply counter_allocateActivation
+                  (make := fun act => ⟨id, act, implementation.vars, [], renewed⟩)
+                  (action := fun activation => do
+                    let carriers ← enterActivation fuel config activation
+                      ((implementation.params.toList.zip values).map fun item => (item.1.var, item.2))
+                      implementation.body origin
+                    deliverCarriers fuel config.layout channels carriers origin)
+                intro activation
+                apply counter_bind
+                · exact previous.activation _ _ _ _
+                · intro carriers
+                  exact counter_deliverCarriers _ _ _ _ _
+
+#print axioms invokeCall_counter_succ
 theorem evalValue_not_counter (fuel : Nat) (config : EvalConfig)
     (previous : EvaluationPreservesActivationCounter fuel config) (environment : RuntimeActivation) (expression : Expr) :
     PreservesActivationCounter (evalValue (fuel + 1) config environment (.not expression)) := by
