@@ -119,6 +119,61 @@ theorem SourcePosition.callee_registerCall_tail_checked {config : EvalConfig} (a
   · simpa [entryStatementsFrame, blockStatementsFrame, bodyFrame, body, Block.scope, RootInterpretation.enterScope,
       GlobalEffectsAvailable] using checked.available
 
+theorem execActivationBody_checked_registerCall_compose (fuel : Nat) (config : EvalConfig) (accepted : AcceptedModule config)
+    (frame : ConstructionSourceFrame) (contextId : Nat) (state : ExecutionState) (ambient : OwnershipAmbient)
+    (types : RootTypes) (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (scope target origin : Nat) (context : Context) (callee : Impl) (ty : Ty)
+    (world : AcceptedWorld config frame.initialized state ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame state types) (phase : frame.phase = .implementation contextId)
+    (parameters : frame.source.impl.params = #[]) (scopes : frame.interpretation.environment.scopes = [])
+    (cursor : frame.rootCursor = ⟨0, {}, []⟩) (bodyFrame : implementationBodyFrame config frame = frame)
+    (body : frame.source.impl.body = ⟨scope, [], some (.call target [] origin)⟩)
+    (channels : frame.interpretation.environment.channels = [.register ty])
+    (position : SourcePosition accepted frame (.block ⟨scope, [], some (.call target [] origin)⟩))
+    (contextAt : frame.typing.module.contexts[target]? = some context)
+    (calleeAt : frame.typing.module.impls[context.impl]? = some callee)
+    (results : callee.results = #[⟨ty, .register, none⟩])
+    (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool)
+    (requests : frame.typing.resultRequests = [.register])
+    (available : ∀ result after, rpBlockValue frame.source [] ⟨scope, [], some (.call target [] origin)⟩ frame.rootCursor =
+      .ok (result, after) → GlobalEffectsAvailable frame.interpretation frame.initialized after.eff)
+    (inner : ∀ roots typingAfter rootsAfter,
+      CheckedValue (entryStatementsFrame config frame state.nextScope) (.call target [] origin) ty roots typingAfter rootsAfter →
+      AcceptedWorld config (entryStatementsFrame config frame state.nextScope).initialized
+        (ownershipResultScopeState frame.interpretation.environment scope state) ambient types live regions pending →
+      AcceptedFrame config accepted (entryStatementsFrame config frame state.nextScope)
+        (ownershipResultScopeState frame.interpretation.environment scope state) types →
+      ∃ nextTypes nextLive nextAmbient,
+        let outcome := invokeCall fuel config
+          { frame.interpretation.environment with scopes := (scope, state.nextScope) :: frame.interpretation.environment.scopes }
+          target [] [.register ty] origin (ownershipResultScopeState frame.interpretation.environment scope state)
+        RootTypesExtend types nextTypes ∧
+        (ownershipResultScopeState frame.interpretation.environment scope state).nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+        (ownershipResultScopeState frame.interpretation.environment scope state).nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+        AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+        FutureGlobalsClear config frame.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+        (match outcome with
+         | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation ty value
+         | .stop .. => True | .escape .. | .jump .. => False)) :
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := execActivationBody (fuel + 2) config frame.interpretation.environment [] ⟨scope, [], some (.call target [] origin)⟩ state
+      RootTypesExtend types nextTypes ∧ state.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      state.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      FutureGlobalsClear config frame.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      (match outcome with
+       | .ok carriers _ => nextAmbient = ambient ∧ ∃ value, carriers = [.register value] ∧ ValueRepresentation ty value
+       | .stop .. => True | .escape .. | .jump .. => False) := by
+  obtain ⟨scopeWorld, scopeSource, _⟩ := acceptedCalleeBodyScope config accepted frame contextId state ambient types live regions pending
+    world source phase parameters scopes cursor
+  have bodyScope : frame.source.impl.body.scope = scope := by simp [body, Block.scope]
+  rw [bodyScope] at scopeWorld scopeSource
+  obtain ⟨roots, typingAfter, rootsAfter, checked⟩ := position.callee_registerCall_tail_checked accepted frame state scope target origin
+    context callee ty bodyFrame body contextAt calleeAt results scalar requests available
+  exact execActivationBody_empty_registerCall_compose fuel config frame.initialized frame.interpretation.environment scope ty target origin state
+    ambient types regions pending channels (inner roots typingAfter rootsAfter checked scopeWorld scopeSource)
+
+#print axioms execActivationBody_checked_registerCall_compose
 #print axioms SourcePosition.callee_registerCall_tail_checked
 #print axioms invokeCall_register_compose
 end Goose.Proofs.ConstructionAcceptedExecution
