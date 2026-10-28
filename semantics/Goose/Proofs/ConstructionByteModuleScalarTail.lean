@@ -19,7 +19,6 @@ theorem acceptedByteModule_scalarTail (fuel : Nat) (config : EvalConfig) (accept
     (body : implementation.body.stmts = declarations.map ByteOwnerDeclaration.statement)
     (tail : implementation.body.value = some expression)
     (form : AcceptedBinaryExpression expression)
-    (enoughFuel : declarations.length + 2 ≤ fuel + 1)
     (owners : ∀ declaration ∈ declarations,
       (implementation.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
     (checkFuel : declarations.length ≤ 4094) :
@@ -46,7 +45,7 @@ theorem acceptedByteModule_scalarTail (fuel : Nat) (config : EvalConfig) (accept
     obtain ⟨live, world⟩ := initializedWorld
     obtain ⟨frame, next, activation, types, nextLive, regions, channels, implEq, environmentEq, callStep, bodyResult⟩ :=
       acceptedByteEntry_scalarTail_outcome fuel config accepted state live declarations original implementation expression world
-        originalAt implementationAt body tail form enoughFuel owners checkFuel
+        originalAt implementationAt body tail form owners checkFuel
     let activated := { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
     let before := ownershipResultScopeState activation frame.source.impl.body.scope activated
     let entryFrame := entryStatementsFrame config frame activated.nextScope

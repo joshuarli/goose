@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionByteEntryScalarTail
+import Goose.Proofs.ConstructionByteEntryFuel
 import Goose.Proofs.ConstructionByteEntryScopeWorld
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
@@ -16,7 +17,6 @@ theorem acceptedByteEntry_scalarTail_outcome (fuel : Nat) (config : EvalConfig) 
     (body : implementation.body.stmts = declarations.map ByteOwnerDeclaration.statement)
     (tail : implementation.body.value = some expression)
     (form : AcceptedBinaryExpression expression)
-    (enoughFuel : declarations.length + 2 ≤ fuel + 1)
     (owners : ∀ declaration ∈ declarations,
       (implementation.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)))
     (checkFuel : declarations.length ≤ 4094) :
@@ -116,39 +116,70 @@ theorem acceptedByteEntry_scalarTail_outcome (fuel : Nat) (config : EvalConfig) 
         simp only [shape, Block.value] at valueEq
         subst statements value
         rfl
-    have enough : declarations.length + 2 ≤ fuel + 1 := enoughFuel
-    have entryWorld : AcceptedWorld config entryFrame.initialized before [.callChannels activation []] (declaredRootTypes config.module) live [] [] := frameWorld
-    have entrySource : AcceptedFrame config accepted entryFrame before (declaredRootTypes config.module) := source
-    have framePhase : entryFrame.phase = .implementation config.module.entry := by simpa [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using phase
-    have entryInitialized : entryFrame.initialized = config.module.globals.size := by
-      simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using initializedEntry
-    have scopeEq : entryFrame.source.impl.body = ⟨frame.source.impl.body.scope, declarations.map ByteOwnerDeclaration.statement, some expression⟩ := by
-      simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using scopeBody
-    have scopedSource : AcceptedFrame config accepted
-        (blockStatementsFrame (implementationBodyFrame config entryFrame) frame.source.impl.body.scope 4095) before
-        (declaredRootTypes config.module) := by
-      simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using source
-    have entryOwners : ∀ declaration ∈ declarations,
-        (entryFrame.source.impl.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)) := by
-      simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, implementationEq] using owners
-    have unnamed : ∀ declaration ∈ declarations,
-        (entryFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none := by
-      intro declaration member
-      simp only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, results,
-        Array.toList_empty, List.zipIdx_nil, List.find?_nil]
-    have environment : entryFrame.interpretation.environment =
-        { activation with scopes := (frame.source.impl.body.scope, activated.nextScope) :: activation.scopes } := by
-      simp only [entryFrame, entryStatementsFrame, blockStatementsFrame, RootInterpretation.enterScope, environmentEq]
-    have normal : execStmts (fuel + 1) config entryFrame.interpretation.environment
-        (declarations.map ByteOwnerDeclaration.statement) before = .ok (.normal .unit) after := by
-      simpa only [implementationEq, body] using outcome
-    have completed := acceptedByteEntry_scalarTail_afterNormal fuel config accepted entryFrame before (declaredRootTypes config.module)
-      activation activated before after frame.source.impl.body.scope declarations expression [.callChannels activation []]
-      (declaredRootTypes config.module) live [] [] entrySource framePhase entryInitialized scopeEq form channels rfl environment
-      entryWorld scopedSource entryOwners unnamed enough checkFuel normal
-    obtain ⟨tailFrame, tailTypes, tailLive, tailRegions, completed⟩ := completed
-    refine ⟨tailFrame, tailTypes, tailLive, tailRegions, ?_⟩
-    exact completed
+    have fuelBounds := execStmts_byteOwners_normalFuel declarations (fuel + 1) 4094 config accepted entryFrame config.module.entry
+      before after [.callChannels activation []] (declaredRootTypes config.module) live [] [] checkFuel rfl frameWorld source
+      (by simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using phase)
+      (by simpa only [implementationEq, body] using position)
+      (by simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, implementationEq] using owners)
+      (by
+        intro declaration member
+        simp only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, results,
+          Array.toList_empty, List.zipIdx_nil, List.find?_nil])
+      (by simpa only [implementationEq, body] using outcome)
+    by_cases enough : declarations.length + 2 ≤ fuel + 1
+    ·
+      have entryWorld : AcceptedWorld config entryFrame.initialized before [.callChannels activation []] (declaredRootTypes config.module) live [] [] := frameWorld
+      have entrySource : AcceptedFrame config accepted entryFrame before (declaredRootTypes config.module) := source
+      have framePhase : entryFrame.phase = .implementation config.module.entry := by simpa [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using phase
+      have entryInitialized : entryFrame.initialized = config.module.globals.size := by
+        simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using initializedEntry
+      have scopeEq : entryFrame.source.impl.body = ⟨frame.source.impl.body.scope, declarations.map ByteOwnerDeclaration.statement, some expression⟩ := by
+        simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using scopeBody
+      have scopedSource : AcceptedFrame config accepted
+          (blockStatementsFrame (implementationBodyFrame config entryFrame) frame.source.impl.body.scope 4095) before
+          (declaredRootTypes config.module) := by
+        simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame] using source
+      have entryOwners : ∀ declaration ∈ declarations,
+          (entryFrame.source.impl.vars[declaration.id]?).map (·.ty) = some (.varr (.int .u8)) := by
+        simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, implementationEq] using owners
+      have unnamed : ∀ declaration ∈ declarations,
+          (entryFrame.source.impl.results.toList.zipIdx.find? (fun (result, _) => result.namedLocal == some declaration.id)) = none := by
+        intro declaration member
+        simp only [entryFrame, entryStatementsFrame, blockStatementsFrame, implementationBodyFrame, results,
+          Array.toList_empty, List.zipIdx_nil, List.find?_nil]
+      have environment : entryFrame.interpretation.environment =
+          { activation with scopes := (frame.source.impl.body.scope, activated.nextScope) :: activation.scopes } := by
+        simp only [entryFrame, entryStatementsFrame, blockStatementsFrame, RootInterpretation.enterScope, environmentEq]
+      have normal : execStmts (fuel + 1) config entryFrame.interpretation.environment
+          (declarations.map ByteOwnerDeclaration.statement) before = .ok (.normal .unit) after := by
+        simpa only [implementationEq, body] using outcome
+      have completed := acceptedByteEntry_scalarTail_afterNormal fuel config accepted entryFrame before (declaredRootTypes config.module)
+        activation activated before after frame.source.impl.body.scope declarations expression [.callChannels activation []]
+        (declaredRootTypes config.module) live [] [] entrySource framePhase entryInitialized scopeEq form channels rfl environment
+        entryWorld scopedSource entryOwners unnamed enough checkFuel normal
+      obtain ⟨tailFrame, tailTypes, tailLive, tailRegions, completed⟩ := completed
+      refine ⟨tailFrame, tailTypes, tailLive, tailRegions, ?_⟩
+      exact completed
+    · have empty : declarations = [] := by
+        by_cases same : declarations = []
+        · exact same
+        · exact False.elim (enough (fuelBounds.2 same))
+      have fuelZero : fuel = 0 := by simp only [empty, List.length_nil] at enough; omega
+      subst fuel
+      have normal : execStmts 1 config
+          { activation with scopes := (frame.source.impl.body.scope, activated.nextScope) :: activation.scopes }
+          (declarations.map ByteOwnerDeclaration.statement) before = .ok (.normal .unit) after := by
+        simpa only [entryFrame, entryStatementsFrame, blockStatementsFrame, RootInterpretation.enterScope, environmentEq,
+          implementationEq, body] using outcome
+      have execution := execActivationBody_scalar_tail form 0 config activation frame.source.impl.body.scope
+        (declarations.map ByteOwnerDeclaration.statement) activated after channels normal
+      rw [← scopeBody] at execution
+      have stopped : execActivationBody 2 config activation [] frame.source.impl.body activated = .stop .timeout after := by
+        simpa only [evalValue, timeout, EvalM.stop] using execution
+      have finalWorld' : AcceptedWorld config next.initialized after [.callChannels activation []] types nextLive regions [] := by
+        simpa only [outcome, Goose.Proofs.Exit.stepState] using finalWorld
+      dsimp only [activated] at stopped
+      exact ⟨next, types, nextLive, regions, by simp only [stopped]; exact finalWorld'⟩
 
 #print axioms acceptedByteEntry_scalarTail_outcome
 
