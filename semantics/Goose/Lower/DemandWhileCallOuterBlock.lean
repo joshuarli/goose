@@ -38,7 +38,7 @@ theorem accepted_generated_while_scalar_call_outer_block {cfg : Cfg} {env : Env}
         StoppedLoopBranchBlockPrefix source map required ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results before none initial start taken reached stop after) := by
   let innerEnv : Env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }
   let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩
-  have agreement := accepted_generated_while_scalar_call_agreement (env := innerEnv) selected condition body loopOrigin conditionForm fragment noValue
+  have agreement := accepted_generated_while_scalar_call_agreement (env := innerEnv) (loop := none) selected condition body loopOrigin conditionForm fragment noValue
   have nilPrefix : ReachableSequencePrefixFamily (env := innerEnv) cx results selected before none [] false block []
       (@WhileCallStatementCursor cfg innerEnv caller results root owner selected) :=
     GeneratedSequencePrefixFamily.reachable (env := innerEnv) (cx := cx) (selected := selected) (before := before) (loop := none)
