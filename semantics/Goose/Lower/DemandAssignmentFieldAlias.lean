@@ -7,6 +7,25 @@ open Goose.Core Goose.GIR Goose.Core.Sound
 inductive FieldScalarPlace : Place → Prop
   | field {owner : Place} (index : Nat) (form : ScalarReadPlace owner) : FieldScalarPlace (.field owner index)
 
+private theorem accepted_assignment_field_place_roots {cfg : Cfg} {env : Env} {state : St} {place : Place}
+    (destination : PlaceSource cfg env place state) (form : FieldScalarPlace place) :
+    destination.rootsEnv.access.placeRoots place = .ok destination.roots := by
+  cases form with
+  | field index ownerForm =>
+    cases ownerForm with
+    | global global =>
+      have rooted := destination.rooted
+      change Except.ok ([RootRef.global global], destination.rootsStart) =
+        Except.ok (destination.roots, destination.rootsEnd) at rooted
+      have shape : destination.roots = [.global global] := (congrArg Prod.fst (Except.ok.inj rooted)).symm
+      simp [AccessEnv.placeRoots, shape, pure] <;> rfl
+    | slot slot =>
+      have rooted := destination.rooted
+      change Except.ok ([RootRef.local slot], destination.rootsStart) =
+        Except.ok (destination.roots, destination.rootsEnd) at rooted
+      have shape : destination.roots = [.local slot] := (congrArg Prod.fst (Except.ok.inj rooted)).symm
+      simp [AccessEnv.placeRoots, shape, pure] <;> rfl
+
 theorem accepted_assignment_field_destination_alias {cfg : Cfg} {env : Env} {state after : St}
     {place : Place} {value : Expr} {origin : OriginId}
     (source : StmtSource cfg env (.assign place value origin) state) (form : FieldScalarPlace place)
@@ -16,46 +35,8 @@ theorem accepted_assignment_field_destination_alias {cfg : Cfg} {env : Env} {sta
     {fuel : Nat} {location : Loc} (placed : evalPlace fuel cfg env place state = .ok location after) :
     ∃ alias : RetainedAlias,
       source.rootsEnv.access.aliasPlace (source.path ++ [0]) place = .ok [alias] ∧
-      AliasAt cfg.mod source.world env after.store alias (.ref location) := by
-  have result := destination.result fuel location placed
-  have valid := result.typed
-  rw [destinationType] at valid
-  have locationType : HasTy cfg.mod destination.world.G after.store (.ref location) (.ref .mutable type) := by
-    rcases valid with valid | invalid | invalid
-    · exact ⟨location, rfl, Or.inl valid⟩
-    · obtain ⟨_, _, _, _, _, _, _, _, _, impossible, _⟩ := invalid
-      cases type <;> simp_all [Ty.refTarget, Ty.isRefLike]
-    · obtain ⟨_, _, _, _, _, _, _, _, _, impossible, _⟩ := invalid
-      cases type <;> simp_all [Ty.refTarget]
-  have lookup := tyPlace_accessType (destination.frame.mod_t.trans destination.frame.mod_p.symm)
-    (destination.frame.vars_t.trans destination.frame.vars_p.symm) destination.typed
-  rw [roots, destinationType] at lookup
-  let alias : RetainedAlias := ⟨.ref .mutable type, destination.roots, .operand (source.path ++ [0])⟩
-  refine ⟨alias, ?_, ?_, ?_⟩
-  · cases form with
-    | field index ownerForm =>
-     cases ownerForm with
-     | global global =>
-       have rooted := destination.rooted
-       change Except.ok ([RootRef.global global], destination.rootsStart) =
-         Except.ok (destination.roots, destination.rootsEnd) at rooted
-       have rootsShape : destination.roots = [.global global] :=
-         (congrArg Prod.fst (Except.ok.inj rooted)).symm
-       cases owner : type.ownerElem?.isSome <;>
-         simp [AccessEnv.aliasPlace, lookup, AccessEnv.placeRoots, rootsShape, Ty.interiorTarget?, owner, alias] <;> rfl
-     | slot slot =>
-       have rooted := destination.rooted
-       change Except.ok ([RootRef.local slot], destination.rootsStart) =
-         Except.ok (destination.roots, destination.rootsEnd) at rooted
-       have rootsShape : destination.roots = [.local slot] :=
-         (congrArg Prod.fst (Except.ok.inj rooted)).symm
-       cases owner : type.ownerElem?.isSome <;>
-         simp [AccessEnv.aliasPlace, lookup, AccessEnv.placeRoots, rootsShape, Ty.interiorTarget?, owner, alias] <;> rfl
-  · simpa only [world] using locationType
-  · intro root target
-    have rootEq : location.root = root := target
-    rw [← rootEq]
-    simpa only [world] using result.rooted
+      AliasAt cfg.mod source.world env after.store alias (.ref location) :=
+  accepted_assignment_destination_alias source destination roots world (by simpa only [roots] using accepted_assignment_field_place_roots destination form) destinationType target placed
 
 theorem accepted_assignment_field_destination_retained {cfg : Cfg} {env : Env} {state after : St}
     {place : Place} {value : Expr} {origin : OriginId}
@@ -68,15 +49,8 @@ theorem accepted_assignment_field_destination_retained {cfg : Cfg} {env : Env} {
     (post : Post cfg env cx before initial built frame point [(id, .val (.ref location))])
     {map : RetainedSsaMap} (realized : map.Realizes cfg.mod source.world env ⟨point, frame, after⟩) :
     ∃ aliases, source.rootsEnv.access.aliasPlace (source.path ++ [0]) place = .ok aliases ∧
-      (map.addValues id aliases).Realizes cfg.mod source.world env ⟨point, frame, after⟩ := by
-  obtain ⟨alias, query, valid⟩ :=
-    accepted_assignment_field_destination_alias source form destination roots world destinationType target placed
-  refine ⟨[alias], query, RetainedSsaMap.addValues_realizes realized ?_⟩
-  intro other member
-  simp only [List.mem_singleton] at member
-  subst other
-  exact ValueAliasAt.of_post post (v := .ref location) (by simp) valid
-
+      (map.addValues id aliases).Realizes cfg.mod source.world env ⟨point, frame, after⟩ :=
+  accepted_assignment_destination_retained source destination roots world (by simpa only [roots] using accepted_assignment_field_place_roots destination form) destinationType target placed post realized
 
 theorem accepted_assignment_field_value_demand {cfg : Cfg} {env : Env} {state after : St}
     {place : Place} {value : Expr} {origin : OriginId}
@@ -104,34 +78,8 @@ theorem accepted_assignment_field_value_demand {cfg : Cfg} {env : Env} {state af
       next.Admitted cfg.mod.profile child.context.retained ∧
       next.Realizes cfg.mod child.world env ⟨point, frame, after⟩ ∧
       GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv
-        (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 frame point := by
-  let id := (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1
-  obtain ⟨aliases, query, realizedNext⟩ := accepted_assignment_field_destination_retained
-    source form destination roots world destinationType target placed post realized
-  have childAdmitted : map.Admitted cfg.mod.profile child.context.retained := by
-    rw [demandContextRetainedEq childAt.plans childAt.path rfl childAt.context]
-    intro profile alias member
-    exact source.context.child_retained_subset rfl 1 (.expression value) .expression rfl (by trivial)
-      (admitted profile alias member)
-  have nextAdmitted : (map.addValues id aliases).Admitted cfg.mod.profile child.context.retained :=
-    RetainedSsaMap.addValues_admitted childAdmitted (fun profile => childAt.retains_generated query profile)
-  have idBound : id < (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2.vals.size :=
-    post.lt (id, .val (.ref location)) (by simp [id])
-  have nextBounded := RetainedSsaMap.addValues_bounded bounded idBound aliases
-  have nextRealized : (map.addValues id aliases).Realizes cfg.mod child.world env ⟨point, frame, after⟩ := by
-    simpa only [childAt.world] using realizedNext
-  have placeAdv := advB_lowerPlace place (lowerEnv cfg.mod env.vars results) before
-    (lowerPlace place (lowerEnv cfg.mod env.vars results) before).1
-    (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 rfl
-  have childInput : GeneratedPrefixInput cfg env cx results loop child.typingEnv child.rootsEnv
-      (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 frame point := by
-    refine ⟨?_, ?_, post.pp, post.rel, input.moduleEq, input.resultsEq, input.depth,
-      (by cases loop <;> exact input.targets), input.counter.afterPost (post.sub (by simp)),
-      input.generated.lowerPlace place rfl, input.frames.mono placeAdv.ext⟩
-    · simpa only [childTyping, childRoots] using input.metadata
-    · simpa only [childTyping] using input.loops
-  exact ⟨aliases, query, coverage.addValues id aliases, nextBounded, nextAdmitted, nextRealized, childInput⟩
-
+        (lowerPlace place (lowerEnv cfg.mod env.vars results) before).2 frame point :=
+  accepted_assignment_value_demand source destination roots world (by simpa only [roots] using accepted_assignment_field_place_roots destination form) destinationType target placed child childAt childTyping childRoots coverage admitted bounded input post realized
 
 #print axioms accepted_assignment_field_value_demand
 end Goose.Lower
