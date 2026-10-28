@@ -415,6 +415,10 @@ theorem statements_exist (fuel : Nat) (config : EvalConfig) (environment : Runti
 inductive SupportedOperation (config : EvalConfig) : {α : Type} → SourceOperation α → Prop
   | value (environment : RuntimeActivation) {expression : Expr} (supported : SupportedValue expression) :
       SupportedOperation config (.value environment expression)
+  | fill (environment : RuntimeActivation) (element : Ty) (count : Nat) (origin : Goose.Core.OriginId)
+      (operand : Expr) (fixed : (Ty.arr element count).nonfixed = false)
+      (child : SupportedOperation config (.value environment operand)) :
+      SupportedOperation config (.value environment (.fill (.arr element count) operand origin))
   | conditional (environment : RuntimeActivation) {condition : Expr} {yes no : Block} (origin : Goose.Core.OriginId)
       (conditionSupported : SupportedOperation config (.value environment condition))
       (yesSupported : SupportedOperation config (.block environment yes))
@@ -477,6 +481,15 @@ theorem history_exists (fuel : Nat) (config : EvalConfig) {α : Type} (operation
       cases supported with
       | value environment supported =>
           exact value_exists (fuel + 1) config environment path _ before supported
+      | fill environment element count origin operand fixed childSupported =>
+          have child := ih (.value environment operand) (path ++ [0]) before childSupported
+          have actual : evalValue (fuel + 1) config environment (.fill (.arr element count) operand origin) before =
+              fillResult count (evalValue fuel config environment operand before) := by
+            simp only [evalValue, fixed, Bool.false_eq_true, ↓reduceIte, bind, fillResult]
+            cases evalValue fuel config environment operand before <;> rfl
+          simp only [execute] at child ⊢
+          rw [actual]
+          exact .fill fixed child
       | @conditional environment condition yes no origin conditionSupported yesSupported noSupported =>
           have child := ih (.value environment condition) (path ++ [0]) before conditionSupported
           have branch : ∀ value middle selected ready,
