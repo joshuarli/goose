@@ -80,7 +80,7 @@ theorem accepted_generated_parameterized_mixed_body_stopped {cfg : Cfg} {env : E
     (stopped : DemandInstructionStop cx targetFuel reached stop after) (nonTimeout : stop ≠ .timeout) :
     ∃ body : StmtsSource cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } block.stmts
         { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store },
-      StoppedSequencePrefix body map cx results before none bindings block
+      body.offset = 0 ∧ StoppedSequencePrefix body map cx results before none bindings block
         { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
         (start.1, start.2 + 1 + bindings.length) taken reached stop after ∧
       RuntimePoint cx.cfg cx.fn (start.1, start.2 + 1 + bindings.length)
@@ -99,7 +99,7 @@ theorem accepted_generated_parameterized_mixed_body_stopped {cfg : Cfg} {env : E
       (lowerStmts none (block.stmts.take body.offset) (lowerEnv cfg.mod env.vars results)
         (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2).2 cx.fn.blocks := by
     simpa [bodyOffset, lowerStmts, pure_run] using generated_block_statements_extended extended
-  exact ⟨body, family body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted bodyBounded'
+  exact ⟨body, bodyOffset, family body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted bodyBounded'
     bodyRealized bodyInput statementsExtended steps stopped nonTimeout, bodyReached⟩
 
 #print axioms accepted_generated_parameterized_mixed_body_stopped
