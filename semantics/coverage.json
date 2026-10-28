@@ -613,6 +613,15 @@
   "evidence": "Goose/Proofs/ConstructionAcceptedByteGlobalTimeout.lean; scoped Lean 4.35 closure and axiom checks."
  },
  {
+  "feature": "Expression-statement sequence stop reflection",
+  "label": "model-proved",
+  "theorem": "Goose.Lower.accepted_generated_expression_statement_stopped_family; Goose.Lower.accepted_generated_stopped_sequence_cons; Goose.Lower.accepted_generated_expression_statements_stopped",
+  "statement": "Non-timeout target stops reflect through accepted expression statements and their sequences, preserving the source stop and final state after prior completed statements. Stops after sequence completion retain their actual residual target prefix.",
+  "assumptions": "Accepted source and generated occurrence, realized and bounded retained map, builder extension, and an actual successful target prefix followed by a non-timeout stopped instruction. Expression statements use the literal, leaf-read, scalar and short-circuit fragment.",
+  "limits": "Other statement forms, block exits, calls, timeout stops and whole-module stopping-prefix reflection remain open. This component does not close TH-LOWER-03.",
+  "evidence": "Goose/Lower/DemandStoppedStatementFamily.lean; Goose/Lower/DemandStoppedSequenceFamily.lean; scoped Lean 4.35 closure and axiom checks."
+ },
+ {
   "feature": "Accepted Core short-circuit control demand transfer",
   "label": "model-proved",
   "theorem": "Goose.Lower.ExprSource.shortCircuitChildrenDemand; Goose.Lower.DemandInstructionStep.runAt; Goose.Lower.shortCircuit_control_step; Goose.Lower.accepted_shortCircuit_demand_step",

@@ -119,7 +119,7 @@ def GeneratedSequencePrefixFamily {cfg : Cfg} {env : Env} (cx : FnCtx) (results 
     ∀ {taken : Nat} {reached : DemandRuntimePoint}, DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached →
     GeneratedSequencePrefixDecomposition source selected occurrence rows map initial start (@cursor) taken reached
 
-private theorem prepared_sequence_cons_normal {cfg : Cfg} {env : Env} {statement : Stmt} {rest : List Stmt}
+theorem prepared_sequence_cons_normal {cfg : Cfg} {env : Env} {statement : Stmt} {rest : List Stmt}
     {loop : Option LoopCtx} {state middle after : St} {headFuel tailFuel : Nat} {flow : Flow}
     (head : execStmt headFuel cfg env statement state = .ok (.normal .unit) middle)
     (tail : (execStmts tailFuel cfg env rest >>= prepareLoopFlow env loop) middle = .ok flow after) :
@@ -136,7 +136,7 @@ private theorem prepared_sequence_cons_normal {cfg : Cfg} {env : Env} {statement
     simp only [execStmts, bind_apply, headRaised, tailRaised]
     exact tail
 
-private theorem prepared_sequence_cons_transfer {cfg : Cfg} {env : Env} {statement : Stmt} {rest : List Stmt}
+theorem prepared_sequence_cons_transfer {cfg : Cfg} {env : Env} {statement : Stmt} {rest : List Stmt}
     {loop : Option LoopCtx} {state after : St} {fuel : Nat} {flow : Flow}
     (abnormal : ∀ value, flow ≠ .normal value)
     (head : (execStmt fuel cfg env statement >>= prepareLoopFlow env loop) state = .ok flow after) :
@@ -156,7 +156,7 @@ private theorem prepared_sequence_cons_transfer {cfg : Cfg} {env : Env} {stateme
       simp only [execStmts, bind_apply, headRun]
       exact head
 
-private theorem transfer_after_builder {cfg : Cfg} {env : Env} {cx : FnCtx} {before first second : LS}
+theorem transfer_after_builder {cfg : Cfg} {env : Env} {cx : FnCtx} {before first second : LS}
     {initial frame : GIR.Frame} {point : Pt} {loop : Option LoopCtx} {flow : Flow}
     (abnormal : ∀ value, flow ≠ .normal value)
     (post : StatementLoopPost cfg env cx before initial first loop flow point frame) :
