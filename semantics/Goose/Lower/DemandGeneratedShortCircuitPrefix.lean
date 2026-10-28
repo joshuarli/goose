@@ -9,7 +9,8 @@ theorem accepted_generated_shortCircuit_left_prefix {cfg : Cfg} {env : Env} {cx 
     {root : DemandNode} {owner : Nat}
     (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
     (loop : Option LoopCtx) (isAnd : Bool) (a b : Expr)
-    (leftFamily : GeneratedExpressionPrefixFamily cx results selected loop a (@CanonicalExpressionPrefixCursor cfg env cx))
+    {cursor : ∀ {expression : Expr} {state : St}, ExprSource cfg env expression state → LS → LS → GIR.Frame → Pt → RetainedSsaMap → RetainedSsaMap → DemandRuntimePoint → Prop}
+    (leftFamily : GeneratedExpressionPrefixFamily cx results selected loop a cursor)
     {state : St} (source : ExprSource cfg env (if isAnd then .and a b else .or a b) state) {before : LS}
     (owned : GeneratedSourceOwner selected source.context)
     (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
@@ -29,7 +30,7 @@ theorem accepted_generated_shortCircuit_left_prefix {cfg : Cfg} {env : Env} {cx 
       (leftRows : GeneratedDemandRows cfg.mod left.rootsEnv.access leftOccurrence required),
       left.typingEnv = source.typingEnv ∧ left.rootsEnv = source.rootsEnv ∧ left.ty = .bool ∧
       GeneratedExpressionPrefixDecomposition left selected leftOccurrence leftRows map initial start
-        (CanonicalExpressionPrefixCursor cx left before (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2
+        (cursor left before (lowerExpr a (lowerEnv cfg.mod env.vars results) before).2
           initial start map required) taken reached := by
   obtain ⟨left, typing, roots, type, world, path, plans, context, retained, next⟩ := source.shortCircuitChildrenDemand isAnd
   have metadata : source.ChildAt left 0 (by cases isAnd <;> rfl) := ⟨world, path, plans, context, retained⟩
