@@ -28,6 +28,7 @@ theorem evalArguments_scalarParameter_body {expression : Expr} (form : AcceptedB
           let scopedState := ownershipResultScopeState activation callee.body.scope activated
           let root := Goose.Core.RootInst.local activation.act state.nextScope 0
           helperFrame.source.impl = callee ∧ helperFrame.interpretation.environment = activation ∧
+          activation.act = state.nextAct ∧ activation.scopes = [] ∧ activation.channels = [] ∧
           freshAct state = .ok activation.act { state with nextAct := state.nextAct + 1 } ∧
           freshScope activated = .ok activated.nextScope { activated with nextScope := activated.nextScope + 1 } ∧
           bindAll activation.act state.nextScope [(parameter.var, value)] scopedState = .ok () after ∧
@@ -60,7 +61,7 @@ theorem evalArguments_scalarParameter_body {expression : Expr} (form : AcceptedB
       acceptedScalarParameterCallBody config accepted state ambient types live regions pending contextId context callee
         parameter descriptor value contextAt calleeAt parameters results declared scalar valid.represented valid.pointers initialWorld
     simp only [Goose.Proofs.Exit.stepState]
-    exact ⟨trivial, value, equal, helperFrame, activation, after, sameImpl, environment, fresh, scopeFresh,
+    exact ⟨trivial, value, equal, helperFrame, activation, after, sameImpl, environment, act, scopes, channels, fresh, scopeFresh,
       bound, nextWorld, nextSource, position⟩
 
 #print axioms evalArguments_scalarParameter_body
