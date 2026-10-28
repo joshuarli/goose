@@ -1,4 +1,4 @@
-import Goose.Lower.DemandCallLoopMixedBody
+import Goose.Lower.DemandWhileNestedCallTrueBody
 import Goose.Lower.DemandWhileTrueBody
 
 namespace Goose.Lower
@@ -58,27 +58,20 @@ theorem accepted_generated_while_scalar_call_true_body {cfg : Cfg} {env : Env} {
           stop ≠ .timeout → StoppedLoopBranchBlockPrefix branch map required cx results bodyStart
             (some ⟨(lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2.stack.length, exitBlock, .jump header⟩)
             frame (bodyBlock, 0) taken reached stop after) := by
-  cases cx with
-  | mk current caller =>
-    change current = ⟨cfg.profile, lower cfg.mod⟩ at targetConfig
-    subst current
-    obtain ⟨bodyBlock, exitBlock, forked, bodyStart, bodyEnd, jumped, value, forkRun, bodyEq, bodyRun,
-      jumpRun, finalEq, forkExtended, bodyExtended, jumpExtended, branchStep⟩ :=
-      generated_while_test_branch (state := middle) true lowered boundary.post extended
-    obtain ⟨branch, typing, roots, canonicalBranch, branchOwner, branchAdmitted, branchBounded, branchRealized,
-      branchOccurrence, branchRows, branchInput⟩ :=
-      accepted_generated_while_body_ready source child canonical evaluated selected owned headerInput headerTarget headerId headerEq
-        occurrence rows admitted boundary forkRun bodyEq forkExtended
-    have bodyExt : ExtT (lowerBlock (some ⟨(lowerExpr condition (lowerEnv cfg.mod env.vars results) headerState).2.stack.length, exitBlock, .jump header⟩) [] false body (lowerEnv cfg.mod env.vars results) bodyStart).2 caller.blocks := by
-      rw [bodyRun]
-      exact bodyExtended
-    refine ⟨bodyBlock, exitBlock, forked, bodyStart, bodyEnd, jumped, value, branch, canonicalBranch, forkRun, bodyEq,
-      bodyRun, jumpRun, jumpExtended, branchStep, ?_⟩
-    have bodyReach : Evidence.RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller (bodyBlock, 0) frame middle := by
-      exact Evidence.RuntimePoint.step conditionReach (branchStep 0).runtime
-    have agreement := accepted_generated_scalar_call_loop_body branch fragment noValue selected branchOwner branchOccurrence branchRows coverage branchAdmitted branchBounded branchRealized
-      branchInput bodyExt bodyReach
-    exact agreement
+  have bounded : BoundedNestedCallLoopStatements cfg 0
+      { env with scopes := (body.scope, middle.nextScope) :: env.scopes } body.stmts := .mixed fragment
+  have families : ∀ (before : LS) (loop : Option LoopCtx),
+      ReachableSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes }) cx results selected before loop [] false body body.stmts
+        (@NestedCallLoopCursor cfg cx.fn results root owner 0 { env with scopes := (body.scope, middle.nextScope) :: env.scopes } loop selected) ∧
+      ReachableStoppedSequencePrefixFamily (env := { env with scopes := (body.scope, middle.nextScope) :: env.scopes }) cx results selected before loop [] false body body.stmts := by
+    intro before loop
+    cases cx with
+    | mk current caller =>
+      change current = ⟨cfg.profile, lower cfg.mod⟩ at targetConfig
+      subst current
+      exact accepted_generated_reachable_scalar_call_statements fragment selected before loop [] false body
+  exact accepted_generated_while_bounded_nested_call_true_body source child canonical evaluated bounded noValue targetConfig
+    selected families owned headerInput headerTarget headerId headerEq occurrence rows coverage admitted boundary conditionReach lowered extended
 
 #print axioms accepted_generated_while_scalar_call_true_body
 end Goose.Lower
