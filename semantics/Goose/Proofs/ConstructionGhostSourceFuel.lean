@@ -80,6 +80,16 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
       (child : ∀ destination, FuelSupport config fuel (.channelCall environment context arguments [.construct destination] origin)) :
       FuelSupport config (fuel + 1) (.builder environment incoming (.call context arguments origin))
+  | builderBlock (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (block : Block) (origin : Goose.Core.OriginId)
+      (child : ∀ destination, FuelSupport config fuel (.resultBlock environment [.construct destination] block)) :
+      FuelSupport config (fuel + 1) (.builder environment incoming (.blockE block origin))
+  | builderConditional (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
+      (conditionChild : FuelSupport config fuel (.value environment condition))
+      (yesChild : ∀ destination, FuelSupport config fuel (.resultBlock environment [.construct destination] yes))
+      (noChild : ∀ destination, FuelSupport config fuel (.resultBlock environment [.construct destination] no)) :
+      FuelSupport config (fuel + 1) (.builder environment incoming (.ifE condition yes no origin))
   | fillBuilder (fuel : Nat) (environment : RuntimeActivation) (destination : Goose.Core.DestinationId)
       (element : Ty) (count : Nat) (operand : Expr) (origin : Goose.Core.OriginId)
       (valueChild : FuelSupport config fuel (.value environment operand))
@@ -417,6 +427,19 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .builderChannelCall fuel path environment incoming context arguments origin before ?_
           intro destination ready renewed
           exact ih (.channelCall environment context arguments [.construct destination] origin) (path ++ [0]) ready (childSupported destination)
+      | builderBlock _ environment incoming block origin childSupported =>
+          refine .builderBlock fuel path environment incoming block origin before ?_
+          intro destination ready renewed
+          exact ih (.resultBlock environment [.construct destination] block) (path ++ [0])
+            (blockProducerStart environment [.construct destination] ready) (childSupported destination)
+      | builderConditional _ environment incoming condition yes no origin conditionSupported yesSupported noSupported =>
+          refine .builderConditional fuel path environment incoming condition yes no origin before ?_ ?_
+          · intro destination ready renewed
+            exact ih (.value environment condition) (path ++ [0]) ready conditionSupported
+          · intro destination ready value middle selected selectedState renewed evaluated boolean
+            cases selected with
+            | false => exact ih (.resultBlock environment [.construct destination] no) (path ++ [1]) selectedState (noSupported destination)
+            | true => exact ih (.resultBlock environment [.construct destination] yes) (path ++ [1]) selectedState (yesSupported destination)
       | fillBuilder _ environment destination element count operand origin valueSupported builderSupported =>
           refine .fillBuilder fuel path environment destination element count operand origin before ?_ ?_
           · intro current ready renewed fixed

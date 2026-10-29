@@ -71,6 +71,11 @@ inductive DeclarationBuilderSyntax (config : EvalConfig) : Expr → Prop
         getImplementation config contextId start = .ok (id, implementation) lookupReady →
         ArgumentSyntax config implementation.params.toList arguments) :
       DeclarationBuilderSyntax config (.call contextId arguments origin)
+  | block (block : Block) (origin : Goose.Core.OriginId) (child : ResultBlockSyntax config block) :
+      DeclarationBuilderSyntax config (.blockE block origin)
+  | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
+      (conditionChild : ValueSyntax config condition) (yesChild : ResultBlockSyntax config yes) (noChild : ResultBlockSyntax config no) :
+      DeclarationBuilderSyntax config (.ifE condition yes no origin)
   | array (ty : Ty) (operands : List Expr) (origin : Goose.Core.OriginId)
       (values : ∀ operand ∈ operands, ValueSyntax config operand)
       (builders : ∀ operand ∈ operands, DeclarationBuilderSyntax config operand) :
@@ -407,6 +412,14 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | channelCall contextId arguments origin argumentsSyntax =>
             exact .builderChannelCall fuel environment destination contextId arguments origin
               (fun child => previous.channelCall environment contextId arguments [.construct child] origin argumentsSyntax)
+        | block block origin child =>
+            exact .builderBlock fuel environment destination block origin
+              (fun selected => previous.resultBlock environment [.construct selected] block child)
+        | conditional condition yes no origin conditionChild yesChild noChild =>
+            exact .builderConditional fuel environment destination condition yes no origin
+              (previous.value environment condition conditionChild)
+              (fun selected => previous.resultBlock environment [.construct selected] yes yesChild)
+              (fun selected => previous.resultBlock environment [.construct selected] no noChild)
         | array ty operands origin values builders =>
             exact .builderArray fuel environment destination ty operands origin
               (fun operand member parent element => previous.element environment parent element operand
