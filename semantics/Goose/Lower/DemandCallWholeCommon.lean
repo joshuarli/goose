@@ -31,39 +31,45 @@ structure GeneratedCallFrontierAgreement {cfg : Cfg} {env : Env} {state : St}
         (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).1 value after
         (point.1, point.2 + 1) (frame.set (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).1 (.val value))
 
-theorem accepted_generated_call_stopped_expression {cfg : Cfg} {env : Env} {state : St}
+inductive StoppedCallArgumentsProgress {cfg : Cfg} {env : Env} {state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
     (source : ExprSource cfg env (.call context arguments origin) state)
-    {caller : Func} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}
-    (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
-    (owned : GeneratedSourceOwner selected source.context)
-    (occurrence : GeneratedDemandOccurrence cfg.mod caller (lowerEnv cfg.mod env.vars results)
-      root source.path (.expression (.call context arguments origin)) before)
-    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
-    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
-    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
-    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
-    (input : GeneratedPrefixInput cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results loop
-      source.typingEnv source.rootsEnv before initial start)
+    (caller : Func) (results : List Ty) (before : LS) (initial : GIR.Frame) (start : Pt)
+    (taken : Nat) (reached : DemandRuntimePoint) (stop : Stop) (after : St) : Prop
+  | aborted (trace : CallArgumentsStopped cfg env arguments state stop after) :
+      StoppedCallArgumentsProgress source caller results before initial start taken reached stop after
+  | complete {consumed remaining : Nat} {boundary : DemandRuntimePoint} {values : List Val}
+      (count : consumed + remaining = taken)
+      (executed : DemandRuntimePrefix ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ consumed ⟨start, initial, state⟩ boundary)
+      (residual : DemandRuntimePrefix ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ remaining boundary reached)
+      (trace : CallArgumentsDone cfg env arguments state values boundary.state)
+      (post : Post cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ before initial
+        (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2 boundary.frame boundary.point [])
+      (cells : CallArgumentCells (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 values
+        (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).2.vals.size boundary.frame)
+      :
+      StoppedCallArgumentsProgress source caller results before initial start taken reached stop after
+
+theorem accepted_generated_call_stopped_from_frontier {cfg : Cfg} {env : Env} {state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) state)
+    {caller : Func} {results : List Ty} {before : LS} {map : RetainedSsaMap}
+    {initial : GIR.Frame} {start : Pt}
     (extended : ExtT (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 caller.blocks)
-    (shrink : cfg.mod.profile = .shrink) (form : CallMixedStoppedArguments source.rootsEnv.access arguments)
     (agreement : GeneratedCallFrontierAgreement source caller results before initial map)
     (callerStart : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller start initial state)
-    {taken : Nat} {reached : DemandRuntimePoint}
-    (steps : DemandRuntimePrefix ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ taken ⟨start, initial, state⟩ reached)
-    {targetFuel : Nat} {stop : Stop} {after : St}
+    {taken : Nat} {reached : DemandRuntimePoint} {targetFuel : Nat} {stop : Stop} {after : St}
     (stopped : DemandInstructionStop ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ targetFuel reached stop after)
-    (nonTimeout : stop ≠ .timeout) :
+    (nonTimeout : stop ≠ .timeout)
+    (argumentProgress : StoppedCallArgumentsProgress source caller results before initial start taken reached stop after) :
     StoppedExpressionPrefix source map ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results before initial start taken reached stop after := by
   let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩
-  have argumentProgress := accepted_generated_call_mixed_stopped_cells source selected owned occurrence rows coverage admitted bounded
-    realized input extended shrink form steps stopped nonTimeout
   cases argumentProgress with
   | aborted trace =>
     obtain ⟨sourceFuel, done⟩ := trace.fuel.2
     apply StoppedExpressionPrefix.aborted (sourceFuel + 1)
     simp only [evalExpr, bind_apply, done]
-  | @complete consumed remaining boundary values prior count argumentSteps residual trace tracked argumentBounded argumentRealized wholePost cells argumentInput =>
+  | @complete consumed remaining boundary values count argumentSteps residual trace wholePost cells =>
     obtain ⟨sourceFuel, argumentsDone⟩ := trace.fuel
     have read : mapList (getVal boundary.frame) (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 boundary.state = .ok values boundary.state := by
       simpa using cells.read boundary.state
@@ -109,5 +115,40 @@ theorem accepted_generated_call_stopped_expression {cfg : Cfg} {env : Env} {stat
           .define instruction execution
         exact .complete (by omega) (argumentSteps.append (.next callStep (.zero _))) later evaluated boundaryResult
 
+
+theorem accepted_generated_call_stopped_expression {cfg : Cfg} {env : Env} {state : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) state)
+    {caller : Func} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod caller (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod caller (lowerEnv cfg.mod env.vars results)
+      root source.path (.expression (.call context arguments origin)) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results loop
+      source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 caller.blocks)
+    (shrink : cfg.mod.profile = .shrink) (form : CallMixedStoppedArguments source.rootsEnv.access arguments)
+    (agreement : GeneratedCallFrontierAgreement source caller results before initial map)
+    (callerStart : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ caller start initial state)
+    {taken : Nat} {reached : DemandRuntimePoint}
+    (steps : DemandRuntimePrefix ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ taken ⟨start, initial, state⟩ reached)
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (stopped : DemandInstructionStop ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ targetFuel reached stop after)
+    (nonTimeout : stop ≠ .timeout) :
+    StoppedExpressionPrefix source map ⟨⟨cfg.profile, lower cfg.mod⟩, caller⟩ results before initial start taken reached stop after := by
+  have progress := accepted_generated_call_mixed_stopped_cells source selected owned occurrence rows coverage admitted bounded
+    realized input extended shrink form steps stopped nonTimeout
+  have shared : StoppedCallArgumentsProgress source caller results before initial start taken reached stop after := by
+    cases progress with
+    | aborted trace => exact .aborted trace
+    | @complete consumed remaining boundary values prior count executed residual trace tracked argumentBounded argumentRealized post cells argumentInput =>
+      exact .complete count executed residual trace (by simpa using post) (by simpa using cells)
+  exact accepted_generated_call_stopped_from_frontier source extended agreement callerStart stopped nonTimeout shared
+
+#print axioms accepted_generated_call_stopped_from_frontier
 #print axioms accepted_generated_call_stopped_expression
 end Goose.Lower
