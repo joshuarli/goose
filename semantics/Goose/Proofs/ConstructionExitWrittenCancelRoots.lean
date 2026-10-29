@@ -1,6 +1,6 @@
 import Goose.Proofs.ConstructionExitWrittenCancelFrame
 import Goose.Proofs.ConstructionExitFreshCancelRoots
-import Goose.Proofs.ConstructionExitByteAdaptationAllocation
+import Goose.Proofs.ConstructionAcceptedByteAllocation
 
 set_option Elab.async false
 
@@ -28,7 +28,7 @@ theorem allocated_byte_write_cancel_rooted (config : EvalConfig) (initialized : 
     origin knownCount before allocated id created
   have same : receiver = backing.destination := Option.some.inj (receiverFound.symm.trans backing.present)
   subst receiver
-  obtain ⟨packedRow, packedFound, packed, _, _, _, adaptation⟩ := exit_newDestination_byte_adaptation config.layout owner origin knownCount before allocated id created
+  obtain ⟨packedRow, packedFound, packed, _, _, _, adaptation⟩ := newDestination_byteOwner_packed_value_with_adaptation config.layout owner origin knownCount before allocated id created
   have same : packedRow = backing.destination := Option.some.inj (packedFound.symm.trans backing.present)
   subst packedRow
   have current := newDestination_current_self config initialized owner (.varr (.int .u8)) .value origin knownCount before allocated id
