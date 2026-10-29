@@ -60,6 +60,10 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | logical (fuel : Nat) (environment : RuntimeActivation) (isAnd : Bool) (first second : Expr)
       (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
       FuelSupport config (fuel + 1) (.value environment (logicalExpression isAnd first second))
+  | valueCopy (fuel : Nat) (environment : RuntimeActivation) (ty : Ty) (place : Place) (origin : Goose.Core.OriginId)
+      (placeChild : FuelSupport config fuel (.place environment place))
+      (builderChild : ∀ destination, FuelSupport config fuel (.builder environment destination (.copy ty place origin))) :
+      FuelSupport config (fuel + 1) (.value environment (.copy ty place origin))
   | valueNonfixedArray (fuel : Nat) (environment : RuntimeActivation) (ty : Ty) (operands : List Expr)
       (origin : Goose.Core.OriginId) (nonfixed : ty.nonfixed = true)
       (child : ∀ destination, FuelSupport config fuel (.builder environment destination (.arrLit ty operands origin))) :
@@ -274,6 +278,9 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (body : ∀ act pre, FuelSupport config fuel
         (.boundActivation ⟨context.impl, act, implementation.vars, [], []⟩ pre implementation.body origin)) :
       FuelSupport config (fuel + 1) (.callWith environment contextId arguments origin)
+  | copyBuilder (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (ty : Ty) (place : Place) (origin : Goose.Core.OriginId) (child : FuelSupport config fuel (.place environment place)) :
+      FuelSupport config (fuel + 1) (.builder environment incoming (.copy ty place origin))
   | defaultBuilder (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
       (expression : Expr) (shape : DefaultBuilderExpression expression) (child : FuelSupport config fuel (.value environment expression)) :
       FuelSupport config (fuel + 1) (.builder environment incoming expression)
@@ -419,6 +426,12 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .logical (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
           intro value middle ready result checked
           exact ih (.value environment second) (path ++ [1]) ready rightSupported
+      | valueCopy _ environment ty place origin placeSupported builderSupported =>
+          refine .valueCopy fuel path environment ty place origin before ?_ ?_
+          · intro fixed
+            exact ih (.place environment place) (path ++ [0]) before placeSupported
+          · intro destination ready nonfixed allocated
+            exact ih (.builder environment destination (.copy ty place origin)) (path ++ [0]) ready (builderSupported destination)
       | valueNonfixedArray _ environment ty operands origin nonfixed childSupported =>
           refine .valueNonfixedArray fuel path environment ty operands origin before nonfixed ?_
           intro destination ready allocated
@@ -750,6 +763,10 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           rw [callWith_source fuel config environment contextId arguments origin context implementation before
             contextFound implementationFound resultsEmpty]
           exact .callWith contextFound implementationFound resultsEmpty argumentsHistory activationHistory
+      | copyBuilder _ environment incoming ty place origin childSupported =>
+          refine .copyBuilder fuel path environment incoming ty place origin before ?_
+          intro destination ready renewed
+          exact ih (.place environment place) (path ++ [0]) ready childSupported
       | defaultBuilder _ environment incoming expression shape childSupported =>
           refine .defaultBuilder fuel path environment incoming expression before shape ?_
           intro destination ready renewed
