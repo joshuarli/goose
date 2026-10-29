@@ -9,7 +9,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ExitExecution
 
-theorem fresh_byteInvoke_pending_allFuel (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+theorem fresh_byteInvoke_pending_frame_allFuel (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (caller : RuntimeActivation) (contextId scope : Nat) (bytes : List UInt8) (allocationOrigin origin : OriginId)
     (context : Context) (helper : Impl) (knownCount : Option Nat) (before allocated : ExecutionState) (id : Nat)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
@@ -31,7 +31,9 @@ theorem fresh_byteInvoke_pending_allFuel (fuel : Nat) (config : EvalConfig) (ini
           (⟨[.construct id], carriers⟩ :: pending) ∧
         after.objects = before.objects ∧ after.objectOrdinals = before.objectOrdinals ∧
         after.nextAct = before.nextAct + 1 ∧ after.nextScope = before.nextScope + 1 ∧
-        Nonempty (BuiltByteReceiver config.layout after id before.construction.storage.size bytes.length)
+        Nonempty (BuiltByteReceiver config.layout after id before.construction.storage.size bytes.length) ∧
+        Nonempty (FreshDestinationFrame { after with construction := { before.construction with
+          exitReservations := before.construction.exitReservations.push .released } } after)
     | _ => False := by
   obtain ⟨ready⟩ := newDestination_initial_backing config.layout caller.act (.varr (.int .u8)) .value allocationOrigin
     knownCount before allocated id (.int .u8) rfl created
@@ -85,12 +87,48 @@ theorem fresh_byteInvoke_pending_allFuel (fuel : Nat) (config : EvalConfig) (ini
           cases fuel with
           | zero => simpa only [low.2.2.2.2.1] using ⟨_, low.2.2.2.2.2.2.2⟩
           | succ fuel =>
-            obtain ⟨after, executed, finalWorld, objects, ordinals, acts, scopes, geometry⟩ :=
-              fresh_byte_call_invoke_world fuel config initialized caller contextId scope allocationOrigin origin knownCount
+            obtain ⟨after, executed, finalWorld, objects, ordinals, acts, scopes, geometry, frame⟩ :=
+              fresh_byte_call_invoke_frame_world fuel config initialized caller contextId scope allocationOrigin origin knownCount
                 before allocated id context helper bytes ambient types live regions pending world coverage created
                 contextAt helperAt parameters results body absent ready fits depth
             simp only [executed]
-            exact ⟨trivial, finalWorld, objects, ordinals, acts, scopes, geometry⟩
+            exact ⟨trivial, finalWorld, objects, ordinals, acts, scopes, geometry, frame⟩
 
+theorem fresh_byteInvoke_pending_allFuel (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (caller : RuntimeActivation) (contextId scope : Nat) (bytes : List UInt8) (allocationOrigin origin : OriginId)
+    (context : Context) (helper : Impl) (knownCount : Option Nat) (before allocated : ExecutionState) (id : Nat)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (coverage : EvaluationHistoryCoverage before ambient pending)
+    (contextAt : config.module.contexts[contextId]? = some context)
+    (helperAt : config.module.impls[context.impl]? = some helper)
+    (parameters : helper.params = #[])
+    (results : helper.results = #[⟨.varr (.int .u8), .value, none⟩])
+    (body : helper.body = ⟨scope, [], some (.bytes (.varr (.int .u8)) bytes origin)⟩)
+    (absent : ∀ descriptor ∈ helper.vars.toList, descriptor.scope ≠ scope)
+    (fits : bytes.length < 2 ^ 32) (depth : before.activations.length < Goose.Core.maxCallDepth)
+    (created : newDestination config.layout caller.act (.varr (.int .u8)) .value allocationOrigin none knownCount before = .ok id allocated) :
+    match invokeCall fuel config caller contextId [] [.construct id] origin allocated with
+    | .stop _ after => ∃ nextAmbient, AcceptedWorld config initialized after nextAmbient types live (freshReceivingRegion before id :: regions) pending
+    | .ok carriers after => carriers = [.completed id] ∧
+        AcceptedWorld config initialized after (.returned carriers :: ambient) types live (freshReceivingRegion before id :: regions)
+          (⟨[.construct id], carriers⟩ :: pending) ∧
+        after.objects = before.objects ∧ after.objectOrdinals = before.objectOrdinals ∧
+        after.nextAct = before.nextAct + 1 ∧ after.nextScope = before.nextScope + 1 ∧
+        Nonempty (BuiltByteReceiver config.layout after id before.construction.storage.size bytes.length)
+    | _ => False := by
+  have outcome := fresh_byteInvoke_pending_frame_allFuel fuel config initialized caller contextId scope bytes allocationOrigin origin context helper
+    knownCount before allocated id ambient types live regions pending world coverage contextAt helperAt parameters results body absent fits depth created
+  cases invoked : invokeCall fuel config caller contextId [] [.construct id] origin allocated with
+  | stop reason after => simpa only [invoked] using outcome
+  | ok carriers after =>
+    simp only [invoked] at outcome ⊢
+    exact ⟨outcome.1, outcome.2.1, outcome.2.2.1, outcome.2.2.2.1, outcome.2.2.2.2.1,
+      outcome.2.2.2.2.2.1, outcome.2.2.2.2.2.2.1⟩
+  | escape target carriers after => simpa only [invoked] using outcome
+  | jump target kind after => simpa only [invoked] using outcome
+
+#print axioms fresh_byteInvoke_pending_frame_allFuel
 #print axioms fresh_byteInvoke_pending_allFuel
 end Goose.Proofs.ConstructionAcceptedExecution
