@@ -11,7 +11,7 @@ open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ConstructionStorage
 open Goose.Proofs.ExitExecution
 
-theorem allocated_byte_write_cancel_pending (config : EvalConfig) (initialized : Nat) (owner : ActId)
+theorem allocated_byte_write_cancel_exact_frame (config : EvalConfig) (initialized : Nat) (owner : ActId)
     (origin : OriginId) (knownCount : Option Nat) (byte : UInt8)
     (before allocated : ExecutionState) (id : Nat) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -22,8 +22,14 @@ theorem allocated_byte_write_cancel_pending (config : EvalConfig) (initialized :
       writeElement id ⟨#[byte]⟩ reserved = .ok () written ∧
       (do cancelExitReservation allocated.construction.exitReservations.size []
           releaseExitReservation allocated.construction.exitReservations.size) written = .ok () final ∧
-      ∀ frame ∈ pending, CarriersLandingReady { allocated with construction := final } frame.channels frame.carriers ∧
-        ∀ carrier ∈ frame.carriers, CarrierResultBacking config.layout { allocated with construction := final } carrier := by
+      ∃ snapshot abandonedRow,
+        Nonempty (FreshDestinationFrame { before with construction := { before.construction with
+          exitReservations := before.construction.exitReservations.push .released } } { allocated with construction := final }) ∧
+        final.destinationResumptions = (id, snapshot) :: allocated.construction.destinationResumptions ∧
+        snapshot.progress = .open 0 ∧ snapshot.use = .receiver ∧
+        final.destinations[id]? = some abandonedRow ∧ allocated.construction.destinations[id]? = some snapshot ∧
+        abandonedRow.use = snapshot.use ∧ abandonedRow.backing = snapshot.backing ∧
+        abandonedRow.progress = .abandoned ∧ final.destinations = allocated.construction.destinations.set! id abandonedRow := by
   obtain ⟨reserved, written, final, reserve, write, cancel, rooted, rows, storage⟩ :=
     allocated_byte_write_cancel_frame config initialized owner origin knownCount byte before allocated id ambient types live regions pending world created
   obtain ⟨⟨backing⟩, _⟩ := newDestination_open_ready config initialized owner (.varr (.int .u8)) .value origin knownCount
@@ -118,12 +124,47 @@ theorem allocated_byte_write_cancel_pending (config : EvalConfig) (initialized :
         Array.set!_eq_setIfInBounds, Array.setIfInBounds, Array.set_push]
     · intro index prior present
       exact storage index prior present
-  refine ⟨expected, written, exactFinal, actualReserve, write, cancel, ?_⟩
+  have finalRows : exactFinal.destinations = allocated.construction.destinations.set! id { nextRow with progress := .abandoned } := by
+    have transition := writeElement_transition id ⟨#[byte]⟩ expected
+    rw [write] at transition
+    cases transition with
+    | written actual oldStorage count actualFound actualStored actualOpened =>
+      have sameRow : actual = backing.destination := Option.some.inj (actualFound.symm.trans backing.present)
+      subst actual
+      simp only [exactFinal, cancelled, cleaned, abandonRowState, expected, Array.set!_eq_setIfInBounds,
+        Array.setIfInBounds_setIfInBounds]
+  have abandonedFound : exactFinal.destinations[id]? = some { nextRow with progress := .abandoned } := by
+    rw [finalRows, Array.set!_eq_setIfInBounds]
+    exact Array.getElem?_setIfInBounds_self_of_lt (Array.getElem?_eq_some_iff.mp backing.present).1
+  have savedEntries : exactFinal.destinationResumptions = (id, backing.destination) :: allocated.construction.destinationResumptions := by
+    simp only [exactFinal, cancelled, cleaned, abandonRowState, metadata.resumptions, expected]
+  exact ⟨expected, written, exactFinal, actualReserve, write, cancel, backing.destination,
+    { nextRow with progress := .abandoned }, ⟨fullFrame⟩, savedEntries, backing.opened, receiver, abandonedFound,
+    backing.present, rfl, rfl, rfl, finalRows⟩
+
+theorem allocated_byte_write_cancel_pending (config : EvalConfig) (initialized : Nat) (owner : ActId)
+    (origin : OriginId) (knownCount : Option Nat) (byte : UInt8)
+    (before allocated : ExecutionState) (id : Nat) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (created : newDestination config.layout owner (.varr (.int .u8)) .value origin none knownCount before = .ok id allocated) :
+    ∃ reserved written final,
+      reserveExitDestination id .newValue allocated.construction = .ok (allocated.construction.exitReservations.size, id) reserved ∧
+      writeElement id ⟨#[byte]⟩ reserved = .ok () written ∧
+      (do cancelExitReservation allocated.construction.exitReservations.size []
+          releaseExitReservation allocated.construction.exitReservations.size) written = .ok () final ∧
+      ∀ frame ∈ pending, CarriersLandingReady { allocated with construction := final } frame.channels frame.carriers ∧
+        ∀ carrier ∈ frame.carriers, CarrierResultBacking config.layout { allocated with construction := final } carrier := by
+  obtain ⟨reserved, written, final, reserve, write, cancel, snapshot, abandonedRow, ⟨fullFrame⟩, _⟩ :=
+    allocated_byte_write_cancel_exact_frame config initialized owner origin knownCount byte before allocated id ambient types live regions pending world created
+  refine ⟨reserved, written, final, reserve, write, cancel, ?_⟩
   intro frame member
   have ready := appended_ticket_pending_carrier_ready config initialized before ambient types live regions pending .released world frame member
   have backing := appended_ticket_pending_carrier_backing config initialized before ambient types live regions pending .released world frame member
   exact ⟨fullFrame.carriers_ready frame.channels frame.carriers ready,
     fun carrier carried => fullFrame.carrier_backing config.layout carrier (backing carrier carried)⟩
+
+#print axioms allocated_byte_write_cancel_exact_frame
 
 #print axioms allocated_byte_write_cancel_pending
 
