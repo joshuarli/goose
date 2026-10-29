@@ -3,12 +3,14 @@ import Goose.Proofs.ConstructionExitDirectFreshAmbient
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct Goose.Core
 open Goose.Proofs.ConstructionExecutionOwnership
+open Goose.Proofs.ConstructionExecutionProtocol
 
-theorem direct_fresh_context (before : ExecutionState) (incoming : Nat) (row : PendingDestination) (ambient : OwnershipAmbient) (carriers : List Goose.Construct.Carrier)
+theorem direct_fresh_context_separated (before : ExecutionState) (incoming : Nat) (row : PendingDestination) (ambient : OwnershipAmbient) (carriers : List Goose.Construct.Carrier)
     (valid : OwnershipExecutionContext before ambient) (history : ReservationReferencesBounded before.construction ambient)
     (present : before.construction.destinations[incoming]? = some row) (opened : row.progress = .open 0)
     (current : destinationCurrent before.construction incoming = .ok incoming)
-    (noRetained : completedCarrierIds ambient.retained = []) :
+    (separated : ∀ retained ∈ completedCarrierIds ambient.retained,
+      destinationDescendant before.construction.destinations incoming retained = false) :
     let waited := { before with construction := { before.construction with
       exitReservations := before.construction.exitReservations.push (.active .fresh incoming incoming row) } }
     OwnershipExecutionContext waited (.exitChannels [before.construction.exitReservations.size] [] carriers :: ambient) := by
@@ -66,10 +68,24 @@ theorem direct_fresh_context (before : ExecutionState) (incoming : Nat) (row : P
   change OwnershipExecutionContext waited (.exitChannels [state.exitReservations.size] [] carriers :: ambient)
   refine ⟨?_, ?_, ?_, reservations, ⟨trivial, captured⟩, ⟨trivial, bounds⟩, ?_⟩
   · exact direct_fresh_source_state state incoming row valid.source present opened current
-  · exact direct_fresh_ambient state incoming row ambient carriers valid.source valid.retention history present opened current noRetained
+  · exact direct_fresh_ambient_separated state incoming row ambient carriers valid.source valid.retention history present opened current separated
   · exact ⟨valid.runtime.activations, valid.runtime.breaks⟩
   · exact ⟨valid.identities.activations, valid.identities.breaks⟩
 
 
+theorem direct_fresh_context (before : ExecutionState) (incoming : Nat) (row : PendingDestination) (ambient : OwnershipAmbient) (carriers : List Goose.Construct.Carrier)
+    (valid : OwnershipExecutionContext before ambient) (history : ReservationReferencesBounded before.construction ambient)
+    (present : before.construction.destinations[incoming]? = some row) (opened : row.progress = .open 0)
+    (current : destinationCurrent before.construction incoming = .ok incoming)
+    (noRetained : completedCarrierIds ambient.retained = []) :
+    let waited := { before with construction := { before.construction with
+      exitReservations := before.construction.exitReservations.push (.active .fresh incoming incoming row) } }
+    OwnershipExecutionContext waited (.exitChannels [before.construction.exitReservations.size] [] carriers :: ambient) := by
+  apply direct_fresh_context_separated before incoming row ambient carriers valid history present opened current
+  intro retained member
+  rw [noRetained] at member
+  cases member
+
+#print axioms direct_fresh_context_separated
 #print axioms direct_fresh_context
 end Goose.Proofs.ConstructionAcceptedExecution

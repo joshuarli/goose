@@ -6,6 +6,7 @@ open Goose.Construct
 open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ConstructionRepresentation
+open Goose.Proofs.ExitExecution
 
 theorem newest_destination_within_successorFrames (state : ConstructionState) (ambient : OwnershipAmbient) (id : Nat)
     (newest : id + 1 = state.destinations.size) (ordered : DestinationOwnersOrdered state) :
@@ -38,6 +39,39 @@ theorem acceptedWorld_pushNewestConstructActivation (config : EvalConfig) (initi
   subst receiving
   exact newest_destination_within_successorFrames state.construction ambient id newest world.ownership.source.structural.1.1.1.2.2.2
 
+theorem ancestryWalk_ordered_le (state : ConstructionState) (ordered : DestinationOwnersOrdered state)
+    (ancestor fuel id : Nat) (descendant : ancestryWalk state.destinations ancestor fuel id = true) : ancestor ≤ id := by
+  induction fuel generalizing id with
+  | zero => simp [ancestryWalk] at descendant
+  | succ fuel ih =>
+    by_cases same : id = ancestor
+    · omega
+    · simp only [ancestryWalk, beq_iff_eq, same, ↓reduceIte] at descendant
+      cases found : state.destinations[id]? with
+      | none => simp [found] at descendant
+      | some row =>
+        cases use : row.use with
+        | receiver => simp [found, use] at descendant
+        | child parent | replacement parent =>
+          have follows : ancestryWalk state.destinations ancestor fuel parent = true := by simpa [found, use] using descendant
+          have earlier : parent < id := by simpa [use] using ordered id row found
+          exact Nat.le_trans (ih parent follows) (Nat.le_of_lt earlier)
+
+theorem destination_retained_older_outside (state : ConstructionState) (id : Nat) (retained : List Carrier)
+    (ordered : DestinationOwnersOrdered state)
+    (old : ∀ carrier ∈ completedCarrierIds retained, carrier < id) :
+    ∀ carrier ∈ completedCarrierIds retained, destinationDescendant state.destinations id carrier = false := by
+  intro carrier member
+  cases descendant : destinationDescendant state.destinations id carrier with
+  | false => rfl
+  | true =>
+    have prior := old carrier member
+    have le := ancestryWalk_ordered_le state ordered id state.destinations.size carrier (by
+      rwa [← destinationDescendant_walk])
+    exact False.elim ((Nat.not_lt_of_ge le) prior)
+
+#print axioms ancestryWalk_ordered_le
+#print axioms destination_retained_older_outside
 #print axioms acceptedWorld_pushNewestConstructActivation
 #print axioms newest_destination_within_successorFrames
 end Goose.Proofs.ConstructionAcceptedExecution

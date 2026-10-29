@@ -5,17 +5,19 @@ namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct Goose.Core
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionExecutionOwnership
+open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ConstructionRootCorrespondence
 open Goose.Proofs.ExitExecution
 
-theorem direct_fresh_acceptedWorld (config : EvalConfig) (initialized : Nat)
+theorem direct_fresh_acceptedWorld_separated (config : EvalConfig) (initialized : Nat)
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
     (regions : List ReceivingRegion) (incoming : Nat) (row : PendingDestination) (carriers : List Goose.Construct.Carrier)
     (world : AcceptedWorld config initialized before ambient types live regions [])
     (history : ReservationReferencesBounded before.construction ambient)
     (present : before.construction.destinations[incoming]? = some row) (opened : row.progress = .open 0)
     (current : destinationCurrent before.construction incoming = .ok incoming)
-    (noRetained : completedCarrierIds ambient.retained = []) :
+    (separated : ∀ retained ∈ completedCarrierIds ambient.retained,
+      destinationDescendant before.construction.destinations incoming retained = false) :
     let token := before.construction.exitReservations.size
     let activated := { before with construction := { before.construction with
       exitReservations := before.construction.exitReservations.push (.active .fresh incoming incoming row) } }
@@ -23,7 +25,7 @@ theorem direct_fresh_acceptedWorld (config : EvalConfig) (initialized : Nat)
   let reservation := ExitReservation.active .fresh incoming incoming row
   let activated := { before with construction := { before.construction with
     exitReservations := before.construction.exitReservations.push reservation } }
-  have ownership := direct_fresh_context before incoming row ambient carriers world.ownership history present opened current noRetained
+  have ownership := direct_fresh_context_separated before incoming row ambient carriers world.ownership history present opened current separated
   refine ⟨⟨ownership, world.globals, world.globalTypes, world.layouts, world.typeFrontier,
     world.syntheticFrontier, world.heap, world.objectsRegistered, world.ordinalsRegistered, ?_, ?_, ?_⟩, world.globalLive⟩
   · refine ⟨?_, world.backing.identities⟩
@@ -42,5 +44,23 @@ theorem direct_fresh_acceptedWorld (config : EvalConfig) (initialized : Nat)
   · intro frame member
     cases member
 
+theorem direct_fresh_acceptedWorld (config : EvalConfig) (initialized : Nat)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
+    (regions : List ReceivingRegion) (incoming : Nat) (row : PendingDestination) (carriers : List Goose.Construct.Carrier)
+    (world : AcceptedWorld config initialized before ambient types live regions [])
+    (history : ReservationReferencesBounded before.construction ambient)
+    (present : before.construction.destinations[incoming]? = some row) (opened : row.progress = .open 0)
+    (current : destinationCurrent before.construction incoming = .ok incoming)
+    (noRetained : completedCarrierIds ambient.retained = []) :
+    let token := before.construction.exitReservations.size
+    let activated := { before with construction := { before.construction with
+      exitReservations := before.construction.exitReservations.push (.active .fresh incoming incoming row) } }
+    AcceptedWorld config initialized activated (.exitChannels [token] [] carriers :: ambient) types live regions [] := by
+  apply direct_fresh_acceptedWorld_separated config initialized before ambient types live regions incoming row carriers world history present opened current
+  intro retained member
+  rw [noRetained] at member
+  cases member
+
+#print axioms direct_fresh_acceptedWorld_separated
 #print axioms direct_fresh_acceptedWorld
 end Goose.Proofs.ConstructionAcceptedExecution

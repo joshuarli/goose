@@ -4,19 +4,21 @@ import Goose.Proofs.ConstructionExitDirectSourceRoles
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct Goose.Core
 open Goose.Proofs.ConstructionExecutionOwnership
+open Goose.Proofs.ConstructionExecutionProtocol
 
-theorem direct_fresh_ambient (state : ConstructionState) (incoming : Nat) (row : PendingDestination)
+theorem direct_fresh_ambient_separated (state : ConstructionState) (incoming : Nat) (row : PendingDestination)
     (ambient : OwnershipAmbient) (carriers : List Goose.Construct.Carrier) (source : OwnershipSourceState state)
     (valid : OwnershipAmbientInvariant state ambient)
     (history : ReservationReferencesBounded state ambient)
     (present : state.destinations[incoming]? = some row) (opened : row.progress = .open 0)
-    (current : destinationCurrent state incoming = .ok incoming)
-    (noRetained : completedCarrierIds ambient.retained = []) :
+    (currentSelf : destinationCurrent state incoming = .ok incoming)
+    (separated : ∀ retained ∈ completedCarrierIds ambient.retained,
+      destinationDescendant state.destinations incoming retained = false) :
     OwnershipAmbientInvariant
       { state with exitReservations := state.exitReservations.push (.active .fresh incoming incoming row) }
       (.exitChannels [state.exitReservations.size] [] carriers :: ambient) := by
   let reserved := { state with exitReservations := state.exitReservations.push (.active .fresh incoming incoming row) }
-  have sourceAfter := direct_fresh_source_state state incoming row source present opened current
+  have sourceAfter := direct_fresh_source_state state incoming row source present opened currentSelf
   have unreferenced := reservationReferencesBounded_unreferenced state ambient history
   have oldTicket (token oldIncoming selected : Nat) (snapshot : PendingDestination)
       (different : token ≠ state.exitReservations.size)
@@ -56,8 +58,32 @@ theorem direct_fresh_ambient (state : ConstructionState) (incoming : Nat) (row :
     simp only [OwnershipAmbient.retained, List.flatMap_cons, OwnershipAmbientFrame.carriers, completedCarrierIds, List.filterMap_append, List.mem_append]
     exact Or.inr member
   · intro token oldIncoming selected current snapshot owned ticket resolved retained member
-    rw [noRetained] at member
-    cases member
+    simp only [OwnershipAmbientFrame.tickets, List.mem_singleton] at owned
+    subst token
+    have same : (.active .fresh oldIncoming selected snapshot : ExitReservation) = .active .fresh incoming incoming row := by
+      have found : reserved.exitReservations[state.exitReservations.size]? = some (.active .fresh incoming incoming row) := by simp [reserved]
+      exact Option.some.inj (ticket.symm.trans found)
+    cases same
+    rw [destinationCurrent_congr_tables state reserved rfl rfl incoming] at resolved
+    have sameCurrent : current = incoming := Except.ok.inj (resolved.symm.trans currentSelf)
+    subst current
+    exact separated retained member
 
+theorem direct_fresh_ambient (state : ConstructionState) (incoming : Nat) (row : PendingDestination)
+    (ambient : OwnershipAmbient) (carriers : List Goose.Construct.Carrier) (source : OwnershipSourceState state)
+    (valid : OwnershipAmbientInvariant state ambient)
+    (history : ReservationReferencesBounded state ambient)
+    (present : state.destinations[incoming]? = some row) (opened : row.progress = .open 0)
+    (current : destinationCurrent state incoming = .ok incoming)
+    (noRetained : completedCarrierIds ambient.retained = []) :
+    OwnershipAmbientInvariant
+      { state with exitReservations := state.exitReservations.push (.active .fresh incoming incoming row) }
+      (.exitChannels [state.exitReservations.size] [] carriers :: ambient) := by
+  apply direct_fresh_ambient_separated state incoming row ambient carriers source valid history present opened current
+  intro retained member
+  rw [noRetained] at member
+  cases member
+
+#print axioms direct_fresh_ambient_separated
 #print axioms direct_fresh_ambient
 end Goose.Proofs.ConstructionAcceptedExecution
