@@ -1,3 +1,4 @@
+import Goose.Lower.DemandCallParameterizedTerminal
 import Goose.Lower.DemandCallFallthrough
 import Goose.Lower.DemandWhileMixedTerminal
 import Goose.Lower.DemandWhileEntryReturn
@@ -39,69 +40,12 @@ theorem accepted_generated_parameterized_callee_terminal {cfg : Cfg} {ctx : Cont
         (callEntry impl) initial
         (lowerBlock none (callPre impl) false impl.body (lowerEnv cfg.mod impl.vars impl.results.toList) (callEntry impl)).2
         terminal.frame terminal.point [] ∧ map.Realizes cfg.mod source.world env terminal := by
-  let cx : FnCtx := ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩
-  have extended : ExtT (lowerBlock none (callPre impl) false impl.body
-      (lowerEnv cfg.mod env.vars impl.results.toList) (callEntry impl)).2 cx.fn.blocks := by
-    let le := lowerEnv cfg.mod impl.vars impl.results.toList
-    let body := lowerBlock none (callPre impl) false impl.body le (callEntry impl)
-    have tailExtension : ExtT (Goose.Proofs.Lower.bodyTail impl le body.1 body.2) (lowerContextAt cfg.mod ctx impl).blocks := by
-      rw [lowerContextAt_blocks, lowerImpl_call_blocks]
-      exact Goose.Proofs.Lower.extT_finish _
-    have bodyExtension := tailExtension.of_adv
-      (advB_finishFunction impl body.1 le body.2 (finishFunction impl body.1 le body.2).1
-        (Goose.Proofs.Lower.bodyTail impl le body.1 body.2) rfl)
-    simpa only [envVars] using bodyExtension
-  have prologue := accepted_block_parameter_prologue_trace source
-    (show lowerBlock none (callPre impl) false impl.body (lowerEnv cfg.mod env.vars impl.results.toList) (callEntry impl) =
-      ((lowerBlock none (callPre impl) false impl.body (lowerEnv cfg.mod env.vars impl.results.toList) (callEntry impl)).1,
-        (lowerBlock none (callPre impl) false impl.body (lowerEnv cfg.mod env.vars impl.results.toList) (callEntry impl)).2) from rfl)
-    input.atPoint extended input.related cells pre.length (by omega)
-  have wholeTrace : DemandRuntimePrefix cx (pre.length + 1 + taken) ⟨(0, 0), initial, state⟩ terminal := by
-    apply prologue.append
-    simpa [cells.length] using steps
-  obtain ⟨body, bodyOffset, bodyOccurrence, bodyRows, decomposition, bodyReached⟩ :=
-    accepted_generated_parameterized_mixed_body source fragment selected owned occurrence rows coverage admitted bounded cells realized input extended entry
-      (by simpa using steps)
-  cases decomposition.progress with
-  | interior cursor => exact (cursor.whileMixed_excludes_maximal_terminal terminalAt maximal).elim
-  | @complete sourceFuel consumed remaining boundary flow count executed residual evaluated ending =>
-    have statements : execStmts sourceFuel cfg { env with scopes := (impl.body.scope, state.nextScope) :: env.scopes }
-        impl.body.stmts { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store } =
-        .ok (.normal .unit) boundary.state := by
-      simp only [prepareLoopFlow_none, bind_apply] at evaluated
-      cases raw : execStmts sourceFuel cfg { env with scopes := (impl.body.scope, state.nextScope) :: env.scopes }
-          impl.body.stmts { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store } with
-      | stop stop after => simp [raw] at evaluated
-      | ok rawFlow after =>
-        have normal := fragment.normal raw
-        subst rawFlow
-        simp only [raw, prepareReturn, pure_apply, Res.ok.injEq] at evaluated
-        obtain ⟨_, rfl⟩ := evaluated
-        rfl
-    have normal : flow = .normal .unit := by
-      simp only [prepareLoopFlow_none, bind_apply, statements, prepareReturn, pure_apply, Res.ok.injEq] at evaluated
-      exact evaluated.1.symm
-    subst flow
-    cases ending with
-    | transfer abnormal _ => exact (abnormal .unit rfl).elim
-    | normal sequencePost result bodyBounded bodyRealized =>
-      have nextPost : Post cfg { env with scopes := (impl.body.scope, state.nextScope) :: env.scopes } cx
-          (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars impl.results.toList) (callEntry impl) (callPre impl) impl.body)
-          { initial with scopes := (impl.body.scope, state.nextScope) :: initial.scopes }
-          (lowerStmts none impl.body.stmts (lowerEnv cfg.mod env.vars impl.results.toList)
-            (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars impl.results.toList) (callEntry impl) (callPre impl) impl.body)).2
-          boundary.frame boundary.point [] := by
-        simpa [bodyOffset, lowerStmts, pure_run] using sequencePost
-      rcases residual.uncons with ⟨_, same⟩ | ⟨rest, afterLeave, length, leaveStep, tail⟩
-      · subst terminal
-        have site := GeneratedDemandInstruction.blockLeave_auto occurrence rows (by simpa [noValue, lowerBlockValue, demandBlockValueBefore, pure_run] using nextPost.pp) extended
-        cases site.instruction.symm.trans terminalAt
-      · obtain ⟨bodyDone, finalPost, bodyResult, finalBounded, finalRealized⟩ :=
-          accepted_generated_parameterized_body_leave source selected owned occurrence rows coverage admitted bounded cells realized input extended entry noValue statements nextPost leaveStep
-        have fallthrough := generated_callee_unit_fallthrough noResults noValue (by simpa [envVars] using finalPost)
-        rcases tail.uncons with ⟨_, rfl⟩ | ⟨_, _, _, nextStep, _⟩
-        · exact ⟨sourceFuel + 1, bodyDone, bodyResult, ⟨_, wholeTrace⟩, by simpa [envVars] using finalPost, finalRealized⟩
-        · exact (runtimeStep_excludes_return fallthrough nextStep).elim
+  apply accepted_generated_parameterized_callee_terminal_of_family source envVars noResults noValue selected owned occurrence rows
+    coverage admitted bounded cells realized input entry (@WhileMixedStatementCursor cfg { env with scopes := (impl.body.scope, state.nextScope) :: env.scopes } ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ impl.results.toList root owner selected)
+    (accepted_generated_while_mixed_statements fragment selected (callEntry impl) (callPre impl) false impl.body).1 (fun done => fragment.normal done) ?_ steps terminalAt maximal
+  intro statement innerState child childBefore childBuilt childInitial childStart childMap childRequired runtime current term terminal fuel maximal
+  exact current.excludes_maximal_terminal terminal maximal
+
 
 theorem accepted_generated_parameterized_callee_return {cfg : Cfg} {ctx : Context} {impl : Impl} {env : Env}
     {pre : List (VarId × Val)} {state : St} (source : BlockSource cfg env pre impl.body state)
