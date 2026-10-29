@@ -1,6 +1,6 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** resumed. Performance qualification and the three universal proof obligations remain open. Pushes remain unauthorized.
+**Status:** winding down. Performance qualification and the three universal proof obligations remain open. Pushes remain unauthorized.
 **Branch:** `goose-ir`. The branch was rebased onto local `master` at `b7885160`.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
