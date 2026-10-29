@@ -10,17 +10,16 @@ open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ExitExecution
 
-theorem waiting_pending_carrier_ready (config : EvalConfig) (initialized : Nat)
+theorem appended_ticket_pending_carrier_ready (config : EvalConfig) (initialized : Nat)
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
-    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (incoming : Nat)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (reservation : ExitReservation)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
     (frame : PendingCarrierFrame) (member : frame ∈ pending) :
     let waited := { before with construction := { before.construction with
-      exitReservations := before.construction.exitReservations.push (.waiting incoming) } }
-    waitExitDestination incoming before.construction = .ok before.construction.exitReservations.size waited.construction ∧
+      exitReservations := before.construction.exitReservations.push reservation } }
     CarriersLandingReady waited frame.channels frame.carriers := by
   let waited := { before with construction := { before.construction with
-    exitReservations := before.construction.exitReservations.push (.waiting incoming) } }
+    exitReservations := before.construction.exitReservations.push reservation } }
   have oldTicket (id : Nat) (status : ExitReservation) (present : before.construction.exitReservations[id]? = some status) :
       waited.construction.exitReservations[id]? = some status := by
     have inside := (Array.getElem?_eq_some_iff.mp present).1
@@ -36,29 +35,40 @@ theorem waiting_pending_carrier_ready (config : EvalConfig) (initialized : Nat)
       | child parent count row use present progress => exact .child parent count row use present progress
       | replacement parent count row use present progress => exact .replacement parent count row use present progress
   have original := (world.carriers frame member).1
-  refine ⟨?_, ⟨original.lengths, ?_⟩⟩
-  · simp [waitExitDestination, ConstructionM.get, ConstructionM.set, bind, pure, waited]
-  · intro channel carrier pair
-    have ready := original.pairs channel carrier pair
-    cases ready with
-    | register ty value => exact .register ty value
-    | pendingNamed token oldIncoming selected snapshot ticket =>
-      exact .pendingNamed token oldIncoming selected snapshot (oldTicket token _ ticket)
-    | construct channel id ready =>
-      exact .construct channel id (receiving channel id ready)
-    | completion token oldIncoming selected id role snapshot ticket ready =>
-      exact .completion token oldIncoming selected id role snapshot (oldTicket token _ ticket) (receiving selected id ready)
+  refine ⟨original.lengths, ?_⟩
+  intro channel carrier pair
+  have ready := original.pairs channel carrier pair
+  cases ready with
+  | register ty value => exact .register ty value
+  | pendingNamed token oldIncoming selected snapshot ticket =>
+    exact .pendingNamed token oldIncoming selected snapshot (oldTicket token _ ticket)
+  | construct channel id ready =>
+    exact .construct channel id (receiving channel id ready)
+  | completion token oldIncoming selected id role snapshot ticket ready =>
+    exact .completion token oldIncoming selected id role snapshot (oldTicket token _ ticket) (receiving selected id ready)
 
-theorem waiting_pending_carrier_backing (config : EvalConfig) (initialized : Nat)
+theorem waiting_pending_carrier_ready (config : EvalConfig) (initialized : Nat)
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (incoming : Nat)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
     (frame : PendingCarrierFrame) (member : frame ∈ pending) :
     let waited := { before with construction := { before.construction with
       exitReservations := before.construction.exitReservations.push (.waiting incoming) } }
+    waitExitDestination incoming before.construction = .ok before.construction.exitReservations.size waited.construction ∧
+    CarriersLandingReady waited frame.channels frame.carriers := by
+  refine ⟨?_, appended_ticket_pending_carrier_ready config initialized before ambient types live regions pending (.waiting incoming) world frame member⟩
+  simp [waitExitDestination, ConstructionM.get, ConstructionM.set, bind, pure]
+
+theorem appended_ticket_pending_carrier_backing (config : EvalConfig) (initialized : Nat)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (reservation : ExitReservation)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (frame : PendingCarrierFrame) (member : frame ∈ pending) :
+    let waited := { before with construction := { before.construction with
+      exitReservations := before.construction.exitReservations.push reservation } }
     ∀ carrier ∈ frame.carriers, CarrierResultBacking config.layout waited carrier := by
   let waited := { before with construction := { before.construction with
-    exitReservations := before.construction.exitReservations.push (.waiting incoming) } }
+    exitReservations := before.construction.exitReservations.push reservation } }
   have oldTicket (id : Nat) (status : ExitReservation) (present : before.construction.exitReservations[id]? = some status) :
       waited.construction.exitReservations[id]? = some status := by
     have inside := (Array.getElem?_eq_some_iff.mp present).1
@@ -101,6 +111,18 @@ theorem waiting_pending_carrier_backing (config : EvalConfig) (initialized : Nat
     exact .pendingNamed token oldIncoming selected count snapshot source stored (oldTicket token _ ticket) found marked phase
       (sample selected stored sampled) (storedBacking stored backed)
 
+theorem waiting_pending_carrier_backing (config : EvalConfig) (initialized : Nat)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (incoming : Nat)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (frame : PendingCarrierFrame) (member : frame ∈ pending) :
+    let waited := { before with construction := { before.construction with
+      exitReservations := before.construction.exitReservations.push (.waiting incoming) } }
+    ∀ carrier ∈ frame.carriers, CarrierResultBacking config.layout waited carrier := by
+  exact appended_ticket_pending_carrier_backing config initialized before ambient types live regions pending (.waiting incoming) world frame member
+
+#print axioms appended_ticket_pending_carrier_ready
+#print axioms appended_ticket_pending_carrier_backing
 #print axioms waiting_pending_carrier_backing
 
 #print axioms waiting_pending_carrier_ready
