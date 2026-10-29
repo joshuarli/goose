@@ -98,7 +98,7 @@ theorem accepted_generated_slice_assignment_literal_stage {cfg : Cfg} {env : Env
       DemandFrameAt cfg env cx source.world source.typingAfter source.rootsEnv source.context.outputFuture
         map.values map.runs ⟨finalPoint, finalFrame, after⟩ := by
   obtain ⟨snapshotPoint, snapshotFrame, sampledState, alias, child, view, childAt, viewAt,
-    rest, count, tail, demanded, next, longer⟩ :=
+    rest, count, tail, demanded, next, instruction, longer⟩ :=
     accepted_generated_slice_assignment_snapshot_stage source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
   exact longer enough
 

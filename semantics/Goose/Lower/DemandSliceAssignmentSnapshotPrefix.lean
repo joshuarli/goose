@@ -42,6 +42,7 @@ theorem accepted_generated_slice_assignment_snapshot_stage {cfg : Cfg} {env : En
           snapshotFrame.set (lowerExpr (.lit intType number) (lowerEnv cfg.mod env.vars results)
             (sliceUpperBefore (.of (.global global)) .omitted (lowerEnv cfg.mod env.vars results)
               (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2)).1 (.val (.int intType number)), sampledState⟩) ∧
+      (∃ id op, instAt cx.fn snapshotPoint = some (.def id op)) ∧
       (5 ≤ taken →
     ∃ (snapshotPoint : Pt) (snapshotFrame : GIR.Frame) (sampledState : St)
       (alias : RetainedAlias) (aliases : List RetainedAlias)
@@ -128,11 +129,11 @@ theorem accepted_generated_slice_assignment_snapshot_stage {cfg : Cfg} {env : En
       obtain ⟨sample, view, canonical, firstStep, viewed, viewPost, viewDemand, viewRetained⟩ :=
         accepted_generated_slice_global_snapshot child valueOccurrence valueRows valueCoverage valueBounded
           destinationPost.pp destinationPost.rel valueRealized (generated_assignment_value_extended extended) snapshot
-      obtain ⟨aliases, upper, viewQuery, literalStep, operands, upperRows, upperCoverage, upperAt, upperAdmitted, upperBounded, upperPost, upperDemand⟩ :=
-        accepted_generated_slice_global_literal_bound child valueOccurrence valueRows valueCoverage valueAdmitted valueBounded
+      obtain ⟨aliases, upper, viewQuery, literalStep, literalInstruction, operands, upperRows, upperCoverage, upperAt, upperAdmitted, upperBounded, upperPost, upperDemand⟩ :=
+        accepted_generated_slice_global_literal_bound_instruction child valueOccurrence valueRows valueCoverage valueAdmitted valueBounded
           valueRealized viewed viewPost (generated_assignment_value_extended extended)
       refine ⟨snapshotPoint, snapshotFrame, sampledState, alias, child, view, childAt, canonical,
-        rest, by omega, tail, viewDemand, literalStep, ?_⟩
+        rest, by omega, tail, viewDemand, literalStep, literalInstruction, ?_⟩
       intro longEnough
       have literalPrefix : DemandRuntimePrefix cx 1 _ _ := .next ((literalStep 0).runtime) (.zero _)
       obtain ⟨suffix, suffixCount, suffixSteps⟩ := literalPrefix.split_at (by omega) tail
@@ -194,16 +195,17 @@ theorem accepted_generated_slice_assignment_snapshot_result_split {cfg : Cfg} {e
         (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).values
         (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).runs
         ⟨snapshotPoint, snapshotFrame, sampledState⟩ ∧
-      ∀ fuel, DemandInstructionStep cx fuel ⟨snapshotPoint, snapshotFrame, sampledState⟩
+      (∀ fuel, DemandInstructionStep cx fuel ⟨snapshotPoint, snapshotFrame, sampledState⟩
         ⟨(snapshotPoint.1, snapshotPoint.2 + 1),
           snapshotFrame.set (lowerExpr (.lit intType number) (lowerEnv cfg.mod env.vars results)
             (sliceUpperBefore (.of (.global global)) .omitted (lowerEnv cfg.mod env.vars results)
-              (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2)).1 (.val (.int intType number)), sampledState⟩ := by
+              (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2)).1 (.val (.int intType number)), sampledState⟩) ∧
+      ∃ id op, instAt cx.fn snapshotPoint = some (.def id op) := by
   obtain ⟨snapshotPoint, snapshotFrame, sampledState, alias, child, view, childAt, viewAt,
-    rest, count, tail, demanded, next, longer⟩ :=
+    rest, count, tail, demanded, next, instruction, longer⟩ :=
     accepted_generated_slice_assignment_snapshot_stage source slice selected owned occurrence rows coverage admitted bounded realized input extended enough steps
   exact ⟨snapshotPoint, snapshotFrame, sampledState, alias, child, view, childAt, viewAt,
-    rest, count, tail, demanded, next⟩
+    rest, count, tail, demanded, next, instruction⟩
 
 #print axioms accepted_generated_slice_assignment_snapshot_result_split
 end Goose.Lower

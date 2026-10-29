@@ -21,7 +21,7 @@ theorem accepted_generated_slice_assignment_stopped_family {cfg : Cfg} {env : En
   · exact False.elim (accepted_generated_slice_assignment_destination_noStop source sliceTy selected owned occurrence rows coverage admitted bounded
       realized input extended short steps stopped nonTimeout)
   · by_cases atTwo : taken = 2
-    · obtain ⟨point, frame, alias, child, canonical, remaining, count, residual, demanded, progress⟩ :=
+    · obtain ⟨point, frame, alias, child, canonical, remaining, count, residual, demanded, progress, instruction⟩ :=
         accepted_generated_slice_assignment_value_entry_split source sliceTy selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
       have zero : remaining = 0 := by omega
       subst remaining
@@ -44,7 +44,7 @@ theorem accepted_generated_slice_assignment_stopped_family {cfg : Cfg} {env : En
         apply StoppedStatementPrefix.aborted 4
         simp only [bind_apply, sourceStop]
       · by_cases atFour : taken = 4
-        · obtain ⟨point, frame, sampled, alias, child, view, canonical, viewAt, remaining, count, residual, demanded, progress⟩ :=
+        · obtain ⟨point, frame, sampled, alias, child, view, canonical, viewAt, remaining, count, residual, demanded, progress, instruction⟩ :=
             accepted_generated_slice_assignment_snapshot_result_split source sliceTy selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
           have zero : remaining = 0 := by omega
           subst remaining

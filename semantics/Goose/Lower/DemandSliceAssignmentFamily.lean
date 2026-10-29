@@ -23,7 +23,8 @@ inductive SliceAssignmentInterior {cfg : Cfg} {env : Env} {state : St}
       (demanded : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
         (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).values
         (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).runs runtime)
-      (progress : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
+      (progress : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next)
+      (instruction : ∃ id op, instAt cx.fn runtime.point = some (.def id op)) :
       SliceAssignmentInterior source cx results before map runtime
   | view {runtime : DemandRuntimePoint} (alias : RetainedAlias)
       (child : ExprSource cfg env (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) state)
@@ -41,7 +42,8 @@ inductive SliceAssignmentInterior {cfg : Cfg} {env : Env} {state : St}
       (demanded : DemandFrameAt cfg env cx view.world view.typingEnv view.rootsEnv view.context.outputFuture
         (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).values
         (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).runs runtime)
-      (progress : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
+      (progress : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next)
+      (instruction : ∃ id op, instAt cx.fn runtime.point = some (.def id op)) :
       SliceAssignmentInterior source cx results before map runtime
   | bound {runtime : DemandRuntimePoint} {sampledState : St} (alias : RetainedAlias) (aliases : List RetainedAlias)
       (child : ExprSource cfg env (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) state)
@@ -91,11 +93,11 @@ theorem SliceAssignmentInterior.realizes {cfg : Cfg} {env : Env} {state : St}
       exact List.mem_append_right _ member
   cases cursor with
   | destination child canonical demanded progress instruction => simpa only [RetainedSsaMap.Realizes, canonical.world] using demanded.operands
-  | value alias child canonical demanded progress =>
+  | value alias child canonical demanded progress instruction =>
     simpa only [canonical.world] using (valueCoverage _ _).realizes demanded.operands
   | view alias child canonical view viewAt demanded instruction =>
     simpa only [canonical.world, viewAt.world] using (valueCoverage _ _).realizes demanded.operands
-  | viewDone alias child canonical view viewAt demanded progress =>
+  | viewDone alias child canonical view viewAt demanded progress instruction =>
     simpa only [canonical.world, viewAt.world] using (valueCoverage _ _).realizes demanded.operands
   | bound alias aliases child canonical upper upperAt demanded instruction =>
     simpa only [canonical.world, upperAt.world] using (runCoverage _ _ _ _).realizes demanded.operands
@@ -116,21 +118,15 @@ theorem SliceAssignmentInterior.instruction {cfg : Cfg} {env : Env} {state : St}
   | destination child canonical demanded progress instruction =>
     obtain ⟨id, op, found⟩ := instruction
     exact ⟨_, found⟩
-  | value alias child canonical demanded progress =>
-    obtain ⟨next, step⟩ := progress
-    cases step 0 with
-    | definition instruction execution => exact ⟨_, instruction⟩
-    | effect instruction execution => exact ⟨_, instruction⟩
-    | control instruction execution => exact ⟨_, instruction⟩
+  | value alias child canonical demanded progress instruction =>
+    obtain ⟨id, op, found⟩ := instruction
+    exact ⟨_, found⟩
   | view alias child canonical view viewAt demanded instruction =>
     obtain ⟨id, op, instruction⟩ := instruction
     exact ⟨_, instruction⟩
-  | viewDone alias child canonical view viewAt demanded progress =>
-    obtain ⟨next, step⟩ := progress
-    cases step 0 with
-    | definition instruction execution => exact ⟨_, instruction⟩
-    | effect instruction execution => exact ⟨_, instruction⟩
-    | control instruction execution => exact ⟨_, instruction⟩
+  | viewDone alias child canonical view viewAt demanded progress instruction =>
+    obtain ⟨id, op, found⟩ := instruction
+    exact ⟨_, found⟩
   | bound alias aliases child canonical upper upperAt demanded instruction =>
     obtain ⟨id, op, instruction⟩ := instruction
     exact ⟨_, instruction⟩
@@ -139,6 +135,25 @@ theorem SliceAssignmentInterior.instruction {cfg : Cfg} {env : Env} {state : St}
     exact ⟨_, instruction⟩
 
 #print axioms SliceAssignmentInterior.instruction
+
+theorem SliceAssignmentInterior.nonterminal {cfg : Cfg} {env : Env} {state : St}
+    {reference : Expr} {mutability : Mutability} {global : GlobalId} {sliceOrigin origin : OriginId}
+    {intType : IntTy} {number : Int}
+    {source : StmtSource cfg env (.assign (.deref reference)
+      (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin) state}
+    {cx : FnCtx} {results : List Ty} {before : LS} {map : RetainedSsaMap} {runtime : DemandRuntimePoint}
+    (cursor : SliceAssignmentInterior source cx results before map runtime) :
+    (∃ id op, instAt cx.fn runtime.point = some (.def id op)) ∨
+      ∃ effect, instAt cx.fn runtime.point = some (.eff effect) := by
+  cases cursor with
+  | destination child canonical demanded progress instruction => exact .inl instruction
+  | value alias child canonical demanded progress instruction => exact .inl instruction
+  | view alias child canonical view viewAt demanded instruction => exact .inl instruction
+  | viewDone alias child canonical view viewAt demanded progress instruction => exact .inl instruction
+  | bound alias aliases child canonical upper upperAt demanded instruction => exact .inl instruction
+  | store alias aliases child canonical demanded instruction => exact .inr instruction
+
+#print axioms SliceAssignmentInterior.nonterminal
 
 theorem accepted_generated_slice_assignment_prefix {cfg : Cfg} {env : Env} {state : St}
     {reference : Expr} {mutability : Mutability} {global : GlobalId} {sliceOrigin origin : OriginId}
@@ -172,12 +187,12 @@ theorem accepted_generated_slice_assignment_prefix {cfg : Cfg} {env : Env} {stat
       realized input extended short steps
     exact ⟨owned, coverage, .interior (.destination destination canonical demanded progress instruction)⟩
   · by_cases atTwo : taken = 2
-    · obtain ⟨point, frame, alias, child, canonical, remaining, count, residual, demanded, progress⟩ :=
+    · obtain ⟨point, frame, alias, child, canonical, remaining, count, residual, demanded, progress, instruction⟩ :=
         accepted_generated_slice_assignment_value_entry_split source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
       have zero : remaining = 0 := by omega
       subst remaining
       cases residual
-      exact ⟨owned, coverage, .interior (.value alias child canonical demanded ⟨_, progress⟩)⟩
+      exact ⟨owned, coverage, .interior (.value alias child canonical demanded ⟨_, progress⟩ instruction)⟩
     · by_cases atThree : taken = 3
       · obtain ⟨point, frame, alias, child, view, canonical, viewAt, executed, ⟨remaining, count, residual⟩, demanded, instruction⟩ :=
           accepted_generated_slice_assignment_snapshot_split source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
@@ -186,12 +201,12 @@ theorem accepted_generated_slice_assignment_prefix {cfg : Cfg} {env : Env} {stat
         cases residual
         exact ⟨owned, coverage, .interior (.view alias child canonical view viewAt demanded instruction)⟩
       · by_cases atFour : taken = 4
-        · obtain ⟨point, frame, after, alias, child, view, canonical, viewAt, remaining, count, residual, demanded, progress⟩ :=
+        · obtain ⟨point, frame, after, alias, child, view, canonical, viewAt, remaining, count, residual, demanded, progress, instruction⟩ :=
             accepted_generated_slice_assignment_snapshot_result_split source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
           have zero : remaining = 0 := by omega
           subst remaining
           cases residual
-          exact ⟨owned, coverage, .interior (.viewDone alias child canonical view viewAt demanded ⟨_, progress⟩)⟩
+          exact ⟨owned, coverage, .interior (.viewDone alias child canonical view viewAt demanded ⟨_, progress⟩ instruction)⟩
         · by_cases atFive : taken = 5
           · obtain ⟨point, frame, after, alias, aliases, child, upper, canonical, upperAt, remaining, count, residual, demanded, instruction⟩ :=
               accepted_generated_slice_assignment_literal_split source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps

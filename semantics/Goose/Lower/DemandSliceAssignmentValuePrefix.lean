@@ -35,11 +35,12 @@ theorem accepted_generated_slice_assignment_value_entry_split {cfg : Cfg} {env :
         (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).values
         (map.addValues (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).1 [alias]).runs
         ⟨destinationPoint, destinationFrame, state⟩ ∧
-      ∀ fuel, DemandInstructionStep cx fuel ⟨destinationPoint, destinationFrame, state⟩
+      (∀ fuel, DemandInstructionStep cx fuel ⟨destinationPoint, destinationFrame, state⟩
         ⟨(destinationPoint.1, destinationPoint.2 + 1),
           destinationFrame.set (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results)
             (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
-              (.val (.ref ⟨.global global, []⟩)), state⟩ := by
+              (.val (.ref ⟨.global global, []⟩)), state⟩) ∧
+      ∃ id op, instAt cx.fn destinationPoint = some (.def id op) := by
   obtain ⟨location, destinationPoint, destinationFrame, alias, destination, canonical, placed, destinationSteps,
     traversal, destinationPost, query, child, childTyping, childRoots, childAt, childOwner, valueOccurrence, valueRows, valueCoverage,
     valueBounded, valueAdmitted, valueRealized, valueInput⟩ :=
@@ -47,9 +48,17 @@ theorem accepted_generated_slice_assignment_value_entry_split {cfg : Cfg} {env :
   obtain ⟨view, viewAt, viewOccurrence, viewRows, globalPlace, globalPost, step⟩ :=
     accepted_generated_slice_global_address child valueOccurrence valueRows destinationPost.pp destinationPost.rel
       (generated_assignment_value_extended extended)
+  let le := lowerEnv cfg.mod env.vars results
+  let valueBefore := (lowerPlace (.deref reference) le before).2
+  have globalExtended : ExtT (lowerPlace (.global global) le valueBefore).2 cx.fn.blocks :=
+    generated_view_place_extended (generated_slice_view_extended (generated_assignment_value_extended extended))
+  have emitted : emitDef (.globalAddr global) le valueBefore =
+      ((lowerPlace (.global global) le valueBefore).1, (lowerPlace (.global global) le valueBefore).2) := rfl
+  obtain ⟨_, instruction⟩ := Post.def_leaf (Post.init destinationPost.rel destinationPost.pp) emitted globalExtended
+    (.val (.ref ⟨.global global, []⟩))
   obtain ⟨remaining, count, residual⟩ := destinationSteps.split_at enough steps
   exact ⟨destinationPoint, destinationFrame, alias, child, childAt, remaining, count, residual,
-    ⟨⟨_, valueInput.atPoint, valueInput.related⟩, child.frame, valueRealized⟩, step⟩
+    ⟨⟨_, valueInput.atPoint, valueInput.related⟩, child.frame, valueRealized⟩, step, ⟨_, _, instruction⟩⟩
 
 #print axioms accepted_generated_slice_assignment_value_entry_split
 end Goose.Lower
