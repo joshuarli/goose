@@ -13,7 +13,7 @@ private def callRetentionDescriptor : LocalVar := ⟨"value", .int .i64, .immuta
 private def callRetentionOther : Impl := ⟨"other", #[callRetentionParameter], #[⟨.int .i64, .register, none⟩], #[callRetentionDescriptor],
   .mk 0 [] (some (.read (.var 0))), .known ⟨[.param 0], [], [], [], [], [], [], [], false, false⟩⟩
 private def callRetentionGlobal : Global := ⟨"answer", .int .i64, .immutable,
-  .bin .add (.call 1 [] 0) (.un .neg (.call 2 [.byVal (.call 1 [] 0)] 0) 0) 0, 0⟩
+  .bin .add (.call 2 [.byVal (.call 1 [] 0)] 0) (.un .neg (.call 1 [] 0) 0) 0, 0⟩
 private def callRetentionModule : Module := ⟨#["unknown-call-retention.goose"], #[.int .i64], #[callRetentionGlobal],
   #[callRetentionEntry, callRetentionHelper, callRetentionOther],
   #[⟨0, "entry", [], [], []⟩, ⟨1, "helper", [], [[]], []⟩, ⟨2, "other", [], [[]], []⟩],
@@ -22,15 +22,12 @@ private def callRetentionConfig : EvalConfig := ⟨.release, callRetentionModule
 
 theorem callRetention_validated : validate callRetentionModule = .ok () := by cbv
 
-theorem callRetention_knownSummary : ∃ summary, callRetentionHelper.summary = .known summary := by
-  apply validated_scalar_initializer_binaryLeftCalls_known callRetentionConfig
-    (acceptedModule callRetentionConfig callRetention_validated) 0 callRetentionGlobal 1 0
-    ⟨1, "helper", [], [[]], []⟩ callRetentionHelper .add (.call 1 [] 0) (.un .neg (.call 2 [.byVal (.call 1 [] 0)] 0) 0) 0
+theorem callRetention_knownSummary : ∃ summary, callRetentionOther.summary = .known summary := by
+  apply validated_scalar_initializer_binaryLeftAnyCall_known callRetentionConfig
+    (acceptedModule callRetentionConfig callRetention_validated) 0 callRetentionGlobal 2 0 [.byVal (.call 1 [] 0)]
+    ⟨2, "other", [], [[]], []⟩ callRetentionOther .add (.call 2 [.byVal (.call 1 [] 0)] 0) (.un .neg (.call 1 [] 0) 0) 0
     (by rfl) (Or.inl ⟨.i64, rfl⟩) (by rfl) .call
-  · exact .unary .neg 0 (.scalarCall 2 0 ⟨2, "other", [], [[]], []⟩ callRetentionOther
-      callRetentionParameter callRetentionDescriptor rfl rfl rfl rfl (Or.inl ⟨.i64, rfl⟩)
-      (.call 1 0 ⟨1, "helper", [], [[]], []⟩ callRetentionHelper rfl rfl rfl))
-  · rfl
+  · exact .unary .neg 0 (.call 1 0 ⟨1, "helper", [], [[]], []⟩ callRetentionHelper rfl rfl rfl)
   · rfl
   · rfl
 

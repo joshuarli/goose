@@ -102,6 +102,55 @@ theorem initializer_unknown_binaryRight (config : EvalConfig) (names : Array (Li
           pure, StateT.pure, Except.pure] at checked <;>
         obtain ⟨_, rfl⟩ := checked <;> simpa using raised
 
+inductive OperatorWrappedCall (target origin : Nat) (arguments : List Arg) : Expr → Prop
+  | call : OperatorWrappedCall target origin arguments (.call target arguments origin)
+  | not {expression : Expr} : OperatorWrappedCall target origin arguments expression → OperatorWrappedCall target origin arguments (.not expression)
+  | unary (operation : Goose.Core.UnOp) (location : Nat) {expression : Expr} :
+      OperatorWrappedCall target origin arguments expression → OperatorWrappedCall target origin arguments (.un operation expression location)
+  | conversion (kind : Goose.Core.ConvKind) (ty : Ty) (location : Nat) {expression : Expr} :
+      OperatorWrappedCall target origin arguments expression → OperatorWrappedCall target origin arguments (.conv kind ty expression location)
+  | binaryRight (operation : Goose.Core.BinOp) (left : Expr) (location : Nat) {right : Expr} :
+      OperatorWrappedCall target origin arguments right → OperatorWrappedCall target origin arguments (.bin operation left right location)
+  | compareRight (operation : Goose.Core.CmpOp) (left : Expr) {right : Expr} :
+      OperatorWrappedCall target origin arguments right → OperatorWrappedCall target origin arguments (.cmp operation left right)
+  | andRight (left : Expr) {right : Expr} : OperatorWrappedCall target origin arguments right → OperatorWrappedCall target origin arguments (.and left right)
+  | orRight (left : Expr) {right : Expr} : OperatorWrappedCall target origin arguments right → OperatorWrappedCall target origin arguments (.or left right)
+
+theorem initializer_unknown_operatorWrappedCall (config : EvalConfig) (names : Array (List RootRef)) (target origin : Nat)
+    (arguments : List Arg) (context : Context) (callee : Impl) (contextAt : config.module.contexts[target]? = some context)
+    (calleeAt : config.module.impls[context.impl]? = some callee) (unknown : callee.summary = .unknown) :
+    ∀ {expression}, OperatorWrappedCall target origin arguments expression → InitializerRaisesUnknown config names expression := by
+  intro expression form
+  induction form with
+  | call =>
+    intro before after roots checked
+    exact initializer_unknown_anyArgumentCallExpr config names target origin context callee arguments before after roots contextAt calleeAt unknown checked
+  | not inner ih =>
+    intro before after roots checked
+    exact initializer_unknown_not config names _ before after roots (fun childRoots middle child => ih before middle childRoots child) checked
+  | unary operation location inner ih => exact initializer_unknown_unary config names operation _ location ih
+  | conversion kind ty location inner ih => exact initializer_unknown_conversion config names kind ty _ location ih
+  | binaryRight operation left location inner ih => exact initializer_unknown_binaryRight config names operation left _ location ih
+  | compareRight operation left inner ih => exact initializer_unknown_cmpRight config names operation left _ ih
+  | andRight left inner ih => exact initializer_unknown_andRight config names left _ ih
+  | orRight left inner ih => exact initializer_unknown_orRight config names left _ ih
+
+theorem validated_scalar_initializer_operatorWrappedCall_known (config : EvalConfig) (accepted : AcceptedModule config)
+    (id : Nat) (descriptor : Global) (target origin : Nat) (arguments : List Arg) (context : Context) (callee : Impl)
+    (present : config.module.globals[id]? = some descriptor)
+    (scalar : (∃ integer, descriptor.ty = .int integer) ∨ descriptor.ty = .bool)
+    (form : OperatorWrappedCall target origin arguments descriptor.init)
+    (contextAt : config.module.contexts[target]? = some context) (calleeAt : config.module.impls[context.impl]? = some callee) :
+    ∃ summary, callee.summary = .known summary := by
+  obtain ⟨names, roots, after, rooted, clear⟩ := validated_scalar_initializer_noUnknown config accepted id descriptor present scalar
+  cases summary : callee.summary with
+  | known value => exact ⟨value, rfl⟩
+  | unknown =>
+    have raised := initializer_unknown_operatorWrappedCall config names target origin arguments context callee contextAt calleeAt summary
+      form ⟨0, {}, []⟩ after roots rooted
+    simp [clear] at raised
+
+
 inductive OperatorWrappedZeroCall (target origin : Nat) : Expr → Prop
   | call : OperatorWrappedZeroCall target origin (.call target [] origin)
   | not {expression : Expr} : OperatorWrappedZeroCall target origin expression → OperatorWrappedZeroCall target origin (.not expression)
@@ -116,24 +165,24 @@ inductive OperatorWrappedZeroCall (target origin : Nat) : Expr → Prop
   | andRight (left : Expr) {right : Expr} : OperatorWrappedZeroCall target origin right → OperatorWrappedZeroCall target origin (.and left right)
   | orRight (left : Expr) {right : Expr} : OperatorWrappedZeroCall target origin right → OperatorWrappedZeroCall target origin (.or left right)
 
+theorem OperatorWrappedZeroCall.toWrappedCall {target origin : Nat} {expression : Expr}
+    (form : OperatorWrappedZeroCall target origin expression) : OperatorWrappedCall target origin [] expression := by
+  induction form with
+  | call => exact .call
+  | not inner ih => exact .not ih
+  | unary operation location inner ih => exact .unary operation location ih
+  | conversion kind ty location inner ih => exact .conversion kind ty location ih
+  | binaryRight operation left location inner ih => exact .binaryRight operation left location ih
+  | compareRight operation left inner ih => exact .compareRight operation left ih
+  | andRight left inner ih => exact .andRight left ih
+  | orRight left inner ih => exact .orRight left ih
+
 theorem initializer_unknown_operatorWrappedZeroCall (config : EvalConfig) (names : Array (List RootRef)) (target origin : Nat)
     (context : Context) (callee : Impl) (contextAt : config.module.contexts[target]? = some context)
     (calleeAt : config.module.impls[context.impl]? = some callee) (parameters : callee.params = #[]) (unknown : callee.summary = .unknown) :
     ∀ {expression}, OperatorWrappedZeroCall target origin expression → InitializerRaisesUnknown config names expression := by
   intro expression form
-  induction form with
-  | call =>
-    intro before after roots checked
-    exact initializer_unknown_zeroCallExpr config names target origin context callee before after roots contextAt calleeAt parameters unknown checked
-  | not inner ih =>
-    intro before after roots checked
-    exact initializer_unknown_not config names _ before after roots (fun childRoots middle child => ih before middle childRoots child) checked
-  | unary operation location inner ih => exact initializer_unknown_unary config names operation _ location ih
-  | conversion kind ty location inner ih => exact initializer_unknown_conversion config names kind ty _ location ih
-  | binaryRight operation left location inner ih => exact initializer_unknown_binaryRight config names operation left _ location ih
-  | compareRight operation left inner ih => exact initializer_unknown_cmpRight config names operation left _ ih
-  | andRight left inner ih => exact initializer_unknown_andRight config names left _ ih
-  | orRight left inner ih => exact initializer_unknown_orRight config names left _ ih
+  exact initializer_unknown_operatorWrappedCall config names target origin [] context callee contextAt calleeAt unknown form.toWrappedCall
 
 theorem validated_scalar_initializer_operatorWrappedZeroCall_known (config : EvalConfig) (accepted : AcceptedModule config)
     (id : Nat) (descriptor : Global) (target origin : Nat) (context : Context) (callee : Impl)
@@ -142,14 +191,12 @@ theorem validated_scalar_initializer_operatorWrappedZeroCall_known (config : Eva
     (form : OperatorWrappedZeroCall target origin descriptor.init)
     (contextAt : config.module.contexts[target]? = some context) (calleeAt : config.module.impls[context.impl]? = some callee)
     (parameters : callee.params = #[]) : ∃ summary, callee.summary = .known summary := by
-  obtain ⟨names, roots, after, rooted, clear⟩ := validated_scalar_initializer_noUnknown config accepted id descriptor present scalar
-  cases summary : callee.summary with
-  | known value => exact ⟨value, rfl⟩
-  | unknown =>
-    have raised := initializer_unknown_operatorWrappedZeroCall config names target origin context callee contextAt calleeAt parameters summary
-      form ⟨0, {}, []⟩ after roots rooted
-    simp [clear] at raised
+  exact validated_scalar_initializer_operatorWrappedCall_known config accepted id descriptor target origin [] context callee present scalar
+    form.toWrappedCall contextAt calleeAt
 
+#print axioms OperatorWrappedZeroCall.toWrappedCall
+#print axioms initializer_unknown_operatorWrappedCall
+#print axioms validated_scalar_initializer_operatorWrappedCall_known
 #print axioms initializer_unknown_operatorWrappedZeroCall
 #print axioms validated_scalar_initializer_operatorWrappedZeroCall_known
 #print axioms initializer_unknown_conversion
