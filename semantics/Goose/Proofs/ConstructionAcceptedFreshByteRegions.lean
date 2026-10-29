@@ -60,32 +60,11 @@ theorem fresh_byte_build_preserves_regions (fuel : Nat) (config : EvalConfig) (i
     (current : destinationCurrent prepared.construction id = .ok id)
     (executed : buildExpr (fuel + 1) config producer id (.bytes (.varr (.int .u8)) bytes origin) prepared = .ok () after) :
     ∀ region ∈ regions, ReceivingProtection config.layout after live region := by
-  have freshId := newDestination_fresh_id config.layout caller.act (.varr (.int .u8)) .value allocationOrigin knownCount before allocated id created
-  subst id
-  obtain ⟨originalFrame⟩ := newDestination_fresh_frame config.layout caller.act (.varr (.int .u8)) .value allocationOrigin knownCount
-    before allocated before.construction.destinations.size world.ownership.source.structural.1.1.1 created
+
   let baseline := { prepared with construction := { before.construction with
     exitReservations := before.construction.exitReservations.push reservation } }
-  let initialFrame : FreshDestinationFrame baseline prepared := originalFrame.appended_ticket_rebase reservation construction
-  obtain ⟨initialReady⟩ := newDestination_initial_backing config.layout caller.act (.varr (.int .u8)) .value allocationOrigin knownCount
-    before allocated before.construction.destinations.size (.int .u8) rfl created
-  have preparedPresent : prepared.construction.destinations[before.construction.destinations.size]? = some initialReady.destination := by
-    simpa only [construction] using initialReady.present
-  have preparedBytes : prepared.construction.storage[initialReady.destination.storage]? = some initialReady.storage := by
-    simpa only [construction] using initialReady.bytes
-  let ready : OpenDestinationBacking config.layout prepared before.construction.destinations.size (.varr (.int .u8)) 0 :=
-    { initialReady with present := preparedPresent, bytes := preparedBytes }
-  obtain ⟨row, found, packed, request, direct, receiver⟩ :=
-    newDestination_byteOwner_packed_value config.layout caller.act allocationOrigin knownCount before allocated before.construction.destinations.size created
-  have frameFound : allocated.construction.destinations[before.construction.destinations.size]? = some originalFrame.row := by
-    rw [originalFrame.destinations]
-    exact Array.getElem?_push_size
-  have sameRow : row = originalFrame.row := Option.some.inj (found.symm.trans frameFound)
-  subst row
-  obtain ⟨nextFrame, nextDirect⟩ := buildExpr_byteOwner_freshFrame fuel config producer bytes origin baseline prepared after initialFrame
-    before.construction.storage.size 0 ready (by simpa [initialFrame, FreshDestinationFrame.appended_ticket_rebase] using direct) rfl
-    (by simpa [initialFrame, FreshDestinationFrame.appended_ticket_rebase] using packed)
-    (by simpa [initialFrame, FreshDestinationFrame.appended_ticket_rebase] using request) source.structural.1.1.1 current executed
+  obtain ⟨nextFrame⟩ := fresh_byte_build_frame fuel config initialized caller producer bytes allocationOrigin origin knownCount
+    before allocated prepared after id reservation ambient types live regions pending world source created construction current executed
   intro region member
   let original := { before with construction := { before.construction with
     exitReservations := before.construction.exitReservations.push reservation } }

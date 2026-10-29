@@ -25,7 +25,7 @@ def FreshDestinationFrame.appended_ticket_rebase {before allocated prepared : Ex
   · intro id storage found
     simpa only [baseline, construction] using frame.storage id storage found
 
-theorem fresh_byte_build_preserves_pending (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+theorem fresh_byte_build_frame (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (caller producer : RuntimeActivation) (bytes : List UInt8) (allocationOrigin origin : OriginId) (knownCount : Option Nat)
     (before allocated prepared after : ExecutionState) (id : Nat) (reservation : ExitReservation)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
@@ -37,8 +37,8 @@ theorem fresh_byte_build_preserves_pending (fuel : Nat) (config : EvalConfig) (i
       exitReservations := allocated.construction.exitReservations.push reservation })
     (current : destinationCurrent prepared.construction id = .ok id)
     (executed : buildExpr (fuel + 1) config producer id (.bytes (.varr (.int .u8)) bytes origin) prepared = .ok () after) :
-    ∀ frame ∈ pending, CarriersLandingReady after frame.channels frame.carriers ∧
-      ∀ carrier ∈ frame.carriers, CarrierResultBacking config.layout after carrier := by
+    Nonempty (FreshDestinationFrame { prepared with construction := { before.construction with
+      exitReservations := before.construction.exitReservations.push reservation } } after) := by
   have freshId := newDestination_fresh_id config.layout caller.act (.varr (.int .u8)) .value allocationOrigin knownCount before allocated id created
   subst id
   obtain ⟨originalFrame⟩ := newDestination_fresh_frame config.layout caller.act (.varr (.int .u8)) .value allocationOrigin knownCount
@@ -65,6 +65,26 @@ theorem fresh_byte_build_preserves_pending (fuel : Nat) (config : EvalConfig) (i
     before.construction.storage.size 0 ready (by simpa [initialFrame, FreshDestinationFrame.appended_ticket_rebase] using direct) rfl
     (by simpa [initialFrame, FreshDestinationFrame.appended_ticket_rebase] using packed)
     (by simpa [initialFrame, FreshDestinationFrame.appended_ticket_rebase] using request) source.structural.1.1.1 current executed
+  exact ⟨nextFrame⟩
+
+theorem fresh_byte_build_preserves_pending (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (caller producer : RuntimeActivation) (bytes : List UInt8) (allocationOrigin origin : OriginId) (knownCount : Option Nat)
+    (before allocated prepared after : ExecutionState) (id : Nat) (reservation : ExitReservation)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (source : OwnershipSourceState prepared.construction)
+    (created : newDestination config.layout caller.act (.varr (.int .u8)) .value allocationOrigin none knownCount before = .ok id allocated)
+    (construction : prepared.construction = { allocated.construction with
+      exitReservations := allocated.construction.exitReservations.push reservation })
+    (current : destinationCurrent prepared.construction id = .ok id)
+    (executed : buildExpr (fuel + 1) config producer id (.bytes (.varr (.int .u8)) bytes origin) prepared = .ok () after) :
+    ∀ frame ∈ pending, CarriersLandingReady after frame.channels frame.carriers ∧
+      ∀ carrier ∈ frame.carriers, CarrierResultBacking config.layout after carrier := by
+  let baseline := { prepared with construction := { before.construction with
+    exitReservations := before.construction.exitReservations.push reservation } }
+  obtain ⟨nextFrame⟩ := fresh_byte_build_frame fuel config initialized caller producer bytes allocationOrigin origin knownCount
+    before allocated prepared after id reservation ambient types live regions pending world source created construction current executed
   intro pendingFrame member
   have oldReady := appended_ticket_pending_carrier_ready config initialized before ambient types live regions pending reservation world pendingFrame member
   have oldBacking := appended_ticket_pending_carrier_backing config initialized before ambient types live regions pending reservation world pendingFrame member
@@ -79,5 +99,6 @@ theorem fresh_byte_build_preserves_pending (fuel : Nat) (config : EvalConfig) (i
   exact nextFrame.carrier_backing config.layout carrier baseBacking
 
 #print axioms FreshDestinationFrame.appended_ticket_rebase
+#print axioms fresh_byte_build_frame
 #print axioms fresh_byte_build_preserves_pending
 end Goose.Proofs.ConstructionAcceptedExecution
