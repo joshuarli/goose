@@ -50,6 +50,7 @@ theorem accepted_generated_slice_assignment_literal_stage {cfg : Cfg} {env : Env
           snapshotFrame.set (lowerExpr (.lit intType number) (lowerEnv cfg.mod env.vars results)
             (sliceUpperBefore (.of (.global global)) .omitted (lowerEnv cfg.mod env.vars results)
               (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2)).1 (.val (.int intType number)), sampledState⟩ ∧
+      (∃ id op, instAt cx.fn (snapshotPoint.1, snapshotPoint.2 + 1) = some (.def id op)) ∧
       ∀ (slicePoint : Pt) (sliceFrame : GIR.Frame) (sliceState : St),
       RuntimeStep cx.cfg cx.fn (snapshotPoint.1, snapshotPoint.2 + 1)
         (snapshotFrame.set (lowerExpr (.lit intType number) (lowerEnv cfg.mod env.vars results)
@@ -135,12 +136,13 @@ theorem accepted_generated_slice_assignment_literal_split {cfg : Cfg} {env : Env
         ⟨(snapshotPoint.1, snapshotPoint.2 + 1),
           snapshotFrame.set (lowerExpr (.lit intType number) (lowerEnv cfg.mod env.vars results)
             (sliceUpperBefore (.of (.global global)) .omitted (lowerEnv cfg.mod env.vars results)
-              (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2)).1 (.val (.int intType number)), sampledState⟩ := by
+              (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2)).1 (.val (.int intType number)), sampledState⟩ ∧
+      ∃ id op, instAt cx.fn (snapshotPoint.1, snapshotPoint.2 + 1) = some (.def id op) := by
   obtain ⟨snapshotPoint, snapshotFrame, sampledState, alias, aliases, child, upper, childAt, upperAt,
-    suffix, count, suffixSteps, upperDemand, next⟩ :=
+    suffix, count, suffixSteps, upperDemand, instruction, next⟩ :=
     accepted_generated_slice_assignment_literal_stage source slice selected owned occurrence rows coverage admitted bounded realized input extended enough steps
   exact ⟨snapshotPoint, snapshotFrame, sampledState, alias, aliases, child, upper, childAt, upperAt,
-    suffix, count, suffixSteps, upperDemand⟩
+    suffix, count, suffixSteps, upperDemand, instruction⟩
 #print axioms accepted_generated_slice_assignment_literal_split
 theorem accepted_generated_slice_assignment_store_split {cfg : Cfg} {env : Env} {state : St}
     {reference : Expr} {mutability : Mutability} {global : GlobalId} {sliceOrigin origin : OriginId}
@@ -184,7 +186,7 @@ theorem accepted_generated_slice_assignment_store_split {cfg : Cfg} {env : Env} 
           (lowerEnv cfg.mod env.vars results) (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
         value sliceState slicePoint sliceFrame := by
   obtain ⟨snapshotPoint, snapshotFrame, sampledState, alias, aliases, child, upper, childAt, upperAt,
-    suffix, count, suffixSteps, upperDemand, next⟩ :=
+    suffix, count, suffixSteps, upperDemand, instruction, next⟩ :=
     accepted_generated_slice_assignment_literal_stage source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
   rcases suffixSteps.uncons with ⟨empty, _⟩ | ⟨restCount, sliceEnd, countSlice, sliceStep, remainingSteps⟩
   · omega
@@ -222,7 +224,7 @@ theorem accepted_generated_slice_assignment_completed_prefix {cfg : Cfg} {env : 
     (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) :
     GeneratedStatementPrefixDecomposition source selected occurrence rows map initial start cursor taken reached := by
   obtain ⟨snapshotPoint, snapshotFrame, sampledState, alias, aliases, child, upper, childAt, upperAt,
-    suffix, count, suffixSteps, upperDemand, next⟩ :=
+    suffix, count, suffixSteps, upperDemand, instruction, next⟩ :=
     accepted_generated_slice_assignment_literal_stage source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
   rcases suffixSteps.uncons with ⟨empty, _⟩ | ⟨restCount, sliceEnd, countSlice, sliceStep, remainingSteps⟩
   · omega

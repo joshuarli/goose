@@ -68,7 +68,8 @@ theorem accepted_generated_slice_assignment_snapshot_cursor {cfg : Cfg} {env : E
         ⟨(destinationPoint.1, destinationPoint.2 + 1),
           destinationFrame.set (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results)
             (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
-              (.val (.ref ⟨.global global, []⟩)), state⟩ := by
+              (.val (.ref ⟨.global global, []⟩)), state⟩ ∧
+      ∃ id op, instAt cx.fn (destinationPoint.1, destinationPoint.2 + 1) = some (.def id op) := by
   obtain ⟨location, destinationPoint, destinationFrame, alias, destination, canonical, placed, destinationSteps,
     traversal, destinationPost, query, child, childTyping, childRoots, childAt, childOwner, valueOccurrence, valueRows, valueCoverage,
     valueBounded, valueAdmitted, valueRealized, valueInput⟩ :=
@@ -76,8 +77,13 @@ theorem accepted_generated_slice_assignment_snapshot_cursor {cfg : Cfg} {env : E
   obtain ⟨view, viewAt, demanded, step⟩ :=
     accepted_generated_slice_global_address_demand child valueOccurrence valueRows valueBounded valueRealized
       destinationPost.pp destinationPost.rel (generated_assignment_value_extended extended)
+  obtain ⟨actualView, actualAt, viewOccurrence, viewRows, globalPlace, globalPost, first⟩ :=
+    accepted_generated_slice_global_address child valueOccurrence valueRows destinationPost.pp destinationPost.rel
+      (generated_assignment_value_extended extended)
+  have site := GeneratedDemandInstruction.snapshot_auto viewOccurrence viewRows globalPost.pp
+    (generated_slice_view_extended (generated_assignment_value_extended extended))
   exact ⟨destinationPoint, destinationFrame, alias, child, view, childAt, viewAt,
-    destinationSteps.append (.next ((step 0).runtime) (.zero _)), demanded⟩
+    destinationSteps.append (.next ((step 0).runtime) (.zero _)), demanded, ⟨_, _, site.instruction⟩⟩
 
 #print axioms accepted_generated_slice_assignment_snapshot_cursor
 theorem accepted_generated_slice_assignment_snapshot_split {cfg : Cfg} {env : Env} {state : St}
@@ -122,11 +128,12 @@ theorem accepted_generated_slice_assignment_snapshot_split {cfg : Cfg} {env : En
         ⟨(destinationPoint.1, destinationPoint.2 + 1),
           destinationFrame.set (lowerPlace (.global global) (lowerEnv cfg.mod env.vars results)
             (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
-              (.val (.ref ⟨.global global, []⟩)), state⟩ := by
-  obtain ⟨destinationPoint, destinationFrame, alias, child, view, childAt, viewAt, executed, demanded⟩ :=
+              (.val (.ref ⟨.global global, []⟩)), state⟩ ∧
+      ∃ id op, instAt cx.fn (destinationPoint.1, destinationPoint.2 + 1) = some (.def id op) := by
+  obtain ⟨destinationPoint, destinationFrame, alias, child, view, childAt, viewAt, executed, demanded, site⟩ :=
     accepted_generated_slice_assignment_snapshot_cursor source slice selected owned occurrence rows coverage admitted bounded realized input extended
   obtain ⟨remaining, count, residual⟩ := executed.split_at boundedSteps steps
-  exact ⟨destinationPoint, destinationFrame, alias, child, view, childAt, viewAt, executed, ⟨remaining, count, residual⟩, demanded⟩
+  exact ⟨destinationPoint, destinationFrame, alias, child, view, childAt, viewAt, executed, ⟨remaining, count, residual⟩, demanded, site⟩
 
 #print axioms accepted_generated_slice_assignment_snapshot_split
 end Goose.Lower

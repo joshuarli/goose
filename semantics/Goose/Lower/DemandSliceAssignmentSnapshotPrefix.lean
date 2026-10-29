@@ -65,6 +65,7 @@ theorem accepted_generated_slice_assignment_snapshot_stage {cfg : Cfg} {env : En
           snapshotFrame.set (lowerExpr (.lit intType number) (lowerEnv cfg.mod env.vars results)
             (sliceUpperBefore (.of (.global global)) .omitted (lowerEnv cfg.mod env.vars results)
               (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2)).1 (.val (.int intType number)), sampledState⟩ ∧
+      (∃ id op, instAt cx.fn (snapshotPoint.1, snapshotPoint.2 + 1) = some (.def id op)) ∧
       ∀ (slicePoint : Pt) (sliceFrame : GIR.Frame) (sliceState : St),
       RuntimeStep cx.cfg cx.fn (snapshotPoint.1, snapshotPoint.2 + 1)
         (snapshotFrame.set (lowerExpr (.lit intType number) (lowerEnv cfg.mod env.vars results)
@@ -123,8 +124,10 @@ theorem accepted_generated_slice_assignment_snapshot_stage {cfg : Cfg} {env : En
       intro longEnough
       have literalPrefix : DemandRuntimePrefix cx 1 _ _ := .next ((literalStep 0).runtime) (.zero _)
       obtain ⟨suffix, suffixCount, suffixSteps⟩ := literalPrefix.split_at (by omega) tail
+      have site := GeneratedSliceInstruction.checked valueOccurrence upperRows upperPost.pp
+        (generated_assignment_value_extended extended)
       refine ⟨snapshotPoint, snapshotFrame, sampledState, alias, aliases, child, upper, childAt, upperAt,
-        suffix, by omega, suffixSteps, upperDemand, ?_⟩
+        suffix, by omega, suffixSteps, upperDemand, ⟨_, _, site.instruction⟩, ?_⟩
       intro slicePoint sliceFrame sliceState sliceStep
       obtain ⟨runAliases, value, rhsSteps, evaluated, site, boundary⟩ :=
         accepted_generated_slice_assignment_store_cursor source child occurrence rows destinationPost query valueRows valueCoverage
