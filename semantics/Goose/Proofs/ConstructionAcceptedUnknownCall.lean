@@ -1,17 +1,8 @@
-import Goose.Proofs.ConstructionAcceptedInitializerUnknown
-import Lean.Elab.Tactic
+import Goose.Proofs.ConstructionAcceptedUnknownAnyArguments
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionRootCorrespondence
-
-private def callHelperName (name : String) : Lean.Name :=
-  Lean.Name.str (Lean.Name.str (Lean.Name.str (Lean.Name.num (Lean.Name.str (Lean.Name.str (Lean.Name.str (Lean.Name.str Lean.Name.anonymous "_private") "Goose") "Construct") "Roots") 0) "Goose") "Construct") name
-
-elab "unfold_call_checks" : tactic => do
-  let scopedCheck := Lean.mkIdent (callHelperName "checkScopedShrinkAliases")
-  let interior := Lean.mkIdent (callHelperName "interiorAliasType")
-  Lean.Elab.Tactic.evalTactic (← `(tactic| unfold $scopedCheck $interior at *))
 
 theorem initializer_unknown_zeroCall (config : EvalConfig) (names : Array (List RootRef)) (target : Nat)
     (context : Context) (callee : Impl) (before after : RState) (roots : List RootRef)
@@ -19,17 +10,7 @@ theorem initializer_unknown_zeroCall (config : EvalConfig) (names : Array (List 
     (parameters : callee.params = #[]) (unknown : callee.summary = .unknown)
     (checked : rpCall (initializerSource config names) target [] before = .ok (roots, after)) :
     after.eff.unknown = true := by
-  unfold rpCall at checked
-  simp only [initializerSource, contextAt, calleeAt, parameters, unknown] at checked
-  unfold_call_checks
-  simp [initImpl, callEffects, bind, StateT.bind, Except.bind, pure, StateT.pure, Except.pure,
-    modify, get, liftV, Goose.Core.forAll, getThe, modifyGet, MonadStateOf.get, MonadStateOf.modifyGet, StateT.get, StateT.modifyGet, unknown] at checked
-  cases result : callResultRoots callee context [] with
-  | error failure => simp [result] at checked
-  | ok value =>
-    simp [result] at checked
-    obtain ⟨_, rfl⟩ := checked
-    rfl
+  exact initializer_unknown_anyArgumentCall config names target context callee [] before after roots contextAt calleeAt unknown checked
 
 theorem initializer_unknown_zeroCallExpr (config : EvalConfig) (names : Array (List RootRef)) (target origin : Nat)
     (context : Context) (callee : Impl) (before after : RState) (roots : List RootRef)
@@ -37,17 +18,7 @@ theorem initializer_unknown_zeroCallExpr (config : EvalConfig) (names : Array (L
     (parameters : callee.params = #[]) (unknown : callee.summary = .unknown)
     (checked : rpExpr (initializerSource config names) (.call target [] origin) before = .ok (roots, after)) :
     after.eff.unknown = true := by
-  simp only [rpExpr, rpArgs, bind, StateT.bind, Except.bind, pure, StateT.pure, Except.pure, initializerSource,
-    contextAt, calleeAt, parameters] at checked
-  simp [List.forIn_nil, liftV, bind, StateT.bind, Except.bind, pure, StateT.pure, Except.pure] at checked
-  cases contents : checkContents (initializerSource config names) target [] [] with
-  | error failure =>
-    simp only [initializerSource] at contents
-    simp [contents] at checked
-  | ok value =>
-    simp only [initializerSource] at contents
-    simp [contents] at checked
-    exact initializer_unknown_zeroCall config names target context callee before after roots contextAt calleeAt parameters unknown checked
+  exact initializer_unknown_anyArgumentCallExpr config names target origin context callee [] before after roots contextAt calleeAt unknown checked
 
 theorem initializer_unknown_not (config : EvalConfig) (names : Array (List RootRef)) (expression : Expr)
     (before after : RState) (roots : List RootRef)
