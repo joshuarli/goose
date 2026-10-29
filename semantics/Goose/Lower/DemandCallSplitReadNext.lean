@@ -1,5 +1,4 @@
-import Goose.Lower.DemandCallSplitCoverage
-import Goose.Lower.DemandScalarReadNext
+import Goose.Lower.DemandCallSplitReadContext
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -34,38 +33,11 @@ theorem accepted_generated_call_split_read_next {cfg : Cfg} {env : Env} {initial
         ⟨retained ++ required.values, required.runs⟩ ∧
       SplitRequiredOperandsAt ⟨retained ++ required.values, required.runs⟩ cfg.mod source.world env
         ⟨start, initial, state⟩ := by
-  have childAt := ArgSource.byVal_callChild source found child canonical
-  obtain ⟨typing, roots⟩ := ArgSource.byVal_callMetadata source found child canonical
-  obtain ⟨retained, argumentRows, splitCoverage⟩ := SplitCallRetained.argumentCoverage (argumentAt := found) rows coverage split
-  let le := lowerEnv cfg.mod env.vars results
-  have childOccurrence : GeneratedDemandOccurrence cfg.mod cx.fn le root child.path (.expression (.read place))
-      (lowerArgs (arguments.take index) le before).2 := by
-    rw [childAt.path]
-    exact .argumentValue (.argument occurrence found)
-  have childRows : GeneratedDemandRows cfg.mod child.rootsEnv.access childOccurrence
-      ⟨retained ++ required.values, required.runs⟩ := by
-    have inherited := GeneratedDemandRows.argumentValue (expression := .read place) argumentRows
-    simpa only [roots, childAt.path] using inherited
-  obtain ⟨ids, middle, after, argsRun, definition, tail⟩ := lowerExpr_call_split
-    (show lowerExpr (.call context arguments origin) le before =
-      ((lowerExpr (.call context arguments origin) le before).1, (lowerExpr (.call context arguments origin) le before).2) from rfl)
-  have afterExtended : ExtT after cx.fn.blocks := by
-    rcases tail with ⟨_, term⟩ | ⟨_, rfl⟩
-    · exact extended.of_adv (adv_emitTerm term)
-    · exact extended
-  have argsExtended : ExtT (lowerArgs arguments le before).2 cx.fn.blocks := by
-    rw [argsRun]
-    exact afterExtended.of_adv (adv_emitDef definition)
-  obtain ⟨earlier, later, argsSplit, length, _, _, advance⟩ := lowerArgs_argument_checkpoint found le before
-  have earlierEq : arguments.take index = earlier := by
-    rw [argsSplit, ← length]
-    simp
-  have childExtended : ExtT (lowerExpr (.read place) le (lowerArgs (arguments.take index) le before).2).2 cx.fn.blocks := by
-    rw [earlierEq]
-    exact argsExtended.of_adv (by simpa [lowerArg] using advance)
+  obtain ⟨retained, childOccurrence, childRows, splitCoverage, requiredRealized, childExtended⟩ :=
+    accepted_generated_call_split_read_context source found child canonical occurrence rows coverage split realized extended
   obtain ⟨label, id, operation, site⟩ := accepted_generated_scalar_read_next child form childOccurrence childRows
     input.atPoint input.related childExtended unfinished steps
-  exact ⟨retained, label, id, operation, site, splitCoverage, splitCoverage.realizes realized⟩
+  exact ⟨retained, label, id, operation, site, splitCoverage, requiredRealized⟩
 
 #print axioms accepted_generated_call_split_read_next
 end Goose.Lower
