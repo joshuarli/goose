@@ -40,6 +40,27 @@ theorem DemandRuntimePrefix.split_length {cx : FnCtx} {length taken : Nat} {befo
       · simpa [Nat.add_comm] using DemandRuntimePrefix.next first leading
       · simpa using suffix
 
+theorem DemandRuntimePrefix.length_le_stopped {cx : FnCtx} {length taken : Nat}
+    {before finish reached : DemandRuntimePoint} (known : DemandRuntimePrefix cx length before finish)
+    (steps : DemandRuntimePrefix cx taken before reached) {fuel : Nat} {stop : Stop} {after : St}
+    (stopped : DemandInstructionStop cx fuel reached stop after) (nonTimeout : stop ≠ .timeout) :
+    length ≤ taken := by
+  by_cases longer : length ≤ taken
+  · exact longer
+  · have bound : taken ≤ length := by omega
+    obtain ⟨middle, leading, residual⟩ := known.split_length bound
+    obtain ⟨remaining, _, same⟩ := leading.split_at (Nat.le_refl taken) steps
+    have zero : remaining = 0 := by omega
+    subst remaining
+    rcases same.uncons with ⟨_, equal⟩ | ⟨rest, next, impossible, step, tail⟩
+    · subst reached
+      rcases residual.uncons with ⟨impossible, _⟩ | ⟨rest, next, _, step, tail⟩
+      · omega
+      · obtain ⟨stepFuel, actual⟩ := runtimeStep_demandInstructionStep step
+        exact (stopped.excludes_step_nonTimeout nonTimeout actual).elim
+    · omega
+#print axioms DemandRuntimePrefix.length_le_stopped
+
 #print axioms DemandRuntimePrefix.split_length
 
 #print axioms DemandRuntimePrefix.split_at
