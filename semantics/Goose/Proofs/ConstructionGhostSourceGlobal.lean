@@ -178,6 +178,22 @@ def DirectSourceForest (fuel : Nat) (config : EvalConfig)
       SourceHistory config fuel [visit.ordinal, 0] (.builder environment destination descriptor.init) ready
         (buildExpr fuel config environment destination descriptor.init ready)
 
+theorem globalReplay_directFuelSourceForest {fuel : Nat} {config : EvalConfig} {offset : Nat}
+    {globals : List Goose.Core.GlobalId} {accumulator : List Unit} {before : ExecutionState}
+    {outcome : ExecutionStep (List Unit)} {visits : List (Invocation Goose.Core.GlobalId Unit)}
+    (replay : OperandReplay (globalInitializer fuel config) offset globals accumulator before outcome visits)
+    (supported : ∀ (global : Goose.Core.GlobalId) (descriptor : Global),
+      config.module.globals[global]? = some descriptor → descriptor.ty.nonfixed = true →
+      ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = none →
+      ∀ environment destination, FuelSupport config fuel (.builder environment destination descriptor.init)) :
+    DirectSourceForest fuel config visits := by
+  intro visit member descriptor found nonfixed direct
+  dsimp only
+  refine ⟨(visit_executes replay visit member).symm.trans
+    (directGlobal_source fuel config visit.operand descriptor visit.before found nonfixed direct), ?_⟩
+  intro destination ready allocated
+  exact fuelHistory_exists fuel config _ _ _ (supported visit.operand descriptor found nonfixed direct _ destination)
+
 theorem globalReplay_directSourceForest {fuel : Nat} {config : EvalConfig} {offset : Nat}
     {globals : List Goose.Core.GlobalId} {accumulator : List Unit} {before : ExecutionState}
     {outcome : ExecutionStep (List Unit)} {visits : List (Invocation Goose.Core.GlobalId Unit)}
@@ -187,13 +203,11 @@ theorem globalReplay_directSourceForest {fuel : Nat} {config : EvalConfig} {offs
       ordinaryProducerCount? fuel ⟨config.module, #[]⟩ descriptor.init = none →
       ∀ environment destination, SupportedOperation config (.builder environment destination descriptor.init)) :
     DirectSourceForest fuel config visits := by
-  intro visit member descriptor found nonfixed direct
-  dsimp only
-  refine ⟨(visit_executes replay visit member).symm.trans
-    (directGlobal_source fuel config visit.operand descriptor visit.before found nonfixed direct), ?_⟩
-  intro destination ready allocated
-  exact history_exists fuel config _ _ _ (supported visit.operand descriptor found nonfixed direct _ destination)
+  apply globalReplay_directFuelSourceForest replay
+  intro global descriptor found nonfixed direct environment destination
+  exact .legacy fuel (supported global descriptor found nonfixed direct environment destination)
 
+#print axioms globalReplay_directFuelSourceForest
 #print axioms globalReplay_directSourceForest
 
 #print axioms directGlobal_source
