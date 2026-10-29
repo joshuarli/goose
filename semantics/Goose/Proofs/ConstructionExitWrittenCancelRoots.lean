@@ -10,7 +10,7 @@ open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionExecutionProtocol
 
-theorem allocated_byte_write_cancel_rooted (config : EvalConfig) (initialized : Nat) (owner : ActId)
+theorem allocated_byte_write_cancel_frame (config : EvalConfig) (initialized : Nat) (owner : ActId)
     (origin : OriginId) (knownCount : Option Nat) (byte : UInt8)
     (before allocated : ExecutionState) (id : Nat) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -21,7 +21,11 @@ theorem allocated_byte_write_cancel_rooted (config : EvalConfig) (initialized : 
       writeElement id ⟨#[byte]⟩ reserved = .ok () written ∧
       (do cancelExitReservation allocated.construction.exitReservations.size []
           releaseExitReservation allocated.construction.exitReservations.size) written = .ok () final ∧
-      RootedBackingObservations config.layout { allocated with construction := final } live (storageExtent before) := by
+      RootedBackingObservations config.layout { allocated with construction := final } live (storageExtent before) ∧
+      (∀ index, index < before.construction.destinations.size →
+        final.destinations[index]? = before.construction.destinations[index]?) ∧
+      ∀ (index : Nat) (oldStorage : ReceivingStorage), before.construction.storage[index]? = some oldStorage →
+        final.storage[index]? = some oldStorage := by
   obtain ⟨⟨backing⟩, _⟩ := newDestination_open_ready config initialized owner (.varr (.int .u8)) .value origin knownCount
     before allocated ambient types live regions pending id (.int .u8) world rfl created
   obtain ⟨newest, receiver, receiverFound, receiverUse⟩ := newDestination_newest_receiver config.layout owner (.varr (.int .u8)) .value
@@ -83,10 +87,33 @@ theorem allocated_byte_write_cancel_rooted (config : EvalConfig) (initialized : 
         exact (rows destination earlier).trans (allocation.lookup destination inside)
   have preserved := original.prefix_frame config.layout before target live (storageExtent before) rootFrame
   have sameTarget : { allocated with construction := final } = target := by rw [allocation.outer]
-  refine ⟨reserved, written, final, reserve, write, cancel, ?_⟩
-  rw [sameTarget]
-  exact preserved
+  refine ⟨reserved, written, final, reserve, write, cancel, ?_, ?_, ?_⟩
+  · rw [sameTarget]
+    exact preserved
+  · intro index inside
+    exact (rows index (by simpa only [fresh] using inside)).trans (allocation.lookup index inside)
+  · intro index oldStorage present
+    have inside := (Array.getElem?_eq_some_iff.mp present).1
+    have different : index ≠ backing.destination.storage := Nat.ne_of_lt (Nat.lt_of_lt_of_le inside freshStorage)
+    exact (storage index different).trans (allocation.storage index oldStorage present)
 
+theorem allocated_byte_write_cancel_rooted (config : EvalConfig) (initialized : Nat) (owner : ActId)
+    (origin : OriginId) (knownCount : Option Nat) (byte : UInt8)
+    (before allocated : ExecutionState) (id : Nat) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (created : newDestination config.layout owner (.varr (.int .u8)) .value origin none knownCount before = .ok id allocated) :
+    ∃ reserved written final,
+      reserveExitDestination id .newValue allocated.construction = .ok (allocated.construction.exitReservations.size, id) reserved ∧
+      writeElement id ⟨#[byte]⟩ reserved = .ok () written ∧
+      (do cancelExitReservation allocated.construction.exitReservations.size []
+          releaseExitReservation allocated.construction.exitReservations.size) written = .ok () final ∧
+      RootedBackingObservations config.layout { allocated with construction := final } live (storageExtent before) := by
+  obtain ⟨reserved, written, final, reserve, write, cancel, rooted, rows, storage⟩ :=
+    allocated_byte_write_cancel_frame config initialized owner origin knownCount byte before allocated id ambient types live regions pending world created
+  exact ⟨reserved, written, final, reserve, write, cancel, rooted⟩
+
+#print axioms allocated_byte_write_cancel_frame
 #print axioms allocated_byte_write_cancel_rooted
 
 end Goose.Proofs.ConstructionAcceptedExecution
