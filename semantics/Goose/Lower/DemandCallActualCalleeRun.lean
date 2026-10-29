@@ -230,6 +230,77 @@ theorem accepted_generated_callee_bool_success {cfg : Cfg} {env : Env} {state mi
       { middle with nextAct := middle.nextAct + 1 } = .ok (.normal (.bool boolean)) after := by
   exact accepted_generated_callee_literal_success source done contextAt implAt fragment (.boolean boolean) hasValue entry run
 
+theorem accepted_generated_callee_unit_stopped_of_endpoints {cfg : Cfg} {env : Env} {state middle : St}
+    {context : ContextId} {arguments : List Arg} {origin : OriginId}
+    (source : ExprSource cfg env (.call context arguments origin) state)
+    {argumentFuel : Nat} {values : List Val} (done : mapList (evalArg argumentFuel cfg env) arguments state = .ok values middle)
+    {ctx : Context} {impl : Impl} (contextAt : cfg.mod.contexts[context]? = some ctx)
+    (implAt : cfg.mod.impls[ctx.impl]? = some impl)
+    (reflectStop : ∀ {taken : Nat} {terminal : DemandRuntimePoint} {terminalFuel : Nat} {stop : Stop} {after : St},
+      DemandRuntimePrefix ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ taken
+        ⟨(0, 1 + (callPre impl).length),
+          { (callFrame impl middle.nextAct (env.depth + 1) values) with scopes := [(impl.body.scope, middle.nextScope)] },
+          { middle with nextAct := middle.nextAct + 1, nextScope := middle.nextScope + 1, store := preStore middle.nextAct middle.nextScope ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) middle.store }⟩ terminal →
+      DemandInstructionStop ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ terminalFuel terminal stop after →
+      stop ≠ .timeout → ∃ bodyFuel, execBlock bodyFuel cfg ⟨impl.vars, middle.nextAct, [], env.depth + 1⟩
+        ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) impl.body
+        { middle with nextAct := middle.nextAct + 1 } = .stop stop after)
+    (reflectTerminal : ∀ {taken : Nat} {terminal : DemandRuntimePoint} {term : Term} {terminalFuel : Nat},
+      DemandRuntimePrefix ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ taken
+        ⟨(0, 1 + (callPre impl).length),
+          { (callFrame impl middle.nextAct (env.depth + 1) values) with scopes := [(impl.body.scope, middle.nextScope)] },
+          { middle with nextAct := middle.nextAct + 1, nextScope := middle.nextScope + 1, store := preStore middle.nextAct middle.nextScope ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) middle.store }⟩ terminal →
+      instAt (lowerContextAt cfg.mod ctx impl) terminal.point = some (.term term) →
+      (∀ next, ¬ DemandInstructionStep ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ terminalFuel terminal next) →
+      ∃ bodyFuel, execBlock bodyFuel cfg ⟨impl.vars, middle.nextAct, [], env.depth + 1⟩
+        ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) impl.body
+        { middle with nextAct := middle.nextAct + 1 } = .ok (.normal .unit) terminal.state ∧
+      Post cfg ⟨impl.vars, middle.nextAct, [], env.depth + 1⟩ ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩
+        (callEntry impl) (callFrame impl middle.nextAct (env.depth + 1) values)
+        (lowerBlock none (callPre impl) false impl.body (lowerEnv cfg.mod impl.vars impl.results.toList) (callEntry impl)).2
+        terminal.frame terminal.point [])
+    (noResults : impl.results.toList = []) (noValue : impl.body.value = none)
+    (entry : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ (lowerContextAt cfg.mod ctx impl) (0, 0)
+      (callFrame impl middle.nextAct (env.depth + 1) values) { middle with nextAct := middle.nextAct + 1 })
+    {targetFuel : Nat} {stop : Stop} {after : St}
+    (run : runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ (0, 0)
+      (callFrame impl middle.nextAct (env.depth + 1) values) targetFuel { middle with nextAct := middle.nextAct + 1 } = .stop stop after)
+    (nonTimeout : stop ≠ .timeout) :
+    ∃ bodyFuel, execBlock bodyFuel cfg ⟨impl.vars, middle.nextAct, [], env.depth + 1⟩
+      ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) impl.body
+      { middle with nextAct := middle.nextAct + 1 } = .stop stop after := by
+  obtain ⟨taken, remaining, terminal, count, steps, terminalRun, maximal, classification⟩ := runAt_nonTimeout_stopped_prefix nonTimeout
+    (initial := ⟨(0, 0), callFrame impl middle.nextAct (env.depth + 1) values,
+      { middle with nextAct := middle.nextAct + 1 }⟩) run
+  have terminated : TerminatedBlocks (lowerContextAt cfg.mod ctx impl) := by
+    intro block member
+    exact Validation.lowerContextAt_terminators cfg.mod ctx impl block (Array.mem_toList_iff.mpr member)
+  have entryExt := lowered_callee_entry_extension cfg ctx impl
+  obtain ⟨entryBlock, entryAt, _⟩ := entryExt.params (b := 0)
+    (blk := ⟨(List.range impl.params.size).zip (callEntryTypes impl), #[]⟩) rfl
+  have initial : ∃ instruction, instAt (lowerContextAt cfg.mod ctx impl) (0, 0) = some instruction :=
+    terminated_first_instruction terminated entryAt
+  obtain ⟨instruction, instructionAt⟩ := steps.has_instruction terminated initial
+  obtain ⟨residual, bodySteps⟩ := accepted_generated_callee_after_prologue source done contextAt implAt steps maximal
+  rcases classification with stopped | ⟨term, terminalAt⟩ | missing
+  · exact reflectStop bodySteps stopped nonTimeout
+  · obtain ⟨bodyFuel, bodyDone, post⟩ := reflectTerminal bodySteps terminalAt maximal
+    have returned := generated_callee_unit_fallthrough noResults noValue post
+    cases remaining with
+    | zero =>
+      change timeout terminal.state = .stop stop after at terminalRun
+      simp [timeout, M.stop] at terminalRun
+      exact (nonTimeout terminalRun.1.symm).elim
+    | succ remaining =>
+      have normal : runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ terminal.point terminal.frame
+          (remaining + 1) terminal.state = .ok .unit terminal.state := by
+        rw [runAt_ret0 returned remaining]
+        rfl
+      cases normal.symm.trans terminalRun
+  · rw [missing] at instructionAt
+    cases instructionAt
+
+
 theorem accepted_generated_callee_unit_stopped_run {cfg : Cfg} {env : Env} {state middle : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
     (source : ExprSource cfg env (.call context arguments origin) state)
@@ -249,22 +320,11 @@ theorem accepted_generated_callee_unit_stopped_run {cfg : Cfg} {env : Env} {stat
       ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) impl.body
       { middle with nextAct := middle.nextAct + 1 } = .stop stop after := by
   obtain ⟨ready⟩ := accepted_generated_callee_ready source done contextAt implAt
-  obtain ⟨taken, remaining, terminal, count, steps, terminalRun, maximal, classification⟩ := runAt_nonTimeout_stopped_prefix nonTimeout
-    (initial := ⟨(0, 0), callFrame impl middle.nextAct (env.depth + 1) values,
-      { middle with nextAct := middle.nextAct + 1 }⟩) run
-  have terminated : TerminatedBlocks (lowerContextAt cfg.mod ctx impl) := by
-    intro block member
-    exact Validation.lowerContextAt_terminators cfg.mod ctx impl block (Array.mem_toList_iff.mpr member)
-  have entryExt := lowered_callee_entry_extension cfg ctx impl
-  obtain ⟨entryBlock, entryAt, _⟩ := entryExt.params (b := 0)
-    (blk := ⟨(List.range impl.params.size).zip (callEntryTypes impl), #[]⟩) rfl
-  have initial : ∃ instruction, instAt (lowerContextAt cfg.mod ctx impl) (0, 0) = some instruction :=
-    terminated_first_instruction terminated entryAt
-  obtain ⟨instruction, instructionAt⟩ := steps.has_instruction terminated initial
-  obtain ⟨residual, bodySteps⟩ := accepted_generated_callee_after_prologue source done contextAt implAt steps maximal
-  rcases classification with stopped | ⟨term, terminalAt⟩ | missing
-  · exact accepted_generated_callee_actual_stop source done contextAt implAt fragment noResults noValue entry bodySteps stopped nonTimeout
-  · have coverage : (⟨[], []⟩ : RetainedSsaMap).Covers ⟨[], []⟩ := by simp [RetainedSsaMap.Covers]
+  apply accepted_generated_callee_unit_stopped_of_endpoints source done contextAt implAt ?_ ?_ noResults noValue entry run nonTimeout
+  · intro taken terminal terminalFuel stop after bodySteps stopped nonTimeout
+    exact accepted_generated_callee_actual_stop source done contextAt implAt fragment noResults noValue entry bodySteps stopped nonTimeout
+  · intro taken terminal term terminalFuel bodySteps terminalAt maximal
+    have coverage : (⟨[], []⟩ : RetainedSsaMap).Covers ⟨[], []⟩ := by simp [RetainedSsaMap.Covers]
     have admitted : (⟨[], []⟩ : RetainedSsaMap).Admitted cfg.mod.profile ready.source.context.retained := by simp [RetainedSsaMap.Admitted]
     have bounded : (⟨[], []⟩ : RetainedSsaMap).Bounded (callEntry impl).vals.size := by simp [RetainedSsaMap.Bounded]
     have realized : (⟨[], []⟩ : RetainedSsaMap).Realizes cfg.mod ready.source.world
@@ -279,20 +339,9 @@ theorem accepted_generated_callee_unit_stopped_run {cfg : Cfg} {env : Env} {stat
       accepted_generated_parameterized_callee_terminal ready.source rfl (by simpa using fragment) noResults noValue
         (.context contextAt implAt) ready.owned ready.occurrence ready.rows coverage admitted bounded ready.cells realized ready.input entry
         (by simpa [frameScopes] using bodySteps) terminalAt maximal
-    have returned := generated_callee_unit_fallthrough noResults noValue post
-    cases remaining with
-    | zero =>
-      change timeout terminal.state = .stop stop after at terminalRun
-      simp [timeout, M.stop] at terminalRun
-      exact (nonTimeout terminalRun.1.symm).elim
-    | succ remaining =>
-      have normal : runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ terminal.point terminal.frame
-          (remaining + 1) terminal.state = .ok .unit terminal.state := by
-        rw [runAt_ret0 returned remaining]
-        rfl
-      cases normal.symm.trans terminalRun
-  · rw [missing] at instructionAt
-    cases instructionAt
+    exact ⟨bodyFuel, bodyDone, post⟩
+
+#print axioms accepted_generated_callee_unit_stopped_of_endpoints
 
 theorem accepted_generated_callee_literal_stopped_run {cfg : Cfg} {env : Env} {state middle : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
