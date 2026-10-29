@@ -1,6 +1,7 @@
 import Goose.Proofs.ConstructionAcceptedParameterizedCallEffects
 import Goose.Proofs.ConstructionAcceptedParameterTargetMapping
 import Goose.Proofs.ConstructionAcceptedParameterArgumentRoots
+import Lean.Elab.Tactic
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
 open Goose.Proofs.ConstructionRootCorrespondence
@@ -52,10 +53,18 @@ theorem rpExpr_singleByValue_noParameter {env : PEnv} {target : Goose.Core.Conte
   · exact clear id prior
   · exact mapped id call
 
-theorem rpArgs_singleByValue_state {env : PEnv} {expression : Expr} {before middle after : RState}
+private def argumentMergeHelperName : Lean.Name :=
+  Lean.Name.str (Lean.Name.str (Lean.Name.str (Lean.Name.num (Lean.Name.str (Lean.Name.str (Lean.Name.str (Lean.Name.str Lean.Name.anonymous "_private") "Goose") "Construct") "Roots") 0) "Goose") "Construct") "mergeEffects"
+
+elab "unfold_argument_merge" : tactic => do
+  let merge := Lean.mkIdent argumentMergeHelperName
+  Lean.Elab.Tactic.evalTactic (← `(tactic| unfold $merge at *))
+
+theorem rpArgs_singleByValue_effectState {env : PEnv} {expression : Expr} {before middle after : RState}
     {roots : List RootRef} {argumentRoots : List (List RootRef)}
     (operand : rpExpr env expression before = .ok (roots, middle))
-    (checked : rpArgs env [.byVal expression] before = .ok (argumentRoots, after)) : after.eff.accessTargets = middle.eff.accessTargets ∧ after.nextVar = middle.nextVar := by
+    (checked : rpArgs env [.byVal expression] before = .ok (argumentRoots, after)) : after.eff.accessTargets = middle.eff.accessTargets ∧ after.nextVar = middle.nextVar ∧
+      after.eff.unknown = middle.eff.unknown := by
   simp only [rpArgs, operand, bind, StateT.bind, Except.bind] at checked
   repeat' first
     | split at checked
@@ -74,8 +83,17 @@ theorem rpArgs_singleByValue_state {env : PEnv} {expression : Expr} {before midd
   constructor
   · change addTargets middle.eff.reads [] ++ addTargets middle.eff.writes [] ++ addTargets middle.eff.grows [] ++ addTargets middle.eff.shrinks [] = middle.eff.accessTargets
     simp [Eff.accessTargets, addTargets]
-  · rfl
+  · constructor
+    · rfl
+    · unfold_argument_merge
+      simp
 
+theorem rpArgs_singleByValue_state {env : PEnv} {expression : Expr} {before middle after : RState}
+    {roots : List RootRef} {argumentRoots : List (List RootRef)}
+    (operand : rpExpr env expression before = .ok (roots, middle))
+    (checked : rpArgs env [.byVal expression] before = .ok (argumentRoots, after)) : after.eff.accessTargets = middle.eff.accessTargets ∧ after.nextVar = middle.nextVar := by
+  obtain ⟨access, next, _⟩ := rpArgs_singleByValue_effectState operand checked
+  exact ⟨access, next⟩
 
 theorem rpArgs_singleByValue_accessTargets {env : PEnv} {expression : Expr} {before middle after : RState}
     {roots : List RootRef} {argumentRoots : List (List RootRef)}
@@ -128,6 +146,7 @@ theorem scalarLocalCallTail_noParameter (source : PEnv) (scope target origin loc
 
 #print axioms scalarLocalCallTail_noParameter
 #print axioms rpExpr_scalarLocalCall_noParameter
+#print axioms rpArgs_singleByValue_effectState
 #print axioms rpArgs_singleByValue_state
 #print axioms rpArgs_singleByValue_accessTargets
 #print axioms rpExpr_singleByValue_noParameter
