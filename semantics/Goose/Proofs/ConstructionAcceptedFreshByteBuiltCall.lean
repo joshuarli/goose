@@ -60,7 +60,7 @@ theorem fresh_byte_call_build_world (fuel : Nat) (config : EvalConfig) (initiali
     exact current
   · exact built
 
-theorem fresh_byte_call_produce_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+theorem fresh_byte_call_produce_observed_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (caller : RuntimeActivation) (scope : Nat) (allocationOrigin origin : OriginId) (knownCount : Option Nat)
     (before allocated : ExecutionState) (id implId : Nat) (helper : Impl) (bytes : List UInt8)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
@@ -80,7 +80,8 @@ theorem fresh_byte_call_produce_world (fuel : Nat) (config : EvalConfig) (initia
         .ok [.completed id] after ∧
       AcceptedWorld config initialized after
         (.exitChannels [scopeState.construction.exitReservations.size] [] [.completed id] :: .callChannels activation [] :: ambient)
-        types live (freshReceivingRegion before id :: regions) pending := by
+        types live (freshReceivingRegion before id :: regions) pending ∧
+      buildExpr (fuel + 1) config producer id (.bytes (.varr (.int .u8)) bytes origin) prepared = .ok () after := by
   let activation : RuntimeActivation := ⟨implId, allocated.nextAct, helper.vars, [], [.construct id]⟩
   let pushed := { allocated with nextAct := allocated.nextAct + 1, activations := activation :: allocated.activations }
   let scopeState := ownershipResultScopeState activation scope pushed
@@ -120,11 +121,37 @@ theorem fresh_byte_call_produce_world (fuel : Nat) (config : EvalConfig) (initia
     simp only [completedReceivingDestination, receivingDestination, liftConstruction, currentAfter,
       bind, completedDestination, getDestination, EvalM.get, found, progress, pure]
   refine ⟨after, ?_, fresh_byte_call_build_world fuel config initialized caller scope allocationOrigin origin knownCount
-    before allocated after id implId helper bytes ambient types live regions pending world coverage created ready fits built⟩
+    before allocated after id implId helper bytes ambient types live regions pending world coverage created ready fits built, built⟩
   change evalProduce (fuel + 2) config producer [.construct id] (.bytes (.varr (.int .u8)) bytes origin) prepared = .ok [.completed id] after
   simp only [evalProduce, List.mapM_cons, List.mapM_nil, liftConstruction, renewal, bind, pure,
     selectCompletionChannel, built, completed]
 
+theorem fresh_byte_call_produce_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (caller : RuntimeActivation) (scope : Nat) (allocationOrigin origin : OriginId) (knownCount : Option Nat)
+    (before allocated : ExecutionState) (id implId : Nat) (helper : Impl) (bytes : List UInt8)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (coverage : EvaluationHistoryCoverage before ambient pending)
+    (created : newDestination config.layout caller.act (.varr (.int .u8)) .value allocationOrigin none knownCount before = .ok id allocated)
+    (ready : OpenDestinationBacking config.layout allocated id (.varr (.int .u8)) 0)
+    (fits : bytes.length < 2 ^ 32) :
+    let activation : RuntimeActivation := ⟨implId, allocated.nextAct, helper.vars, [], [.construct id]⟩
+    let pushed := { allocated with nextAct := allocated.nextAct + 1, activations := activation :: allocated.activations }
+    let scopeState := ownershipResultScopeState activation scope pushed
+    let prepared := { scopeState with construction := { scopeState.construction with
+      exitReservations := scopeState.construction.exitReservations.push (.active .fresh id id ready.destination) } }
+    let producer := { activation with scopes := (scope, pushed.nextScope) :: activation.scopes }
+    ∃ after, evalProduce (fuel + 2) config producer [.construct id] (.bytes (.varr (.int .u8)) bytes origin) prepared =
+        .ok [.completed id] after ∧
+      AcceptedWorld config initialized after
+        (.exitChannels [scopeState.construction.exitReservations.size] [] [.completed id] :: .callChannels activation [] :: ambient)
+        types live (freshReceivingRegion before id :: regions) pending := by
+  obtain ⟨after, produced, afterWorld, built⟩ := fresh_byte_call_produce_observed_world fuel config initialized caller scope
+    allocationOrigin origin knownCount before allocated id implId helper bytes ambient types live regions pending world coverage created ready fits
+  exact ⟨after, produced, afterWorld⟩
+
+#print axioms fresh_byte_call_produce_observed_world
 #print axioms fresh_byte_call_produce_world
 #print axioms fresh_byte_call_build_world
 end Goose.Proofs.ConstructionAcceptedExecution
