@@ -60,6 +60,13 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | logical (fuel : Nat) (environment : RuntimeActivation) (isAnd : Bool) (first second : Expr)
       (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
       FuelSupport config (fuel + 1) (.value environment (logicalExpression isAnd first second))
+  | emptyValues (fuel : Nat) (environment : RuntimeActivation) :
+      FuelSupport config (fuel + 1) (.value environment (.values []))
+  | multipleValues (fuel : Nat) (environment : RuntimeActivation) (first second : Expr) (rest : List Expr) :
+      FuelSupport config (fuel + 1) (.value environment (.values (first :: second :: rest)))
+  | singletonValue (fuel : Nat) (environment : RuntimeActivation) (operand : Expr)
+      (child : FuelSupport config fuel (.value environment operand)) :
+      FuelSupport config (fuel + 1) (.value environment (.values [operand]))
   | valuePush (fuel : Nat) (environment : RuntimeActivation) (owner : Place) (operand : Expr) (origin : Option Goose.Core.OriginId)
       (child : FuelSupport config fuel (.push environment owner operand (origin.getD 0))) :
       FuelSupport config (fuel + 1) (.value environment (.push owner operand origin))
@@ -451,6 +458,11 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .logical (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
           intro value middle ready result checked
           exact ih (.value environment second) (path ++ [1]) ready rightSupported
+      | emptyValues _ environment => exact .emptyValues fuel path environment before
+      | multipleValues _ environment first second rest => exact .multipleValues fuel path environment first second rest before
+      | singletonValue _ environment operand childSupported =>
+          simpa [execute, evalValue, bind] using
+            (SourceHistory.singleton (ih (.value environment operand) (path ++ [0]) before childSupported))
       | valuePush _ environment owner operand origin childSupported =>
           exact .valuePush fuel path environment owner operand origin before
             (ih (.push environment owner operand (origin.getD 0)) (path ++ [0]) before childSupported)

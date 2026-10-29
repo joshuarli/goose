@@ -14,6 +14,9 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | slice (mutability : Goose.Core.Mutability) (view : View) (lo hi : Bound) (origin : Goose.Core.OriginId)
       (viewChild : ViewSyntax config view) (loChild : BoundSyntax config lo) (hiChild : BoundSyntax config hi) :
       ValueSyntax config (.slice mutability view lo hi origin)
+  | emptyValues : ValueSyntax config (.values [])
+  | singletonValue (operand : Expr) (child : ValueSyntax config operand) : ValueSyntax config (.values [operand])
+  | multipleValues (first second : Expr) (rest : List Expr) : ValueSyntax config (.values (first :: second :: rest))
   | resultLocal (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) : ValueSyntax config (.resultLocal localVar origin)
   | string (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
       (children : ∀ argument ∈ arguments, PrintArgumentSyntax config argument) : ValueSyntax config (.str ty arguments origin)
@@ -388,6 +391,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | read place child => exact .readValue fuel environment place (previous.place environment place child)
         | reference mutability place child => exact .referenceValue fuel environment mutability place (previous.place environment place child)
         | length view child => exact .lengthValue fuel environment view (previous.view environment view child)
+        | emptyValues => exact .emptyValues fuel environment
+        | singletonValue operand child => exact .singletonValue fuel environment operand (previous.value environment operand child)
+        | multipleValues first second rest => exact .multipleValues fuel environment first second rest
         | resultLocal localVar origin => exact .valueResultLocal fuel environment localVar origin
         | string ty arguments origin children =>
             exact .valueString fuel environment ty arguments origin
