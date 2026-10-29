@@ -1,6 +1,10 @@
 import Goose.Proofs.ConstructionGhostSourceFuel
 
+namespace Goose.Proofs.ConstructionGhostProducerSyntax
+end Goose.Proofs.ConstructionGhostProducerSyntax
+
 namespace Goose.Proofs.ConstructionGhostSyntaxFuel
+open Goose.Proofs.ConstructionGhostProducerSyntax
 open Goose.Construct Goose.Proofs.ConstructionGhostSourceMutual Goose.Proofs.ConstructionGhostSourceFuel
 open Goose.Proofs.ConstructionGhostSourceTransition Goose.Proofs.ConstructionGhostRegisterProducer Goose.Proofs.ConstructionGhostScalarProducer
 
@@ -150,6 +154,26 @@ inductive ResultBlockSyntax (config : EvalConfig) : Block → Prop
       (body : ∀ statement ∈ statements, StatementSyntax config statement) (result : ResultTailSyntax config tail) :
       ResultBlockSyntax config (.mk scope statements tail)
 
+inductive _root_.Goose.Proofs.ConstructionGhostProducerSyntax.ProducerSyntax (config : EvalConfig) : Expr → Prop
+  | constructed (expression : Expr) (shape : ValueProducerExpression expression)
+      (value : ValueSyntax config expression) (builder : DeclarationBuilderSyntax config expression) :
+      ProducerSyntax config expression
+  | call (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
+      (argumentsSyntax : ∀ id implementation start ready,
+        getImplementation config context start = .ok (id, implementation) ready →
+        ArgumentSyntax config implementation.params.toList arguments) :
+      ProducerSyntax config (.call context arguments origin)
+  | block (block : Block) (origin : Goose.Core.OriginId) (child : ResultBlockSyntax config block) :
+      ProducerSyntax config (.blockE block origin)
+  | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
+      (conditionChild : ValueSyntax config condition) (yesChild : ResultBlockSyntax config yes) (noChild : ResultBlockSyntax config no) :
+      ProducerSyntax config (.ifE condition yes no origin)
+  | resultLocal (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) :
+      ProducerSyntax config (.resultLocal localVar origin)
+  | values (operands : List Expr) (children : ∀ operand ∈ operands, ProducerSyntax config operand) :
+      ProducerSyntax config (.values operands)
+
+
 inductive ResultTailSyntax (config : EvalConfig) : Option Expr → Prop
   | none : ResultTailSyntax config none
   | produced (expression : Expr) (shape : ValueProducerExpression expression)
@@ -159,6 +183,8 @@ inductive ResultTailSyntax (config : EvalConfig) : Option Expr → Prop
       (argumentsSyntax : ∀ id implementation start ready,
         getImplementation config context start = .ok (id, implementation) ready → ArgumentSyntax config implementation.params.toList arguments) :
       ResultTailSyntax config (some (.call context arguments origin))
+  | values (operands : List Expr) (children : ∀ operand ∈ operands, ProducerSyntax config operand) :
+      ResultTailSyntax config (some (.values operands))
   | resultLocal (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) : ResultTailSyntax config (some (.resultLocal localVar origin))
   | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
       (conditionChild : ValueSyntax config condition) (yesChild : ResultBlockSyntax config yes) (noChild : ResultBlockSyntax config no) :
@@ -239,6 +265,7 @@ inductive TailSyntax (config : EvalConfig) : Option Expr → Prop
   | constructed (expression : Expr) (shape : ValueProducerExpression expression)
       (value : ValueSyntax config expression) (builder : DeclarationBuilderSyntax config expression) :
       TailSyntax config (some expression)
+  | producer (expression : Expr) (derivation : ProducerSyntax config expression) : TailSyntax config (some expression)
   | call (contextId : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
       (argumentsSyntax : ∀ id implementation start lookupReady,
         getImplementation config contextId start = .ok (id, implementation) lookupReady →
@@ -296,6 +323,10 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     FuelSupport config fuel (.resultBlockWith environment pre channels block)
   resultBlock : ∀ environment channels block, ResultBlockSyntax config block →
     FuelSupport config fuel (.resultBlock environment channels block)
+  producer : ∀ environment channels expression, ProducerSyntax config expression →
+    FuelSupport config fuel (.producerWith environment channels expression)
+  producerOperands : ∀ environment channels operands, (∀ operand ∈ operands, ProducerSyntax config operand) →
+    FuelSupport config fuel (.producerOperands environment channels operands)
   push : ∀ environment owner operand origin, PlaceSyntax config owner → ValueSyntax config operand → DeclarationBuilderSyntax config operand →
     FuelSupport config fuel (.push environment owner operand origin)
   resultLocalProducer : ∀ environment channels localVar origin,
@@ -358,6 +389,12 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     FuelSupport config fuel (.boundActivation activation pre (.mk scope statements (some expression)) origin)
   constructedProducer : ∀ environment channels expression, ValueProducerExpression expression → ValueSyntax config expression →
     DeclarationBuilderSyntax config expression → FuelSupport config fuel (.producerWith environment channels expression)
+  activationBodyProducerTail : ∀ activation pre scope statements expression,
+    (∀ statement ∈ statements, StatementSyntax config statement) → ProducerSyntax config expression →
+    FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements (some expression)))
+  activationProducerTail : ∀ activation pre scope statements expression origin,
+    (∀ statement ∈ statements, StatementSyntax config statement) → ProducerSyntax config expression →
+    FuelSupport config fuel (.boundActivation activation pre (.mk scope statements (some expression)) origin)
   activationBodyConstructedTail : ∀ activation pre scope statements expression,
     (∀ statement ∈ statements, StatementSyntax config statement) → ValueProducerExpression expression → ValueSyntax config expression →
     DeclarationBuilderSyntax config expression → FuelSupport config fuel (.boundActivationBody activation pre (.mk scope statements (some expression)))
@@ -606,6 +643,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
               | call context arguments origin argumentsSyntax =>
                   cases tailEq
                   exact previous.producerCall scopedEnvironment channels context arguments origin argumentsSyntax
+              | values operands children =>
+                  cases tailEq
+                  exact previous.producer scopedEnvironment channels (.values operands) (.values operands children)
               | resultLocal localVar origin =>
                   cases tailEq
                   exact previous.resultLocalProducer scopedEnvironment channels localVar origin
@@ -617,6 +657,39 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
                   exact previous.blockProducer scopedEnvironment channels block origin child
       · intro environment channels block derivation
         exact .resultBlock fuel environment channels block (previous.resultBlockWith environment [] channels block derivation)
+      · intro environment channels expression derivation
+        cases derivation with
+        | constructed expression shape value builder =>
+            exact .valueProducer fuel environment channels expression shape (previous.value environment expression value)
+              (fun destination => previous.builder environment destination expression builder)
+        | call context arguments origin argumentsSyntax =>
+            exact .producerChannelCall fuel environment channels context arguments origin
+              (fun selected => previous.channelCall environment context arguments selected origin argumentsSyntax)
+        | block block origin child =>
+            exact .producerBlock fuel environment channels block origin (fun planned => previous.resultBlock environment planned block child)
+        | conditional condition yes no origin conditionChild yesChild noChild =>
+            exact .producerConditional fuel environment channels condition yes no origin (previous.value environment condition conditionChild)
+              (fun planned => previous.resultBlock environment planned yes yesChild)
+              (fun planned => previous.resultBlock environment planned no noChild)
+        | resultLocal localVar origin =>
+            exact .producerResultLocal fuel environment channels localVar origin
+              (previous.value environment (.resultLocal localVar origin) (.resultLocal localVar origin))
+              (fun destination => previous.builder environment destination (.resultLocal localVar origin) (.resultLocal localVar origin))
+        | values operands children =>
+            exact .producerValues fuel environment channels operands (fun planned => previous.producerOperands environment planned operands children)
+      · intro environment channels operands children
+        cases channels with
+        | nil =>
+            cases operands with
+            | nil => exact .producerOperandsEmpty fuel environment
+            | cons operand operands => exact .producerOperandsNoChannels fuel environment operand operands
+        | cons channel channels =>
+            cases operands with
+            | nil => exact .producerOperandsNoValues fuel environment channel channels
+            | cons operand operands =>
+                exact .producerOperandsCons fuel environment channel channels operand operands
+                  (previous.producer environment [channel] operand (children operand (by simp)))
+                  (previous.producerOperands environment channels operands (fun value member => children value (by simp [member])))
       · intro environment owner operand origin placeChild valueChild builderChild
         exact .push fuel environment owner operand origin (previous.place environment owner placeChild)
           (previous.value environment operand valueChild)
@@ -689,6 +762,13 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
       · intro environment channels expression shape value builder
         exact .valueProducer fuel environment channels expression shape (previous.value environment expression value)
           (fun destination => previous.builder environment destination expression builder)
+      · intro activation pre scope statements expression derivation producerSyntax
+        exact .boundActivationTail fuel activation pre scope statements expression
+          (fun environment => previous.statements environment statements derivation)
+          (fun environment channels => previous.producer environment channels expression producerSyntax)
+      · intro activation pre scope statements expression origin derivation producerSyntax
+        exact .boundActivationWithTail fuel activation pre scope statements expression origin
+          (previous.activationBodyProducerTail activation pre scope statements expression derivation producerSyntax)
       · intro activation pre scope statements expression derivation shape value builder
         exact .boundActivationTail fuel activation pre scope statements expression
           (fun environment => previous.statements environment statements derivation)
@@ -718,6 +798,8 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
               exact previous.activationValueTail ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements expression origin derivation supported
           | constructed expression shape value builder =>
               exact previous.activationConstructedTail ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements expression origin derivation shape value builder
+          | producer expression producerSyntax =>
+              exact previous.activationProducerTail ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements expression origin derivation producerSyntax
           | call tailContext tailArguments tailOrigin tailArgumentsSyntax =>
               exact previous.activationTail ⟨context.impl, act, implementation.vars, [], callableChannels⟩ pre scope statements
                 tailContext tailArguments tailOrigin origin derivation tailArgumentsSyntax
@@ -735,6 +817,8 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
             exact previous.activationValueTail ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements expression origin derivation supported
         | constructed expression shape value builder =>
             exact previous.activationConstructedTail ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements expression origin derivation shape value builder
+        | producer expression producerSyntax =>
+            exact previous.activationProducerTail ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements expression origin derivation producerSyntax
         | call tailContext tailArguments tailOrigin tailArgumentsSyntax =>
             exact previous.activationTail ⟨context.impl, act, implementation.vars, [], []⟩ pre scope statements
               tailContext tailArguments tailOrigin origin derivation tailArgumentsSyntax
