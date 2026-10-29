@@ -74,7 +74,7 @@ theorem PlaceSource.sliceReference_operandAlias {cfg : Cfg} {env : Env} {state :
 
 #print axioms PlaceSource.sliceReference_operandAlias
 
-theorem accepted_generated_slice_reference_address {cfg : Cfg} {env : Env} {state : St} {expression : Expr}
+theorem accepted_generated_slice_reference_address_next {cfg : Cfg} {env : Env} {state : St} {expression : Expr}
     (source : PlaceSource cfg env (.deref expression) state) {ty : Ty}
     (slice : sliceRefTy source.typingEnv expression = some ty)
     {cx : FnCtx} {results : List Ty} {before : LS} {initial : GIR.Frame} {point : Pt}
@@ -88,7 +88,10 @@ theorem accepted_generated_slice_reference_address {cfg : Cfg} {env : Env} {stat
       DemandUniformTraversal cx (DemandFrameAt cfg env cx source.world source.typingEnv source.rootsEnv
         source.context.inputFuture map.values map.runs) 2 ⟨point, initial, state⟩ ⟨finalPoint, frame, state⟩ ∧
       Post cfg env cx before initial (lowerPlace (.deref expression) (lowerEnv cfg.mod env.vars results) before).2
-        frame finalPoint [((lowerPlace (.deref expression) (lowerEnv cfg.mod env.vars results) before).1, .val (.ref location))] := by
+        frame finalPoint [((lowerPlace (.deref expression) (lowerEnv cfg.mod env.vars results) before).1, .val (.ref location))] ∧
+      ∀ {taken : Nat} {reached : DemandRuntimePoint}, taken < 2 →
+        DemandRuntimePrefix cx taken ⟨point, initial, state⟩ reached →
+        ∃ id op, instAt cx.fn reached.point = some (.def id op) := by
   obtain ⟨slot, descriptor, outer, mutability, element, expressionEq, visible, variableAt, variableType, flat, typeEq⟩ :=
     sliceRefTy_some slice
   subst expression
@@ -151,10 +154,45 @@ theorem accepted_generated_slice_reference_address {cfg : Cfg} {env : Env} {stat
         ⟨(point.1, point.2 + 2), middleFrame.set loaded.1 (.val (.ref location)), state⟩ :=
     ⟨⟨built.2, finalPost.pp, finalPost.rel⟩, source.frame,
       realized.retained finalPost.same bounded.1 bounded.2 RetainsAliases.refl⟩
-  refine ⟨location, (point.1, point.2 + 2), middleFrame.set loaded.1 (.val (.ref location)), evaluated, ?_, ?_, ?_⟩
+  refine ⟨location, (point.1, point.2 + 2), middleFrame.set loaded.1 (.val (.ref location)), evaluated, ?_, ?_, ?_, ?_⟩
   · exact .next (addressStep 0).runtime (.next (loadStep 0).runtime (.zero _))
   · exact .next startDemand addressStep (.next middleDemand loadStep (.done endDemand))
   · simpa only [lowerPlace, built, lowerExpr_read_run] using finalPost
+  · intro taken reached beforeEnd steps
+    rcases steps.uncons with ⟨rfl, rfl⟩ | ⟨remaining, next, count, first, rest⟩
+    · exact ⟨_, _, addressInstruction⟩
+    · have zero : remaining = 0 := by omega
+      subst remaining
+      cases rest
+      obtain ⟨fuel, actual⟩ := runtimeStep_demandInstructionStep first
+      have same := actual.deterministic (addressStep fuel)
+      have nextEq : reached = ⟨(point.1, point.2 + 1), middleFrame, state⟩ := by
+        cases reached
+        exact same
+      rw [nextEq]
+      exact ⟨_, _, loadInstruction⟩
+
+
+theorem accepted_generated_slice_reference_address {cfg : Cfg} {env : Env} {state : St} {expression : Expr}
+    (source : PlaceSource cfg env (.deref expression) state) {ty : Ty}
+    (slice : sliceRefTy source.typingEnv expression = some ty)
+    {cx : FnCtx} {results : List Ty} {before : LS} {initial : GIR.Frame} {point : Pt}
+    (atPoint : before.pp = some point) (related : Rel cfg env cx initial before)
+    (map : RetainedSsaMap) (bounded : map.Bounded before.vals.size)
+    (realized : map.Realizes cfg.mod source.world env ⟨point, initial, state⟩)
+    (extended : ExtT (lowerPlace (.deref expression) (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks) :
+    ∃ (location : Loc) (finalPoint : Pt) (frame : GIR.Frame),
+      evalPlace 3 cfg env (.deref expression) state = .ok location state ∧
+      DemandRuntimePrefix cx 2 ⟨point, initial, state⟩ ⟨finalPoint, frame, state⟩ ∧
+      DemandUniformTraversal cx (DemandFrameAt cfg env cx source.world source.typingEnv source.rootsEnv
+        source.context.inputFuture map.values map.runs) 2 ⟨point, initial, state⟩ ⟨finalPoint, frame, state⟩ ∧
+      Post cfg env cx before initial (lowerPlace (.deref expression) (lowerEnv cfg.mod env.vars results) before).2
+        frame finalPoint [((lowerPlace (.deref expression) (lowerEnv cfg.mod env.vars results) before).1, .val (.ref location))] := by
+  obtain ⟨location, finalPoint, frame, placed, steps, traversal, post, next⟩ :=
+    accepted_generated_slice_reference_address_next source slice atPoint related map bounded realized extended
+  exact ⟨location, finalPoint, frame, placed, steps, traversal, post⟩
+
+#print axioms accepted_generated_slice_reference_address_next
 
 theorem accepted_generated_slice_reference_retained {cfg : Cfg} {env : Env} {state : St} {expression : Expr}
     (source : PlaceSource cfg env (.deref expression) state) {ty : Ty}

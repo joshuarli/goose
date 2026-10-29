@@ -33,6 +33,37 @@ theorem accepted_generated_slice_assignment_destination_prefix {cfg : Cfg} {env 
   exact ⟨destination, canonical, traversal.runtimePrefix_invariant (by omega) steps,
     traversal.runtimePrefix_next beforeAddress steps⟩
 
+theorem accepted_generated_slice_assignment_destination_instruction {cfg : Cfg} {env : Env} {state : St}
+    {reference value : Expr} {origin : OriginId}
+    (source : StmtSource cfg env (.assign (.deref reference) value origin) state)
+    {ty : Ty} (slice : sliceRefTy source.typingEnv reference = some ty)
+    {cx : FnCtx} {results : List Ty} {root : DemandNode} {owner : Nat} {before : LS} {loop : Option LoopCtx}
+    (selected : GeneratedDemandRootSelection cfg.mod cx.fn (lowerEnv cfg.mod env.vars results) root owner)
+    (owned : GeneratedSourceOwner selected source.context)
+    (occurrence : GeneratedDemandOccurrence cfg.mod cx.fn (lowerEnv cfg.mod env.vars results)
+      root source.path (.statement loop (.assign (.deref reference) value origin)) before)
+    {required map : RetainedSsaMap} (rows : GeneratedDemandRows cfg.mod source.rootsEnv.access occurrence required)
+    (coverage : map.Covers required) (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (bounded : map.Bounded before.vals.size) {initial : GIR.Frame} {start : Pt}
+    (realized : map.Realizes cfg.mod source.world env ⟨start, initial, state⟩)
+    (input : GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv before initial start)
+    (extended : ExtT (lowerStmt loop (.assign (.deref reference) value origin)
+      (lowerEnv cfg.mod env.vars results) before).2 cx.fn.blocks)
+    {taken : Nat} {reached : DemandRuntimePoint} (beforeAddress : taken < 2)
+    (steps : DemandRuntimePrefix cx taken ⟨start, initial, state⟩ reached) : ∃ id op, instAt cx.fn reached.point = some (.def id op) := by
+  obtain ⟨destination, typing, roots, canonical, destinationOwner, destinationOccurrence, destinationRows, next⟩ :=
+    accepted_generated_assignment_children source selected owned occurrence rows
+  have destinationSlice : sliceRefTy destination.typingEnv reference = some ty := by
+    simpa only [typing] using slice
+  have destinationRealized : map.Realizes cfg.mod destination.world env ⟨start, initial, state⟩ := by
+    simpa only [RetainedSsaMap.Realizes, canonical.world] using realized
+  obtain ⟨location, point, frame, placed, executed, traversal, post, instruction⟩ :=
+    accepted_generated_slice_reference_address_next destination destinationSlice input.atPoint input.related map bounded destinationRealized
+      (generated_assignment_place_extended extended)
+  exact instruction beforeAddress steps
+
+#print axioms accepted_generated_slice_assignment_destination_instruction
+
 theorem accepted_generated_slice_assignment_destination_noStop {cfg : Cfg} {env : Env} {state : St}
     {reference value : Expr} {origin : OriginId}
     (source : StmtSource cfg env (.assign (.deref reference) value origin) state)

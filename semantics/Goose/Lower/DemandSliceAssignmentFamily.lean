@@ -14,7 +14,8 @@ inductive SliceAssignmentInterior {cfg : Cfg} {env : Env} {state : St}
   | destination {runtime : DemandRuntimePoint}
       (child : PlaceSource cfg env (.deref reference) state) (canonical : source.PlaceChildAt child rfl)
       (demanded : DemandFrameAt cfg env cx child.world child.typingEnv child.rootsEnv child.context.inputFuture
-        map.values map.runs runtime) (progress : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next) :
+        map.values map.runs runtime) (progress : ∃ next, ∀ fuel, DemandInstructionStep cx fuel runtime next)
+      (instruction : ∃ id op, instAt cx.fn runtime.point = some (.def id op)) :
       SliceAssignmentInterior source cx results before map runtime
   | value {runtime : DemandRuntimePoint} (alias : RetainedAlias)
       (child : ExprSource cfg env (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) state)
@@ -89,7 +90,7 @@ theorem SliceAssignmentInterior.realizes {cfg : Cfg} {env : Env} {state : St}
     · intro cell member
       exact List.mem_append_right _ member
   cases cursor with
-  | destination child canonical demanded progress => simpa only [RetainedSsaMap.Realizes, canonical.world] using demanded.operands
+  | destination child canonical demanded progress instruction => simpa only [RetainedSsaMap.Realizes, canonical.world] using demanded.operands
   | value alias child canonical demanded progress =>
     simpa only [canonical.world] using (valueCoverage _ _).realizes demanded.operands
   | view alias child canonical view viewAt demanded instruction =>
@@ -112,12 +113,9 @@ theorem SliceAssignmentInterior.instruction {cfg : Cfg} {env : Env} {state : St}
     (cursor : SliceAssignmentInterior source cx results before map runtime) :
     ∃ instruction, instAt cx.fn runtime.point = some instruction := by
   cases cursor with
-  | destination child canonical demanded progress =>
-    obtain ⟨next, step⟩ := progress
-    cases step 0 with
-    | definition instruction execution => exact ⟨_, instruction⟩
-    | effect instruction execution => exact ⟨_, instruction⟩
-    | control instruction execution => exact ⟨_, instruction⟩
+  | destination child canonical demanded progress instruction =>
+    obtain ⟨id, op, found⟩ := instruction
+    exact ⟨_, found⟩
   | value alias child canonical demanded progress =>
     obtain ⟨next, step⟩ := progress
     cases step 0 with
@@ -170,7 +168,9 @@ theorem accepted_generated_slice_assignment_prefix {cfg : Cfg} {env : Env} {stat
   by_cases short : taken < 2
   · obtain ⟨destination, canonical, demanded, progress⟩ :=
       accepted_generated_slice_assignment_destination_prefix source slice selected owned occurrence rows coverage admitted bounded realized input extended short steps
-    exact ⟨owned, coverage, .interior (.destination destination canonical demanded progress)⟩
+    have instruction := accepted_generated_slice_assignment_destination_instruction source slice selected owned occurrence rows coverage admitted bounded
+      realized input extended short steps
+    exact ⟨owned, coverage, .interior (.destination destination canonical demanded progress instruction)⟩
   · by_cases atTwo : taken = 2
     · obtain ⟨point, frame, alias, child, canonical, remaining, count, residual, demanded, progress⟩ :=
         accepted_generated_slice_assignment_value_entry_split source slice selected owned occurrence rows coverage admitted bounded realized input extended (by omega) steps
