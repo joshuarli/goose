@@ -25,37 +25,10 @@ theorem accepted_generated_actual_slice_unit_call_instruction_stop {cfg : Cfg} {
       (.call context (lowerArgs arguments (lowerEnv cfg.mod env.vars results) before).1 (some origin)) middle = .stop stop after)
     (nonTimeout : stop ≠ .timeout) :
     ∃ sourceFuel, evalExpr sourceFuel cfg env (.call context arguments origin) state = .stop stop after := by
-  let le := lowerEnv cfg.mod env.vars results
-  obtain ⟨ids, middleBuilder, afterCall, argsRun, definition, tail⟩ := lowerExpr_call_split
-    (show lowerExpr (.call context arguments origin) le before =
-      ((lowerExpr (.call context arguments origin) le before).1, (lowerExpr (.call context arguments origin) le before).2) from rfl)
-  have afterExtended : ExtT afterCall caller.blocks := by
-    rcases tail with ⟨_, term⟩ | ⟨_, rfl⟩
-    · exact extended.of_adv (adv_emitTerm term)
-    · exact extended
-  have idsEq : ids = (lowerArgs arguments le before).1 := by rw [argsRun]
-  have middleEq : middleBuilder = (lowerArgs arguments le before).2 := by rw [argsRun]
-  subst ids
-  subst middleBuilder
-  obtain ⟨_, instruction⟩ := Post.def_leaf wholePost definition afterExtended (.val .unit)
-  have arity := source.call_arguments_arity contextAt implAt argumentsDone
-  have depthAt : frame.depth = env.depth := wholePost.rel.depth
-  have below : frame.depth < maxCallDepth := by simpa [depthAt] using depth
-  have entry := lowered_function_entry_generated (cfg := cfg) (ctx := ctx) (impl := impl)
-    (depth := env.depth + 1) (values := values) (state := middle) arity
-  have callerEntry : FunctionEntry (lowerContextAt cfg.mod ctx impl) (frame.depth + 1) values middle
-      (callFrame impl middle.nextAct (env.depth + 1) values) { middle with nextAct := middle.nextAct + 1 } := by
-    simpa [depthAt] using entry
-  have calleePoint : RuntimePoint ⟨cfg.profile, lower cfg.mod⟩ (lowerContextAt cfg.mod ctx impl) (0, 0)
-      (callFrame impl middle.nextAct (env.depth + 1) values) { middle with nextAct := middle.nextAct + 1 } :=
-    .call callerPoint instruction below read (lower_func_at contextAt implAt) callerEntry
-  obtain ⟨calleeFuel, calleeRun⟩ := actual_call_stopped_callee_run below read
-    (lower_func_at contextAt implAt) callerEntry nonTimeout executed
-  obtain ⟨bodyFuel, bodyStopped⟩ :=
-    accepted_generated_slice_callee_unit_stopped_run source argumentsDone contextAt implAt fragment noResults noValue calleePoint calleeRun nonTimeout
-  exact ⟨max argumentFuel bodyFuel + 2,
-    accepted_call_source_stop source argumentsDone contextAt implAt depth nonTimeout bodyStopped⟩
-
+  apply accepted_generated_actual_unit_call_stop_of_callee source argumentsDone contextAt implAt depth ?_
+    wholePost read callerPoint extended executed nonTimeout
+  intro calleeFuel stop after entry run nonTimeout
+  exact accepted_generated_slice_callee_unit_stopped_run source argumentsDone contextAt implAt fragment noResults noValue entry run nonTimeout
 
 #print axioms accepted_generated_actual_slice_unit_call_instruction_stop
 end Goose.Lower

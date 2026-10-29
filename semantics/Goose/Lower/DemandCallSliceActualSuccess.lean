@@ -35,19 +35,10 @@ theorem accepted_generated_actual_slice_unit_call_success {cfg : Cfg} {env : Env
         (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).1 value after
         (point.1, point.2 + 1)
         (frame.set (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).1 (.val value)) := by
-  obtain ⟨afterCall, calleeFuel, afterEq, calleePoint, calleeRun, post, step⟩ :=
-    accepted_generated_call_execution_frontier source argumentsDone contextAt implAt depth wholePost read callerPoint extended executed
-  obtain ⟨valueEq, bodyFuel, bodyDone⟩ :=
-    accepted_generated_slice_callee_unit_success source argumentsDone contextAt implAt fragment noResults noValue calleePoint calleeRun
-  subst value
-  have boundary := accepted_call_value_demand_return source argumentsDone contextAt implAt depth bodyDone admitted bounded realized post
-  have evaluated := accepted_call_value_source_return source argumentsDone contextAt implAt depth bodyDone
-  have noReturn := accepted_call_returning_not_noReturn evaluated
-  have finalEq : afterCall = (lowerExpr (.call context arguments origin) (lowerEnv cfg.mod env.vars results) before).2 := by
-    rw [afterEq]
-    simp [lowerExpr, bind_run, pure_run, lowerEnv, noReturn]
-  exact ⟨rfl, afterCall, _, evaluated, finalEq, step, boundary⟩
-
+  apply accepted_generated_actual_unit_call_success_of_callee source argumentsDone contextAt implAt depth ?_
+    wholePost read callerPoint extended admitted bounded realized executed
+  intro calleeFuel value after entry run
+  exact accepted_generated_slice_callee_unit_success source argumentsDone contextAt implAt fragment noResults noValue entry run
 
 #print axioms accepted_generated_actual_slice_unit_call_success
 end Goose.Lower
