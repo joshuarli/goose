@@ -69,6 +69,48 @@ theorem checkedValue_singleByValue_argument {config : EvalConfig} {accepted : Ac
     source contextAt calleeAt parameters mode declared descriptorType nesting resultTy roots typingAfter rootsAfter checked
 
 
+theorem evalArguments_singleByValue_fromChecker_lowerFuel {config : EvalConfig} {accepted : AcceptedModule config}
+    (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (target callOrigin : Nat) (context : Context) (callee : Impl) (parameter : Param) (descriptor : LocalVar)
+    (expression : Expr) (integer : Goose.Core.IntTy) (checkFuel fuel : Nat)
+    (world : AcceptedWorld config frame.initialized before ambient types live regions pending)
+    (source : AcceptedFrame config accepted frame before types)
+    (contextAt : config.module.contexts[target]? = some context) (calleeAt : config.module.impls[context.impl]? = some callee)
+    (parameters : callee.params = #[parameter]) (mode : parameter.mode = .byValue)
+    (declared : callee.vars[parameter.var]? = some descriptor) (descriptorType : descriptor.ty = .int integer)
+    (nesting : frame.typingFuel = checkFuel + 2)
+    (resultTy : Ty) (roots : List RootRef) (typingAfter : Nat) (rootsAfter : RState)
+    (checked : CheckedValue frame (.call target [.byVal expression] callOrigin) resultTy roots typingAfter rootsAfter)
+    (evaluate : ∀ argumentRoots argumentTypingAfter argumentRootsAfter,
+      AcceptedFrame config accepted (ordinaryOperandFrame frame checkFuel) before types →
+      CheckedValue (ordinaryOperandFrame frame checkFuel) expression (.int integer) argumentRoots argumentTypingAfter argumentRootsAfter →
+      ∀ inner, inner + 1 ≤ fuel → EarlierScalarOutcome config accepted (ordinaryOperandFrame frame checkFuel) before ambient types regions pending (.int integer)
+        (evalValue inner config (ordinaryOperandFrame frame checkFuel).interpretation.environment expression before)) :
+    ∃ nextTypes nextLive nextAmbient,
+      let outcome := evalArguments fuel config frame.interpretation.environment callee.vars [parameter] [.byVal expression] before
+      RootTypesExtend types nextTypes ∧ before.nextAct ≤ (Goose.Proofs.Exit.stepState outcome).nextAct ∧
+      before.nextScope ≤ (Goose.Proofs.Exit.stepState outcome).nextScope ∧
+      AcceptedWorld config frame.initialized (Goose.Proofs.Exit.stepState outcome) nextAmbient nextTypes nextLive regions pending ∧
+      AcceptedFrame config accepted frame (Goose.Proofs.Exit.stepState outcome) nextTypes ∧
+      FutureGlobalsClear config frame.initialized (Goose.Proofs.Exit.stepState outcome) ∧
+      EarlierCallerObservations before.nextAct before (Goose.Proofs.Exit.stepState outcome) types nextTypes ∧
+      (match outcome with
+       | .ok values _ => nextAmbient = ambient ∧ ∃ value, values = [value] ∧ ValueRepresentation (.int integer) value
+       | .stop .. => True | .escape .. | .jump .. => False) := by
+  obtain ⟨argumentRoots, argumentTypingAfter, argumentRootsAfter, operandSource, operandChecked⟩ :=
+    checkedValue_singleByValue_argument_fromChecker frame before types target callOrigin context callee parameter descriptor expression integer checkFuel
+      source contextAt calleeAt parameters mode declared descriptorType nesting resultTy roots typingAfter rootsAfter checked
+  have operandWorld : AcceptedWorld config (ordinaryOperandFrame frame checkFuel).initialized before ambient types live regions pending := world
+  obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, finalOperandSource, clear, observed, result⟩ :=
+    evalArguments_singleByValue_lowerFuel config (.int integer) fuel accepted (ordinaryOperandFrame frame checkFuel) before ambient types live
+      regions pending callee.vars parameter operandWorld operandSource
+      (evaluate argumentRoots argumentTypingAfter argumentRootsAfter operandSource operandChecked)
+  have finalSource := source.afterEarlierObservations acts scopes observed
+  exact ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, finalSource, clear, observed, result⟩
+
+
+
 theorem evalArguments_singleByValue_fromChecker {config : EvalConfig} {accepted : AcceptedModule config}
     (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : Goose.Core.RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -98,17 +140,11 @@ theorem evalArguments_singleByValue_fromChecker {config : EvalConfig} {accepted 
       (match outcome with
        | .ok values _ => nextAmbient = ambient ∧ ∃ value, values = [value] ∧ ValueRepresentation (.int integer) value
        | .stop .. => True | .escape .. | .jump .. => False) := by
-  obtain ⟨argumentRoots, argumentTypingAfter, argumentRootsAfter, operandSource, operandChecked⟩ :=
-    checkedValue_singleByValue_argument_fromChecker frame before types target callOrigin context callee parameter descriptor expression integer checkFuel
-      source contextAt calleeAt parameters mode declared descriptorType nesting resultTy roots typingAfter rootsAfter checked
-  have operandWorld : AcceptedWorld config (ordinaryOperandFrame frame checkFuel).initialized before ambient types live regions pending := world
-  obtain ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, finalOperandSource, clear, observed, result⟩ :=
-    evalArguments_singleByValue_earlier config (.int integer) fuel accepted (ordinaryOperandFrame frame checkFuel) before ambient types live
-      regions pending callee.vars parameter operandWorld operandSource
-      (evaluate argumentRoots argumentTypingAfter argumentRootsAfter operandSource operandChecked)
-  have finalSource := source.afterEarlierObservations acts scopes observed
-  exact ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, finalSource, clear, observed, result⟩
-
+  apply evalArguments_singleByValue_fromChecker_lowerFuel frame before ambient types live regions pending target callOrigin context callee parameter
+    descriptor expression integer checkFuel fuel world source contextAt calleeAt parameters mode declared descriptorType nesting
+    resultTy roots typingAfter rootsAfter checked
+  intro argumentRoots argumentTypingAfter argumentRootsAfter operandSource operandChecked inner bound
+  exact evaluate argumentRoots argumentTypingAfter argumentRootsAfter operandSource operandChecked inner
 
 theorem evalArguments_unaryRegisterExpression_fromChecker {config : EvalConfig} {accepted : AcceptedModule config}
     (frame : ConstructionSourceFrame) (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
@@ -172,6 +208,7 @@ theorem evalArguments_unaryRegisterExpression_fromCall {config : EvalConfig} {ac
     descriptor expression integer checkFuel fuel form graph world source contextAt calleeAt parameters mode declared descriptorType nesting
     resultTy roots typingAfter rootsAfter checked
 
+#print axioms evalArguments_singleByValue_fromChecker_lowerFuel
 #print axioms evalArguments_singleByValue_fromChecker
 #print axioms evalArguments_unaryRegisterExpression_fromChecker
 #print axioms evalArguments_unaryRegisterExpression_fromCall
