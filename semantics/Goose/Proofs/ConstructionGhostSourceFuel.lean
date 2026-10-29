@@ -60,6 +60,14 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | logical (fuel : Nat) (environment : RuntimeActivation) (isAnd : Bool) (first second : Expr)
       (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
       FuelSupport config (fuel + 1) (.value environment (logicalExpression isAnd first second))
+  | valuePush (fuel : Nat) (environment : RuntimeActivation) (owner : Place) (operand : Expr) (origin : Option Goose.Core.OriginId)
+      (child : FuelSupport config fuel (.push environment owner operand (origin.getD 0))) :
+      FuelSupport config (fuel + 1) (.value environment (.push owner operand origin))
+  | push (fuel : Nat) (environment : RuntimeActivation) (owner : Place) (operand : Expr) (origin : Goose.Core.OriginId)
+      (placeChild : FuelSupport config fuel (.place environment owner))
+      (valueChild : FuelSupport config fuel (.value environment operand))
+      (builderChild : ∀ destination, FuelSupport config fuel (.builder environment destination operand)) :
+      FuelSupport config (fuel + 1) (.push environment owner operand origin)
   | valueResultLocal (fuel : Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) :
       FuelSupport config (fuel + 1) (.value environment (.resultLocal localVar origin))
   | builderResultLocal (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
@@ -369,7 +377,7 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
   induction fuel generalizing α operation path before with
   | zero =>
       cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execResultBlock, execResultBlockWith, execActivationBody,
-        enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, evalOperands, Goose.Construct.timeout, EvalM.stop] using
+        enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, evalOperands, pushValue, Goose.Construct.timeout, EvalM.stop] using
         (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -443,6 +451,16 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .logical (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
           intro value middle ready result checked
           exact ih (.value environment second) (path ++ [1]) ready rightSupported
+      | valuePush _ environment owner operand origin childSupported =>
+          exact .valuePush fuel path environment owner operand origin before
+            (ih (.push environment owner operand (origin.getD 0)) (path ++ [0]) before childSupported)
+      | push _ environment owner operand origin placeSupported valueSupported builderSupported =>
+          refine .push fuel path environment owner operand origin before
+            (ih (.place environment owner) (path ++ [0]) before placeSupported) ?_ ?_
+          · intro location placed stored readState bytes run sampled placeRead read sampledRead fixed
+            exact ih (.value environment operand) (path ++ [1]) sampled valueSupported
+          · intro location placed stored readState bytes run sampled snapshot snapshotState destination buildState placeRead read sampledRead nonfixed snapshotRead allocated
+            exact ih (.builder environment destination operand) (path ++ [1]) buildState (builderSupported destination)
       | valueResultLocal _ environment localVar origin => exact .valueResultLocal fuel path environment localVar origin before
       | builderResultLocal _ environment incoming localVar origin => exact .builderResultLocal fuel path environment incoming localVar origin before
       | producerResultLocal _ environment channels localVar origin valueSupported builderSupported =>

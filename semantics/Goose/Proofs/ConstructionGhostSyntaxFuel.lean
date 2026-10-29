@@ -18,6 +18,9 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | string (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
       (children : ∀ argument ∈ arguments, PrintArgumentSyntax config argument) : ValueSyntax config (.str ty arguments origin)
   | copy (ty : Ty) (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.copy ty place origin)
+  | push (owner : Place) (operand : Expr) (origin : Option Goose.Core.OriginId)
+      (placeChild : PlaceSyntax config owner) (valueChild : ValueSyntax config operand) (builderChild : DeclarationBuilderSyntax config operand) :
+      ValueSyntax config (.push owner operand origin)
   | pop (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.pop place origin)
   | blockValue (block : Block) (origin : Goose.Core.OriginId) (child : ResultBlockSyntax config block) :
       ValueSyntax config (.blockE block origin)
@@ -290,6 +293,8 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     FuelSupport config fuel (.resultBlockWith environment pre channels block)
   resultBlock : ∀ environment channels block, ResultBlockSyntax config block →
     FuelSupport config fuel (.resultBlock environment channels block)
+  push : ∀ environment owner operand origin, PlaceSyntax config owner → ValueSyntax config operand → DeclarationBuilderSyntax config operand →
+    FuelSupport config fuel (.push environment owner operand origin)
   resultLocalProducer : ∀ environment channels localVar origin,
     FuelSupport config fuel (.producerWith environment channels (.resultLocal localVar origin))
   conditionalProducer : ∀ environment channels condition yes no origin, ValueSyntax config condition →
@@ -390,6 +395,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | copy ty place origin child =>
             exact .valueCopy fuel environment ty place origin (previous.place environment place child)
               (fun destination => previous.builder environment destination (.copy ty place origin) (.copy ty place origin child))
+        | push owner operand origin placeChild valueChild builderChild =>
+            exact .valuePush fuel environment owner operand origin
+              (previous.push environment owner operand (origin.getD 0) placeChild valueChild builderChild)
         | pop place origin child => exact .popValue fuel environment place origin (previous.place environment place child)
         | blockValue block origin child =>
             exact .valueBlockProducer fuel environment block origin (fun channels => previous.blockProducer environment channels block origin child)
@@ -603,6 +611,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
                   exact previous.blockProducer scopedEnvironment channels block origin child
       · intro environment channels block derivation
         exact .resultBlock fuel environment channels block (previous.resultBlockWith environment [] channels block derivation)
+      · intro environment owner operand origin placeChild valueChild builderChild
+        exact .push fuel environment owner operand origin (previous.place environment owner placeChild)
+          (previous.value environment operand valueChild)
+          (fun destination => previous.builder environment destination operand builderChild)
       · intro environment channels localVar origin
         exact .producerResultLocal fuel environment channels localVar origin
           (previous.value environment (.resultLocal localVar origin) (.resultLocal localVar origin))
