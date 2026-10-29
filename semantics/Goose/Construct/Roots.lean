@@ -319,6 +319,14 @@ theorem noteReceivingCapacity_byte_result (env : PEnv) (bytes : List UInt8) (ori
     noteReceivingCapacity env (.varr (.int .u8)) .value (.bytes (.varr (.int .u8)) bytes origin) =
       if bytes.length > 2 ^ 32 - 1 then noteAborts else pure () := rfl
 
+theorem noteReceivingCapacity_call_byte_result (env : PEnv) (contextId origin : Nat)
+    (context : Context) (callee : Impl)
+    (contextAt : env.mod.contexts[contextId]? = some context)
+    (calleeAt : env.mod.impls[context.impl]? = some callee)
+    (results : callee.results = #[⟨.varr (.int .u8), .value, none⟩]) :
+    noteReceivingCapacity env (.varr (.int .u8)) .value (.call contextId [] origin) = pure () := by
+  simp [noteReceivingCapacity, receivingCapacity, expressionMaximum, contextAt, calleeAt, results, maximumElements]
+
 private def noteOperandCapacities (env : PEnv) (descriptors : List ResultDescriptor) (operands : List Expr) : P Unit :=
   for (descriptor, operand) in descriptors.zip operands do
     noteReceivingCapacity env descriptor.ty descriptor.request operand
