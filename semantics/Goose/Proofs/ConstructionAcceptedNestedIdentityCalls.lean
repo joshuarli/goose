@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedEarlierScalarComplete
+import Goose.Proofs.ConstructionAcceptedSingleArgumentValue
 import Goose.Proofs.ConstructionAcceptedIdentityUnaryCall
 import Goose.Proofs.ConstructionAcceptedUnaryArgumentSource
 import Goose.Proofs.ConstructionAcceptedInvocationValue
@@ -32,33 +33,22 @@ theorem evalValue_nestedIdentity {config : EvalConfig} {integer : Goose.Core.Int
     exact evalValue_checkedBinary_earlier config integer form fuel accepted frame before ambient types live regions pending
       world source roots typingAfter rootsAfter checked
   | @call argument target origin context callee parameter descriptor contextAt calleeAt parameters mode declared descriptorType results body argumentForm ih =>
-    apply evalValue_registerArguments_earlier_fromInvocation fuel config accepted frame before ambient types live regions pending
-      target [.byVal argument] context callee (.int integer) origin world source contextAt calleeAt results
-    intro callFuel fuelEq
-    cases depth : frame.typingFuel with
-    | zero =>
-      have typed := checked.typing
-      rw [depth] at typed
-      change Except.error _ = Except.ok _ at typed
-      cases typed
-    | succ remaining =>
-      cases remaining with
-      | zero =>
-        have typed := checked.typing
-        rw [depth] at typed
-        simp only [typeExpr, source.compatible.module, contextAt, calleeAt, parameters, typeArguments, bind, StateT.bind, Except.bind] at typed
-        change Except.error _ = Except.ok _ at typed
-        cases typed
-      | succ checkFuel =>
-        apply invokeCall_identity_fromArguments frame before ambient types live regions pending target origin context callee parameter descriptor
-          argument integer callFuel world source contextAt calleeAt parameters declared descriptorType results body
-        intro argumentFuel
-        apply evalArguments_singleByValue_fromChecker frame before ambient types live regions pending target origin context callee parameter descriptor
-          argument integer checkFuel argumentFuel world source contextAt calleeAt parameters mode declared descriptorType depth
-          (.int integer) roots typingAfter rootsAfter checked
-        intro argumentRoots argumentTypingAfter argumentRootsAfter operandSource operandChecked inner
-        exact ih inner (ordinaryOperandFrame frame checkFuel) before ambient types live world operandSource argumentRoots
-          argumentTypingAfter argumentRootsAfter operandChecked
+    apply evalValue_singleArgument_fromOperand fuel frame before ambient types live regions pending target origin context callee parameter descriptor
+      argument integer world source contextAt calleeAt parameters mode declared descriptorType results roots typingAfter rootsAfter checked
+    · intro bodyFuel argumentState argumentTypes argumentLive argumentAmbient value represented argumentWorld argumentSource
+      have parameterAt : callee.params[0]? = some parameter := by simp [parameters]
+      have parameterId := validated_parameter_variable config.module context.impl callee 0 parameter accepted.accepted calleeAt parameterAt
+      have declared0 : callee.vars[0]? = some descriptor := by simpa [parameterId] using declared
+      have pointers : PointerTypedValue argumentTypes (.int integer) value := by
+        cases represented with
+        | integer _ number => exact .integer integer number
+        | stored _ _ nonfixed _ => cases nonfixed
+      exact identityParameterBody_partial bodyFuel config accepted frame argumentState argumentAmbient argumentTypes argumentLive regions pending
+        target context callee parameter descriptor value (.int integer) contextAt calleeAt parameters declared0 body
+        (Or.inl ⟨integer, descriptorType⟩) descriptorType represented pointers argumentWorld argumentSource
+    · intro checkFuel argumentRoots argumentTypingAfter argumentRootsAfter depth operandSource operandChecked inner
+      exact ih inner (ordinaryOperandFrame frame checkFuel) before ambient types live world operandSource argumentRoots
+        argumentTypingAfter argumentRootsAfter operandChecked
 
 #print axioms evalValue_nestedIdentity
 end Goose.Proofs.ConstructionAcceptedExecution
