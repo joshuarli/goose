@@ -41,7 +41,7 @@ private theorem cancelled_leaf_exact (state : ConstructionState)
   simp only [releaseExitReservation, ConstructionM.get, bind, restored, ConstructionM.set]
   rfl
 
-theorem allocated_receiver_cancel_pending (config : EvalConfig) (initialized : Nat) (owner : ActId)
+theorem allocated_receiver_cancel_frame (config : EvalConfig) (initialized : Nat) (owner : ActId)
     (ty element : Goose.Construct.Ty) (request : ConstructionRequest) (origin : OriginId) (knownCount : Option Nat)
     (before allocated : ExecutionState) (id : Nat) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
@@ -52,9 +52,8 @@ theorem allocated_receiver_cancel_pending (config : EvalConfig) (initialized : N
       reserveExitDestination id .newValue allocated.construction = .ok (allocated.construction.exitReservations.size, id) reserved ∧
       (do cancelExitReservation allocated.construction.exitReservations.size []
           releaseExitReservation allocated.construction.exitReservations.size) reserved = .ok () final ∧
-      ∀ pendingFrame ∈ pending,
-        CarriersLandingReady { allocated with construction := final } pendingFrame.channels pendingFrame.carriers ∧
-        ∀ carrier ∈ pendingFrame.carriers, CarrierResultBacking config.layout { allocated with construction := final } carrier := by
+      Nonempty (FreshDestinationFrame { before with construction := { before.construction with
+        exitReservations := before.construction.exitReservations.push .released } } { allocated with construction := final }) := by
   obtain ⟨⟨backing⟩, _⟩ := newDestination_open_ready config initialized owner ty request origin knownCount
     before allocated ambient types live regions pending id element world elementType created
   obtain ⟨newest, receiver, receiverFound, receiverUse⟩ := newDestination_newest_receiver config.layout owner ty request
@@ -126,12 +125,32 @@ theorem allocated_receiver_cancel_pending (config : EvalConfig) (initialized : N
       change (reserved.storage.set! backing.destination.storage _)[index]? = some storage
       rw [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds_ne (Ne.symm different)]
       exact old
+  exact ⟨reserved, final, reservation, cancel, ⟨fullFrame⟩⟩
+
+theorem allocated_receiver_cancel_pending (config : EvalConfig) (initialized : Nat) (owner : ActId)
+    (ty element : Goose.Construct.Ty) (request : ConstructionRequest) (origin : OriginId) (knownCount : Option Nat)
+    (before allocated : ExecutionState) (id : Nat) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (elementType : Goose.Construct.elementType ty = some element)
+    (created : newDestination config.layout owner ty request origin none knownCount before = .ok id allocated) :
+    ∃ reserved final,
+      reserveExitDestination id .newValue allocated.construction = .ok (allocated.construction.exitReservations.size, id) reserved ∧
+      (do cancelExitReservation allocated.construction.exitReservations.size []
+          releaseExitReservation allocated.construction.exitReservations.size) reserved = .ok () final ∧
+      ∀ pendingFrame ∈ pending,
+        CarriersLandingReady { allocated with construction := final } pendingFrame.channels pendingFrame.carriers ∧
+        ∀ carrier ∈ pendingFrame.carriers, CarrierResultBacking config.layout { allocated with construction := final } carrier := by
+  obtain ⟨reserved, final, reservation, cancel, ⟨fullFrame⟩⟩ := allocated_receiver_cancel_frame config initialized owner ty element
+    request origin knownCount before allocated id ambient types live regions pending world elementType created
   refine ⟨reserved, final, reservation, cancel, ?_⟩
   intro pendingFrame member
   have ready := appended_ticket_pending_carrier_ready config initialized before ambient types live regions pending .released world pendingFrame member
   have backing := appended_ticket_pending_carrier_backing config initialized before ambient types live regions pending .released world pendingFrame member
   exact ⟨fullFrame.carriers_ready pendingFrame.channels pendingFrame.carriers ready,
     fun carrier carried => fullFrame.carrier_backing config.layout carrier (backing carrier carried)⟩
+
+#print axioms allocated_receiver_cancel_frame
 
 #print axioms allocated_receiver_cancel_pending
 
