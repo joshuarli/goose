@@ -1,72 +1,24 @@
 # Campaign: Lean-backed Goose semantics, Goose IR, and build scalability
 
-**Status:** winding down. Performance qualification and the three universal proof obligations remain open. Pushes remain unauthorized.
-**Branch:** `goose-ir`. The branch was rebased onto local `master` at `b7885160`.
+**Status:** paused 2026-10-29. Resume: “Resume the Goose IR campaign from its paused status.” First run `git status --short --branch` and read this status and the current instructions.
+**Accepted:** source through `c19cac946` on `goose-ir`; the following commits record winddown only. The branch was rebased onto local `master` `b7885160`; sibling `lean4` was updated to `origin/master` `f4856ef9` and stage1 rebuilt.
+**Verification:** scoped integration closures passed 1,606, 1,452 and 1,462 jobs at successive frozen snapshots, the last at source `38cb7987c`. The final two byte-call sequence modules passed direct pinned-Lean checks against a source-identical 660-module dependency closure. Later slices passed their lane checks, but the final combined-tree closure was interrupted for winddown; do not call the current tree fully green. `git diff --check` passed. No broad qualification was run.
+**Open — construction:** `TH-CON-01` still needs a whole-validated-execution induction linking dynamic initializer occurrences and all seven construction protocol rules, including terminal paths. Supported source histories are not a proof that validation covers every syntax form.
+**Open — exits:** `TH-EXIT-01` still needs general nearest-target unwinding, cleanup and outside-root preservation. The interrupted-byte example reaches cleanup, but its accepted-world and handler bridge is incomplete; immediate and one-write cancellation proofs do not establish all histories, multiple writes or descendants.
+**Open — lowering:** `TH-LOWER-03` still needs the general demand, retained-operand and iteration invariant plus source-to-GIR existence and module composition. Mixed scalar/slice calls and forward argument traces remain restricted fragments. Neither `G-SHRINK` nor `G-CONSTRUCT` is closed.
+**Steering:** the owner criticized thousands of commits while the central theorems remain unfinished. Measure progress against those theorems, assemble the mutual inductions and remove duplicate machinery; do not treat further narrow lemmas or example counts as completion.
+**Next:** make a short proof-dependency map for the three general obligations, verify the final integrated consumers, then select one top-level induction and its minimum necessary premises. Reuse earlier evidence only when source and environment match.
+**Parked exit:** `campaign/ir-exit-byte-return` at `0035d3ebd` contains a checked reached-loop world theorem not integrated because five shared dependencies differ from the integration tree; compare and rerun its scoped closure before accepting it.
+**Preserved unfinished work:** `refs/campaign/winddown/ir-recursive-global-trace` holds unchecked mutation-history edits; `refs/campaign/winddown/ir-lower-projection` holds individually checked but not closure-checked empty-callee proofs. Recreate their worktrees from their corresponding `campaign/` branches and use `git stash apply <ref>` only after review.
+**Other preserved work:** `refs/campaign/winddown/ir-scalar-global-entry` contains unchecked-closure two-argument proofs and preexisting edits; `refs/campaign/winddown/ir-byte-owner` contains the obsolete cursor snapshot; `refs/campaign/winddown/ir-exit-byte-return` contains the lane's synced owner files. These are saved Git stash objects, not accepted commits. Do not apply the obsolete cursor snapshot over current source.
+**Other refs and scratch:** historical unmerged branches remain preserved and were not individually classified during this winddown. Inspect `git branch --no-merged` and [the earlier cleanup record](goose-ir-winddown-cleanup.md#retained-unmerged-refs) before selecting any. Campaign worktree scratch is archived under `.work/archive/goose-ir-winddown-20261029/`; source needed to resume is in branches and the saved Git refs.
+**Retained worktrees:** `.work/wt/accelerate-perf-baseline` is the deferred performance baseline; `.work/wt/aincrad3-goose-storage-whole-region`, `.work/wt/aincrad3-goose-whole-region-master` and `.work/wt/goose-master-2ad09c99` are owner-managed Aincrad work. The separately registered `/home/josh/d/aincrad3/.work/wt/goose-master-fae24622` is also owner-managed and must not be removed by this campaign.
+**Closeout limitation:** the closeout hook cannot allow that external worktree, so its guard was cancelled after the audit rather than disrupting the other project. The user crontab could not be inspected because `crontab -l` failed; no campaign worker remained in the process audit. Comprehensive corpora, full Lean/native qualification, five-kernel replay and final performance qualification remain manual-only named workloads; no gate is waived. Pushes remain unauthorized.
 **Contracts:** [specification](goose-ir-spec.md), [validation plan](goose-ir-validation.md).
 
 ## Current proof work
 
-The demand-prefix proofs cover supported scalar and short-circuit expressions, local or global clears, and assignments to local or global places, their fields, indexed elements and indexed array fields. Mixed blocks carry accepted frames through scope entry and exit. They cover successful prefixes and non-timeout stops, with no loop context in the block stop proofs. Assignment values include literals, arithmetic, comparisons, short-circuit expressions, and direct reads. Direct reads require the value type to be a valid reference target.
-
-Construction proofs preserve accepted worlds and frames across every outcome of byte-owner value evaluation, byte-owner global initialization and checked sequences of unnamed byte-owner declarations. A byte-only module with no entry tail retains an accepted world and satisfies the destination-trace protocol at its actual result for every fuel; the world result also covers arbitrary interleavings of byte declarations and recursive scalar expression statements with byte-owner globals and no tail. Exit proofs connect a nested byte return through an intervening activation to its matching outer handler, under the recorded receiver, setup and successful-build assumptions. Output and outside-scope entries are preserved relative to the post-build state. General construction preservation, other exits, loops, calls, returns, and whole-function cursor reconstruction remain open. These results do not close `TH-CON-01`, `TH-EXIT-01`, `TH-LOWER-03`, or their gates. The current assumptions and limits are recorded in `semantics/coverage.json`.
-
-Scoped proof closures use pinned Lean 4.35.0 and the allowed axioms. The adjacent `lean4` checkout is at `origin/master` revision `f4856ef9`, with stage1 built separately. Comprehensive corpora, full Lean and native qualification, five-kernel replay, and final performance qualification remain manual-only named workloads under the owner's existing instruction. No performance budget or release gate is waived.
-
-## Historical resume handoff (2026-10-26)
-
-**Resume:** “Resume the paused Goose IR campaign from this handoff; reread current instructions and finish the remaining accepted-execution proofs.” First run `git status --short --branch`. On an authorized resume, cancel campaign closeout if still active, reread the applicable skills, and perform the parent steering checkpoint before selecting work. Recreate selected worktrees under `.work/wt/` from their preserved branches. Do not automatically replay historical lane commits or repeat unchanged qualification.
-
-**State:** the last accepted source revision is `0df2c602`. Later commits record cleanup and this handoff. No integrated code is awaiting a known failing check. There are no in-flight lanes. Local commits remain authorized by the requested workflow; pushes remain unauthorized. Other owner workflows may update remote refs independently.
-
-Winddown integrated all ready coherent lane changes: canonical checker cursors and successors, literal/Boolean and negation prefix decomposition, shared unit/value block assembly, discarded-expression prefix transfer, actual reservation ticket append, initializer witness alignment, and the canonical callee source-frame factory. The proof APIs retain actual child metadata and initializer callee tables. These changes do not alter compiler or evaluator behavior. The earlier limited-array capture fixes and raw-module validation repair remain integrated.
-
-**Direction:** whole-block prefix composition now consumes actual child prefixes and retains the real execution remainder. It covers clear-only bodies with literal/Boolean values, plus abstract expression-family composition for negation and discarded expressions. The retained-index initializer pilot preserves its nonempty run map through every prefix, conditional on source validation. Its validation is confirmed at runtime; no closed kernel validation proof is claimed.
-
-The limiting work is the accepted mutual induction. Construction receipts must link actual current objects, allocation rows, receiving ancestry and lifetime before they can support separation. The qualified conditional family draft is not a sufficient accepted-world invariant. Callee source frames are canonical, but actual argument execution, final-heap content provenance, parameter binding and the runtime world/frame still need one assembled proof. General expression/statement recursion, abnormal block exits, loops, calls, returns and all-runtime demand-root assembly remain unfinished. `TH-CON-01`, `TH-EXIT-01`, `TH-LOWER-03` and their campaign gates remain open.
-
-The next substantive delivery is a source-derived construction invariant with one complete accepted evaluator case, then preservation through the remaining native families. Strengthen or replace the parked receipts before extending their family. On the lowering side, extend the existing prefix engine rather than adding a second one or assuming successful whole-source evaluation. Reassess after a real accepted case or a demonstrated contradiction. Comprehensive corpora, full Lean/native qualification, five-kernel replay and final performance qualification remain manual-only named workloads under the owner's existing instruction; scoped checks do not select them. No performance budget or release gate was waived.
-
-**Parked proof designs:**
-
-| Branch | Checkpoint | Finding and retry condition |
-| --- | --- | --- |
-| `campaign/afk-family` | `81ffccd6` | Qualified conditional Native23 family declaration and Boolean case. Current-row, storage and lifetime links in its receipt prerequisite are underconstrained. Repair those links and derive initial/preserved validity before claiming accepted execution. |
-| `campaign/afk-construction` | `881f7635` | Draft owning receipts. Its useful source-position prerequisite `71003ffb` is integrated as `1c163465`; the receipts are deliberately excluded. |
-| `campaign/afk-construction-receipts-draft` | `21a33526` | Obsolete earlier family snapshot, preserved for design comparison only. |
-
-Accepted work from `campaign/afk-demand`, `campaign/afk-short-circuit`, `campaign/afk-construct-roots`, `campaign/afk-exit`, and `campaign/afk-allocation` is integrated. Their checkouts were retired. Other retained unmerged refs are frozen historical or owner-managed snapshots, listed in [the cleanup record](goose-ir-winddown-cleanup.md#retained-unmerged-refs); branch history alone does not identify missing patches. No historical source is implicitly selected for resumption.
-
-**Cleanup:** 23 completed campaign checkouts were removed with Git, preserving every branch. `.work/` shrank from 80.6 GB to 11.6 GB. About 9.2 GB is compressed evidence: qualified exports, native artifacts, logs, repro inputs and performance results under `.work/archive/`. Each new archive passed integrity and tar-list checks before the originals were removed. Current scratch uses about 401 MB. The cleanup record names the archives and four small unregistered source snapshots retained pending ownership/source review. Durable campaign state is committed; archived scratch is optional evidence rather than the only copy of any campaign source.
-
-**Retained registered worktrees:** all four are clean and allowed by the closeout guard. The Aincrad trees belong to separate owner work; none is an active IR proof lane.
-
-| Path under `.work/wt/` | Branch or HEAD | Current consumer |
-| --- | --- | --- |
-| `accelerate-perf-baseline` | `campaign/accelerate-perf-baseline`, `24ba0840` | Frozen compiler baseline for deferred performance comparison. |
-| `aincrad3-goose-storage-whole-region` | `fix/linux-whole-region-advice`, `b7b9e0e3` | Owner-managed Aincrad storage experiment. |
-| `aincrad3-goose-whole-region-master` | `fix/linux-whole-region-master`, `ed85e2e5` | Owner-managed Aincrad upstream comparison. |
-| `goose-master-2ad09c99` | detached `2ad09c99` | Immutable Aincrad upstream baseline, relocated with owner approval. |
-
-The other approved external relocation was followed by concurrent owner cleanup: the runtime edits are preserved at `85fd984f` on `fix/linux-current-whole-region-advice-20261023`, and its checkout is retired. No registered external worktree remains.
-
-**Verified:** the final lowering group passes 201 modules and the final construction/callee/reservation group passes 245 modules under pinned Lean 4.35.0. The earlier 346-module source-position/negation group also passed; the changed construction dependencies were rechecked in the final group. Seven final selected axiom checks use only `propext`, `Classical.choice` and `Quot.sound`. `git diff --check` passes. No formatter, new corpus run, native semantic rebuild, independent-kernel replay or performance measurement was run for winddown. The known full-proof and performance gaps remain unmet.
-
-Reboot checks cover clean registered worktrees, preserved branch refs, ignored disk-backed `.work/`, no campaign worker/build process, and the configured trusted Stop command. The API cannot invoke interactive `/hooks`; its configuration and actual closeout command were checked directly. The campaign goal is paused. The current user has no crontab; system-wide schedules were not audited.
-
-Rehearse inspection from the repository root without starting work:
-
-```sh
-env -i HOME="$HOME" PATH="$PATH" sh -c '
-git status --short --branch
-git log -1 --oneline 0df2c602
-git show campaign/afk-family:semantics/Goose/Proofs/ConstructionAcceptedExecutionFamily.lean >/dev/null
-git show campaign/afk-construction:semantics/Goose/Proofs/ConstructionAcceptedOwningOrigins.lean >/dev/null
-git show campaign/afk-construction-receipts-draft:semantics/Goose/Proofs/ConstructionAcceptedExecutionFamily.lean >/dev/null
-git worktree list --porcelain
-test -f docs/design/goose-ir-winddown-cleanup.md
-test -x /home/josh/.local/lib/lean4/v4.35.0/bin/lean
-'
-```
+Focused all-fuel results now cover recursive scalar call graphs, selected byte-call declaration sequences and several actual cancellation transitions. Supported mixed scalar/slice calls have prefix, stop and limited forward-argument proofs. These are conditional fragments and examples; they do not establish the three universal obligations above. Source-history and checker proof interfaces were extended without changing evaluator operations.
 
 ## Unattended completion (2026-10-25)
 
