@@ -7,6 +7,7 @@ open Goose.Proofs.ConstructionGhostSyntaxFuel
 private def bytes : Expr := .bytes (.varr (.int .u8)) [65] 0
 private def resultBlock : Block := .mk 1 [] (some bytes)
 private def blockSource : Expr := .blockE resultBlock 0
+private def singleSource : Expr := .values [bytes]
 private def conditionalSource : Expr := .ifE (.bool true) resultBlock resultBlock 0
 private def global (source : Expr) : Global := ⟨"global", .varr (.int .u8), .immutable, source, 0⟩
 private def context : Context := ⟨0, "entry", [], [], []⟩
@@ -44,6 +45,20 @@ theorem conditional_history (fuel : Nat) (environment : RuntimeActivation) (dest
   exact (syntaxFuel_exists fuel (config conditionalSource) (closed conditionalSource)).builder environment destination conditionalSource
     (.conditional (.bool true) resultBlock resultBlock 0 (.base (.boolean true)) (resultSyntax conditionalSource) (resultSyntax conditionalSource))
 
+theorem single_history (fuel : Nat) (environment : RuntimeActivation) (destination : Goose.Core.DestinationId) (before : ExecutionState) :
+    SourceHistory (config singleSource) fuel [] (.builder environment destination singleSource) before
+      (buildExpr fuel (config singleSource) environment destination singleSource before) := by
+  apply fuelHistory_exists
+  exact (syntaxFuel_exists fuel (config singleSource) (closed singleSource)).builder environment destination singleSource
+    (.singleValue bytes (.bytes _ _ _))
+
+theorem conditional_producer_history (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel) (before : ExecutionState) :
+    SourceHistory (config conditionalSource) fuel [] (.producerWith environment channels conditionalSource) before
+      (evalProduce fuel (config conditionalSource) environment channels conditionalSource before) := by
+  apply fuelHistory_exists
+  exact (syntaxFuel_exists fuel (config conditionalSource) (closed conditionalSource)).conditionalProducer environment channels
+    (.bool true) resultBlock resultBlock 0 (.base (.boolean true)) (resultSyntax conditionalSource) (resultSyntax conditionalSource)
+
 theorem actual_events :
     runModule 40 (config blockSource) .initial = .ok () (stepState (runModule 40 (config blockSource) .initial)) ∧
     runModule 40 (config conditionalSource) .initial = .ok () (stepState (runModule 40 (config conditionalSource) .initial)) ∧
@@ -54,5 +69,7 @@ theorem actual_events :
 
 #print axioms block_history
 #print axioms conditional_history
+#print axioms single_history
+#print axioms conditional_producer_history
 #print axioms actual_events
 end Goose.Proofs.ConstructionGhostBuilderResultWitness

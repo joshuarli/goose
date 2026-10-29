@@ -71,6 +71,8 @@ inductive DeclarationBuilderSyntax (config : EvalConfig) : Expr → Prop
         getImplementation config contextId start = .ok (id, implementation) lookupReady →
         ArgumentSyntax config implementation.params.toList arguments) :
       DeclarationBuilderSyntax config (.call contextId arguments origin)
+  | singleValue (operand : Expr) (child : DeclarationBuilderSyntax config operand) :
+      DeclarationBuilderSyntax config (.values [operand])
   | block (block : Block) (origin : Goose.Core.OriginId) (child : ResultBlockSyntax config block) :
       DeclarationBuilderSyntax config (.blockE block origin)
   | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
@@ -140,6 +142,9 @@ inductive ResultTailSyntax (config : EvalConfig) : Option Expr → Prop
       (argumentsSyntax : ∀ id implementation start ready,
         getImplementation config context start = .ok (id, implementation) ready → ArgumentSyntax config implementation.params.toList arguments) :
       ResultTailSyntax config (some (.call context arguments origin))
+  | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
+      (conditionChild : ValueSyntax config condition) (yesChild : ResultBlockSyntax config yes) (noChild : ResultBlockSyntax config no) :
+      ResultTailSyntax config (some (.ifE condition yes no origin))
   | block (block : Block) (origin : Goose.Core.OriginId) (child : ResultBlockSyntax config block) :
       ResultTailSyntax config (some (.blockE block origin))
 
@@ -273,6 +278,9 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     FuelSupport config fuel (.resultBlockWith environment pre channels block)
   resultBlock : ∀ environment channels block, ResultBlockSyntax config block →
     FuelSupport config fuel (.resultBlock environment channels block)
+  conditionalProducer : ∀ environment channels condition yes no origin, ValueSyntax config condition →
+    ResultBlockSyntax config yes → ResultBlockSyntax config no →
+    FuelSupport config fuel (.producerWith environment channels (.ifE condition yes no origin))
   blockProducer : ∀ environment channels block origin, ResultBlockSyntax config block →
     FuelSupport config fuel (.producerWith environment channels (.blockE block origin))
   loopBody : ∀ environment scope statements, (∀ statement ∈ statements, StatementSyntax config statement) →
@@ -412,6 +420,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | channelCall contextId arguments origin argumentsSyntax =>
             exact .builderChannelCall fuel environment destination contextId arguments origin
               (fun child => previous.channelCall environment contextId arguments [.construct child] origin argumentsSyntax)
+        | singleValue operand child =>
+            exact .builderSingleValue fuel environment destination operand
+              (fun selected => previous.builder environment selected operand child)
         | block block origin child =>
             exact .builderBlock fuel environment destination block origin
               (fun selected => previous.resultBlock environment [.construct selected] block child)
@@ -554,11 +565,18 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
               | call context arguments origin argumentsSyntax =>
                   cases tailEq
                   exact previous.producerCall scopedEnvironment channels context arguments origin argumentsSyntax
+              | conditional condition yes no origin conditionChild yesChild noChild =>
+                  cases tailEq
+                  exact previous.conditionalProducer scopedEnvironment channels condition yes no origin conditionChild yesChild noChild
               | block block origin child =>
                   cases tailEq
                   exact previous.blockProducer scopedEnvironment channels block origin child
       · intro environment channels block derivation
         exact .resultBlock fuel environment channels block (previous.resultBlockWith environment [] channels block derivation)
+      · intro environment channels condition yes no origin conditionChild yesChild noChild
+        exact .producerConditional fuel environment channels condition yes no origin (previous.value environment condition conditionChild)
+          (fun planned => previous.resultBlock environment planned yes yesChild)
+          (fun planned => previous.resultBlock environment planned no noChild)
       · intro environment channels block origin derivation
         exact .producerBlock fuel environment channels block origin (fun planned => previous.resultBlock environment planned block derivation)
       · intro environment scope statements derivation

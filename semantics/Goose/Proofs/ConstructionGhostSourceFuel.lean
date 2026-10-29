@@ -80,6 +80,9 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (context : Goose.Core.ContextId) (arguments : List Arg) (origin : Goose.Core.OriginId)
       (child : ∀ destination, FuelSupport config fuel (.channelCall environment context arguments [.construct destination] origin)) :
       FuelSupport config (fuel + 1) (.builder environment incoming (.call context arguments origin))
+  | builderSingleValue (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (operand : Expr) (child : ∀ destination, FuelSupport config fuel (.builder environment destination operand)) :
+      FuelSupport config (fuel + 1) (.builder environment incoming (.values [operand]))
   | builderBlock (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
       (block : Block) (origin : Goose.Core.OriginId)
       (child : ∀ destination, FuelSupport config fuel (.resultBlock environment [.construct destination] block)) :
@@ -102,6 +105,12 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | valueBlockProducer (fuel : Nat) (environment : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId)
       (child : ∀ channels, FuelSupport config fuel (.producerWith environment channels (.blockE block origin))) :
       FuelSupport config (fuel + 1) (.value environment (.blockE block origin))
+  | producerConditional (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel)
+      (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
+      (conditionChild : FuelSupport config fuel (.value environment condition))
+      (yesChild : ∀ planned, FuelSupport config fuel (.resultBlock environment planned yes))
+      (noChild : ∀ planned, FuelSupport config fuel (.resultBlock environment planned no)) :
+      FuelSupport config (fuel + 1) (.producerWith environment channels (.ifE condition yes no origin))
   | producerBlock (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel) (block : Block) (origin : Goose.Core.OriginId)
       (child : ∀ planned, FuelSupport config fuel (.resultBlock environment planned block)) :
       FuelSupport config (fuel + 1) (.producerWith environment channels (.blockE block origin))
@@ -427,6 +436,10 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .builderChannelCall fuel path environment incoming context arguments origin before ?_
           intro destination ready renewed
           exact ih (.channelCall environment context arguments [.construct destination] origin) (path ++ [0]) ready (childSupported destination)
+      | builderSingleValue _ environment incoming operand childSupported =>
+          refine .builderSingleValue fuel path environment incoming operand before ?_
+          intro destination ready renewed
+          exact ih (.builder environment destination operand) (path ++ [0]) ready (childSupported destination)
       | builderBlock _ environment incoming block origin childSupported =>
           refine .builderBlock fuel path environment incoming block origin before ?_
           intro destination ready renewed
@@ -461,6 +474,14 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .valueBlockProducer fuel path environment block origin before ?_
           intro types channels ready typesFound prepared
           exact ih (.producerWith environment channels (.blockE block origin)) (path ++ [0]) ready (childSupported channels)
+      | producerConditional _ environment channels condition yes no origin conditionSupported yesSupported noSupported =>
+          refine .producerConditional fuel path environment channels condition yes no origin before ?_ ?_
+          · intro planned ready prepared
+            exact ih (.value environment condition) (path ++ [0]) ready conditionSupported
+          · intro planned ready value middle selected selectedState prepared evaluated boolean
+            cases selected with
+            | false => exact ih (.resultBlock environment planned no) (path ++ [1]) selectedState (noSupported planned)
+            | true => exact ih (.resultBlock environment planned yes) (path ++ [1]) selectedState (yesSupported planned)
       | producerBlock _ environment channels block origin childSupported =>
           refine .producerBlock fuel path environment channels block origin before ?_
           intro planned ready prepared
