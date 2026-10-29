@@ -1,5 +1,5 @@
 import Goose.Proofs.ConstructionExitFreshCancelSource
-import Goose.Proofs.ConstructionExitReleasedAppendContext
+import Goose.Proofs.ConstructionExitReleasedAppendReceiving
 
 set_option Elab.async false
 
@@ -15,7 +15,6 @@ theorem allocated_receiver_cancel_world (config : EvalConfig) (initialized : Nat
     (before allocated : ExecutionState) (id : Nat) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
-    (history : ReservationReferencesBounded before.construction ambient)
     (elementType : Goose.Construct.elementType ty = some element)
     (created : newDestination config.layout owner ty request origin none knownCount before = .ok id allocated) :
     ∃ reserved final,
@@ -35,7 +34,7 @@ theorem allocated_receiver_cancel_world (config : EvalConfig) (initialized : Nat
   subst otherReserved
   have sameFinal : otherFinal = final := (ConstructionResult.ok.inj (otherCancel.symm.trans cancel)).2
   subst otherFinal
-  have oldContext := released_ticket_append_context before ambient world.ownership history
+  have oldContext := released_ticket_append_context_unbounded before ambient world.ownership
   have context := frame.ownershipContext ambient oldContext source
   obtain ⟨allocation⟩ := newDestination_fresh_frame config.layout owner ty request origin knownCount before allocated id
     world.ownership.source.structural.1.1.1 created

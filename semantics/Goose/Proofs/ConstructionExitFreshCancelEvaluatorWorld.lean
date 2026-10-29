@@ -15,7 +15,6 @@ theorem allocated_byte_exit_cancel_world (config : EvalConfig) (initialized : Na
     (before allocated : ExecutionState) (id : Nat) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : RootInst → Prop) (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
     (world : AcceptedWorld config initialized before ambient types live regions pending)
-    (history : ReservationReferencesBounded before.construction ambient)
     (created : newDestination config.layout owner (.varr (.int .u8)) .value origin none knownCount before = .ok id allocated)
     (channels : target.channels = [.construct id]) :
     ∃ prepared final,
@@ -23,7 +22,7 @@ theorem allocated_byte_exit_cancel_world (config : EvalConfig) (initialized : Na
       exitChannelCleanupBorrowed origin [] [allocated.construction.exitReservations.size] true [] prepared = .ok () final ∧
       AcceptedWorld config initialized final ambient types live regions pending := by
   obtain ⟨reserved, final, reserve, cancelled, finalWorld⟩ := allocated_receiver_cancel_world config initialized owner
-    (.varr (.int .u8)) (.int .u8) .value origin knownCount before allocated id ambient types live regions pending world history rfl created
+    (.varr (.int .u8)) (.int .u8) .value origin knownCount before allocated id ambient types live regions pending world rfl created
   obtain ⟨⟨backing⟩, _⟩ := newDestination_open_ready config initialized owner (.varr (.int .u8)) .value origin knownCount
     before allocated ambient types live regions pending id (.int .u8) world rfl created
   have current := newDestination_current_self config initialized owner (.varr (.int .u8)) .value origin knownCount before allocated id
