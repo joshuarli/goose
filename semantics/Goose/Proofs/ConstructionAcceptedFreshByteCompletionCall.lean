@@ -2,6 +2,7 @@ import Goose.Proofs.ConstructionAcceptedFreshByteBuiltCall
 import Goose.Proofs.ConstructionExitFreshSeparation
 import Goose.Proofs.ConstructionExitByteBacking
 import Goose.Proofs.ConstructionExitCompletionActivation
+import Goose.Proofs.ConstructionAcceptedByteNormalized
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct Goose.Core
@@ -10,7 +11,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ExitExecution
 
-theorem fresh_byte_call_completion_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+theorem fresh_byte_call_completion_observed_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (caller : RuntimeActivation) (scope : Nat) (allocationOrigin origin : OriginId) (knownCount : Option Nat)
     (before allocated : ExecutionState) (id implId : Nat) (helper : Construct.Impl) (bytes : List UInt8)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
@@ -28,7 +29,10 @@ theorem fresh_byte_call_completion_world (fuel : Nat) (config : EvalConfig) (ini
       (fun channels => evalProduce (fuel + 2) config producer channels (.bytes (.varr (.int .u8)) bytes origin)) scopeState =
       .ok [.completed id] after ∧
       AcceptedWorld config initialized after (.returned [.completed id] :: .callChannels activation [] :: ambient) types live
-        (freshReceivingRegion before id :: regions) (⟨[.construct id], [.completed id]⟩ :: pending) := by
+        (freshReceivingRegion before id :: regions) (⟨[.construct id], [.completed id]⟩ :: pending) ∧
+      after = { scopeState with construction := after.construction } ∧
+      Nonempty (NormalizedCompletedCarrier after (.varr (.int .u8)) id) ∧
+      Nonempty (BuiltByteReceiver config.layout after id before.construction.storage.size bytes.length) := by
   let activation : RuntimeActivation := ⟨implId, allocated.nextAct, helper.vars, [], [.construct id]⟩
   let pushed := { allocated with nextAct := allocated.nextAct + 1, activations := activation :: allocated.activations }
   let scopeState := ownershipResultScopeState activation scope pushed
@@ -106,10 +110,51 @@ theorem fresh_byte_call_completion_world (fuel : Nat) (config : EvalConfig) (ini
     rfl
   have equal : after = final := (ExecutionStep.ok.inj (cleanup.symm.trans actualCleanup)).2
   subst after
-  refine ⟨final, ?_, afterWorld⟩
-  change withCompletionChannels [.construct id] origin (fun channels => evalProduce (fuel + 2) config producer channels (.bytes (.varr (.int .u8)) bytes origin)) scopeState = .ok [.completed id] final
-  simp [withCompletionChannels, setup, producedCompletion, materializeOwnedCarriers, List.mapM_cons, List.mapM_nil,
-    List.forIn_cons, List.forIn_nil, liftConstruction, released, bind, pure, final]
+  have runtime := buildExpr_bytes_runtime fuel config producer id (.varr (.int .u8)) bytes origin prepared built
+    ready.destination 0 prep.1.ownership.source preparedCurrent preparedReady.present preparedReady.opened actualBuild
+  have outer : built = { scopeState with construction := built.construction } := by simpa only [prepared] using runtime
+  obtain ⟨normalized⟩ := packed_byte_build_normalized fuel config producer id bytes origin prepared built prep.1.ownership.source
+    preparedReady packed request receiver adaptation physical preparedCurrent fits actualBuild
+  obtain ⟨geometry⟩ := packed_byte_build_receiver fuel config producer id before.construction.storage.size bytes origin prepared built
+    prep.1.ownership.source preparedReady packed request receiver adaptation physical direct preparedCurrent fits actualBuild
+  have valid := normalized
+  have validFinal : NormalizedCompletedCarrier final (.varr (.int .u8)) id := by
+    refine ⟨valid.destination, valid.present, valid.built, ?_, valid.adaptation, valid.normalized, valid.type, valid.constructible⟩
+    simpa only [destinationCanWrite_result, final] using valid.writable
+  have geometryFinal : BuiltByteReceiver config.layout final id before.construction.storage.size bytes.length := by
+    exact ⟨geometry.row, geometry.storage, geometry.present, geometry.stored, geometry.progress, geometry.receiver, geometry.backing,
+      geometry.storageEq, geometry.packed, geometry.request, geometry.logical, geometry.adaptation, geometry.sampled, validFinal⟩
+  refine ⟨final, ?_, afterWorld, ?_, ⟨validFinal⟩, ⟨geometryFinal⟩⟩
+  · change withCompletionChannels [.construct id] origin (fun channels => evalProduce (fuel + 2) config producer channels (.bytes (.varr (.int .u8)) bytes origin)) scopeState = .ok [.completed id] final
+    simp [withCompletionChannels, setup, producedCompletion, materializeOwnedCarriers, List.mapM_cons, List.mapM_nil,
+      List.forIn_cons, List.forIn_nil, liftConstruction, released, bind, pure, final]
+  · change final = { scopeState with construction := final.construction }
+    dsimp only [final]
+    rw [outer]
 
+theorem fresh_byte_call_completion_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (caller : RuntimeActivation) (scope : Nat) (allocationOrigin origin : OriginId) (knownCount : Option Nat)
+    (before allocated : ExecutionState) (id implId : Nat) (helper : Construct.Impl) (bytes : List UInt8)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame)
+    (world : AcceptedWorld config initialized before ambient types live regions pending)
+    (coverage : EvaluationHistoryCoverage before ambient pending)
+    (created : newDestination config.layout caller.act (.varr (.int .u8)) .value allocationOrigin none knownCount before = .ok id allocated)
+    (ready : OpenDestinationBacking config.layout allocated id (.varr (.int .u8)) 0)
+    (fits : bytes.length < 2 ^ 32) :
+    let activation : RuntimeActivation := ⟨implId, allocated.nextAct, helper.vars, [], [.construct id]⟩
+    let pushed := { allocated with nextAct := allocated.nextAct + 1, activations := activation :: allocated.activations }
+    let scopeState := ownershipResultScopeState activation scope pushed
+    let producer := { activation with scopes := (scope, pushed.nextScope) :: activation.scopes }
+    ∃ after, withCompletionChannels [.construct id] origin
+      (fun channels => evalProduce (fuel + 2) config producer channels (.bytes (.varr (.int .u8)) bytes origin)) scopeState =
+      .ok [.completed id] after ∧
+      AcceptedWorld config initialized after (.returned [.completed id] :: .callChannels activation [] :: ambient) types live
+        (freshReceivingRegion before id :: regions) (⟨[.construct id], [.completed id]⟩ :: pending) := by
+  obtain ⟨after, done, afterWorld, outer, normalized, geometry⟩ := fresh_byte_call_completion_observed_world fuel config initialized caller scope
+    allocationOrigin origin knownCount before allocated id implId helper bytes ambient types live regions pending world coverage created ready fits
+  exact ⟨after, done, afterWorld⟩
+
+#print axioms fresh_byte_call_completion_observed_world
 #print axioms fresh_byte_call_completion_world
 end Goose.Proofs.ConstructionAcceptedExecution
