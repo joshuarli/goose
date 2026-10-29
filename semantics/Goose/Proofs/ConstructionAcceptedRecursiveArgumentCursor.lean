@@ -1,4 +1,5 @@
 import Goose.Proofs.ConstructionAcceptedNestedParameterCursor
+import Goose.Proofs.ConstructionAcceptedUnaryCallComplete
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -13,6 +14,11 @@ inductive RecursiveArgumentExpression (config : EvalConfig) (integer : Goose.Cor
   | binary {left right : Expr} (operation : Goose.Core.BinOp) (origin : Nat) :
       RecursiveArgumentExpression config integer implementation left → RecursiveArgumentExpression config integer implementation right →
       RecursiveArgumentExpression config integer implementation (.bin operation left right origin)
+  | zeroCall (target origin : Nat) (context : Context) (callee : Impl) :
+      config.module.contexts[target]? = some context → config.module.impls[context.impl]? = some callee →
+      callee.params = #[] → callee.results = #[⟨.int integer, .register, none⟩] →
+      RegisterCallGraphWithCallLocals config (.int integer) →
+      RecursiveArgumentExpression config integer implementation (.call target [] origin)
   | call {argument : Expr} (target origin : Nat) (context : Context) (callee : Impl) (parameter : Param)
       (descriptor : LocalVar) (summary : Summary) :
       config.module.contexts[target]? = some context → config.module.impls[context.impl]? = some callee →
@@ -28,6 +34,8 @@ theorem RecursiveArgumentExpression.toSource {config : EvalConfig} {integer : Go
   | literal value => exact .literal value
   | localRead id descriptor declared descriptorType => exact .localRead id descriptor declared (Or.inl ⟨integer, descriptorType⟩)
   | binary operation origin left right leftIH rightIH => exact .binary operation origin leftIH rightIH
+  | zeroCall target origin context callee contextAt calleeAt parameters results graph =>
+    exact .zeroCall target origin context callee contextAt calleeAt parameters results
   | call target origin context callee parameter descriptor summary contextAt calleeAt parameters mode declared descriptorType results known argument ih =>
     exact .call target origin context callee parameter summary contextAt calleeAt parameters results known ih
 

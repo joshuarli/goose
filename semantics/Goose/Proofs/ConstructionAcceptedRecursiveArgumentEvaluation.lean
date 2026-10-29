@@ -99,6 +99,9 @@ theorem evalValue_recursiveArgument_fromCalls {config : EvalConfig} {integer : G
           refine ⟨nextTypes, nextLive, nextAmbient, extend, acts, scopes, finalWorld, ?_, clear, observed, result⟩
           exact currentSource.afterEarlierObservations acts scopes observed
         exact evalValue_binary_earlier_compose fuel config accepted frame before ambient types regions pending integer operation left right origin leftSafe rightSafe
+  | zeroCall target origin context callee contextAt calleeAt parameters results graph =>
+    exact evalValue_unaryRegisterExpression config integer (.call target origin context callee contextAt calleeAt parameters results)
+      fuel accepted frame before ambient types live regions pending graph world source roots typingAfter rootsAfter checked
   | @call argument target origin context callee parameter descriptor summary contextAt calleeAt parameters mode declared descriptorType results known argumentForm ih =>
     apply evalValue_registerArguments_earlier_fromInvocation fuel config accepted frame before ambient types live regions pending
       target [.byVal argument] context callee (.int integer) origin world source contextAt calleeAt results

@@ -1,6 +1,7 @@
 import Goose.Proofs.ConstructionAcceptedNestedParameterCallEffects
 import Goose.Proofs.ConstructionAcceptedCallResultRoots
 import Goose.Proofs.ConstructionAcceptedBinaryTyping
+import Goose.Proofs.ConstructionAcceptedZeroCallParameterEffects
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -14,6 +15,10 @@ inductive NestedParameterExpression (config : EvalConfig) (integer : Goose.Core.
   | binary {left right : Expr} (operation : Goose.Core.BinOp) (origin : Nat) :
       NestedParameterExpression config integer implementation left → NestedParameterExpression config integer implementation right →
       NestedParameterExpression config integer implementation (.bin operation left right origin)
+  | zeroCall (target origin : Nat) (context : Context) (callee : Impl) :
+      config.module.contexts[target]? = some context → config.module.impls[context.impl]? = some callee →
+      callee.params = #[] → callee.results = #[⟨.int integer, .register, none⟩] →
+      NestedParameterExpression config integer implementation (.call target [] origin)
   | call {argument : Expr} (target origin : Nat) (context : Context) (callee : Impl) (parameter : Param) (summary : Summary) :
       config.module.contexts[target]? = some context → config.module.impls[context.impl]? = some callee →
       callee.params = #[parameter] → callee.results = #[⟨.int integer, .register, none⟩] →
@@ -49,6 +54,12 @@ theorem nestedParameterExpression_source {config : EvalConfig} {integer : Goose.
     refine ⟨rootsEmpty, ?_⟩
     intro id member
     exact second.2 id (by rw [← same]; exact member)
+  | zeroCall target origin context callee contextAt calleeAt parameters results =>
+    intro source before after roots moduleEq implementationEq clear rooted
+    have contextFound : source.mod.contexts[target]? = some context := by simpa [moduleEq] using contextAt
+    have calleeFound : source.mod.impls[context.impl]? = some callee := by simpa [moduleEq] using calleeAt
+    exact ⟨rpExpr_zeroArgument_scalarRegister_roots (.int integer) contextFound calleeFound parameters results (Or.inl ⟨integer, rfl⟩) rooted,
+      rpExpr_zeroArgument_noParameter contextFound calleeFound parameters clear rooted⟩
   | @call argument target origin context callee parameter summary contextAt calleeAt parameters results known argumentForm ih =>
     intro source before after roots moduleEq implementationEq clear rooted
     have contextFound : source.mod.contexts[target]? = some context := by simpa [moduleEq] using contextAt

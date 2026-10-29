@@ -1,5 +1,7 @@
 import Goose.Proofs.ConstructionAcceptedNestedParameterSource
 import Goose.Proofs.ConstructionAcceptedUnaryArgumentSource
+import Goose.Proofs.ConstructionAcceptedRecursiveCallRootCursor
+import Goose.Proofs.ConstructionAcceptedRecursiveCallCursor
 
 namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct
@@ -76,6 +78,11 @@ theorem nestedParameterExpression_rootCursor {config : EvalConfig} {integer : Go
     have second := rightIH { frame with rootCursor := middle } rightRoots final moduleEq rightRooted
     have last := nestedBin_final_nextVar frame operation left right origin roots leftRoots rightRoots after middle final rooted leftRooted rightRooted
     exact last.trans (second.trans first)
+  | zeroCall target origin context callee contextAt calleeAt parameters results =>
+    intro frame roots after moduleEq rooted
+    have contextFound : frame.source.mod.contexts[target]? = some context := by simpa [moduleEq] using contextAt
+    have calleeFound : frame.source.mod.impls[context.impl]? = some callee := by simpa [moduleEq] using calleeAt
+    exact rpExpr_zeroArgument_nextVar contextFound calleeFound parameters rooted
   | @call argument target origin context callee parameter summary contextAt calleeAt parameters results known argumentForm ih =>
     intro frame roots after moduleEq rooted
     have contextFound : frame.source.mod.contexts[target]? = some context := by simpa [moduleEq] using contextAt
@@ -173,6 +180,21 @@ theorem nestedParameterExpression_typingCursor {config : EvalConfig} {integer : 
       have second := rightIH fuel { environment with use := .ordinary, request := .value, resultRequests := [] }
         middle after (.int operandInteger) moduleEq (Or.inl rfl) rightTyped
       exact second.trans first
+  | zeroCall target origin context callee contextAt calleeAt parameters results =>
+    intro fuel environment before after ty moduleEq requests checked
+    cases fuel with
+    | zero => change Except.error _ = Except.ok _ at checked; cases checked
+    | succ remaining =>
+      cases remaining with
+      | zero =>
+        simp only [typeExpr, moduleEq, contextAt, calleeAt, typeArguments, bind, StateT.bind, Except.bind] at checked
+        change Except.error _ = Except.ok _ at checked
+        cases checked
+      | succ fuel =>
+        have contextFound : environment.module.contexts[target]? = some context := by simpa [moduleEq] using contextAt
+        have calleeFound : environment.module.impls[context.impl]? = some callee := by simpa [moduleEq] using calleeAt
+        exact typeExpr_zeroArgumentRegisterCall_cursor fuel environment target origin context callee (.int integer) before after [ty]
+          contextFound calleeFound parameters results (Or.inl ⟨integer, rfl⟩) requests checked
   | @call argument target origin context callee parameter summary contextAt calleeAt parameters results known argumentForm ih =>
     intro fuel environment before after ty moduleEq requests checked
     cases fuel with
