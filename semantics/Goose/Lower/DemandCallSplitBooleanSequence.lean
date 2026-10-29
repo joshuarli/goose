@@ -1,17 +1,9 @@
-import Goose.Lower.DemandCallSliceSequence
-import Goose.Lower.DemandCallSplitBooleanStage
+import Goose.Lower.DemandCallSplitArgumentForms
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
 open Goose.Lower.Validation.ReplacementContentFlowSource
 
-inductive LocalSliceBooleanArguments (access : AccessEnv) : List Arg → Prop
-  | nil : LocalSliceBooleanArguments access []
-  | boolean (boolean : Bool) {rest : List Arg} (tail : LocalSliceBooleanArguments access rest) :
-      LocalSliceBooleanArguments access (.byVal (.bool boolean) :: rest)
-  | reference {borrow : Mutability} {slot : VarId} {mutability : Mutability} {element : Ty} {rest : List Arg}
-      (type : access.placeType? (.var slot) = some (.slice mutability element))
-      (tail : LocalSliceBooleanArguments access rest) : LocalSliceBooleanArguments access (.byRef borrow (.var slot) :: rest)
 
 theorem accepted_generated_call_slice_boolean_sequence {cfg : Cfg} {env : Env} {initialState state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
@@ -24,7 +16,7 @@ theorem accepted_generated_call_slice_boolean_sequence {cfg : Cfg} {env : Env} {
     {index : Nat} (sources : ∀ fuel, ArgsSource fuel cfg env rest state)
     (canonical : ∀ fuel, (sources fuel).CallChildren source index)
     {values : List (ValueId × RetainedAlias)} {slots : List SliceSlotArgumentCell} {map : RetainedSsaMap}
-    (admitted : map.Admitted cfg.mod.profile source.context.retained)
+    (admitted : ∀ boolean, .byVal (.bool boolean) ∈ rest → map.Admitted cfg.mod.profile source.context.retained)
     (split : SplitCallArgumentRows source.rootsEnv.access source.path 0 (arguments.take index)
       (lowerArgs (arguments.take index) (lowerEnv cfg.mod env.vars results) before).1 values slots)
     {initial rootFrame : GIR.Frame} {start : Pt} {previousValues : List Val}
@@ -69,7 +61,7 @@ theorem accepted_generated_call_slice_boolean_sequence {cfg : Cfg} {env : Env} {
         rw [sourceEq] at evidence
         obtain ⟨found, childCanonical, _⟩ := evidence
         obtain ⟨point, frame, evaluated, executed, post, nextRows, nextRealized, nextBounded, nextChecked, nextInput⟩ :=
-          accepted_generated_call_split_boolean_stage source found child childCanonical admitted split input bounded realized checked extended
+          accepted_generated_call_split_boolean_stage source found child childCanonical (admitted boolean (by simp)) split input bounded realized checked extended
         have nextCells := cells.next found post
         have nextPost : Post cfg env cx before rootFrame
             (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).2 frame point [] := by
@@ -85,7 +77,7 @@ theorem accepted_generated_call_slice_boolean_sequence {cfg : Cfg} {env : Env} {
           exact ArgsSource.afterHead_callChildren source sources canonical evaluated fuel
         obtain ⟨tailLength, finalPoint, finalFrame, finalValues, finalSlots, done, tailSteps, finalRows,
           finalBounded, finalRealized, finalChecked, finalPost, finalCells, finalInput⟩ :=
-          ih nextSources nextCanonical nextRows nextPost nextCells nextInput nextBounded nextRealized nextChecked
+          ih nextSources nextCanonical (fun boolean member => admitted boolean (by simp [member])) nextRows nextPost nextCells nextInput nextBounded nextRealized nextChecked
         refine ⟨1 + tailLength, finalPoint, finalFrame, .bool boolean :: finalValues, finalSlots,
           .cons evaluated done, executed.append tailSteps, ?_, ?_, finalRealized, ?_, ?_, ?_, ?_⟩
         · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalRows
@@ -125,7 +117,7 @@ theorem accepted_generated_call_slice_boolean_sequence {cfg : Cfg} {env : Env} {
           exact ArgsSource.afterHead_callChildren source sources canonical evaluated fuel
         obtain ⟨tailLength, finalPoint, finalFrame, finalValues, finalSlots, done, tailSteps, finalRows,
           finalBounded, finalRealized, finalChecked, finalPost, finalCells, finalInput⟩ :=
-          ih nextSources nextCanonical nextRows nextPost nextCells nextInput nextBounded nextRealized nextChecked
+          ih nextSources nextCanonical (fun boolean member => admitted boolean (by simp [member])) nextRows nextPost nextCells nextInput nextBounded nextRealized nextChecked
         refine ⟨length + tailLength, finalPoint, finalFrame, .ref location :: finalValues, finalSlots,
           .cons evaluated done, executed.append tailSteps, ?_, ?_, finalRealized, ?_, ?_, ?_, ?_⟩
         · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalRows
@@ -187,7 +179,7 @@ theorem accepted_generated_call_slice_boolean_arguments {cfg : Cfg} {env : Env} 
       (lowerArgs (arguments.take 0) (lowerEnv cfg.mod env.vars results) before).2 initial start [] := by
     simpa [lowerArgs, pure_run] using Post.init input.related input.atPoint
   obtain ⟨length, point, frame, values, slots, done, executed, rowsFinal, boundFinal, realizedFinal, checkedFinal, postFinal, cellsFinal, inputFinal⟩ :=
-    accepted_generated_call_slice_boolean_sequence source occurrence rows form sources canonical admitted split wholePost cells input' bounded' realized'
+    accepted_generated_call_slice_boolean_sequence source occurrence rows form sources canonical (fun _ _ => admitted) split wholePost cells input' bounded' realized'
       (by simp) extended
   obtain ⟨fuel, evaluated⟩ := done.fuel
   refine ⟨fuel, length, point, frame, values, slots, evaluated, executed, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩

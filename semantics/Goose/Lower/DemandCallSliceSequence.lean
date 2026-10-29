@@ -1,3 +1,4 @@
+import Goose.Lower.DemandCallSplitBooleanSequence
 import Goose.Lower.DemandCallSliceSequenceStage
 import Goose.Lower.DemandCallFuel
 import Goose.Lower.DemandCallArgumentCells
@@ -6,11 +7,6 @@ namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
 open Goose.Lower.Validation.ReplacementContentFlowSource
 
-inductive LocalSliceArguments (access : AccessEnv) : List Arg → Prop
-  | nil : LocalSliceArguments access []
-  | cons {borrow : Mutability} {slot : VarId} {mutability : Mutability} {element : Ty} {rest : List Arg}
-      (type : access.placeType? (.var slot) = some (.slice mutability element))
-      (tail : LocalSliceArguments access rest) : LocalSliceArguments access (.byRef borrow (.var slot) :: rest)
 
 theorem accepted_generated_call_slice_sequence {cfg : Cfg} {env : Env} {initialState state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
@@ -54,50 +50,8 @@ theorem accepted_generated_call_slice_sequence {cfg : Cfg} {env : Env} {initialS
         (previousValues ++ resultsValues) (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).2.vals.size frame ∧
       GeneratedPrefixInput cfg env cx results loop source.typingEnv source.rootsEnv
         (lowerArgs (arguments.take (index + rest.length)) (lowerEnv cfg.mod env.vars results) before).2 frame point := by
-  induction form generalizing index initial start slots previousValues with
-  | nil =>
-    exact ⟨0, start, initial, [], slots, .nil state, .zero _, by simpa using split, by simpa using bounded,
-      realized, by simpa using checked, by simpa using wholePost, by simpa using cells, by simpa using input⟩
-  | @cons borrow slot mutability element rest type tail ih =>
-    cases sourceEq : sources 0 with
-    | cons head tailSource =>
-      cases head with
-      | byRef _ child target =>
-        have evidence := canonical 0
-        rw [sourceEq] at evidence
-        obtain ⟨found, childCanonical, _⟩ := evidence
-        have metadata := childCanonical
-        obtain ⟨_, _, _, _, roots, _⟩ := metadata
-        have accessType := tyPlace_accessType (child.frame.mod_t.trans child.frame.mod_p.symm)
-          (child.frame.vars_t.trans child.frame.vars_p.symm) child.typed
-        rw [roots, type] at accessType
-        have childType : child.ty = .slice mutability element := (Option.some.inj accessType).symm
-        obtain ⟨location, length, point, frame, cell, evaluated, executed, post, nextRows, nextBounded, nextRealized, nextChecked, nextInput⟩ :=
-          accepted_generated_call_slice_sequence_stage source found child target childCanonical childType occurrence rows split input bounded realized checked extended
-        have nextCells := cells.next found post
-        have nextPost : Post cfg env cx before rootFrame
-            (lowerArgs (arguments.take (index + 1)) (lowerEnv cfg.mod env.vars results) before).2 frame point [] := by
-          have combined := wholePost.comp post
-          have takeEq : arguments.take (index + 1) = arguments.take index ++ [.byRef borrow (.var slot)] := by
-            rw [List.take_add_one, found]
-            simp
-          rw [takeEq, lowerArgs_append_run]
-          simpa [lowerArgs, bind_run, pure_run] using combined.sub (by simp)
-        let nextSources := ArgsSource.afterHead sources evaluated
-        have nextCanonical : ∀ fuel, (nextSources fuel).CallChildren source (index + 1) := by
-          intro fuel
-          exact ArgsSource.afterHead_callChildren source sources canonical evaluated fuel
-        obtain ⟨tailLength, finalPoint, finalFrame, finalValues, finalSlots, done, tailSteps, finalRows,
-          finalBounded, finalRealized, finalChecked, finalPost, finalCells, finalInput⟩ :=
-          ih nextSources nextCanonical nextRows nextPost nextCells nextInput nextBounded nextRealized nextChecked
-        refine ⟨length + tailLength, finalPoint, finalFrame, .ref location :: finalValues, finalSlots,
-          .cons evaluated done, executed.append tailSteps, ?_, ?_, finalRealized, ?_, ?_, ?_, ?_⟩
-        · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalRows
-        · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalBounded
-        · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalChecked
-        · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalPost
-        · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, List.append_assoc] using finalCells
-        · simpa [List.length_cons, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm] using finalInput
+  exact accepted_generated_call_slice_boolean_sequence source occurrence rows form.toBoolean sources canonical
+    (fun boolean member => (form.noBoolean boolean member).elim) split wholePost cells input bounded realized checked extended
 
 theorem accepted_generated_call_slice_arguments {cfg : Cfg} {env : Env} {state : St}
     {context : ContextId} {arguments : List Arg} {origin : OriginId}
