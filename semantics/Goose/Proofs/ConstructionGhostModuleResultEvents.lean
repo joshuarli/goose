@@ -96,6 +96,33 @@ theorem moduleEntry_tail_resultPrefix (fuel : Nat) (config : EvalConfig) (activa
   rw [moduleResult]
   exact eventPrefix_trans _ _ _ kept (entryCallResult_resultPrefix callResult)
 
+theorem moduleEntry_tail_replayPrefix (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
+    (implementation : Impl) (scope : Nat) (statements : List Stmt) (tail : Option Expr) (activated before : ExecutionState)
+    (channels : List Channel) (callResult : ExecutionStep (List Carrier)) (outcome : ExecutionStep Flow)
+    (visits : List StatementInvocation)
+    (found : config.module.impls[activation.implementation]? = some implementation)
+    (body : implementation.body = .mk scope statements tail)
+    (replay : StatementReplay config { activation with scopes := (scope, activated.nextScope) :: activation.scopes }
+      fuel 0 statements (resultScopeStart activation scope activated) outcome visits)
+    (supported : ∀ sourceFuel localVar expression origin, .letS localVar expression origin ∈ statements →
+      FuelSupport config sourceFuel
+        (.value { activation with scopes := (scope, activated.nextScope) :: activation.scopes } expression))
+    (call : callResult = ((enterActivation (fuel + 2) config activation [] implementation.body 0 >>= fun carriers =>
+      deliverCarriers (fuel + 2) config.layout channels carriers 0) activated))
+    (moduleResult : runModule (fuel + 3) config before = entryCallResult callResult) :
+    EventPrefix (Goose.Proofs.Exit.stepState outcome).construction.events
+      (Goose.Proofs.Exit.stepState (runModule (fuel + 3) config before)).construction.events := by
+  have bound : bindAll activation.act activated.nextScope [] (resultScopeStart activation scope activated) =
+      .ok () (resultScopeStart activation scope activated) := by simp [bindAll, bind, pure]
+  obtain ⟨other, otherVisits, chunks, otherReplay, ordered, once, aligned, finalEq, execution, sources⟩ :=
+    activationBody_fixedSourceEvents fuel config activation [] scope statements tail activated
+      (resultScopeStart activation scope activated) bound supported
+  have same : other = outcome := otherReplay.sound.symm.trans replay.sound
+  subst other
+  have kept := moduleEntry_tail_resultPrefix fuel config activation implementation scope statements tail activated before channels
+    callResult outcome found body execution call moduleResult
+  exact kept
+
 theorem moduleEntry_tail_visitPrefix (fuel : Nat) (config : EvalConfig) (activation : RuntimeActivation)
     (implementation : Impl) (scope : Nat) (statements : List Stmt) (tail : Option Expr) (activated before : ExecutionState)
     (channels : List Channel) (callResult : ExecutionStep (List Carrier)) (outcome : ExecutionStep Flow)
@@ -113,15 +140,8 @@ theorem moduleEntry_tail_visitPrefix (fuel : Nat) (config : EvalConfig) (activat
     (moduleResult : runModule (fuel + 3) config before = entryCallResult callResult) :
     EventPrefix (Goose.Proofs.Exit.stepState visit.outcome).construction.events
       (Goose.Proofs.Exit.stepState (runModule (fuel + 3) config before)).construction.events := by
-  have bound : bindAll activation.act activated.nextScope [] (resultScopeStart activation scope activated) =
-      .ok () (resultScopeStart activation scope activated) := by simp [bindAll, bind, pure]
-  obtain ⟨other, otherVisits, chunks, otherReplay, ordered, once, aligned, finalEq, execution, sources⟩ :=
-    activationBody_fixedSourceEvents fuel config activation [] scope statements tail activated
-      (resultScopeStart activation scope activated) bound supported
-  have same : other = outcome := otherReplay.sound.symm.trans replay.sound
-  subst other
-  have kept := moduleEntry_tail_resultPrefix fuel config activation implementation scope statements tail activated before channels
-    callResult outcome found body execution call moduleResult
+  have kept := moduleEntry_tail_replayPrefix fuel config activation implementation scope statements tail activated before channels
+    callResult outcome visits found body replay supported call moduleResult
   have visitsKept := invocationEvents_visitPrefix (statementReplay_invocationEvents replay) (statementInvocation visit)
     (List.mem_map.mpr ⟨visit, member, rfl⟩)
   exact eventPrefix_trans _ _ _ visitsKept kept
