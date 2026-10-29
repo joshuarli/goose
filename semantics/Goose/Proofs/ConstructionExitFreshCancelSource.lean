@@ -23,7 +23,7 @@ theorem allocated_receiver_cancel_source_roles (config : EvalConfig) (initialize
         releaseExitReservation allocated.construction.exitReservations.size) reserved = .ok () final ∧
       ReservationLifecycleInvariant final ∧ DestinationSuccessorsValid final ∧ DestinationSuccessorKeysInactive final ∧
       LiveFreshReservationSuccessorRoles final ∧ LiveFreshReservationRawRoles final ∧ LiveFreshReservationRoles final ∧
-      ResumptionReservationRoles final ∧ ResumptionSnapshotStart final ∧ ResumptionBackingSources final ∧ UnsupportedResumptionKeys final ∧ SupportedReplacementAuthority final ∧
+      ResumptionReservationRoles final ∧ ResumptionSnapshotStart final ∧ ResumptionBackingSources final ∧ UnsupportedResumptionKeys final ∧ SupportedReplacementAuthority final ∧ ConstructionOwnershipLinks final ∧ OwnershipSourceState final ∧
       RootedBackingObservations config.layout { allocated with construction := final } live (storageExtent before) ∧
       (∀ region ∈ regions, ReceivingProtection config.layout { allocated with construction := final } live region) ∧
       ∀ frame ∈ pending, CarriersLandingReady { allocated with construction := final } frame.channels frame.carriers ∧
@@ -168,8 +168,64 @@ theorem allocated_receiver_cancel_source_roles (config : EvalConfig) (initialize
       { savedSnapshot with progress := .abandoned } savedPresent rfl rfl (Or.inr (Or.inl rfl))
       allocatedWorld.ownership.source.structural.1.2.2.1
     exact supportedReplacementAuthority_congr_destinations _ final savedRows prior
+  have extension : OwnershipSourceExtension before.construction final := by
+    intro index row present
+    refine ⟨row, (frame.lookup index (Array.getElem?_eq_some_iff.mp present).1).trans present, rfl, ?_⟩
+    cases use : row.use <;> simp only [OwnershipLinkBacking, use] <;> trivial
+  have priorTicket (token incoming selected : Nat) (snapshot : PendingDestination)
+      (ticket : final.exitReservations[token]? = some (.active .fresh incoming selected snapshot)) :
+      before.construction.exitReservations[token]? = some (.active .fresh incoming selected snapshot) := by
+    have tickets : final.exitReservations = before.construction.exitReservations.push .released := frame.tickets
+    simp only [tickets, Array.getElem?_push] at ticket
+    split at ticket
+    · cases ticket
+    · exact ticket
+  have oldLinks := world.ownership.source.structural.1.2.1
+  have forward : DestinationForwardLinks final := by
+    intro index row present
+    by_cases old : index < before.construction.destinations.size
+    · have beforeFound : before.construction.destinations[index]? = some row := (frame.lookup index old).symm.trans present
+      exact destinationForwardLink_sourceExtension before.construction final extension index row (oldLinks.2.1 index row beforeFound)
+    · have bound := (Array.getElem?_eq_some_iff.mp present).1
+      have finalSize : final.destinations.size = before.construction.destinations.size + 1 := by
+        simpa only [Array.size_push] using congrArg Array.size frame.destinations
+      have indexLe : index ≤ before.construction.destinations.size := Nat.lt_succ_iff.mp (by simpa only [finalSize] using bound)
+      have indexEqual : index = id := by
+        have eq : index = before.construction.destinations.size := Nat.le_antisymm indexLe (Nat.le_of_not_gt old)
+        exact eq.trans fresh.symm
+      subst index
+      have same : row = { savedSnapshot with progress := .abandoned } := Option.some.inj (present.symm.trans abandonedFound)
+      subst row
+      simp [DestinationForwardLink]
+  have savedForward : SavedDestinationForwardLinks final := by
+    constructor
+    · intro token incoming selected snapshot ticket
+      exact destinationForwardLink_sourceExtension before.construction final extension snapshot.capability.id snapshot
+        (oldLinks.2.2.1.1 token incoming selected snapshot (priorTicket token incoming selected snapshot ticket))
+    · intro key snapshot found
+      simp [DestinationForwardLink, savedStart key snapshot found]
+  have snapshotProgress : FreshReservationSnapshotProgress final := by
+    intro token incoming selected snapshot ticket
+    exact oldLinks.2.2.2.1 token incoming selected snapshot (priorTicket token incoming selected snapshot ticket)
+  have snapshotAuthority : FreshReservationSnapshotAuthority final := by
+    intro token incoming selected snapshot row ticket different found count replacement phase
+    have oldTicket := priorTicket token incoming selected snapshot ticket
+    have bound := (world.ownership.source.structural.1.1.2.active token .fresh incoming selected snapshot oldTicket).1.allocated
+    have oldFound : before.construction.destinations[snapshot.capability.id]? = some row :=
+      (frame.lookup snapshot.capability.id bound).symm.trans found
+    exact oldLinks.2.2.2.2.1 token incoming selected snapshot row oldTicket different oldFound count replacement phase
+  have directStart : FreshDirectReservationStart final := by
+    intro token incoming selected snapshot ticket direct
+    exact oldLinks.2.2.2.2.2.1 token incoming selected snapshot (priorTicket token incoming selected snapshot ticket) direct
+  have links : ConstructionOwnershipLinks final :=
+    ⟨lifecycle.1, forward, savedForward, snapshotProgress, snapshotAuthority, directStart, savedStart⟩
+  have rawRoles := liveFreshReservationSuccessorRoles_raw final aliases
+  have currentRoles := liveFreshReservationSuccessorRoles_current final aliases
+  have source : OwnershipSourceState final :=
+    ⟨⟨⟨lifecycle, links, authority, savedBacking, unsupported, currentRoles⟩, successors, rawRoles⟩,
+      aliases, inactive, resumptions⟩
   exact ⟨reserved, final, reserve, cancel, lifecycle, successors, inactive, aliases,
-    liveFreshReservationSuccessorRoles_raw final aliases, liveFreshReservationSuccessorRoles_current final aliases, resumptions, savedStart, savedBacking, unsupported, authority,
+    rawRoles, currentRoles, resumptions, savedStart, savedBacking, unsupported, authority, links, source,
     rooted, regionsSafe, frames⟩
 
 #print axioms allocated_receiver_cancel_source_roles
