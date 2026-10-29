@@ -10,7 +10,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ExitExecution
 
-private theorem cancelled_leaf_exact (state : ConstructionState)
+theorem cancelled_leaf_exact (state : ConstructionState)
     (token incoming reserved selected count : Nat) (snapshot row : PendingDestination) (storage : ReceivingStorage)
     (ticket : state.exitReservations[token]? = some (.active .fresh incoming reserved snapshot))
     (current : destinationCurrent state reserved = .ok selected)
@@ -176,6 +176,7 @@ theorem allocated_receiver_cancel_pending (config : EvalConfig) (initialized : N
   exact ⟨fullFrame.carriers_ready pendingFrame.channels pendingFrame.carriers ready,
     fun carrier carried => fullFrame.carrier_backing config.layout carrier (backing carrier carried)⟩
 
+#print axioms cancelled_leaf_exact
 #print axioms allocated_receiver_cancel_exact_frame
 #print axioms allocated_receiver_cancel_frame
 
