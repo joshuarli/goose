@@ -4,15 +4,17 @@ namespace Goose.Proofs.ConstructionAcceptedExecution
 open Goose.Construct Goose.Core
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionExecutionOwnership
+open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ExitExecution
 
-theorem withCompletion_byteReceiver_timeouts (config : EvalConfig) (initialized : Nat)
+theorem withCompletion_byteReceiver_separated_timeouts (config : EvalConfig) (initialized : Nat)
     (environment : RuntimeActivation) (id : Nat) (bytes : List UInt8) (origin : OriginId)
     (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
     (live : RootInst → Prop) (regions : List ReceivingRegion)
     (world : AcceptedWorld config initialized before ambient types live regions [])
     (history : ReservationReferencesBounded before.construction ambient)
-    (noRetained : completedCarrierIds ambient.retained = [])
+    (separated : ∀ retained ∈ completedCarrierIds ambient.retained,
+      destinationDescendant before.construction.destinations id retained = false)
     (ready : OpenDestinationBacking config.layout before id (.varr (.int .u8)) 0)
     (current : destinationCurrent before.construction id = .ok id) :
     let final := { before with construction := { before.construction with
@@ -30,7 +32,7 @@ theorem withCompletion_byteReceiver_timeouts (config : EvalConfig) (initialized 
   let final := { before with construction := { before.construction with
     exitReservations := before.construction.exitReservations.push .released } }
   have activatedWorld : AcceptedWorld config initialized activated (.exitChannels [token] [] [] :: ambient) types live regions [] :=
-    direct_fresh_acceptedWorld config initialized before ambient types live regions id ready.destination [] world history ready.present ready.opened current noRetained
+    direct_fresh_acceptedWorld_separated config initialized before ambient types live regions id ready.destination [] world history ready.present ready.opened current separated
   have activeTicket : activated.construction.exitReservations[token]? = some (.active .fresh id id ready.destination) := by simp [activated, token]
   obtain ⟨after, cleanup, afterWorld⟩ := exit_cleanup_accepted_world config initialized activated token id id ready.destination [] []
     ambient types live regions [] origin activeTicket activatedWorld (by intro frame member; cases member)
@@ -59,5 +61,27 @@ theorem withCompletion_byteReceiver_timeouts (config : EvalConfig) (initialized 
     simp [buildExpr, Goose.Construct.timeout, EvalM.stop, List.forIn_cons, List.forIn_nil,
       liftConstruction, activeRelease', bind, pure, activated, final]
 
+theorem withCompletion_byteReceiver_timeouts (config : EvalConfig) (initialized : Nat)
+    (environment : RuntimeActivation) (id : Nat) (bytes : List UInt8) (origin : OriginId)
+    (before : ExecutionState) (ambient : OwnershipAmbient) (types : RootTypes)
+    (live : RootInst → Prop) (regions : List ReceivingRegion)
+    (world : AcceptedWorld config initialized before ambient types live regions [])
+    (history : ReservationReferencesBounded before.construction ambient)
+    (noRetained : completedCarrierIds ambient.retained = [])
+    (ready : OpenDestinationBacking config.layout before id (.varr (.int .u8)) 0)
+    (current : destinationCurrent before.construction id = .ok id) :
+    let final := { before with construction := { before.construction with
+      exitReservations := before.construction.exitReservations.push .released } }
+    withCompletionChannels [.construct id] origin
+      (fun channels => evalProduce 0 config environment channels (.bytes (.varr (.int .u8)) bytes origin)) before = .stop .timeout final ∧
+    withCompletionChannels [.construct id] origin
+      (fun channels => evalProduce 1 config environment channels (.bytes (.varr (.int .u8)) bytes origin)) before = .stop .timeout final ∧
+    AcceptedWorld config initialized final (.returned [] :: ambient) types live regions [] := by
+  apply withCompletion_byteReceiver_separated_timeouts config initialized environment id bytes origin before ambient types live regions world history ?_ ready current
+  intro retained member
+  rw [noRetained] at member
+  cases member
+
+#print axioms withCompletion_byteReceiver_separated_timeouts
 #print axioms withCompletion_byteReceiver_timeouts
 end Goose.Proofs.ConstructionAcceptedExecution
