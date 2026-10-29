@@ -23,20 +23,8 @@ theorem accepted_generated_slice_mixed_callee_unit_success {cfg : Cfg} {env : En
       ((impl.params.toList.zip values).map fun item => (item.1.var, item.2)) impl.body
       { middle with nextAct := middle.nextAct + 1 } = .ok (.normal .unit) after := by
   obtain ⟨ready⟩ := accepted_generated_callee_ready source done contextAt implAt
-  obtain ⟨taken, remaining, terminal, count, steps, terminalRun, maximal, classification⟩ := runAt_success_maximal_prefix
-    (initial := ⟨(0, 0), callFrame impl middle.nextAct (env.depth + 1) values,
-      { middle with nextAct := middle.nextAct + 1 }⟩) run
-  have terminated : TerminatedBlocks (lowerContextAt cfg.mod ctx impl) := by
-    intro block member
-    exact Validation.lowerContextAt_terminators cfg.mod ctx impl block (Array.mem_toList_iff.mpr member)
-  have entryExt := lowered_callee_entry_extension cfg ctx impl
-  obtain ⟨entryBlock, entryAt, _⟩ := entryExt.params (b := 0)
-    (blk := ⟨(List.range impl.params.size).zip (callEntryTypes impl), #[]⟩) rfl
-  have initial : ∃ instruction, instAt (lowerContextAt cfg.mod ctx impl) (0, 0) = some instruction :=
-    terminated_first_instruction terminated entryAt
-  obtain ⟨instruction, instructionAt⟩ := steps.has_instruction terminated initial
-  obtain ⟨term, rfl⟩ := classification instruction instructionAt
-  obtain ⟨residual, bodySteps⟩ := accepted_generated_callee_after_prologue source done contextAt implAt steps maximal
+  apply accepted_generated_callee_unit_success_of_terminal source done contextAt implAt ?_ noResults noValue entry run
+  intro taken terminal term terminalFuel bodySteps instructionAt maximal
   have coverage : (⟨[], []⟩ : RetainedSsaMap).Covers ⟨[], []⟩ := by simp [RetainedSsaMap.Covers]
   have admitted : (⟨[], []⟩ : RetainedSsaMap).Admitted cfg.mod.profile ready.source.context.retained := by simp [RetainedSsaMap.Admitted]
   have bounded : (⟨[], []⟩ : RetainedSsaMap).Bounded (callEntry impl).vals.size := by simp [RetainedSsaMap.Bounded]
@@ -52,22 +40,7 @@ theorem accepted_generated_slice_mixed_callee_unit_success {cfg : Cfg} {env : En
     accepted_generated_parameterized_slice_mixed_callee_terminal ready.source rfl (by simpa using fragment) noResults noValue
       (.context contextAt implAt) ready.owned ready.occurrence ready.rows coverage admitted bounded ready.cells realized ready.input entry
       (by simpa [frameScopes] using bodySteps) instructionAt maximal
-  have returned := generated_callee_unit_fallthrough noResults noValue post
-  cases remaining with
-  | zero =>
-    change timeout terminal.state = .ok value after at terminalRun
-    simp [timeout, M.stop] at terminalRun
-  | succ remaining =>
-    have finalRun : runAt ⟨⟨cfg.profile, lower cfg.mod⟩, lowerContextAt cfg.mod ctx impl⟩ terminal.point terminal.frame
-        (remaining + 1) terminal.state = .ok .unit terminal.state := by
-      rw [runAt_ret0 returned remaining]
-      rfl
-    obtain ⟨valueEq, stateEq⟩ := Res.ok.inj (terminalRun.symm.trans finalRun)
-    subst value
-    subst after
-    exact ⟨rfl, bodyFuel, bodyDone⟩
-
-
+  exact ⟨bodyFuel, bodyDone, post⟩
 
 #print axioms accepted_generated_slice_mixed_callee_unit_success
 theorem accepted_generated_slice_mixed_callee_unit_stopped_run {cfg : Cfg} {env : Env} {state middle : St}
