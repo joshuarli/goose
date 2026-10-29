@@ -23,7 +23,7 @@ theorem allocated_receiver_cancel_source_roles (config : EvalConfig) (initialize
         releaseExitReservation allocated.construction.exitReservations.size) reserved = .ok () final ∧
       ReservationLifecycleInvariant final ∧ DestinationSuccessorsValid final ∧ DestinationSuccessorKeysInactive final ∧
       LiveFreshReservationSuccessorRoles final ∧ LiveFreshReservationRawRoles final ∧ LiveFreshReservationRoles final ∧
-      ResumptionReservationRoles final ∧ ResumptionSnapshotStart final ∧ ResumptionBackingSources final ∧
+      ResumptionReservationRoles final ∧ ResumptionSnapshotStart final ∧ ResumptionBackingSources final ∧ UnsupportedResumptionKeys final ∧ SupportedReplacementAuthority final ∧
       RootedBackingObservations config.layout { allocated with construction := final } live (storageExtent before) ∧
       (∀ region ∈ regions, ReceivingProtection config.layout { allocated with construction := final } live region) ∧
       ∀ frame ∈ pending, CarriersLandingReady { allocated with construction := final } frame.channels frame.carriers ∧
@@ -31,7 +31,7 @@ theorem allocated_receiver_cancel_source_roles (config : EvalConfig) (initialize
   obtain ⟨reserved, final, reserve, cancel, lifecycle, rooted, regionsSafe, frames⟩ :=
     allocated_receiver_cancel_lifecycle config initialized owner ty element request origin knownCount before allocated id ambient types live
       regions pending world elementType created
-  obtain ⟨otherReserved, otherFinal, otherReserve, otherCancel, savedSnapshot, ⟨frame⟩, savedEntries, savedOpened, savedUse, abandonedFound⟩ :=
+  obtain ⟨otherReserved, otherFinal, otherReserve, otherCancel, savedSnapshot, ⟨frame⟩, savedEntries, savedOpened, savedUse, abandonedFound, savedPresent, savedRows⟩ :=
     allocated_receiver_cancel_exact_frame config initialized owner ty element request origin knownCount before allocated id ambient types live
       regions pending world elementType created
   have sameReserved : otherReserved = reserved := (ConstructionResult.ok.inj (otherReserve.symm.trans reserve)).2
@@ -135,8 +135,41 @@ theorem allocated_receiver_cancel_source_roles (config : EvalConfig) (initialize
       have foundAfter : final.destinations[key]? = some row :=
         (frame.lookup key oldBound).trans ((allocation.lookup key oldBound).symm.trans present)
       exact ⟨row, foundAfter, inactive, sameBacking⟩
+  have unsupported : UnsupportedResumptionKeys final := by
+    intro key saved found support
+    by_cases same : key = id
+    · subst key
+      cases support with
+      | active index row present active =>
+        have equal : row = { savedSnapshot with progress := .abandoned } := Option.some.inj (present.symm.trans abandonedFound)
+        subst row
+        simp [activeProgress] at active
+      | parent child parent row present use supported =>
+        have ordered : id < child := by simpa only [use] using lifecycle.1.2.2.2 child row present
+        have bound := (Array.getElem?_eq_some_iff.mp present).1
+        have finalSize : final.destinations.size = before.construction.destinations.size + 1 := by
+          simpa only [Array.size_push] using congrArg Array.size frame.destinations
+        rw [finalSize, ← fresh] at bound
+        omega
+    · have mismatch : (key == id) = false := beq_eq_false_iff_ne.mpr same
+      have old : allocated.construction.destinationResumptions.lookup key = some saved := by
+        simpa [savedEntries, List.lookup, mismatch] using found
+      have setSupport : ReplacementSupported { allocated.construction with
+          destinations := allocated.construction.destinations.set! id { savedSnapshot with progress := .abandoned } } key :=
+        replacementSupported_congr_destinations final _ savedRows.symm key support
+      have prior : ReplacementSupported allocated.construction key := by
+        apply replacementSupported_replace_back allocated.construction id savedSnapshot
+          { savedSnapshot with progress := .abandoned } savedPresent _ _ key setSupport
+        · intro parent use; exact use
+        · intro active; simp [activeProgress] at active
+      exact allocatedWorld.ownership.source.structural.1.2.2.2.2.1 key saved old prior
+  have authority : SupportedReplacementAuthority final := by
+    have prior := supportedReplacementAuthority_replace_inactive allocated.construction id savedSnapshot
+      { savedSnapshot with progress := .abandoned } savedPresent rfl rfl (Or.inr (Or.inl rfl))
+      allocatedWorld.ownership.source.structural.1.2.2.1
+    exact supportedReplacementAuthority_congr_destinations _ final savedRows prior
   exact ⟨reserved, final, reserve, cancel, lifecycle, successors, inactive, aliases,
-    liveFreshReservationSuccessorRoles_raw final aliases, liveFreshReservationSuccessorRoles_current final aliases, resumptions, savedStart, savedBacking,
+    liveFreshReservationSuccessorRoles_raw final aliases, liveFreshReservationSuccessorRoles_current final aliases, resumptions, savedStart, savedBacking, unsupported, authority,
     rooted, regionsSafe, frames⟩
 
 #print axioms allocated_receiver_cancel_source_roles
