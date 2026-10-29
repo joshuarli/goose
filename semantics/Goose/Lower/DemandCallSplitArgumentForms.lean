@@ -22,6 +22,32 @@ inductive LocalSliceBooleanArguments (access : AccessEnv) : List Arg → Prop
       (tail : LocalSliceBooleanArguments access rest) : LocalSliceBooleanArguments access (.byRef borrow (.var slot) :: rest)
 
 
+inductive LocalSliceScalarArguments (access : AccessEnv) : List Arg → Prop
+  | nil : LocalSliceScalarArguments access []
+  | literal {expression : Expr} {value : Val} {operation : Op} {rest : List Arg}
+      (literal : CallScalarLiteral expression value operation) (tail : LocalSliceScalarArguments access rest) :
+      LocalSliceScalarArguments access (.byVal expression :: rest)
+  | reference {borrow : Mutability} {slot : VarId} {mutability : Mutability} {element : Ty} {rest : List Arg}
+      (type : access.placeType? (.var slot) = some (.slice mutability element))
+      (tail : LocalSliceScalarArguments access rest) : LocalSliceScalarArguments access (.byRef borrow (.var slot) :: rest)
+
+theorem LocalSliceBooleanArguments.toScalar {access : AccessEnv} {arguments : List Arg}
+    (form : LocalSliceBooleanArguments access arguments) : LocalSliceScalarArguments access arguments := by
+  induction form with
+  | nil => exact .nil
+  | boolean boolean tail ih => exact .literal (.boolean boolean) ih
+  | reference type tail ih => exact .reference type ih
+
+theorem LocalSliceBooleanArguments.noInteger {access : AccessEnv} {arguments : List Arg}
+    (form : LocalSliceBooleanArguments access arguments) (type : IntTy) (number : Int) : .byVal (.lit type number) ∉ arguments := by
+  induction form with
+  | nil => simp
+  | boolean boolean tail ih => simp [ih]
+  | reference type tail ih => simp [ih]
+
+#print axioms LocalSliceBooleanArguments.toScalar
+#print axioms LocalSliceBooleanArguments.noInteger
+
 theorem LocalSliceArguments.toBoolean {access : AccessEnv} {arguments : List Arg}
     (form : LocalSliceArguments access arguments) : LocalSliceBooleanArguments access arguments := by
   induction form with
