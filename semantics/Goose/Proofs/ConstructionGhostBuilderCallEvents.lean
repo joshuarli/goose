@@ -22,6 +22,9 @@ theorem builderCall_child_history {config : EvalConfig} {α : Type} {fuel : Nat}
     SourceHistory config sourceFuel (path ++ [0]) (.channelCall environment context arguments [.construct destination] origin) ready
       (invokeCall sourceFuel config environment context arguments [.construct destination] origin ready) := by
   cases history <;> simp_all [builderCallSyntax]
+  case defaultBuilder =>
+    rename_i shape child
+    cases shape <;> simp_all [builderCallSyntax]
   case scalarBuilder =>
     rename_i scalar child
     cases scalar <;> simp_all [builderCallSyntax]

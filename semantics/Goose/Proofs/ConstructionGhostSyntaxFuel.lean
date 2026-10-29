@@ -61,6 +61,8 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
 inductive DeclarationBuilderSyntax (config : EvalConfig) : Expr → Prop
   | bytes (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
       DeclarationBuilderSyntax config (.bytes ty bytes origin)
+  | default (expression : Expr) (shape : DefaultBuilderExpression expression) (source : ValueSyntax config expression) :
+      DeclarationBuilderSyntax config expression
   | scalar (expression : Expr) (shape : ScalarExpression expression) (source : ValueSyntax config expression) :
       DeclarationBuilderSyntax config expression
   | supported (expression : Expr) (source : SupportedValue expression) : DeclarationBuilderSyntax config expression
@@ -410,6 +412,7 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
       · intro environment destination expression derivation
         cases derivation with
         | bytes ty bytes origin => exact .legacy (fuel + 1) (.builderBytes environment destination ty bytes origin)
+        | default expression shape source => exact .defaultBuilder fuel environment destination expression shape (previous.value environment expression source)
         | scalar expression shape source => exact .scalarBuilder fuel environment destination expression shape (previous.value environment expression source)
         | supported expression source =>
             have operandSupported := supportedBuilderOperand_supported expression source

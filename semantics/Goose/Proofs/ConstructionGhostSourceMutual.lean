@@ -907,6 +907,14 @@ inductive SourceHistory (config : EvalConfig) :
       SourceHistory config (fuel + 1) path
         (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments)) before
         (evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.byRef mutability place :: arguments) before)
+  | defaultBuilder (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
+      (incoming : Goose.Core.DestinationId) (expression : Expr) (before : ExecutionState) (shape : DefaultBuilderExpression expression)
+      (child : ∀ destination ready,
+        liftConstruction (expressionOrigin expression) (renewReceivingDestination incoming) before = .ok destination ready →
+        SourceHistory config fuel (path ++ [0]) (.value environment expression) ready
+          (evalValue fuel config environment expression ready)) :
+      SourceHistory config (fuel + 1) path (.builder environment incoming expression) before
+        (buildExpr (fuel + 1) config environment incoming expression before)
   | scalarBuilder (fuel : Nat) (path : List Nat) (environment : RuntimeActivation)
       (incoming : Goose.Core.DestinationId) (expression : Expr) (before : ExecutionState) (scalar : ScalarExpression expression)
       (child : ∀ destination ready,
@@ -1218,7 +1226,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execResultBlock, execResultBlockWith, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, evalOperands, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | producerValues | producerOperandsEmpty | producerOperandsNoChannels | producerOperandsNoValues | producerOperandsCons | builderSingleValue | builderBlock | builderConditional | valueBlockProducer | producerConditional | producerBlock | resultBlock | resultBlockWith | blockTail | valueFirstStatement | leafStatement | assignment | declaration | valueNonfixedArray | valueNonfixedFill | builderChannelCall | fillBuilder | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
+  | defaultBuilder | producerValues | producerOperandsEmpty | producerOperandsNoChannels | producerOperandsNoValues | producerOperandsCons | builderSingleValue | builderBlock | builderConditional | valueBlockProducer | producerConditional | producerBlock | resultBlock | resultBlockWith | blockTail | valueFirstStatement | leafStatement | assignment | declaration | valueNonfixedArray | valueNonfixedFill | builderChannelCall | fillBuilder | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]

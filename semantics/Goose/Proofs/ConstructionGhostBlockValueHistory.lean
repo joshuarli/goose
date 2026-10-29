@@ -52,6 +52,7 @@ theorem blockProducer_resultBlock_history {config : EvalConfig} {α : Type} {fue
     cases shape <;> try simp_all [blockProducerSyntax]
     case supported supported => cases supported <;> simp_all [blockProducerSyntax]
     case scalar scalar => cases scalar <;> simp_all [blockProducerSyntax]
+    case default shape => cases shape <;> simp_all [blockProducerSyntax]
 
 theorem resultBlock_with_history {config : EvalConfig} {α : Type} {fuel : Nat} {path : List Nat}
     {operation : SourceOperation α} {before : ExecutionState} {outcome : ExecutionStep α}

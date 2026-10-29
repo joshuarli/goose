@@ -274,6 +274,9 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (body : ∀ act pre, FuelSupport config fuel
         (.boundActivation ⟨context.impl, act, implementation.vars, [], []⟩ pre implementation.body origin)) :
       FuelSupport config (fuel + 1) (.callWith environment contextId arguments origin)
+  | defaultBuilder (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (expression : Expr) (shape : DefaultBuilderExpression expression) (child : FuelSupport config fuel (.value environment expression)) :
+      FuelSupport config (fuel + 1) (.builder environment incoming expression)
   | scalarBuilder (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
       (expression : Expr) (scalar : ScalarExpression expression) (child : FuelSupport config fuel (.value environment expression)) :
       FuelSupport config (fuel + 1) (.builder environment incoming expression)
@@ -747,6 +750,10 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           rw [callWith_source fuel config environment contextId arguments origin context implementation before
             contextFound implementationFound resultsEmpty]
           exact .callWith contextFound implementationFound resultsEmpty argumentsHistory activationHistory
+      | defaultBuilder _ environment incoming expression shape childSupported =>
+          refine .defaultBuilder fuel path environment incoming expression before shape ?_
+          intro destination ready renewed
+          exact ih (.value environment expression) (path ++ [0]) ready childSupported
       | scalarBuilder _ environment incoming expression scalar childSupported =>
           refine .scalarBuilder fuel path environment incoming expression before scalar ?_
           intro destination ready renewed

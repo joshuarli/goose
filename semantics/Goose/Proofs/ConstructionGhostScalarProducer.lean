@@ -23,10 +23,30 @@ theorem scalarProducer_source (fuel : Nat) (config : EvalConfig) (environment : 
   cases scalar <;> simp only [evalProduce, prepareProducerCallChannels, supportedProducerResult,
     Goose.Proofs.ConstructionGhostGlobalStep.evalM_bind_assoc] <;> rfl
 
+inductive DefaultBuilderExpression : Expr → Prop
+  | read (place : Place) : DefaultBuilderExpression (.read place)
+  | reference (mutability : Goose.Core.Mutability) (place : Place) : DefaultBuilderExpression (.ref mutability place)
+  | slice (mutability : Goose.Core.Mutability) (view : View) (lo hi : Bound) (origin : Goose.Core.OriginId) :
+      DefaultBuilderExpression (.slice mutability view lo hi origin)
+  | length (view : View) : DefaultBuilderExpression (.len view)
+  | pop (place : Place) (origin : Goose.Core.OriginId) : DefaultBuilderExpression (.pop place origin)
+  | push (place : Place) (operand : Expr) (origin : Option Goose.Core.OriginId) : DefaultBuilderExpression (.push place operand origin)
+  | structure (ty : Ty) (operands : List Expr) : DefaultBuilderExpression (.structLit ty operands)
+
+theorem defaultBuilder_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)
+    (incoming : Goose.Core.DestinationId) (expression : Expr) (before : ExecutionState) (shape : DefaultBuilderExpression expression) :
+    buildExpr (fuel + 1) config environment incoming expression before =
+      (do let destination ← liftConstruction (expressionOrigin expression) (renewReceivingDestination incoming)
+          protectDestination (expressionOrigin expression) destination do
+            let value ← evalValue fuel config environment expression
+            copyValue fuel config.layout destination value (expressionOrigin expression) none) before := by
+  cases shape <;> simp only [buildExpr]
+
 inductive ValueProducerExpression : Expr → Prop
   | supported {expression : Expr} (supported : Goose.Proofs.ConstructionGhostSourceTransition.SupportedValue expression) :
       ValueProducerExpression expression
   | scalar {expression : Expr} (scalar : ScalarExpression expression) : ValueProducerExpression expression
+  | default {expression : Expr} (shape : DefaultBuilderExpression expression) : ValueProducerExpression expression
   | bytes (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) : ValueProducerExpression (.bytes ty bytes origin)
   | array (ty : Ty) (operands : List Expr) (origin : Goose.Core.OriginId) : ValueProducerExpression (.arrLit ty operands origin)
   | fill (ty : Ty) (operand : Expr) (origin : Goose.Core.OriginId) : ValueProducerExpression (.fill ty operand origin)
@@ -38,6 +58,8 @@ theorem valueProducer_source (fuel : Nat) (config : EvalConfig) (environment : R
   cases shape with
   | supported supported => exact supportedProducer_source fuel config environment channels expression before supported
   | scalar scalar => exact scalarProducer_source fuel config environment channels expression before scalar
+  | default shape => cases shape <;> simp only [evalProduce, prepareProducerCallChannels, supportedProducerResult,
+      Goose.Proofs.ConstructionGhostGlobalStep.evalM_bind_assoc] <;> rfl
   | bytes | array | fill => simp only [evalProduce, prepareProducerCallChannels, supportedProducerResult,
       Goose.Proofs.ConstructionGhostGlobalStep.evalM_bind_assoc] <;> rfl
 
