@@ -37,6 +37,50 @@ theorem typeStatements_scalarLocal_callContext {statements : List Stmt} (form : 
           have preserved := ih (fuel + 1) middle next counter after checked
           simpa [middleShape] using preserved
 
+theorem ScalarLocalReplay.registerCall_withArguments_tail_checked {config : EvalConfig} (accepted : AcceptedModule config)
+    (blockFrame child final : ConstructionSourceFrame) (scope fuel target origin : Nat) (statements : List Stmt)
+    (context : Context) (callee : Impl) (arguments : List Arg) (ty : Ty)
+    (position : SourcePosition accepted blockFrame (.block ⟨scope, statements, some (.call target arguments origin)⟩))
+    (nesting : blockFrame.typingFuel = (fuel + 1) + 1)
+    (childTyping : child.typing = { blockFrame.typing with scope := scope })
+    (childFuel : child.typingFuel = fuel + 1) (childCounter : child.typingCounter = blockFrame.typingCounter)
+    (childSource : child.source = { blockFrame.source with scopes := scope :: blockFrame.source.scopes })
+    (childCursor : child.rootCursor = blockFrame.rootCursor)
+    (replay : ScalarLocalReplay child final statements) (form : ScalarLocalStatements statements)
+    (contextAt : blockFrame.typing.module.contexts[target]? = some context)
+    (calleeAt : blockFrame.typing.module.impls[context.impl]? = some callee)
+    (results : callee.results = #[⟨ty, .register, none⟩])
+    (scalar : (∃ intTy, ty = .int intTy) ∨ ty = .bool)
+    (requests : blockFrame.typing.resultRequests = [.register])
+    (available : ∀ roots rootsAfter,
+      rpExpr final.source (.call target arguments origin) final.rootCursor = .ok (roots, rootsAfter) →
+      GlobalEffectsAvailable final.interpretation final.initialized rootsAfter.eff) :
+    ∃ roots typingAfter rootsAfter,
+      CheckedValue { final with typingFuel := fuel + 1 } (.call target arguments origin) ty roots typingAfter rootsAfter := by
+  obtain ⟨next, typingMiddle, rootMiddle, types, typingAfter, roots, rootsAfter,
+    _, typedStatements, rootedStatements, typedTail, rootedTail⟩ :=
+    position.blockTail_checks accepted blockFrame scope (fuel + 1) statements (.call target arguments origin) nesting
+  obtain ⟨typedReplay, rootedReplay, sourceSame, interpretationSame⟩ := replay
+  rw [childTyping, childFuel, childCounter] at typedReplay
+  have sameTyping : (final.typing, final.typingCounter) = (next, typingMiddle) :=
+    Except.ok.inj (typedReplay.symm.trans typedStatements)
+  obtain ⟨sameEnvironment, sameCounter⟩ := Prod.mk.inj sameTyping
+  rw [childSource, childCursor] at rootedReplay
+  have sameRoots : final.rootCursor = rootMiddle :=
+    (Prod.mk.inj (Except.ok.inj (rootedReplay.symm.trans rootedStatements))).2
+  have finalRooted : rpExpr final.source (.call target arguments origin) final.rootCursor = .ok (roots, rootsAfter) := by
+    rw [sourceSame, childSource, sameRoots]
+    exact rootedTail
+  obtain ⟨sameModule, sameRequests⟩ := typeStatements_scalarLocal_callContext form (fuel + 1)
+    { blockFrame.typing with scope := scope } next blockFrame.typingCounter typingMiddle typedStatements
+  have singleton := typeExpr_registerCall_tail_result fuel next target origin context callee arguments ty typingMiddle typingAfter types
+    (by simpa [sameModule] using contextAt) (by simpa [sameModule] using calleeAt) results scalar
+    (by simpa [sameRequests] using requests) typedTail
+  subst types
+  refine ⟨roots, typingAfter, rootsAfter, ?_, finalRooted, available roots rootsAfter finalRooted⟩
+  simpa [sameEnvironment, sameCounter] using typedTail
+
+
 theorem ScalarLocalReplay.registerCall_tail_checked {config : EvalConfig} (accepted : AcceptedModule config)
     (blockFrame child final : ConstructionSourceFrame) (scope fuel target origin : Nat) (statements : List Stmt)
     (context : Context) (callee : Impl) (ty : Ty)
@@ -57,28 +101,9 @@ theorem ScalarLocalReplay.registerCall_tail_checked {config : EvalConfig} (accep
       GlobalEffectsAvailable final.interpretation final.initialized rootsAfter.eff) :
     ∃ roots typingAfter rootsAfter,
       CheckedValue { final with typingFuel := fuel + 1 } (.call target [] origin) ty roots typingAfter rootsAfter := by
-  obtain ⟨next, typingMiddle, rootMiddle, types, typingAfter, roots, rootsAfter,
-    _, typedStatements, rootedStatements, typedTail, rootedTail⟩ :=
-    position.blockTail_checks accepted blockFrame scope (fuel + 1) statements (.call target [] origin) nesting
-  obtain ⟨typedReplay, rootedReplay, sourceSame, interpretationSame⟩ := replay
-  rw [childTyping, childFuel, childCounter] at typedReplay
-  have sameTyping : (final.typing, final.typingCounter) = (next, typingMiddle) :=
-    Except.ok.inj (typedReplay.symm.trans typedStatements)
-  obtain ⟨sameEnvironment, sameCounter⟩ := Prod.mk.inj sameTyping
-  rw [childSource, childCursor] at rootedReplay
-  have sameRoots : final.rootCursor = rootMiddle :=
-    (Prod.mk.inj (Except.ok.inj (rootedReplay.symm.trans rootedStatements))).2
-  have finalRooted : rpExpr final.source (.call target [] origin) final.rootCursor = .ok (roots, rootsAfter) := by
-    rw [sourceSame, childSource, sameRoots]
-    exact rootedTail
-  obtain ⟨sameModule, sameRequests⟩ := typeStatements_scalarLocal_callContext form (fuel + 1)
-    { blockFrame.typing with scope := scope } next blockFrame.typingCounter typingMiddle typedStatements
-  have singleton := typeExpr_registerCall_tail_result fuel next target origin context callee [] ty typingMiddle typingAfter types
-    (by simpa [sameModule] using contextAt) (by simpa [sameModule] using calleeAt) results scalar
-    (by simpa [sameRequests] using requests) typedTail
-  subst types
-  refine ⟨roots, typingAfter, rootsAfter, ?_, finalRooted, available roots rootsAfter finalRooted⟩
-  simpa [sameEnvironment, sameCounter] using typedTail
+  exact ScalarLocalReplay.registerCall_withArguments_tail_checked accepted blockFrame child final scope fuel target origin statements
+    context callee [] ty position nesting childTyping childFuel childCounter childSource childCursor replay form contextAt calleeAt
+    results scalar requests available
 
 theorem execActivationBody_registerCall_afterStatements (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (activation : RuntimeActivation) (scope : Nat) (statements : List Stmt) (ty : Ty) (target origin : Nat)
@@ -286,6 +311,7 @@ theorem execActivationBody_scalarLocal_registerCall_compose (fuel : Nat) (config
 
 #print axioms execActivationBody_scalarLocal_registerCall_compose
 #print axioms execActivationBody_registerCall_afterStatements
+#print axioms ScalarLocalReplay.registerCall_withArguments_tail_checked
 #print axioms ScalarLocalReplay.registerCall_tail_checked
 #print axioms typeStatements_scalarLocal_callContext
 end Goose.Proofs.ConstructionAcceptedExecution
