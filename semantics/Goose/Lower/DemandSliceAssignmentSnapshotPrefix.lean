@@ -66,6 +66,14 @@ theorem accepted_generated_slice_assignment_snapshot_stage {cfg : Cfg} {env : En
             (sliceUpperBefore (.of (.global global)) .omitted (lowerEnv cfg.mod env.vars results)
               (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2)).1 (.val (.int intType number)), sampledState⟩ ∧
       (∃ id op, instAt cx.fn (snapshotPoint.1, snapshotPoint.2 + 1) = some (.def id op)) ∧
+      (∀ {targetFuel : Nat} {stop : Stop} {after : St},
+        DemandInstructionStop cx targetFuel
+          ⟨(snapshotPoint.1, snapshotPoint.2 + 1),
+            snapshotFrame.set (lowerExpr (.lit intType number) (lowerEnv cfg.mod env.vars results)
+              (sliceUpperBefore (.of (.global global)) .omitted (lowerEnv cfg.mod env.vars results)
+                (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2)).1 (.val (.int intType number)), sampledState⟩ stop after →
+        stop ≠ .timeout → execStmt 4 cfg env (.assign (.deref reference)
+          (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin) state = .stop stop after) ∧
       ∀ (slicePoint : Pt) (sliceFrame : GIR.Frame) (sliceState : St),
       RuntimeStep cx.cfg cx.fn (snapshotPoint.1, snapshotPoint.2 + 1)
         (snapshotFrame.set (lowerExpr (.lit intType number) (lowerEnv cfg.mod env.vars results)
@@ -86,6 +94,10 @@ theorem accepted_generated_slice_assignment_snapshot_stage {cfg : Cfg} {env : En
         (lowerExpr (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin)
           (lowerEnv cfg.mod env.vars results) (lowerPlace (.deref reference) (lowerEnv cfg.mod env.vars results) before).2).1
         value sliceState slicePoint sliceFrame ∧
+      (∀ {targetFuel : Nat} {stop : Stop} {after : St},
+        DemandInstructionStop cx targetFuel ⟨slicePoint, sliceFrame, sliceState⟩ stop after → stop ≠ .timeout →
+        execStmt 4 cfg env (.assign (.deref reference)
+          (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin) state = .stop stop after) ∧
       ∀ (finalPoint : Pt) (finalFrame : GIR.Frame) (after : St),
       RuntimeStep cx.cfg cx.fn slicePoint sliceFrame sliceState finalPoint finalFrame after →
       DemandRuntimePrefix cx 7 ⟨start, initial, state⟩ ⟨finalPoint, finalFrame, after⟩ ∧
@@ -127,17 +139,24 @@ theorem accepted_generated_slice_assignment_snapshot_stage {cfg : Cfg} {env : En
       have site := GeneratedSliceInstruction.checked valueOccurrence upperRows upperPost.pp
         (generated_assignment_value_extended extended)
       refine ⟨snapshotPoint, snapshotFrame, sampledState, alias, aliases, child, upper, childAt, upperAt,
-        suffix, by omega, suffixSteps, upperDemand, ⟨_, _, site.instruction⟩, ?_⟩
-      intro slicePoint sliceFrame sliceState sliceStep
-      obtain ⟨runAliases, value, rhsSteps, evaluated, site, boundary⟩ :=
-        accepted_generated_slice_assignment_store_cursor source child occurrence rows destinationPost query valueRows valueCoverage
-          valueAdmitted valueBounded valueRealized extended snapshot sliceStep
-      refine ⟨destinationFrame, runAliases, value, evaluated, site, boundary, ?_⟩
-      intro finalPoint finalFrame after store
-      obtain ⟨suffixSteps, done, post, result, demanded⟩ :=
-        accepted_generated_slice_assignment_store source child childAt occurrence rows admitted bounded realized placed destinationPost
-          query childTyping childRoots valueRows valueCoverage valueAdmitted valueBounded valueRealized extended snapshot sliceStep store
-      exact ⟨destinationSteps.append suffixSteps, done, post, result, bounded.mono post.mono, demanded⟩
+        suffix, by omega, suffixSteps, upperDemand, ⟨_, _, site.instruction⟩, ?_, ?_⟩
+      · intro targetFuel stop after stopped nonTimeout
+        exact (accepted_generated_slice_assignment_slice_stop (sliceState := sampledState) source child childAt occurrence rows admitted bounded
+          realized placed destinationPost query childTyping childRoots valueRows valueCoverage valueAdmitted valueBounded valueRealized
+          extended snapshot stopped nonTimeout).2
+      · intro slicePoint sliceFrame sliceState sliceStep
+        obtain ⟨runAliases, value, rhsSteps, evaluated, site, boundary⟩ :=
+          accepted_generated_slice_assignment_store_cursor source child occurrence rows destinationPost query valueRows valueCoverage
+            valueAdmitted valueBounded valueRealized extended snapshot sliceStep
+        refine ⟨destinationFrame, runAliases, value, evaluated, site, boundary, ?_, ?_⟩
+        · intro targetFuel stop after stopped nonTimeout
+          exact (accepted_generated_slice_assignment_store_stop source child childAt occurrence rows admitted bounded realized placed destinationPost
+            query childTyping childRoots valueRows valueCoverage valueAdmitted valueBounded valueRealized extended snapshot sliceStep stopped nonTimeout).2
+        · intro finalPoint finalFrame after store
+          obtain ⟨suffixSteps, done, post, result, demanded⟩ :=
+            accepted_generated_slice_assignment_store source child childAt occurrence rows admitted bounded realized placed destinationPost
+              query childTyping childRoots valueRows valueCoverage valueAdmitted valueBounded valueRealized extended snapshot sliceStep store
+          exact ⟨destinationSteps.append suffixSteps, done, post, result, bounded.mono post.mono, demanded⟩
 
 
 #print axioms accepted_generated_slice_assignment_snapshot_stage
