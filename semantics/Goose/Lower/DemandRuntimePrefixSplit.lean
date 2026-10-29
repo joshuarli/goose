@@ -25,5 +25,22 @@ theorem DemandRuntimePrefix.split_at {cx : FnCtx} {length : Nat} {before middle 
       obtain ⟨remaining, count, residual⟩ := ih (by omega) rest
       exact ⟨remaining, by omega, residual⟩
 
+theorem DemandRuntimePrefix.split_length {cx : FnCtx} {length taken : Nat} {before reached : DemandRuntimePoint}
+    (bounded : length ≤ taken) (steps : DemandRuntimePrefix cx taken before reached) :
+    ∃ middle, DemandRuntimePrefix cx length before middle ∧
+      DemandRuntimePrefix cx (taken - length) middle reached := by
+  induction length generalizing taken before with
+  | zero => exact ⟨before, .zero _, by simpa using steps⟩
+  | succ length ih =>
+    cases steps with
+    | zero => omega
+    | @next rest begin middle finish first tail =>
+      obtain ⟨boundary, leading, suffix⟩ := ih (by omega) tail
+      refine ⟨boundary, ?_, ?_⟩
+      · simpa [Nat.add_comm] using DemandRuntimePrefix.next first leading
+      · simpa using suffix
+
+#print axioms DemandRuntimePrefix.split_length
+
 #print axioms DemandRuntimePrefix.split_at
 end Goose.Lower
