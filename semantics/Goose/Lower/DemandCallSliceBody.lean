@@ -1,3 +1,4 @@
+import Goose.Lower.DemandCallParameterizedSequence
 import Goose.Lower.DemandCallPostPrologue
 import Goose.Lower.DemandSliceAssignmentSequence
 import Goose.Lower.DemandScalarAssignmentStatementsNormal
@@ -76,27 +77,8 @@ theorem accepted_generated_parameterized_slice_body_canonical {cfg : Cfg} {env :
           RuntimePoint cx.cfg cx.fn (start.1, start.2 + 1 + bindings.length)
             { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
             { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store } := by
-  obtain ⟨body, bodyAll, bodyScope, bodyValue, bodyOffset, bodyCanonical, bodyOccurrence, bodyRows, bodyOwned, bodyAdmitted,
-    bodyBounded, bodyRealized, bodyInput, prologuePost, bodyReached⟩ :=
-    accepted_generated_post_prologue_canonical source selected owned occurrence rows coverage admitted bounded cells realized input extended entry
-  have family : GeneratedSequencePrefixFamily (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes })
-      cx results selected before none bindings want block block.stmts
-      (@SliceAssignmentCursor cfg { env with scopes := (block.scope, state.nextScope) :: env.scopes } cx results) :=
-    accepted_generated_slice_assignment_sequence_prefix
-      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) selected before none bindings want block fragment
-  have bodyBounded' : map.Bounded (lowerStmts none (block.stmts.take body.offset) (lowerEnv cfg.mod env.vars results)
-      (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2.vals.size := by
-    simpa [bodyOffset, lowerStmts, pure_run] using bodyBounded
-  have statementsExtended : ExtT (lowerStmts none block.stmts (lowerEnv cfg.mod env.vars results)
-      (lowerStmts none (block.stmts.take body.offset) (lowerEnv cfg.mod env.vars results)
-        (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2).2 cx.fn.blocks := by
-    simpa [bodyOffset, lowerStmts, pure_run] using generated_block_statements_extended extended
-  have normalizedInput := bodyInput
-  simp only [bodyOffset, List.take_zero, lowerStmts, pure_run] at normalizedInput
-  exact ⟨body, bodyOffset, bodyCanonical, bodyOccurrence, bodyRows, bodyOwned, bodyAdmitted, bodyBounded, bodyRealized, normalizedInput, prologuePost,
-    family body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted bodyBounded'
-      bodyRealized bodyInput statementsExtended steps, bodyReached⟩
-
+  exact accepted_generated_parameterized_body_family_canonical source selected owned occurrence rows coverage admitted bounded
+    cells realized input extended entry _ (accepted_generated_slice_assignment_sequence_prefix (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) selected before none bindings want block fragment) steps
 
 #print axioms accepted_generated_parameterized_slice_body_canonical
 theorem accepted_generated_parameterized_slice_body_stopped_canonical {cfg : Cfg} {env : Env} {pre : List (VarId × Val)}
@@ -145,24 +127,8 @@ theorem accepted_generated_parameterized_slice_body_stopped_canonical {cfg : Cfg
       RuntimePoint cx.cfg cx.fn (start.1, start.2 + 1 + bindings.length)
         { initial with scopes := (block.scope, state.nextScope) :: initial.scopes }
         { state with nextScope := state.nextScope + 1, store := preStore env.act state.nextScope pre state.store } := by
-  obtain ⟨body, bodyAll, bodyScope, bodyValue, bodyOffset, bodyCanonical, bodyOccurrence, bodyRows, bodyOwned, bodyAdmitted,
-    bodyBounded, bodyRealized, bodyInput, prologuePost, bodyReached⟩ :=
-    accepted_generated_post_prologue_canonical source selected owned occurrence rows coverage admitted bounded cells realized input extended entry
-  have family : GeneratedStoppedSequencePrefixFamily
-      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) cx results selected before none bindings want block block.stmts :=
-    accepted_generated_slice_assignment_sequence_stopped
-      (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) selected before none bindings want block fragment
-  have bodyBounded' : map.Bounded (lowerStmts none (block.stmts.take body.offset) (lowerEnv cfg.mod env.vars results)
-      (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2.vals.size := by
-    simpa [bodyOffset, lowerStmts, pure_run] using bodyBounded
-  have statementsExtended : ExtT (lowerStmts none block.stmts (lowerEnv cfg.mod env.vars results)
-      (lowerStmts none (block.stmts.take body.offset) (lowerEnv cfg.mod env.vars results)
-        (demandBlockStatementsBefore (lowerEnv cfg.mod env.vars results) before bindings block)).2).2 cx.fn.blocks := by
-    simpa [bodyOffset, lowerStmts, pure_run] using generated_block_statements_extended extended
-  have normalizedInput := bodyInput
-  simp only [bodyOffset, List.take_zero, lowerStmts, pure_run] at normalizedInput
-  exact ⟨body, bodyOffset, bodyCanonical, bodyOccurrence, bodyRows, bodyOwned, bodyAdmitted, bodyBounded, bodyRealized, normalizedInput, prologuePost, family body bodyOwned bodyOccurrence bodyAll bodyScope bodyValue bodyRows coverage bodyAdmitted bodyBounded'
-    bodyRealized bodyInput statementsExtended steps stopped nonTimeout, bodyReached⟩
+  exact accepted_generated_parameterized_body_stopped_family_canonical source selected owned occurrence rows coverage admitted bounded
+    cells realized input extended entry (accepted_generated_slice_assignment_sequence_stopped (env := { env with scopes := (block.scope, state.nextScope) :: env.scopes }) selected before none bindings want block fragment) steps stopped nonTimeout
 
 #print axioms accepted_generated_parameterized_slice_body_stopped_canonical
 end Goose.Lower

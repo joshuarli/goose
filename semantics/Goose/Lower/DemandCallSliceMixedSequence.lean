@@ -2,6 +2,7 @@ import Goose.Lower.DemandSliceAssignmentSequence
 import Goose.Lower.DemandWhileMixedStatements
 import Goose.Lower.DemandIfMixedSequence
 import Goose.Lower.DemandWhileMixedTerminal
+import Goose.Lower.DemandScalarAssignmentStatementsNormal
 
 namespace Goose.Lower
 open Goose.Core Goose.GIR Goose.Core.Sound
@@ -76,6 +77,50 @@ theorem accepted_generated_slice_mixed_statements {cfg : Cfg} {env : Env} {state
     exact ⟨accepted_generated_sequence_prefix_cons selected before none bindings want block _ head family,
       accepted_generated_stopped_sequence_cons selected before none bindings want block
         (accepted_generated_slice_assignment_accepted_stopped_family selected none reference mutability global intType number sliceOrigin origin) stopped⟩
+
+theorem normal_after_fragment {cfg : Cfg} {env : Env} {earlier later : List Stmt}
+    (valid : stmtsOk earlier = true)
+    (tailNormal : ∀ {fuel : Nat} {state after : St} {flow : Flow},
+      execStmts fuel cfg env later state = .ok flow after → flow = .normal .unit)
+    {fuel : Nat} {state after : St} {flow : Flow}
+    (done : execStmts fuel cfg env (earlier ++ later) state = .ok flow after) : flow = .normal .unit := by
+  induction earlier generalizing fuel state after flow with
+  | nil => exact tailNormal done
+  | cons head tail ih =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [stmtsOk, Bool.and_eq_true] at valid
+      simp only [List.cons_append, execStmts, bind_apply] at done
+      cases executed : execStmt fuel cfg env head state with
+      | stop stop final => simp only [executed] at done; cases done
+      | ok headFlow middle =>
+        have normal := execStmt_fragment_normal fuel cfg env head valid.1 state middle headFlow executed
+        subst headFlow
+        simp only [executed] at done
+        exact ih valid.2 done
+
+theorem SliceMixedStatements.normal {cfg : Cfg} {env : Env} {statements : List Stmt}
+    (fragment : SliceMixedStatements cfg env statements) {fuel : Nat} {state after : St} {flow : Flow}
+    (done : execStmts fuel cfg env statements state = .ok flow after) : flow = .normal .unit := by
+  induction fragment generalizing fuel state after flow with
+  | mixed fragment => exact fragment.normal done
+  | control fragment tail ih => exact normal_after_fragment fragment.fragment (fun run => ih run) done
+  | assignment reference mutability global intType number sliceOrigin origin tail ih =>
+    cases fuel with
+    | zero => simp [execStmts, timeout, M.stop] at done
+    | succ fuel =>
+      simp only [execStmts, bind_apply] at done
+      cases head : execStmt fuel cfg env (.assign (.deref reference)
+          (.slice mutability (.of (.global global)) .omitted (.expr (.lit intType number)) sliceOrigin) origin) state with
+      | stop stop final => simp only [head] at done; cases done
+      | ok headFlow middle =>
+        have normal := assignment_normal head
+        subst headFlow
+        simp only [head] at done
+        exact ih done
+
+#print axioms SliceMixedStatements.normal
 
 theorem SliceMixedCursor.excludes_maximal_terminal {cfg : Cfg} {env : Env} {cx : FnCtx} {results : List Ty}
     {root : DemandNode} {owner : Nat}
