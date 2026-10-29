@@ -54,7 +54,9 @@ theorem allocated_receiver_cancel_exact_frame (config : EvalConfig) (initialized
           releaseExitReservation allocated.construction.exitReservations.size) reserved = .ok () final ∧
       ∃ snapshot, Nonempty (FreshDestinationFrame { before with construction := { before.construction with
         exitReservations := before.construction.exitReservations.push .released } } { allocated with construction := final }) ∧
-        final.destinationResumptions = (id, snapshot) :: allocated.construction.destinationResumptions := by
+        final.destinationResumptions = (id, snapshot) :: allocated.construction.destinationResumptions ∧
+        snapshot.progress = .open 0 ∧ snapshot.use = .receiver ∧
+        final.destinations[id]? = some { snapshot with progress := .abandoned } := by
   obtain ⟨⟨backing⟩, _⟩ := newDestination_open_ready config initialized owner ty request origin knownCount
     before allocated ambient types live regions pending id element world elementType created
   obtain ⟨newest, receiver, receiverFound, receiverUse⟩ := newDestination_newest_receiver config.layout owner ty request
@@ -126,7 +128,11 @@ theorem allocated_receiver_cancel_exact_frame (config : EvalConfig) (initialized
       change (reserved.storage.set! backing.destination.storage _)[index]? = some storage
       rw [Array.set!_eq_setIfInBounds, Array.getElem?_setIfInBounds_ne (Ne.symm different)]
       exact old
-  exact ⟨reserved, final, reservation, cancel, backing.destination, ⟨fullFrame⟩, rfl⟩
+  have abandonedFound : final.destinations[id]? = some { backing.destination with progress := .abandoned } := by
+    change (allocated.construction.destinations.set! id { backing.destination with progress := .abandoned })[id]? = _
+    rw [Array.set!_eq_setIfInBounds]
+    exact Array.getElem?_setIfInBounds_self_of_lt (Array.getElem?_eq_some_iff.mp backing.present).1
+  exact ⟨reserved, final, reservation, cancel, backing.destination, ⟨fullFrame⟩, rfl, backing.opened, receiverUse, abandonedFound⟩
 
 theorem allocated_receiver_cancel_frame (config : EvalConfig) (initialized : Nat) (owner : ActId)
     (ty element : Goose.Construct.Ty) (request : ConstructionRequest) (origin : OriginId) (knownCount : Option Nat)
@@ -141,7 +147,7 @@ theorem allocated_receiver_cancel_frame (config : EvalConfig) (initialized : Nat
           releaseExitReservation allocated.construction.exitReservations.size) reserved = .ok () final ∧
       Nonempty (FreshDestinationFrame { before with construction := { before.construction with
         exitReservations := before.construction.exitReservations.push .released } } { allocated with construction := final }) := by
-  obtain ⟨reserved, final, reservation, cancel, snapshot, frame, saved⟩ := allocated_receiver_cancel_exact_frame config initialized owner
+  obtain ⟨reserved, final, reservation, cancel, snapshot, frame, saved, opened, use, found⟩ := allocated_receiver_cancel_exact_frame config initialized owner
     ty element request origin knownCount before allocated id ambient types live regions pending world elementType created
   exact ⟨reserved, final, reservation, cancel, frame⟩
 

@@ -23,7 +23,7 @@ theorem allocated_receiver_cancel_source_roles (config : EvalConfig) (initialize
         releaseExitReservation allocated.construction.exitReservations.size) reserved = .ok () final ∧
       ReservationLifecycleInvariant final ∧ DestinationSuccessorsValid final ∧ DestinationSuccessorKeysInactive final ∧
       LiveFreshReservationSuccessorRoles final ∧ LiveFreshReservationRawRoles final ∧ LiveFreshReservationRoles final ∧
-      ResumptionReservationRoles final ∧
+      ResumptionReservationRoles final ∧ ResumptionSnapshotStart final ∧ ResumptionBackingSources final ∧
       RootedBackingObservations config.layout { allocated with construction := final } live (storageExtent before) ∧
       (∀ region ∈ regions, ReceivingProtection config.layout { allocated with construction := final } live region) ∧
       ∀ frame ∈ pending, CarriersLandingReady { allocated with construction := final } frame.channels frame.carriers ∧
@@ -31,7 +31,7 @@ theorem allocated_receiver_cancel_source_roles (config : EvalConfig) (initialize
   obtain ⟨reserved, final, reserve, cancel, lifecycle, rooted, regionsSafe, frames⟩ :=
     allocated_receiver_cancel_lifecycle config initialized owner ty element request origin knownCount before allocated id ambient types live
       regions pending world elementType created
-  obtain ⟨otherReserved, otherFinal, otherReserve, otherCancel, savedSnapshot, ⟨frame⟩, savedEntries⟩ :=
+  obtain ⟨otherReserved, otherFinal, otherReserve, otherCancel, savedSnapshot, ⟨frame⟩, savedEntries, savedOpened, savedUse, abandonedFound⟩ :=
     allocated_receiver_cancel_exact_frame config initialized owner ty element request origin knownCount before allocated id ambient types live
       regions pending world elementType created
   have sameReserved : otherReserved = reserved := (ConstructionResult.ok.inj (otherReserve.symm.trans reserve)).2
@@ -101,8 +101,42 @@ theorem allocated_receiver_cancel_source_roles (config : EvalConfig) (initialize
       ambient types live regions pending world created
     apply allocatedWorld.ownership.source.resumptionRoles key saved oldSaved token incoming selected snapshot allocatedTicket
     simpa only [keyEqual] using allocatedResolved
+  have allocatedWorld := newDestination_acceptedWorld config owner ty request origin knownCount initialized before allocated id
+    ambient types live regions pending world created
+  obtain ⟨allocation⟩ := newDestination_fresh_frame config.layout owner ty request origin knownCount before allocated id
+    world.ownership.source.structural.1.1.1 created
+  have fresh := newDestination_fresh_id config.layout owner ty request origin knownCount before allocated id created
+  have newest := (newDestination_newest_receiver config.layout owner ty request origin knownCount before allocated id created).1
+  have savedStart : ResumptionSnapshotStart final := by
+    intro key saved found
+    by_cases same : key = id
+    · subst key
+      have equal : savedSnapshot = saved := by simpa [savedEntries, List.lookup] using found
+      simpa only [← equal] using savedOpened
+    · have mismatch : (key == id) = false := beq_eq_false_iff_ne.mpr same
+      have old : allocated.construction.destinationResumptions.lookup key = some saved := by
+        simpa [savedEntries, List.lookup, mismatch] using found
+      exact allocatedWorld.ownership.source.structural.1.2.1.2.2.2.2.2.2 key saved old
+  have savedBacking : ResumptionBackingSources final := by
+    intro key saved found
+    by_cases same : key = id
+    · subst key
+      have equal : savedSnapshot = saved := by simpa [savedEntries, List.lookup] using found
+      subst saved
+      exact ⟨{ savedSnapshot with progress := .abandoned }, abandonedFound, by simp [activeProgress], by simp [SnapshotBackingAgrees, savedUse]⟩
+    · have mismatch : (key == id) = false := beq_eq_false_iff_ne.mpr same
+      have old : allocated.construction.destinationResumptions.lookup key = some saved := by
+        simpa [savedEntries, List.lookup, mismatch] using found
+      obtain ⟨row, present, inactive, sameBacking⟩ := allocatedWorld.ownership.source.structural.1.2.2.2.1 key saved old
+      have bound := (Array.getElem?_eq_some_iff.mp present).1
+      have keyLe : key ≤ id := Nat.lt_succ_iff.mp (by simpa only [newest] using bound)
+      have keyLt : key < id := Nat.lt_of_le_of_ne keyLe same
+      have oldBound : key < before.construction.destinations.size := by simpa only [fresh] using keyLt
+      have foundAfter : final.destinations[key]? = some row :=
+        (frame.lookup key oldBound).trans ((allocation.lookup key oldBound).symm.trans present)
+      exact ⟨row, foundAfter, inactive, sameBacking⟩
   exact ⟨reserved, final, reserve, cancel, lifecycle, successors, inactive, aliases,
-    liveFreshReservationSuccessorRoles_raw final aliases, liveFreshReservationSuccessorRoles_current final aliases, resumptions,
+    liveFreshReservationSuccessorRoles_raw final aliases, liveFreshReservationSuccessorRoles_current final aliases, resumptions, savedStart, savedBacking,
     rooted, regionsSafe, frames⟩
 
 #print axioms allocated_receiver_cancel_source_roles
