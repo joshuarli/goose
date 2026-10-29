@@ -14,6 +14,8 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | slice (mutability : Goose.Core.Mutability) (view : View) (lo hi : Bound) (origin : Goose.Core.OriginId)
       (viewChild : ViewSyntax config view) (loChild : BoundSyntax config lo) (hiChild : BoundSyntax config hi) :
       ValueSyntax config (.slice mutability view lo hi origin)
+  | string (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
+      (children : ∀ argument ∈ arguments, PrintArgumentSyntax config argument) : ValueSyntax config (.str ty arguments origin)
   | copy (ty : Ty) (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.copy ty place origin)
   | pop (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.pop place origin)
   | blockValue (block : Block) (origin : Goose.Core.OriginId) (child : ResultBlockSyntax config block) :
@@ -62,6 +64,8 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
 inductive DeclarationBuilderSyntax (config : EvalConfig) : Expr → Prop
   | bytes (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
       DeclarationBuilderSyntax config (.bytes ty bytes origin)
+  | string (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
+      (children : ∀ argument ∈ arguments, PrintArgumentSyntax config argument) : DeclarationBuilderSyntax config (.str ty arguments origin)
   | copy (ty : Ty) (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) :
       DeclarationBuilderSyntax config (.copy ty place origin)
   | default (expression : Expr) (shape : DefaultBuilderExpression expression) (source : ValueSyntax config expression) :
@@ -374,6 +378,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | read place child => exact .readValue fuel environment place (previous.place environment place child)
         | reference mutability place child => exact .referenceValue fuel environment mutability place (previous.place environment place child)
         | length view child => exact .lengthValue fuel environment view (previous.view environment view child)
+        | string ty arguments origin children =>
+            exact .valueString fuel environment ty arguments origin
+              (fun destination => previous.builder environment destination (.str ty arguments origin) (.string ty arguments origin children))
         | copy ty place origin child =>
             exact .valueCopy fuel environment ty place origin (previous.place environment place child)
               (fun destination => previous.builder environment destination (.copy ty place origin) (.copy ty place origin child))
@@ -418,6 +425,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
       · intro environment destination expression derivation
         cases derivation with
         | bytes ty bytes origin => exact .legacy (fuel + 1) (.builderBytes environment destination ty bytes origin)
+        | string ty arguments origin children =>
+            exact .stringBuilder fuel environment destination ty arguments origin
+              (fun argument member => previous.printArgument environment argument (children argument member))
         | copy ty place origin child => exact .copyBuilder fuel environment destination ty place origin (previous.place environment place child)
         | default expression shape source => exact .defaultBuilder fuel environment destination expression shape (previous.value environment expression source)
         | scalar expression shape source => exact .scalarBuilder fuel environment destination expression shape (previous.value environment expression source)

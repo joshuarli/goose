@@ -47,6 +47,7 @@ inductive ValueProducerExpression : Expr → Prop
       ValueProducerExpression expression
   | scalar {expression : Expr} (scalar : ScalarExpression expression) : ValueProducerExpression expression
   | default {expression : Expr} (shape : DefaultBuilderExpression expression) : ValueProducerExpression expression
+  | string (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId) : ValueProducerExpression (.str ty arguments origin)
   | copy (ty : Ty) (place : Place) (origin : Goose.Core.OriginId) : ValueProducerExpression (.copy ty place origin)
   | bytes (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) : ValueProducerExpression (.bytes ty bytes origin)
   | array (ty : Ty) (operands : List Expr) (origin : Goose.Core.OriginId) : ValueProducerExpression (.arrLit ty operands origin)
@@ -61,7 +62,7 @@ theorem valueProducer_source (fuel : Nat) (config : EvalConfig) (environment : R
   | scalar scalar => exact scalarProducer_source fuel config environment channels expression before scalar
   | default shape => cases shape <;> simp only [evalProduce, prepareProducerCallChannels, supportedProducerResult,
       Goose.Proofs.ConstructionGhostGlobalStep.evalM_bind_assoc] <;> rfl
-  | copy | bytes | array | fill => simp only [evalProduce, prepareProducerCallChannels, supportedProducerResult,
+  | string | copy | bytes | array | fill => simp only [evalProduce, prepareProducerCallChannels, supportedProducerResult,
       Goose.Proofs.ConstructionGhostGlobalStep.evalM_bind_assoc] <;> rfl
 
 theorem scalarBuilder_source (fuel : Nat) (config : EvalConfig) (environment : RuntimeActivation)

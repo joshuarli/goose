@@ -1,3 +1,4 @@
+import Goose.Proofs.ConstructionGhostStringLoop
 import Goose.Proofs.ConstructionGhostScalarProducer
 import Goose.Proofs.ConstructionGhostRegisterProducer
 import Goose.Proofs.ConstructionGhostProducerChannel
@@ -21,6 +22,8 @@ open Goose.Proofs.ConstructionInvocationReplay Goose.Proofs.ConstructionGhostInv
 open Goose.Proofs.ConstructionGhostArguments Goose.Proofs.ConstructionGhostEachCore
 open Goose.Proofs.ConstructionGhostCallArguments Goose.Proofs.ConstructionGhostCallActivation
 open Goose.Proofs.ConstructionGhostProducerChannel Goose.Proofs.ConstructionGhostRegisterProducer Goose.Proofs.ConstructionGhostScalarProducer
+
+open Goose.Proofs.ConstructionGhostStringLoop
 
 inductive SourceOperation : Type → Type
   | value (environment : RuntimeActivation) (expression : Expr) : SourceOperation Value
@@ -415,6 +418,15 @@ inductive SourceHistory (config : EvalConfig) :
       (bytes : List UInt8) (origin : Goose.Core.OriginId) (before : ExecutionState) :
       SourceHistory config (fuel + 1) path (.value environment (.bytes ty bytes origin)) before
         (evalValue (fuel + 1) config environment (.bytes ty bytes origin) before)
+  | valueString (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (ty : Ty) (arguments : List PrintArg)
+      (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (child : ∀ destination ready,
+        newDestination config.layout environment.act ty .value origin none
+          (producerCount? ⟨config.module, environment.vars⟩ (.str ty arguments origin)) before = .ok destination ready →
+        SourceHistory config fuel (path ++ [0]) (.builder environment destination (.str ty arguments origin)) ready
+          (buildExpr fuel config environment destination (.str ty arguments origin) ready)) :
+      SourceHistory config (fuel + 1) path (.value environment (.str ty arguments origin)) before
+        (evalValue (fuel + 1) config environment (.str ty arguments origin) before)
   | valueCopy (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (ty : Ty) (place : Place)
       (origin : Goose.Core.OriginId) (before : ExecutionState)
       (placeChild : ty.nonfixed = false → SourceHistory config fuel (path ++ [0]) (.place environment place) before
@@ -918,6 +930,15 @@ inductive SourceHistory (config : EvalConfig) :
       SourceHistory config (fuel + 1) path
         (.arguments environment vars (parameter :: parameters) (.byRef mutability place :: arguments)) before
         (evalArguments (fuel + 1) config environment vars (parameter :: parameters) (.byRef mutability place :: arguments) before)
+  | stringBuilder (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId) (before : ExecutionState)
+      (children : ∀ destination ready outcome visits,
+        liftConstruction origin (renewReceivingDestination incoming) before = .ok destination ready →
+        OperandReplay (stringArgumentAction fuel config environment destination origin) 0 arguments [] ready outcome visits →
+        ∀ visit ∈ visits, SourceHistory config fuel (path ++ [visit.ordinal]) (.printArgument environment visit.operand)
+          visit.before (evalPrintArg fuel config environment visit.operand visit.before)) :
+      SourceHistory config (fuel + 1) path (.builder environment incoming (.str ty arguments origin)) before
+        (buildExpr (fuel + 1) config environment incoming (.str ty arguments origin) before)
   | copyBuilder (fuel : Nat) (path : List Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
       (ty : Ty) (place : Place) (origin : Goose.Core.OriginId) (before : ExecutionState)
       (child : ∀ destination ready, liftConstruction origin (renewReceivingDestination incoming) before = .ok destination ready →
@@ -1243,7 +1264,7 @@ theorem SourceHistory.sound (history : SourceHistory config fuel path operation 
   induction history with
   | timeout path operation before => cases operation <;> simp [execute, evalValue, execStmt, execStmts, execBlock, execResultBlock, execResultBlockWith, execActivationBody, enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, evalOperands, Goose.Construct.timeout, EvalM.stop]
   | integer | boolean => simp [execute, evalValue, pure]
-  | valueCopy | copyBuilder | defaultBuilder | producerValues | producerOperandsEmpty | producerOperandsNoChannels | producerOperandsNoValues | producerOperandsCons | builderSingleValue | builderBlock | builderConditional | valueBlockProducer | producerConditional | producerBlock | resultBlock | resultBlockWith | blockTail | valueFirstStatement | leafStatement | assignment | declaration | valueNonfixedArray | valueNonfixedFill | builderChannelCall | fillBuilder | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
+  | valueString | stringBuilder | valueCopy | copyBuilder | defaultBuilder | producerValues | producerOperandsEmpty | producerOperandsNoChannels | producerOperandsNoValues | producerOperandsCons | builderSingleValue | builderBlock | builderConditional | valueBlockProducer | producerConditional | producerBlock | resultBlock | resultBlockWith | blockTail | valueFirstStatement | leafStatement | assignment | declaration | valueNonfixedArray | valueNonfixedFill | builderChannelCall | fillBuilder | valueBytes | builderArray | aggregate | unary | conversion | comparison | binary | logical | channelCall | valueChannelCall | producerChannelCall | boundActivationTail | supportedBuilder | valueProducer | scalarBuilder => rfl
   | @negation fuel path environment operand before outcome child ih =>
       simp only [execute] at ih ⊢
       simp only [evalValue, bind, ih, negationResult]

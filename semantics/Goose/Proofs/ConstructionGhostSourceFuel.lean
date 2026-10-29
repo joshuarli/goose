@@ -60,6 +60,9 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | logical (fuel : Nat) (environment : RuntimeActivation) (isAnd : Bool) (first second : Expr)
       (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
       FuelSupport config (fuel + 1) (.value environment (logicalExpression isAnd first second))
+  | valueString (fuel : Nat) (environment : RuntimeActivation) (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
+      (builderChild : ∀ destination, FuelSupport config fuel (.builder environment destination (.str ty arguments origin))) :
+      FuelSupport config (fuel + 1) (.value environment (.str ty arguments origin))
   | valueCopy (fuel : Nat) (environment : RuntimeActivation) (ty : Ty) (place : Place) (origin : Goose.Core.OriginId)
       (placeChild : FuelSupport config fuel (.place environment place))
       (builderChild : ∀ destination, FuelSupport config fuel (.builder environment destination (.copy ty place origin))) :
@@ -278,6 +281,10 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
       (body : ∀ act pre, FuelSupport config fuel
         (.boundActivation ⟨context.impl, act, implementation.vars, [], []⟩ pre implementation.body origin)) :
       FuelSupport config (fuel + 1) (.callWith environment contextId arguments origin)
+  | stringBuilder (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
+      (children : ∀ argument ∈ arguments, FuelSupport config fuel (.printArgument environment argument)) :
+      FuelSupport config (fuel + 1) (.builder environment incoming (.str ty arguments origin))
   | copyBuilder (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
       (ty : Ty) (place : Place) (origin : Goose.Core.OriginId) (child : FuelSupport config fuel (.place environment place)) :
       FuelSupport config (fuel + 1) (.builder environment incoming (.copy ty place origin))
@@ -426,6 +433,10 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .logical (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
           intro value middle ready result checked
           exact ih (.value environment second) (path ++ [1]) ready rightSupported
+      | valueString _ environment ty arguments origin builderSupported =>
+          refine .valueString fuel path environment ty arguments origin before ?_
+          intro destination ready allocated
+          exact ih (.builder environment destination (.str ty arguments origin)) (path ++ [0]) ready (builderSupported destination)
       | valueCopy _ environment ty place origin placeSupported builderSupported =>
           refine .valueCopy fuel path environment ty place origin before ?_ ?_
           · intro fixed
@@ -763,6 +774,14 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           rw [callWith_source fuel config environment contextId arguments origin context implementation before
             contextFound implementationFound resultsEmpty]
           exact .callWith contextFound implementationFound resultsEmpty argumentsHistory activationHistory
+      | stringBuilder _ environment incoming ty arguments origin childrenSupported =>
+          refine .stringBuilder fuel path environment incoming ty arguments origin before ?_
+          intro destination ready outcome visits renewed replay visit member
+          have inMapped : visit.operand ∈ visits.map Goose.Proofs.ConstructionInvocationReplay.Invocation.operand := List.mem_map_of_mem member
+          rw [replay.sourceOrder] at inMapped
+          have inArguments : visit.operand ∈ arguments := List.mem_of_mem_take inMapped
+          exact ih (.printArgument environment visit.operand) (path ++ [visit.ordinal]) visit.before
+            (childrenSupported visit.operand inArguments)
       | copyBuilder _ environment incoming ty place origin childSupported =>
           refine .copyBuilder fuel path environment incoming ty place origin before ?_
           intro destination ready renewed
