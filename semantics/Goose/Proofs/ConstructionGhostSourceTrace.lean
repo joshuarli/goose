@@ -32,6 +32,7 @@ theorem sourceOperation_keepsEventPrefix (fuel : Nat) (config : EvalConfig)
     | exact preserved.element _ _ _ _
     | exact preserved.arguments _ _ _ _
     | exact preserved.produce _ _ _
+    | exact preserved.operands _ _ _
 
 theorem sourceHistory_eventPrefix (history : SourceHistory config fuel path operation before outcome) :
     EventPrefix before.construction.events

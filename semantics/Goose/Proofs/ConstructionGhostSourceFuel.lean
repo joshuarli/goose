@@ -105,6 +105,20 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | valueBlockProducer (fuel : Nat) (environment : RuntimeActivation) (block : Block) (origin : Goose.Core.OriginId)
       (child : ∀ channels, FuelSupport config fuel (.producerWith environment channels (.blockE block origin))) :
       FuelSupport config (fuel + 1) (.value environment (.blockE block origin))
+  | producerValues (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel) (operands : List Expr)
+      (child : ∀ planned, FuelSupport config fuel (.producerOperands environment planned operands)) :
+      FuelSupport config (fuel + 1) (.producerWith environment channels (.values operands))
+  | producerOperandsEmpty (fuel : Nat) (environment : RuntimeActivation) :
+      FuelSupport config (fuel + 1) (.producerOperands environment [] [])
+  | producerOperandsNoChannels (fuel : Nat) (environment : RuntimeActivation) (operand : Expr) (operands : List Expr) :
+      FuelSupport config (fuel + 1) (.producerOperands environment [] (operand :: operands))
+  | producerOperandsNoValues (fuel : Nat) (environment : RuntimeActivation) (channel : Channel) (channels : List Channel) :
+      FuelSupport config (fuel + 1) (.producerOperands environment (channel :: channels) [])
+  | producerOperandsCons (fuel : Nat) (environment : RuntimeActivation) (channel : Channel) (channels : List Channel)
+      (operand : Expr) (operands : List Expr)
+      (head : FuelSupport config fuel (.producerWith environment [channel] operand))
+      (tail : FuelSupport config fuel (.producerOperands environment channels operands)) :
+      FuelSupport config (fuel + 1) (.producerOperands environment (channel :: channels) (operand :: operands))
   | producerConditional (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel)
       (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
       (conditionChild : FuelSupport config fuel (.value environment condition))
@@ -328,7 +342,7 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
   induction fuel generalizing α operation path before with
   | zero =>
       cases operation <;> simpa [execute, evalValue, execStmt, execStmts, execBlock, execResultBlock, execResultBlockWith, execActivationBody,
-        enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, Goose.Construct.timeout, EvalM.stop] using
+        enterActivation, invokeCall, evalArguments, evalBound, evalPlace, evalView, execWhile, execRange, execEach, Goose.Construct.loopBody, evalPrintArg, buildExpr, buildElement, evalProduce, evalOperands, Goose.Construct.timeout, EvalM.stop] using
         (SourceHistory.timeout path _ before)
   | succ fuel ih =>
       cases supported with
@@ -474,6 +488,18 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .valueBlockProducer fuel path environment block origin before ?_
           intro types channels ready typesFound prepared
           exact ih (.producerWith environment channels (.blockE block origin)) (path ++ [0]) ready (childSupported channels)
+      | producerValues _ environment channels operands childSupported =>
+          refine .producerValues fuel path environment channels operands before ?_
+          intro planned ready prepared
+          exact ih (.producerOperands environment planned operands) (path ++ [0]) ready (childSupported planned)
+      | producerOperandsEmpty _ environment => exact .producerOperandsEmpty fuel path environment before
+      | producerOperandsNoChannels _ environment operand operands => exact .producerOperandsNoChannels fuel path environment operand operands before
+      | producerOperandsNoValues _ environment channel channels => exact .producerOperandsNoValues fuel path environment channel channels before
+      | producerOperandsCons _ environment channel channels operand operands headSupported tailSupported =>
+          refine .producerOperandsCons fuel path environment channel channels operand operands before
+            (ih (.producerWith environment [channel] operand) (path ++ [0]) before headSupported) ?_
+          intro carriers middle carrier ready produced selected
+          exact ih (.producerOperands environment channels operands) (path ++ [1]) ready tailSupported
       | producerConditional _ environment channels condition yes no origin conditionSupported yesSupported noSupported =>
           refine .producerConditional fuel path environment channels condition yes no origin before ?_ ?_
           · intro planned ready prepared
