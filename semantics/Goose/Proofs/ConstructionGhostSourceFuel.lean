@@ -60,6 +60,16 @@ inductive FuelSupport (config : EvalConfig) : {α : Type} → Nat → SourceOper
   | logical (fuel : Nat) (environment : RuntimeActivation) (isAnd : Bool) (first second : Expr)
       (left : FuelSupport config fuel (.value environment first)) (right : FuelSupport config fuel (.value environment second)) :
       FuelSupport config (fuel + 1) (.value environment (logicalExpression isAnd first second))
+  | valueResultLocal (fuel : Nat) (environment : RuntimeActivation) (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) :
+      FuelSupport config (fuel + 1) (.value environment (.resultLocal localVar origin))
+  | builderResultLocal (fuel : Nat) (environment : RuntimeActivation) (incoming : Goose.Core.DestinationId)
+      (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) :
+      FuelSupport config (fuel + 1) (.builder environment incoming (.resultLocal localVar origin))
+  | producerResultLocal (fuel : Nat) (environment : RuntimeActivation) (channels : List Channel)
+      (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId)
+      (value : FuelSupport config fuel (.value environment (.resultLocal localVar origin)))
+      (builder : ∀ destination, FuelSupport config fuel (.builder environment destination (.resultLocal localVar origin))) :
+      FuelSupport config (fuel + 1) (.producerWith environment channels (.resultLocal localVar origin))
   | valueString (fuel : Nat) (environment : RuntimeActivation) (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
       (builderChild : ∀ destination, FuelSupport config fuel (.builder environment destination (.str ty arguments origin))) :
       FuelSupport config (fuel + 1) (.value environment (.str ty arguments origin))
@@ -433,6 +443,14 @@ theorem fuelHistory_exists (fuel : Nat) (config : EvalConfig) {α : Type} (opera
           refine .logical (ih (.value environment first) (path ++ [0]) before leftSupported) ?_
           intro value middle ready result checked
           exact ih (.value environment second) (path ++ [1]) ready rightSupported
+      | valueResultLocal _ environment localVar origin => exact .valueResultLocal fuel path environment localVar origin before
+      | builderResultLocal _ environment incoming localVar origin => exact .builderResultLocal fuel path environment incoming localVar origin before
+      | producerResultLocal _ environment channels localVar origin valueSupported builderSupported =>
+          refine .producerResultLocal fuel path environment channels localVar origin before ?_ ?_
+          · intro selected ready prepared channelShape
+            exact ih (.value environment (.resultLocal localVar origin)) (path ++ [0]) ready valueSupported
+          · intro planned plannedState destination ready stored readState buildState prepared selected read named
+            exact ih (.builder environment destination (.resultLocal localVar origin)) (path ++ [0]) buildState (builderSupported destination)
       | valueString _ environment ty arguments origin builderSupported =>
           refine .valueString fuel path environment ty arguments origin before ?_
           intro destination ready allocated

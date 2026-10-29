@@ -14,6 +14,7 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
   | slice (mutability : Goose.Core.Mutability) (view : View) (lo hi : Bound) (origin : Goose.Core.OriginId)
       (viewChild : ViewSyntax config view) (loChild : BoundSyntax config lo) (hiChild : BoundSyntax config hi) :
       ValueSyntax config (.slice mutability view lo hi origin)
+  | resultLocal (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) : ValueSyntax config (.resultLocal localVar origin)
   | string (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
       (children : ∀ argument ∈ arguments, PrintArgumentSyntax config argument) : ValueSyntax config (.str ty arguments origin)
   | copy (ty : Ty) (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) : ValueSyntax config (.copy ty place origin)
@@ -64,6 +65,7 @@ inductive ValueSyntax (config : EvalConfig) : Expr → Prop
 inductive DeclarationBuilderSyntax (config : EvalConfig) : Expr → Prop
   | bytes (ty : Ty) (bytes : List UInt8) (origin : Goose.Core.OriginId) :
       DeclarationBuilderSyntax config (.bytes ty bytes origin)
+  | resultLocal (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) : DeclarationBuilderSyntax config (.resultLocal localVar origin)
   | string (ty : Ty) (arguments : List PrintArg) (origin : Goose.Core.OriginId)
       (children : ∀ argument ∈ arguments, PrintArgumentSyntax config argument) : DeclarationBuilderSyntax config (.str ty arguments origin)
   | copy (ty : Ty) (place : Place) (origin : Goose.Core.OriginId) (child : PlaceSyntax config place) :
@@ -151,6 +153,7 @@ inductive ResultTailSyntax (config : EvalConfig) : Option Expr → Prop
       (argumentsSyntax : ∀ id implementation start ready,
         getImplementation config context start = .ok (id, implementation) ready → ArgumentSyntax config implementation.params.toList arguments) :
       ResultTailSyntax config (some (.call context arguments origin))
+  | resultLocal (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) : ResultTailSyntax config (some (.resultLocal localVar origin))
   | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
       (conditionChild : ValueSyntax config condition) (yesChild : ResultBlockSyntax config yes) (noChild : ResultBlockSyntax config no) :
       ResultTailSyntax config (some (.ifE condition yes no origin))
@@ -287,6 +290,8 @@ structure SyntaxFuel (config : EvalConfig) (fuel : Nat) : Prop where
     FuelSupport config fuel (.resultBlockWith environment pre channels block)
   resultBlock : ∀ environment channels block, ResultBlockSyntax config block →
     FuelSupport config fuel (.resultBlock environment channels block)
+  resultLocalProducer : ∀ environment channels localVar origin,
+    FuelSupport config fuel (.producerWith environment channels (.resultLocal localVar origin))
   conditionalProducer : ∀ environment channels condition yes no origin, ValueSyntax config condition →
     ResultBlockSyntax config yes → ResultBlockSyntax config no →
     FuelSupport config fuel (.producerWith environment channels (.ifE condition yes no origin))
@@ -378,6 +383,7 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
         | read place child => exact .readValue fuel environment place (previous.place environment place child)
         | reference mutability place child => exact .referenceValue fuel environment mutability place (previous.place environment place child)
         | length view child => exact .lengthValue fuel environment view (previous.view environment view child)
+        | resultLocal localVar origin => exact .valueResultLocal fuel environment localVar origin
         | string ty arguments origin children =>
             exact .valueString fuel environment ty arguments origin
               (fun destination => previous.builder environment destination (.str ty arguments origin) (.string ty arguments origin children))
@@ -425,6 +431,7 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
       · intro environment destination expression derivation
         cases derivation with
         | bytes ty bytes origin => exact .legacy (fuel + 1) (.builderBytes environment destination ty bytes origin)
+        | resultLocal localVar origin => exact .builderResultLocal fuel environment destination localVar origin
         | string ty arguments origin children =>
             exact .stringBuilder fuel environment destination ty arguments origin
               (fun argument member => previous.printArgument environment argument (children argument member))
@@ -585,6 +592,9 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
               | call context arguments origin argumentsSyntax =>
                   cases tailEq
                   exact previous.producerCall scopedEnvironment channels context arguments origin argumentsSyntax
+              | resultLocal localVar origin =>
+                  cases tailEq
+                  exact previous.resultLocalProducer scopedEnvironment channels localVar origin
               | conditional condition yes no origin conditionChild yesChild noChild =>
                   cases tailEq
                   exact previous.conditionalProducer scopedEnvironment channels condition yes no origin conditionChild yesChild noChild
@@ -593,6 +603,10 @@ theorem syntaxFuel_existsWithTails (fuel : Nat) (config : EvalConfig) (closed : 
                   exact previous.blockProducer scopedEnvironment channels block origin child
       · intro environment channels block derivation
         exact .resultBlock fuel environment channels block (previous.resultBlockWith environment [] channels block derivation)
+      · intro environment channels localVar origin
+        exact .producerResultLocal fuel environment channels localVar origin
+          (previous.value environment (.resultLocal localVar origin) (.resultLocal localVar origin))
+          (fun destination => previous.builder environment destination (.resultLocal localVar origin) (.resultLocal localVar origin))
       · intro environment channels condition yes no origin conditionChild yesChild noChild
         exact .producerConditional fuel environment channels condition yes no origin (previous.value environment condition conditionChild)
           (fun planned => previous.resultBlock environment planned yes yesChild)

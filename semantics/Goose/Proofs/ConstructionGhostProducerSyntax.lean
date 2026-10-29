@@ -20,6 +20,8 @@ inductive ProducerSyntax (config : EvalConfig) : Expr → Prop
   | conditional (condition : Expr) (yes no : Block) (origin : Goose.Core.OriginId)
       (conditionChild : ValueSyntax config condition) (yesChild : ResultBlockSyntax config yes) (noChild : ResultBlockSyntax config no) :
       ProducerSyntax config (.ifE condition yes no origin)
+  | resultLocal (localVar : Goose.Core.VarId) (origin : Goose.Core.OriginId) :
+      ProducerSyntax config (.resultLocal localVar origin)
   | values (operands : List Expr) (children : ∀ operand ∈ operands, ProducerSyntax config operand) :
       ProducerSyntax config (.values operands)
 
@@ -37,6 +39,8 @@ theorem producerSyntax_fuel (fuel : Nat) (config : EvalConfig) (closed : ClosedM
           exact (syntaxFuel_existsWithTails fuel config closed).blockProducer environment channels block origin child
       | conditional condition yes no origin conditionChild yesChild noChild =>
           exact (syntaxFuel_existsWithTails fuel config closed).conditionalProducer environment channels condition yes no origin conditionChild yesChild noChild
+      | resultLocal localVar origin =>
+          exact (syntaxFuel_existsWithTails fuel config closed).resultLocalProducer environment channels localVar origin
       | values operands children =>
           apply valuesFuel fuel config environment channels operands
           intro childFuel channel operand lower member
