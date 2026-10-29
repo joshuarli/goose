@@ -5,13 +5,14 @@ open Goose.Construct
 open Goose.Proofs.ConstructionRepresentation
 open Goose.Proofs.ConstructionExecutionOwnership
 
-theorem acceptedWorld_pushConstructActivation (config : EvalConfig) (initialized : Nat) (state : ExecutionState)
+theorem acceptedWorld_pushConstructActivation_withReceiving (config : EvalConfig) (initialized : Nat) (state : ExecutionState)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
     (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (activation : RuntimeActivation) (id : Nat)
     (world : AcceptedWorld config initialized state ambient types live regions pending)
     (identifier : activation.act = state.nextAct) (channels : activation.channels = [.construct id])
     (bound : id < state.construction.destinations.size)
-    (noTickets : ∀ frame ∈ ambient, frame.tickets = []) :
+    (within : ∀ receiving, destinationCurrent state.construction id = .ok receiving →
+      OwnershipReceivingWithinSuccessorFrames state.construction ambient receiving) :
     AcceptedWorld config initialized
       { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
       (.callChannels activation [] :: ambient) types live regions pending := by
@@ -36,9 +37,7 @@ theorem acceptedWorld_pushConstructActivation (config : EvalConfig) (initialized
     intro channel member
     simp only [channels, List.mem_singleton] at member
     subst channel
-    intro receiving resolved frame member token owned
-    rw [noTickets frame member] at owned
-    cases owned
+    exact within
   have bounds : OwnershipCapturedReceivingBounds state.construction nextAmbient := by
     refine ⟨?_, world.ownership.bounds⟩
     intro channel member
@@ -51,5 +50,21 @@ theorem acceptedWorld_pushConstructActivation (config : EvalConfig) (initialized
   exact acceptedWorld_clockFrame config initialized state after nextAmbient types live world ownership rfl rfl rfl
     (Nat.le_succ _) (Nat.le_refl _)
 
+theorem acceptedWorld_pushConstructActivation (config : EvalConfig) (initialized : Nat) (state : ExecutionState)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : Goose.Core.RootInst → Prop)
+    (regions : List ReceivingRegion) (pending : List PendingCarrierFrame) (activation : RuntimeActivation) (id : Nat)
+    (world : AcceptedWorld config initialized state ambient types live regions pending)
+    (identifier : activation.act = state.nextAct) (channels : activation.channels = [.construct id])
+    (bound : id < state.construction.destinations.size)
+    (noTickets : ∀ frame ∈ ambient, frame.tickets = []) :
+    AcceptedWorld config initialized
+      { state with nextAct := state.nextAct + 1, activations := activation :: state.activations }
+      (.callChannels activation [] :: ambient) types live regions pending := by
+  apply acceptedWorld_pushConstructActivation_withReceiving config initialized state ambient types live regions pending activation id world identifier channels bound
+  intro receiving resolved frame member token owned
+  rw [noTickets frame member] at owned
+  cases owned
+
+#print axioms acceptedWorld_pushConstructActivation_withReceiving
 #print axioms acceptedWorld_pushConstructActivation
 end Goose.Proofs.ConstructionAcceptedExecution

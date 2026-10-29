@@ -10,7 +10,7 @@ open Goose.Proofs.ConstructionExecutionOwnership
 open Goose.Proofs.ConstructionExecutionProtocol
 open Goose.Proofs.ExitExecution
 
-theorem fresh_byteInvoke_observed (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+theorem fresh_byteInvoke_ticketed (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (caller : RuntimeActivation) (contextId scope : Nat) (bytes : List UInt8) (allocationOrigin origin : OriginId)
     (context : Context) (helper : Impl) (knownCount : Option Nat) (before allocated : ExecutionState) (id : Nat)
     (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
@@ -23,7 +23,6 @@ theorem fresh_byteInvoke_observed (fuel : Nat) (config : EvalConfig) (initialize
     (absent : ∀ descriptor ∈ helper.vars.toList, descriptor.scope ≠ scope)
     (history : ReservationReferencesBounded before.construction ambient)
     (noRetained : completedCarrierIds ambient.retained = [])
-    (noTickets : ∀ frame ∈ ambient, frame.tickets = [])
     (fits : bytes.length < 2 ^ 32) (depth : before.activations.length < Goose.Core.maxCallDepth)
     (created : newDestination config.layout caller.act (.varr (.int .u8)) .value allocationOrigin none knownCount before = .ok id allocated) :
     match invokeCall fuel config caller contextId [] [.construct id] origin allocated with
@@ -72,8 +71,19 @@ theorem fresh_byteInvoke_observed (fuel : Nat) (config : EvalConfig) (initialize
   have allocatedDepth : allocated.activations.length < Goose.Core.maxCallDepth := by
     have sameActs := congrArg ExecutionState.activations freshFrame.outer
     simpa only [sameActs] using depth
-  have low := invokeByteReceiver_lowFuel_world config initialized caller contextId id scope bytes origin context helper allocated ambient
-    types live [freshReceivingRegion before id] allocatedWorld contextAt helperAt parameters results body allocatedHistory noRetained noTickets
+  have freshId := newDestination_fresh_id config.layout caller.act (.varr (.int .u8)) .value allocationOrigin knownCount before allocated id created
+  have newest : id + 1 = allocated.construction.destinations.size := by
+    rw [freshFrame.destinations, freshId]
+    simp
+  have within : ∀ receiving, destinationCurrent allocated.construction id = .ok receiving →
+      OwnershipReceivingWithinSuccessorFrames allocated.construction ambient receiving := by
+    intro receiving resolved
+    have same : receiving = id := Except.ok.inj (resolved.symm.trans current)
+    subst receiving
+    exact newest_destination_within_successorFrames allocated.construction ambient id newest
+      allocatedWorld.ownership.source.structural.1.1.1.2.2.2
+  have low := invokeByteReceiver_lowFuel_within config initialized caller contextId id scope bytes origin context helper allocated ambient
+    types live [freshReceivingRegion before id] allocatedWorld contextAt helperAt parameters results body allocatedHistory noRetained within
     ready receiver current allocatedDepth
   cases fuel with
   | zero => simpa only [low.1] using ⟨ambient, allocatedWorld⟩
@@ -90,9 +100,9 @@ theorem fresh_byteInvoke_observed (fuel : Nat) (config : EvalConfig) (initialize
           cases fuel with
           | zero => simpa only [low.2.2.2.2.1] using ⟨_, low.2.2.2.2.2.2.2⟩
           | succ fuel =>
-            obtain ⟨after, executed, finalWorld, objects, ordinals, acts, scopes, geometry⟩ := invokeByteReceiver_success_observed fuel config initialized caller contextId id scope bytes origin
+            obtain ⟨after, executed, finalWorld, objects, ordinals, acts, scopes, geometry⟩ := invokeByteReceiver_success_within fuel config initialized caller contextId id scope bytes origin
               context helper allocated ambient types live [freshReceivingRegion before id] allocatedWorld contextAt helperAt parameters results body absent
-              allocatedHistory noRetained noTickets ready packed adaptation receiver request physical current fits mutable cutoff covered allocatedDepth
+              allocatedHistory noRetained within ready packed adaptation receiver request physical current fits mutable cutoff covered allocatedDepth
             have outerObjects : allocated.objects = before.objects := by simpa only using congrArg ExecutionState.objects freshFrame.outer
             have outerOrdinals : allocated.objectOrdinals = before.objectOrdinals := by simpa only using congrArg ExecutionState.objectOrdinals freshFrame.outer
             have outerActs : allocated.nextAct = before.nextAct := by simpa only using congrArg ExecutionState.nextAct freshFrame.outer
@@ -100,6 +110,34 @@ theorem fresh_byteInvoke_observed (fuel : Nat) (config : EvalConfig) (initialize
             simp only [executed]
             exact ⟨trivial, finalWorld, objects.trans outerObjects, ordinals.trans outerOrdinals,
               by simpa only [outerActs] using acts, by simpa only [outerScopes] using scopes, geometry _ backing⟩
+
+theorem fresh_byteInvoke_observed (fuel : Nat) (config : EvalConfig) (initialized : Nat)
+    (caller : RuntimeActivation) (contextId scope : Nat) (bytes : List UInt8) (allocationOrigin origin : OriginId)
+    (context : Context) (helper : Impl) (knownCount : Option Nat) (before allocated : ExecutionState) (id : Nat)
+    (ambient : OwnershipAmbient) (types : RootTypes) (live : RootInst → Prop)
+    (world : AcceptedWorld config initialized before ambient types live [] [])
+    (contextAt : config.module.contexts[contextId]? = some context)
+    (helperAt : config.module.impls[context.impl]? = some helper)
+    (parameters : helper.params = #[])
+    (results : helper.results = #[⟨.varr (.int .u8), .value, none⟩])
+    (body : helper.body = ⟨scope, [], some (.bytes (.varr (.int .u8)) bytes origin)⟩)
+    (absent : ∀ descriptor ∈ helper.vars.toList, descriptor.scope ≠ scope)
+    (history : ReservationReferencesBounded before.construction ambient)
+    (noRetained : completedCarrierIds ambient.retained = [])
+    (noTickets : ∀ frame ∈ ambient, frame.tickets = [])
+    (fits : bytes.length < 2 ^ 32) (depth : before.activations.length < Goose.Core.maxCallDepth)
+    (created : newDestination config.layout caller.act (.varr (.int .u8)) .value allocationOrigin none knownCount before = .ok id allocated) :
+    match invokeCall fuel config caller contextId [] [.construct id] origin allocated with
+    | .stop _ after => ∃ nextAmbient, AcceptedWorld config initialized after nextAmbient types live [freshReceivingRegion before id] []
+    | .ok carriers after => carriers = [.completed id] ∧
+        AcceptedWorld config initialized after (.returned carriers :: ambient) types live [freshReceivingRegion before id]
+          [⟨[.construct id], carriers⟩] ∧
+        after.objects = before.objects ∧ after.objectOrdinals = before.objectOrdinals ∧
+        after.nextAct = before.nextAct + 1 ∧ after.nextScope = before.nextScope + 1 ∧
+        Nonempty (BuiltByteReceiver config.layout after id before.construction.storage.size bytes.length)
+    | _ => False := by
+  exact fresh_byteInvoke_ticketed fuel config initialized caller contextId scope bytes allocationOrigin origin context helper knownCount
+    before allocated id ambient types live world contextAt helperAt parameters results body absent history noRetained fits depth created
 
 theorem fresh_byteInvoke_world (fuel : Nat) (config : EvalConfig) (initialized : Nat)
     (caller : RuntimeActivation) (contextId scope : Nat) (bytes : List UInt8) (allocationOrigin origin : OriginId)
@@ -184,6 +222,7 @@ theorem allocate_then_invoke_byte_world (fuel : Nat) (config : EvalConfig) (acce
       exact ⟨id, same, finalWorld⟩
 
 #print axioms allocate_then_invoke_byte_world
+#print axioms fresh_byteInvoke_ticketed
 #print axioms fresh_byteInvoke_observed
 #print axioms fresh_byteInvoke_world
 end Goose.Proofs.ConstructionAcceptedExecution
